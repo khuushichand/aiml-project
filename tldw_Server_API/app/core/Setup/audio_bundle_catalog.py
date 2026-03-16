@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +38,12 @@ class AudioBundle(BaseModel):
     system_prerequisites: list[AudioBundleStep] = Field(default_factory=list)
     python_dependencies: list[AudioBundleStep] = Field(default_factory=list)
     model_assets: list[AudioBundleStep] = Field(default_factory=list)
+    stt_plan: list[dict[str, Any]] = Field(default_factory=list)
+    tts_plan: list[dict[str, Any]] = Field(default_factory=list)
+    embeddings_plan: dict[str, list[str]] = Field(
+        default_factory=lambda: {"huggingface": [], "custom": [], "onnx": []}
+    )
+    default_config_updates: dict[str, dict[str, str]] = Field(default_factory=dict)
     verification_targets: list[str] = Field(default_factory=list)
 
 
@@ -96,6 +103,8 @@ def get_audio_bundle_catalog() -> AudioBundleCatalog:
                     automation_tier=AutomationTier.AUTOMATIC,
                 )
             ],
+            stt_plan=[{"engine": "faster_whisper", "models": ["small"]}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
             verification_targets=["stt_default", "tts_default"],
         ),
         AudioBundle(
@@ -117,6 +126,8 @@ def get_audio_bundle_catalog() -> AudioBundleCatalog:
                     automation_tier=AutomationTier.AUTOMATIC,
                 )
             ],
+            stt_plan=[{"engine": "faster_whisper", "models": ["small"]}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
             verification_targets=["stt_default", "tts_default"],
         ),
         AudioBundle(
@@ -138,6 +149,8 @@ def get_audio_bundle_catalog() -> AudioBundleCatalog:
                     automation_tier=AutomationTier.AUTOMATIC,
                 )
             ],
+            stt_plan=[{"engine": "faster_whisper", "models": ["small"]}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
             verification_targets=["stt_default", "tts_default"],
         ),
         AudioBundle(
@@ -160,6 +173,8 @@ def get_audio_bundle_catalog() -> AudioBundleCatalog:
                     automation_tier=AutomationTier.AUTOMATIC,
                 )
             ],
+            stt_plan=[{"engine": "faster_whisper", "models": ["small"]}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
             verification_targets=["stt_default", "tts_default"],
         ),
     ]

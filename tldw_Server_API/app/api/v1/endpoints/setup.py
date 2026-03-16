@@ -50,6 +50,14 @@ class AssistantQuestion(BaseModel):
     question: str = Field(..., min_length=1, description="Natural language question for the setup assistant")
 
 
+class AudioBundleProvisionRequest(BaseModel):
+    bundle_id: str = Field(..., min_length=1, description="Curated audio bundle identifier to provision.")
+    safe_rerun: bool = Field(
+        False,
+        description="If true, skip bundle installation only when all expected install steps were previously completed.",
+    )
+
+
 async def require_admin_and_system_configure(
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
 ) -> AuthPrincipal:
@@ -165,6 +173,26 @@ async def reset_audio_readiness(
         "success": True,
         "audio_readiness": readiness,
     }
+
+
+@router.post("/audio/provision", openapi_extra={"security": []})
+async def provision_audio_bundle(
+    payload: AudioBundleProvisionRequest,
+    _guard: None = Depends(require_local_setup_access),
+) -> dict[str, Any]:
+    """Expand and provision a curated audio bundle."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    try:
+        return install_manager.execute_audio_bundle(
+            payload.bundle_id,
+            safe_rerun=payload.safe_rerun,
+        )
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/config", openapi_extra={"security": []})

@@ -21,8 +21,14 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup import setup_manager
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    AudioBundleStep,
+    AutomationTier,
+    get_audio_bundle_catalog,
+)
 from tldw_Server_API.app.core.Setup.install_schema import DEFAULT_WHISPER_MODELS, InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
@@ -460,6 +466,132 @@ def execute_install_plan(plan_payload: dict[str, Any]) -> None:
             status='partial',
             remediation_items=['Run audio verification to confirm readiness.'],
         )
+    return json.loads(json.dumps(status.data))
+
+
+def build_install_plan_from_bundle(bundle_id: str) -> InstallPlan:
+    """Expand a curated bundle into the existing installer plan schema."""
+
+    bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    return InstallPlan.model_validate(
+        {
+            "stt": bundle.stt_plan,
+            "tts": bundle.tts_plan,
+            "embeddings": bundle.embeddings_plan,
+        }
+    )
+
+
+def _plan_step_names(plan: InstallPlan) -> set[str]:
+    step_names: set[str] = set()
+
+    for entry in plan.stt:
+        step_names.add(f"deps:stt:{entry.engine}")
+        step_names.add(f"stt:{entry.engine}")
+    if plan.stt:
+        step_names.add("stt:silero_vad")
+
+    for entry in plan.tts:
+        step_names.add(f"deps:tts:{entry.engine}")
+        step_names.add(f"tts:{entry.engine}")
+
+    if plan.embeddings.huggingface:
+        step_names.add("deps:embeddings:huggingface")
+        step_names.add("embeddings:huggingface")
+    if plan.embeddings.custom:
+        step_names.add("deps:embeddings:custom")
+        step_names.add("embeddings:custom")
+    if plan.embeddings.onnx:
+        step_names.add("deps:embeddings:onnx")
+        step_names.add("embeddings:onnx")
+
+    return step_names
+
+
+def _completed_step_names(snapshot: dict[str, Any] | None) -> set[str]:
+    if not snapshot:
+        return set()
+    completed: set[str] = set()
+    for step in snapshot.get("steps", []):
+        if step.get("status") == "completed" and step.get("name"):
+            completed.add(str(step["name"]))
+    return completed
+
+
+def _system_prerequisite_status(
+    bundle_step: AudioBundleStep,
+    machine_profile: audio_profile_service.MachineProfile,
+) -> tuple[str, str | None]:
+    if bundle_step.step_id == "ffmpeg" and machine_profile.ffmpeg_available:
+        return "completed", "FFmpeg already available."
+    if bundle_step.step_id == "espeak_ng" and machine_profile.espeak_available:
+        return "completed", "eSpeak already available."
+    if bundle_step.automation_tier == AutomationTier.GUIDED:
+        return "guided_action_required", bundle_step.detail
+    if bundle_step.automation_tier == AutomationTier.MANUAL_BLOCKED:
+        return "failed", bundle_step.detail
+    return "pending", bundle_step.detail
+
+
+def execute_audio_bundle(bundle_id: str, *, safe_rerun: bool = False) -> dict[str, Any]:
+    """Provision a curated audio bundle using the existing installer substrate."""
+
+    bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    plan = build_install_plan_from_bundle(bundle_id)
+    plan_payload = model_dump_compat(plan)
+    machine_profile = audio_profile_service.detect_machine_profile()
+    readiness = audio_readiness_store.get_audio_readiness_store()
+    readiness.update(
+        status="provisioning",
+        selected_bundle_id=bundle_id,
+        machine_profile=machine_profile.model_dump(),
+        remediation_items=[],
+        last_verification=None,
+    )
+
+    result_steps: list[dict[str, Any]] = []
+    for prerequisite in bundle.system_prerequisites:
+        status_value, detail = _system_prerequisite_status(prerequisite, machine_profile)
+        result_steps.append(
+            {
+                "name": f"system:{prerequisite.step_id}",
+                "status": status_value,
+                "detail": detail,
+            }
+        )
+
+    expected_steps = _plan_step_names(plan)
+    completed_steps = _completed_step_names(get_install_status_snapshot()) if safe_rerun else set()
+    if safe_rerun and expected_steps and expected_steps.issubset(completed_steps):
+        for step_name in sorted(expected_steps):
+            result_steps.append(
+                {
+                    "name": step_name,
+                    "status": "skipped",
+                    "detail": "Already satisfied by a previous successful install run.",
+                }
+            )
+        readiness.update(
+            status="partial",
+            remediation_items=["Run audio verification to confirm readiness."],
+        )
+        return {
+            "bundle_id": bundle_id,
+            "safe_rerun": True,
+            "install_plan": plan_payload,
+            "steps": result_steps,
+            "status": "partial",
+        }
+
+    install_result = execute_install_plan(plan_payload) or {"steps": [], "status": "failed"}
+    result_steps.extend(install_result.get("steps", []))
+    return {
+        "bundle_id": bundle_id,
+        "safe_rerun": safe_rerun,
+        "install_plan": plan_payload,
+        "steps": result_steps,
+        "status": install_result.get("status"),
+    }
 
 def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     any_stt = False
