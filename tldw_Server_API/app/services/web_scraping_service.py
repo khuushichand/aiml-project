@@ -18,6 +18,7 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import ScrapeMethod
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 from tldw_Server_API.app.core.deprecations import log_runtime_deprecation
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.testing import env_flag_enabled
@@ -491,7 +492,7 @@ async def process_web_scraping_task(
                         except Exception:
                             chunks_for_sql = []
 
-                        media_id, media_uuid, message = db.add_media_with_keywords(
+                        media_id, media_uuid, message = get_media_repository(db).add_media_with_keywords(
                             url=article.get("url", ""),
                             title=article.get("title", "Untitled"),
                             media_type="web_document",

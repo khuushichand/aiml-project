@@ -191,6 +191,7 @@ async def run_media_ingest_adapter(config: dict[str, Any], context: dict[str, An
                 indexing = config.get("indexing") or {}
                 if isinstance(indexing, dict) and indexing.get("index_in_rag") and extracted_text:
                     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+                    from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
                     try:
                         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
                         _mdb_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
@@ -201,7 +202,7 @@ async def run_media_ingest_adapter(config: dict[str, Any], context: dict[str, An
                     title = (config.get("metadata", {}) or {}).get("title") or resolved_path.name
                     keywords = (config.get("metadata", {}) or {}).get("tags") or []
                     media_type = src.get("media_type") or "document"
-                    media_id, media_uuid, msg = mdb.add_media_with_keywords(
+                    media_id, media_uuid, msg = get_media_repository(mdb).add_media_with_keywords(
                         url=uri,
                         title=title,
                         media_type=media_type,
