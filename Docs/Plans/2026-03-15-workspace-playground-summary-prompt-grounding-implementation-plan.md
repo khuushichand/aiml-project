@@ -31,6 +31,8 @@ Add a test that:
   - a user message containing the selected source title and content
 - expects `ragSearch(...)` not to be called
 
+Also replace the now-obsolete summary-specific RAG assertions in `StudioPane.stage1.test.tsx`, including the tests that currently assert summary timeout and `generation_prompt` are sent through `ragSearch(...)`. Those expectations must be rewritten for the new direct-content contract, not left in place.
+
 **Step 2: Write the failing test for default-prompt fallback**
 
 Add a second test that:
@@ -40,16 +42,25 @@ Add a second test that:
 - clicks `Summary`
 - expects `createChatCompletion(...)` to include the default summary instruction text
 
-**Step 3: Write the failing test for empty/error output**
+**Step 3: Write the failing test for no-model-available behavior**
 
 Add a third test that:
+
+- arranges state so no selected model resolves and no chat-model fallback is available
+- clicks `Summary`
+- expects the artifact to be marked `failed`
+- expects the error message to contain `No model available for summary generation`
+
+**Step 4: Write the failing test for empty/error output**
+
+Add a fourth test that:
 
 - mocks `createChatCompletion(...)` to return empty output or a known backend error string
 - clicks `Summary`
 - expects the artifact to be marked `failed`
 - expects success toast not to fire
 
-**Step 4: Run the focused suite to verify failure**
+**Step 5: Run the focused suite to verify failure**
 
 Run:
 
@@ -61,7 +72,7 @@ Expected:
 
 - the new summary contract assertions fail because the current implementation still calls `ragSearch(...)` and ignores the workspace prompt
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 ```bash
 git add /Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx
@@ -86,6 +97,11 @@ Normalize it so:
 - non-empty string => custom summary instruction
 - empty/null => fallback to the current default summary instruction
 
+Also define the effective summary control contract in code comments or nearby implementation notes:
+
+- Summary continues to use shared generation controls (`model`, `provider`, `temperature`, `top_p`, `max_tokens`)
+- Summary no longer uses retrieval-oriented RAG controls (`ragSearchMode`, `ragTopK`, `min_score`, `enable_reranking`, `enable_citations`)
+
 **Step 2: Update `generateSummary(...)` to use source-context helpers**
 
 Refactor `generateSummary(...)` so it accepts the same direct-content generation options used by other direct-content outputs:
@@ -99,14 +115,28 @@ Refactor `generateSummary(...)` so it accepts the same direct-content generation
 - `maxTokens`
 - `abortSignal`
 - summary instruction text
+- resolved model/provider runtime
 
 Inside `generateSummary(...)`:
 
 - call `loadStudioSourceContexts(...)`
 - call `formatStudioSourceContexts(...)`
 - fail if no usable source text exists
+- do not change the existing source character budgets in this task; Summary should intentionally inherit the current bounded-content behavior
 
-**Step 3: Call `createChatCompletion(...)` with separate instruction and source content**
+**Step 3: Define the no-model-available behavior before request execution**
+
+Resolve summary runtime through `resolveStudioChatRuntime()`.
+
+If no `model` resolves, fail with:
+
+```ts
+throw new Error("No model available for summary generation")
+```
+
+Do not silently fall back to the old RAG path.
+
+**Step 4: Call `createChatCompletion(...)` with separate instruction and source content**
 
 Send a request like:
 
@@ -121,7 +151,7 @@ Send a request like:
 
 Reuse the existing `readChatCompletionResponseText(...)` helper to extract the answer.
 
-**Step 4: Validate output with the existing finalization path**
+**Step 5: Validate output with the existing finalization path**
 
 Return `GenerationResult` with:
 
@@ -130,12 +160,12 @@ Return `GenerationResult` with:
 
 Do not bypass `finalizeGenerationResult(...)`. Let existing text validation continue to mark unusable outputs as failed.
 
-**Step 5: Update the summary branch in `handleGenerateOutput(...)`**
+**Step 6: Update the summary branch in `handleGenerateOutput(...)`**
 
 Pass the resolved direct-content options into `generateSummary(...)`, matching the established `mindmap` and `data_table` style:
 
 - selected sources
-- resolved model/runtime
+- resolved model/runtime from `resolveStudioChatRuntime()`
 - provider
 - temperature
 - top-p
@@ -143,7 +173,7 @@ Pass the resolved direct-content options into `generateSummary(...)`, matching t
 - abort signal
 - resolved summary prompt
 
-**Step 6: Run the focused suite to verify pass**
+**Step 7: Run the focused suite to verify pass**
 
 Run:
 
@@ -156,7 +186,7 @@ Expected:
 - the new summary tests pass
 - existing summary failure/success regression tests continue to pass
 
-**Step 7: Commit**
+**Step 8: Commit**
 
 ```bash
 git add /Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx /Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx
@@ -180,7 +210,16 @@ Add or adjust a test so that when effective selection is derived from folders:
 
 This ensures the bugfix works for effective selection, not only explicitly clicked sources.
 
-**Step 2: Run the targeted folder-context suite**
+**Step 2: Keep the folder-context contract aligned with the new path**
+
+Remove any remaining summary expectation that depends on `ragSearch(...)` or RAG request fields such as `media_ids`.
+
+Replace those with direct-content expectations:
+
+- `getMediaDetails(...)` called with the derived media ids
+- `createChatCompletion(...)` receives source text derived from the folder-backed effective selection
+
+**Step 3: Run the targeted folder-context suite**
 
 Run:
 
@@ -192,7 +231,7 @@ Expected:
 
 - the folder-derived summary contract passes with the new direct-content path
 
-**Step 3: Commit**
+**Step 4: Commit**
 
 ```bash
 git add /Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage5.folder-context.test.tsx
@@ -218,6 +257,8 @@ cd /Users/macbook-dev/Documents/GitHub/tldw_server2/apps/tldw-frontend && bunx v
 Expected:
 
 - all touched `StudioPane` suites pass
+
+During final review, confirm there are no stale summary tests left that still assert `ragSearch(...)` behavior.
 
 **Step 2: Run Bandit on the touched scope**
 

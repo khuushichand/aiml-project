@@ -109,7 +109,35 @@ Behavior:
 
 This makes the workspace summary feature honor the same prompt-setting surface the user has already configured.
 
-### 3. Separate Instruction Text From Source Content In The Request
+### 3. Define Summary Control Semantics Explicitly
+
+After this change, Summary should use:
+
+- shared generation controls:
+  - selected model/provider
+  - temperature
+  - top-p
+  - max tokens
+- workspace instruction text:
+  - `ragAdvancedOptions.generation_prompt`
+
+Summary should no longer use retrieval-oriented RAG controls such as:
+
+- `ragSearchMode`
+- `ragTopK`
+- `min_score`
+- `enable_reranking`
+- `enable_citations`
+
+This is an important contract clarification for the implementation and tests. The visible studio RAG controls may still appear in the UI, but this task should not claim they continue to affect Summary after the fix.
+
+If no chat model can be resolved for direct completion, Summary should fail with:
+
+- `No model available for summary generation`
+
+Changing or scoping the visible settings UI is out of scope for this task. A future UX cleanup can scope workspace settings by output type.
+
+### 4. Separate Instruction Text From Source Content In The Request
 
 The chat-completion request should be structured so the model cannot confuse instructions with the source material.
 
@@ -125,7 +153,7 @@ Recommended request shape:
 
 This explicitly prevents the prompt text from being treated as the thing to summarize.
 
-### 4. Reuse Existing Studio Source-Content Helpers
+### 5. Reuse Existing Studio Source-Content Helpers
 
 Do not create a parallel source-fetch stack for summary.
 
@@ -137,7 +165,7 @@ Reuse:
 
 This keeps summary behavior consistent with other direct-content generators and avoids new prompt-size or content-extraction drift.
 
-### 5. Preserve Existing Artifact Finalization And Visibility
+### 6. Preserve Existing Artifact Finalization And Visibility
 
 The existing shared artifact lifecycle stays in place:
 
@@ -156,6 +184,8 @@ Cases:
 
 - no selected sources:
   - existing disabled/button guard remains
+- no chat model available for direct completion:
+  - fail with `No model available for summary generation`
 - selected sources but no usable text returned by `loadStudioSourceContexts(...)`:
   - fail with `No usable summary source content was found.`
 - blank custom prompt:
@@ -165,17 +195,26 @@ Cases:
 - known backend error text or local failure sentinel:
   - fail and do not show success toast
 
+## Tradeoff: Long-Source Coverage
+
+This fix intentionally reuses `loadStudioSourceContexts(...)`, which clips source text using the existing per-source and total character budgets.
+
+That means Summary will use bounded leading content from the selected sources rather than retrieval-ranked passages. This is acceptable for the current bugfix because prompt/source separation is the primary correctness goal.
+
+If summary quality on long PDFs or transcripts remains weak after this fix, the next improvement should be selected-source chunk ranking or chunk sampling within the chosen sources, not a return to the current overloaded RAG prompt path.
+
 ## Testing Strategy
 
 Add or update `StudioPane` regression tests to cover:
 
 1. summary uses workspace `ragAdvancedOptions.generation_prompt` when present
 2. summary falls back to the default instruction when the workspace prompt is blank
-3. summary uses `createChatCompletion(...)`
-4. summary does not call `ragSearch(...)`
-5. selected source titles and fetched source text are included in the request payload
-6. empty or error-like completion output marks the artifact failed
-7. valid completion output completes the artifact and stores the generated summary
+3. summary fails with `No model available for summary generation` when no chat model resolves
+4. summary uses `createChatCompletion(...)`
+5. summary does not call `ragSearch(...)`
+6. selected source titles and fetched source text are included in the request payload
+7. empty or error-like completion output marks the artifact failed
+8. valid completion output completes the artifact and stores the generated summary
 
 One test should explicitly lock the bug report scenario:
 
@@ -187,9 +226,10 @@ One test should explicitly lock the bug report scenario:
 
 1. Add failing tests that lock the new summary contract.
 2. Replace summary RAG generation with direct selected-source content generation.
-3. Reuse existing artifact finalization and tighten summary failure messaging as needed.
-4. Run focused frontend tests.
-5. Record the backend follow-up item in the implementation plan and task summary.
+3. Define and test the no-model-available failure path.
+4. Reuse existing artifact finalization and tighten summary failure messaging as needed.
+5. Run focused frontend tests.
+6. Record the backend follow-up item in the implementation plan and task summary.
 
 ## Next Item
 
