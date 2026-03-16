@@ -437,6 +437,13 @@ export interface ChatCompletionRequest {
   grammar_inline?: string
   grammar_override?: string
   response_format?: { type: "json_object" | "text" }
+  routing?: {
+    strategy?: "llm_router" | "rules_router"
+    objective?: "highest_quality" | "lowest_cost" | "lowest_latency" | "balanced"
+    mode?: "per_turn" | "sticky_session"
+    cross_provider?: boolean
+    failure_mode?: "fallback_then_error" | "error"
+  }
 }
 
 export interface ServerChatSummary {
