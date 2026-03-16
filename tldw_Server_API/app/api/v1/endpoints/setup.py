@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Setup import install_manager, setup_manager
 from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup import audio_readiness_store
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import get_audio_bundle_catalog
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -138,6 +139,19 @@ async def get_audio_recommendations(
         prefer_offline_runtime=prefer_offline_runtime,
         allow_hosted_fallbacks=allow_hosted_fallbacks,
     )
+    catalog = get_audio_bundle_catalog()
+    bundle_lookup = {
+        bundle.bundle_id: bundle.model_dump() if hasattr(bundle, "model_dump") else dict(bundle)
+        for bundle in catalog.bundles
+    }
+    for recommendation in recommendations.get("recommendations", []):
+        bundle_id = recommendation.get("bundle_id")
+        if bundle_id in bundle_lookup:
+            recommendation["bundle"] = bundle_lookup[bundle_id]
+    for excluded_bundle in recommendations.get("excluded", []):
+        bundle_id = excluded_bundle.get("bundle_id")
+        if bundle_id in bundle_lookup:
+            excluded_bundle["bundle"] = bundle_lookup[bundle_id]
 
     return {
         "machine_profile": (
@@ -145,6 +159,7 @@ async def get_audio_recommendations(
             if hasattr(machine_profile, "model_dump")
             else dict(machine_profile)
         ),
+        "catalog": list(bundle_lookup.values()),
         **recommendations,
     }
 

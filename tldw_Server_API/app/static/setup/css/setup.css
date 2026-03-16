@@ -202,6 +202,244 @@
     gap: var(--spacing-sm, 12px);
 }
 
+.audio-bundle-stage {
+    gap: var(--spacing-lg, 24px);
+}
+
+.audio-stage-note {
+    margin: 0;
+    color: var(--color-text-secondary, #94a3b8);
+    line-height: 1.5;
+}
+
+.audio-profile-summary {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm, 12px);
+    padding: var(--spacing-sm, 12px) var(--spacing-md, 16px);
+    border-radius: var(--radius-sm, 10px);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(15, 17, 23, 0.55);
+}
+
+.audio-profile-title {
+    margin: 0;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-muted, #64748b);
+}
+
+.audio-profile-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.audio-profile-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.12);
+    color: #c7d2fe;
+    font-size: 0.9rem;
+}
+
+.audio-bundle-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md, 16px);
+    padding: var(--spacing-lg, 24px);
+    border-radius: var(--radius-md, 12px);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: linear-gradient(145deg, rgba(19, 25, 38, 0.95), rgba(12, 16, 25, 0.92));
+    box-shadow: 0 18px 36px rgba(8, 11, 18, 0.28);
+}
+
+.audio-bundle-card.selected {
+    border-color: rgba(99, 102, 241, 0.45);
+    box-shadow: 0 18px 36px rgba(99, 102, 241, 0.16);
+}
+
+.audio-bundle-card.recommended {
+    background: linear-gradient(145deg, rgba(24, 33, 52, 0.98), rgba(12, 16, 25, 0.92));
+}
+
+.audio-bundle-card.compact {
+    padding: var(--spacing-md, 16px);
+}
+
+.audio-bundle-card-header {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--spacing-md, 16px);
+    align-items: flex-start;
+}
+
+.audio-bundle-card-title {
+    margin: 0 0 6px;
+    font-size: 1.05rem;
+}
+
+.audio-bundle-card-description {
+    margin: 0;
+    color: var(--color-text-secondary, #94a3b8);
+    line-height: 1.5;
+}
+
+.audio-bundle-card-badges {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.audio-bundle-reasons {
+    margin: 0;
+    padding-left: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--color-text-secondary, #94a3b8);
+}
+
+.audio-bundle-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.audio-bundle-meta-item {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.12);
+    color: var(--color-text, #e2e8f0);
+    font-size: 0.9rem;
+}
+
+.audio-bundle-tier-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.audio-bundle-tier-title {
+    margin: 0;
+    color: #c7d2fe;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.audio-bundle-tier-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.audio-bundle-tier-item {
+    padding: var(--spacing-sm, 12px) var(--spacing-md, 16px);
+    border-radius: var(--radius-sm, 10px);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(15, 17, 23, 0.55);
+}
+
+.audio-bundle-tier-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.audio-bundle-tier-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+}
+
+.audio-bundle-tier-label {
+    font-weight: 600;
+}
+
+.audio-bundle-tier-hint {
+    margin: 0;
+    color: var(--color-text-muted, #64748b);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.audio-bundle-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.audio-bundle-alt-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--spacing-md, 16px);
+}
+
+.audio-readiness-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md, 16px);
+    padding: var(--spacing-md, 16px) var(--spacing-lg, 24px);
+    border-radius: var(--radius-md, 12px);
+    border: 1px solid rgba(99, 102, 241, 0.22);
+    background: rgba(12, 16, 25, 0.9);
+}
+
+.audio-readiness-header {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--spacing-sm, 12px);
+    align-items: center;
+}
+
+.audio-readiness-header h5 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.audio-readiness-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.audio-readiness-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: var(--spacing-sm, 12px);
+    border-radius: var(--radius-sm, 10px);
+    background: rgba(15, 17, 23, 0.58);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.audio-readiness-label {
+    color: var(--color-text-muted, #64748b);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.audio-readiness-value {
+    color: var(--color-text, #e2e8f0);
+    font-weight: 600;
+}
+
+.audio-readiness-empty {
+    margin: 0;
+    color: var(--color-text-secondary, #94a3b8);
+}
+
 .install-option-card {
     display: flex;
     flex-direction: column;
@@ -722,6 +960,12 @@
 .install-step.completed {
     border-color: rgba(34, 197, 94, 0.3);
     background: rgba(34, 197, 94, 0.1);
+}
+
+.install-step.guided_action_required,
+.install-step.pending {
+    border-color: rgba(250, 204, 21, 0.35);
+    background: rgba(250, 204, 21, 0.08);
 }
 
 .install-status-errors {
