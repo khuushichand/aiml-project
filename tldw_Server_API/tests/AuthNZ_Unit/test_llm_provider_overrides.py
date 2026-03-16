@@ -1,6 +1,7 @@
 from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
     LLMProviderOverride,
     apply_llm_provider_overrides_to_listing,
+    get_override_model_priority,
     set_llm_provider_overrides_cache_for_tests,
     validate_provider_override,
 )
@@ -58,5 +59,29 @@ def test_validate_provider_override_blocks_disallowed_model() -> None:
 
     allowed = validate_provider_override("openai", "gpt-4o")
     assert allowed is None
+
+    set_llm_provider_overrides_cache_for_tests({})
+
+
+def test_get_override_model_priority_reads_routing_rankings() -> None:
+    set_llm_provider_overrides_cache_for_tests(
+        {
+            "openai": LLMProviderOverride(
+                provider="openai",
+                config={
+                    "routing": {
+                        "model_rankings": {
+                            "highest_quality": ["gpt-4.1", "gpt-4.1-mini"],
+                        }
+                    }
+                },
+            )
+        }
+    )
+
+    assert get_override_model_priority("openai", "highest_quality") == [
+        "gpt-4.1",
+        "gpt-4.1-mini",
+    ]
 
     set_llm_provider_overrides_cache_for_tests({})

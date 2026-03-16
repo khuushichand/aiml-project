@@ -160,6 +160,14 @@ def apply_llm_provider_overrides_to_listing(payload: dict[str, Any]) -> dict[str
             models = [str(v).strip() for v in config_models if str(v).strip()]
         if override.allowed_models:
             models = [m for m in models if m in override.allowed_models] if models else list(override.allowed_models)
+
+        preferred_order = get_override_model_priority(provider_name, "highest_quality")
+        if preferred_order:
+            order_index = {name: index for index, name in enumerate(preferred_order)}
+            models = sorted(
+                models,
+                key=lambda model_name: (order_index.get(model_name, len(order_index)), model_name),
+            )
         merged["models"] = models
 
         models_info = merged.get("models_info")
@@ -171,6 +179,15 @@ def apply_llm_provider_overrides_to_listing(payload: dict[str, Any]) -> dict[str
                 if mi.get("name") in models:
                     filtered_info.append(mi)
             merged["models_info"] = filtered_info
+        if isinstance(merged.get("models_info"), list) and preferred_order:
+            order_index = {name: index for index, name in enumerate(preferred_order)}
+            merged["models_info"] = sorted(
+                merged["models_info"],
+                key=lambda model_info: (
+                    order_index.get(str(model_info.get("name") or ""), len(order_index)),
+                    str(model_info.get("name") or ""),
+                ),
+            )
 
         default_model = override.config.get("default_model")
         if isinstance(default_model, str) and default_model.strip():
@@ -205,6 +222,30 @@ def validate_provider_override(provider: str, model: str | None) -> dict[str, st
             "error_code": "model_not_allowed",
             "message": f"Model '{model}' is not allowed for provider '{provider}'.",
         }
+    return None
+
+
+def get_override_model_priority(provider: str, objective: str = "highest_quality") -> list[str] | None:
+    override = get_llm_provider_override(provider)
+    if not override:
+        return None
+
+    config = override.config if isinstance(override.config, dict) else {}
+
+    routing_config = config.get("routing")
+    if isinstance(routing_config, dict):
+        model_rankings = routing_config.get("model_rankings")
+        if isinstance(model_rankings, dict):
+            ranked_models = _normalize_models(model_rankings.get(objective))
+            if ranked_models:
+                return ranked_models
+
+    model_rankings = config.get("model_rankings")
+    if isinstance(model_rankings, dict):
+        ranked_models = _normalize_models(model_rankings.get(objective))
+        if ranked_models:
+            return ranked_models
+
     return None
 
 
