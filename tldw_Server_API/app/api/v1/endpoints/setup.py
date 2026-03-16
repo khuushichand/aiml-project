@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Setup import install_manager, setup_manager
 from tldw_Server_API.app.core.Setup import audio_profile_service
+from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -133,6 +134,36 @@ async def get_audio_recommendations(
             else dict(machine_profile)
         ),
         **recommendations,
+    }
+
+
+@router.get("/audio/readiness", openapi_extra={"security": []})
+async def get_audio_readiness(
+    _guard: None = Depends(require_local_setup_access),
+) -> dict[str, Any]:
+    """Return the persisted setup audio readiness snapshot."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    return audio_readiness_store.get_audio_readiness_store().load()
+
+
+@router.post("/audio/readiness/reset", openapi_extra={"security": []})
+async def reset_audio_readiness(
+    _guard: None = Depends(require_local_setup_access),
+) -> dict[str, Any]:
+    """Reset the persisted setup audio readiness snapshot."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    readiness = audio_readiness_store.get_audio_readiness_store().reset()
+    return {
+        "success": True,
+        "audio_readiness": readiness,
     }
 
 

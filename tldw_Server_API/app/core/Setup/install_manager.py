@@ -21,6 +21,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.core.Setup.install_schema import DEFAULT_WHISPER_MODELS, InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -428,6 +429,13 @@ def execute_install_plan(plan_payload: dict[str, Any]) -> None:
         logger.info("Install plan empty; nothing to install.")
         return
 
+    readiness = audio_readiness_store.get_audio_readiness_store()
+    readiness.update(
+        status='provisioning',
+        remediation_items=[],
+        last_verification=None,
+    )
+
     status = InstallationStatus(plan)
     errors: list[str] = []
 
@@ -442,8 +450,16 @@ def execute_install_plan(plan_payload: dict[str, Any]) -> None:
 
     if errors:
         status.fail('; '.join(errors))
+        readiness.update(
+            status='failed',
+            remediation_items=errors,
+        )
     else:
         status.complete()
+        readiness.update(
+            status='partial',
+            remediation_items=['Run audio verification to confirm readiness.'],
+        )
 
 def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     any_stt = False
