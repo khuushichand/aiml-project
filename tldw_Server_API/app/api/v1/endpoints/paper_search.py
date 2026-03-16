@@ -1269,7 +1269,8 @@ async def eartharxiv_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"eartharxiv:{osf_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -3885,7 +3886,8 @@ async def osf_ingest(
         # Persist
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"osf:{osf_id}",
                 title=title or osf_id,
                 media_type="pdf",
@@ -4213,7 +4215,8 @@ async def zenodo_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"zenodo:{record_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -4481,7 +4484,8 @@ async def figshare_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"figshare:{article_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -4636,7 +4640,8 @@ async def figshare_ingest_by_doi(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"figshare:{article_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -4880,7 +4885,8 @@ async def hal_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"hal:{docid}",
                 title=title_for_db,
                 media_type="pdf",
@@ -5037,7 +5043,8 @@ async def vixra_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"vixra:{vid}",
                 title=title_for_db,
                 media_type="pdf",
