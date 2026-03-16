@@ -36,6 +36,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     DatabaseError,
     InputError,
     MediaDatabase,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
     fetch_keywords_for_media_batch,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (

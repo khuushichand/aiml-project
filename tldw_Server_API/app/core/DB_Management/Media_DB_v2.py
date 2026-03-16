@@ -134,8 +134,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_document_artifacts i
     get_specific_analysis,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
-    fetch_keywords_for_media,
-    fetch_keywords_for_media_batch,
+    fetch_keywords_for_media as _fetch_keywords_for_media,
     get_all_content_from_database,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
@@ -15369,7 +15368,7 @@ def get_full_media_details(db_instance: MediaDatabase, media_id: int, *, include
     latest = get_document_version(db_instance, media_id=media_id, version_number=None, include_content=include_content)
     # Keywords
     try:
-        keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
+        keywords = _fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
     except _MEDIA_NONCRITICAL_EXCEPTIONS:
         keywords = []
 
@@ -15417,7 +15416,7 @@ def get_full_media_details_rich(
 
     # Keywords
     try:
-        keywords = fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
+        keywords = _fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
     except _MEDIA_NONCRITICAL_EXCEPTIONS:
         keywords = []
 

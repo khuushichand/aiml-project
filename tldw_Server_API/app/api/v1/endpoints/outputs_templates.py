@@ -199,8 +199,10 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
         latest = None
         try:
             from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-                fetch_keywords_for_media,
                 get_document_version,
+            )
+            from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+                fetch_keywords_for_media,
             )
             latest = get_document_version(media_db, media_id=mid, version_number=None, include_content=False)
             tags = fetch_keywords_for_media(media_id=mid, db_instance=media_db) or []
