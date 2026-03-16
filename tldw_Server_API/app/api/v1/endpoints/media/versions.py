@@ -42,6 +42,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     InputError,
     MediaDatabase,
     check_media_exists,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version,
 )
 from tldw_Server_API.app.core.Utils.metadata_utils import (
