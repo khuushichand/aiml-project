@@ -1,5 +1,6 @@
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    get_document_version,
     import_obsidian_note_to_db,
     ingest_article_to_db_new,
 )
@@ -166,6 +167,46 @@ def test_import_obsidian_note_wrapper_uses_media_repository(monkeypatch) -> None
         assert "author: Jane" in str(captured["kwargs"]["analysis_content"])
         assert captured["kwargs"]["ingestion_date"] == "2024-01-02T03:04:05Z"
         assert captured["kwargs"]["overwrite"] is True
+    finally:
+        db.close_connection()
+
+
+def test_get_document_version_wrapper_uses_document_versions_repository(monkeypatch) -> None:
+    db = MediaDatabase(db_path=":memory:", client_id="version-wrapper")
+    sentinel = {"media_id": 11, "version_number": 2, "content": "delegated"}
+    captured: dict[str, object] = {}
+
+    def fake_get(self, *, media_id, version_number=None, include_content=True):
+        captured["session"] = self.session
+        captured["kwargs"] = {
+            "media_id": media_id,
+            "version_number": version_number,
+            "include_content": include_content,
+        }
+        return sentinel
+
+    monkeypatch.setattr(
+        DocumentVersionsRepository,
+        "get",
+        fake_get,
+        raising=False,
+    )
+
+    try:
+        result = get_document_version(
+            db,
+            media_id=11,
+            version_number=2,
+            include_content=False,
+        )
+
+        assert result == sentinel
+        assert captured["session"] is db
+        assert captured["kwargs"] == {
+            "media_id": 11,
+            "version_number": 2,
+            "include_content": False,
+        }
     finally:
         db.close_connection()
 

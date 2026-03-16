@@ -110,6 +110,11 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.rows import (
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.execution import (
     close_sqlite_ephemeral,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    get_document_version,
+    import_obsidian_note_to_db,
+    ingest_article_to_db_new,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.schema.bootstrap import (
     ensure_media_schema,
 )
@@ -16200,16 +16205,6 @@ MediaDatabase.process_chunks = process_chunks
 # These generally call instance methods now, which handle logging/FTS internally.
 
 
-def get_document_version(db_instance: MediaDatabase, media_id: int, version_number: int | None = None, include_content: bool = True) -> dict[str, Any] | None:
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance must be a Database object.")  # noqa: TRY003
-    return DocumentVersionsRepository.from_legacy_db(db_instance).get(
-        media_id=media_id,
-        version_number=version_number,
-        include_content=include_content,
-    )
-
-
 # Backup functions remain placeholders or need proper implementation
 def create_incremental_backup(db_path, backup_dir):
     """Create an incremental backup using the DB_Backups helper.
@@ -16514,125 +16509,6 @@ def mark_media_as_processed(db_instance: MediaDatabase, media_id: int):
     except (DatabaseError, sqlite3.Error) as e:
         logger.exception(f"Error marking media {media_id} processed '{db_instance.db_path_str}'")
         raise DatabaseError(f"Failed mark media {media_id} processed") from e  # noqa: TRY003
-
-# Ingestion wrappers call instance methods
-def ingest_article_to_db_new(db_instance: MediaDatabase, *,
-                             url: str, title: str,
-                             content: str,
-                             author: str | None = None,
-                             keywords: list[str] | None = None,
-                             summary: str | None = None,
-                             ingestion_date: str | None = None,
-                             custom_prompt: str | None = None,
-                             overwrite: bool = False) -> tuple[int | None,
-                            str | None, str]:
-    """
-    Wrapper function to add or update an article using `add_media_with_keywords`.
-
-    Sets `media_type` to 'article'. Uses `summary` as `analysis_content` and
-    `custom_prompt` as `prompt` for the initial document version.
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        url (str): The URL of the article. Required.
-        title (str): The title of the article. Required.
-        content (str): The main content of the article. Required.
-        author (Optional[str]): Author of the article.
-        keywords (Optional[List[str]]): Keywords associated with the article.
-        summary (Optional[str]): A summary or analysis of the article.
-        ingestion_date (Optional[str]): ISO 8601 UTC timestamp string. Defaults to now.
-        custom_prompt (Optional[str]): A prompt related to the article/summary.
-        overwrite (bool): If True, update if article exists. Defaults to False.
-
-    Returns:
-        Tuple[Optional[int], Optional[str], str]: Result from `add_media_with_keywords`:
-            (media_id, media_uuid, message).
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object.
-        InputError: If required fields (url, title, content) are missing/invalid.
-        ConflictError: If overwrite=True and update fails due to version conflict.
-        DatabaseError: For underlying database or sync/FTS errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    if not url or not title or content is None:
-        raise InputError("URL, Title, and Content are required.")  # noqa: TRY003
-    media_repo = MediaRepository.from_legacy_db(db_instance)
-    return media_repo.add_media_with_keywords(
-        url=url,
-        title=title,
-        media_type='article',
-        content=content,
-        keywords=keywords,
-        prompt=custom_prompt,
-        analysis_content=summary,
-        author=author,
-        ingestion_date=ingestion_date,
-        overwrite=overwrite
-    )
-
-
-def import_obsidian_note_to_db(db_instance: MediaDatabase, note_data: dict[str, Any]) -> tuple[int | None, str | None, str]:
-    """
-    Wrapper function to add or update an Obsidian note using `add_media_with_keywords`.
-
-    Extracts relevant fields from the `note_data` dictionary. Uses Obsidian tags
-    as keywords and YAML frontmatter (if present and valid) as `analysis_content`.
-    Constructs a default URL like 'obsidian://note/TITLE'.
-
-    Requires `pyyaml` to be installed to parse frontmatter.
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        note_data (Dict[str, Any]): A dictionary containing note information.
-            Expected keys: 'title' (str, required), 'content' (str, required).
-            Optional keys: 'tags' (List[str|int]), 'frontmatter' (Dict),
-            'file_created_date' (str, ISO 8601 UTC), 'overwrite' (bool).
-
-    Returns:
-        Tuple[Optional[int], Optional[str], str]: Result from `add_media_with_keywords`:
-            (media_id, media_uuid, message).
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object or `note_data` is not a dict.
-        InputError: If required keys ('title', 'content') are missing or invalid in `note_data`.
-        ConflictError: If overwrite=True and update fails due to version conflict.
-        DatabaseError: For underlying database or sync/FTS errors.
-        ImportError: If `yaml` library is needed but not installed.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    required = ['title', 'content']
-    missing = [k for k in required if k not in note_data or note_data[k] is None]
-    if missing:
-        raise InputError(f"Obsidian note missing required keys: {missing}")  # noqa: TRY003
-    url_id = f"obsidian://note/{note_data['title']}"
-    kw = note_data.get('tags', [])
-    kw = [str(k) for k in kw if isinstance(k, (str, int))]
-    fm_str = None
-    fm = note_data.get('frontmatter')
-    author = None
-    if isinstance(fm, dict):
-        author = fm.get('author')
-        try:
-            fm_str = yaml.dump(fm, default_flow_style=False)
-        except _MEDIA_NONCRITICAL_EXCEPTIONS:
-            logger.exception("Error dumping frontmatter")
-    media_repo = MediaRepository.from_legacy_db(db_instance)
-    return media_repo.add_media_with_keywords(
-        url=url_id,
-        title=note_data['title'],
-        media_type='obsidian_note',
-        content=note_data['content'],
-        keywords=kw,
-        author=author,
-        prompt="Obsidian Frontmatter" if fm_str else None,
-        analysis_content=fm_str,
-        ingestion_date=note_data.get('file_created_date'),
-        overwrite=note_data.get('overwrite', False),
-    )
-
 
 # Read functions call instance methods or query directly with filters
 def get_media_transcripts(db_instance: MediaDatabase, media_id: int) -> list[dict]:

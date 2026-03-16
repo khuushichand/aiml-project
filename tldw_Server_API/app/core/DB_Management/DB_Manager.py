@@ -42,6 +42,15 @@ from tldw_Server_API.app.core.DB_Management.content_backend import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    get_document_version as sqlite_get_document_version,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    ingest_article_to_db_new as sqlite_ingest_article_to_db,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
 )
@@ -62,9 +71,6 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_all_content_from_database as sqlite_get_all_content_from_database,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_document_version as sqlite_get_document_version,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_full_media_details as sqlite_get_full_media_details,
@@ -89,12 +95,6 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_unprocessed_media as sqlite_get_unprocessed_media,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    ingest_article_to_db_new as sqlite_ingest_article_to_db,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     mark_media_as_processed as sqlite_mark_media_as_processed,
