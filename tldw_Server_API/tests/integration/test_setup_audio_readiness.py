@@ -63,3 +63,25 @@ def test_audio_readiness_reset_endpoint_restores_default_state(mocker, tmp_path)
     assert readiness.status_code == 200
     assert readiness.json()["status"] == "not_started"
     assert readiness.json()["selected_bundle_id"] is None
+
+
+def test_audio_provision_endpoint_accepts_resource_profile(mocker):
+    mocker.patch.object(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        return_value={"enabled": True, "needs_setup": True},
+    )
+    execute_mock = mocker.patch.object(
+        setup_endpoint.install_manager,
+        "execute_audio_bundle",
+        return_value={"status": "completed", "bundle_id": "cpu_local", "resource_profile": "balanced"},
+    )
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/audio/provision",
+            json={"bundle_id": "cpu_local", "resource_profile": "balanced"},
+        )
+
+    assert response.status_code == 200
+    execute_mock.assert_called_once_with("cpu_local", resource_profile="balanced", safe_rerun=False)

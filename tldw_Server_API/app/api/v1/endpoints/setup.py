@@ -21,7 +21,10 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Setup import install_manager, setup_manager
 from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup import audio_readiness_store
-from tldw_Server_API.app.core.Setup.audio_bundle_catalog import get_audio_bundle_catalog
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    DEFAULT_AUDIO_RESOURCE_PROFILE,
+    get_audio_bundle_catalog,
+)
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -53,6 +56,11 @@ class AssistantQuestion(BaseModel):
 
 class AudioBundleProvisionRequest(BaseModel):
     bundle_id: str = Field(..., min_length=1, description="Curated audio bundle identifier to provision.")
+    resource_profile: str = Field(
+        DEFAULT_AUDIO_RESOURCE_PROFILE,
+        min_length=1,
+        description="Selected resource profile within the curated audio bundle.",
+    )
     safe_rerun: bool = Field(
         False,
         description="If true, skip bundle installation only when all expected install steps were previously completed.",
@@ -211,6 +219,7 @@ async def provision_audio_bundle(
     try:
         return install_manager.execute_audio_bundle(
             payload.bundle_id,
+            resource_profile=payload.resource_profile,
             safe_rerun=payload.safe_rerun,
         )
     except KeyError as exc:

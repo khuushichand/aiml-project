@@ -27,7 +27,14 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup import setup_manager
-from tldw_Server_API.app.core.Setup.audio_bundle_catalog import AudioBundleStep, AutomationTier, get_audio_bundle_catalog
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    AUDIO_BUNDLE_CATALOG_VERSION,
+    AudioBundleStep,
+    AutomationTier,
+    DEFAULT_AUDIO_RESOURCE_PROFILE,
+    build_audio_selection_key,
+    get_audio_bundle_catalog,
+)
 from tldw_Server_API.app.core.Setup.install_schema import DEFAULT_WHISPER_MODELS, InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
@@ -370,6 +377,18 @@ def _record_latest_status(data: dict[str, Any]) -> None:
     _LATEST_STATUS_DATA = json.loads(json.dumps(data))
 
 
+def _persist_install_status_snapshot(data: dict[str, Any]) -> None:
+    """Persist an install status snapshot with the same shape used by InstallationStatus."""
+
+    path = _resolve_status_file()
+    if path:
+        try:
+            path.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        except Exception:  # noqa: BLE001
+            logger.warning('Failed to persist qualified setup install status to {}', path, exc_info=True)
+    _record_latest_status(data)
+
+
 # --- HTTPX network error detection -------------------------------------------
 def _is_httpx_network_error(exc: Exception) -> bool:
     """Return True if the exception is an httpx HTTP/network error.
@@ -468,41 +487,58 @@ def execute_install_plan(plan_payload: dict[str, Any]) -> None:
     return json.loads(json.dumps(status.data))
 
 
-def build_install_plan_from_bundle(bundle_id: str) -> InstallPlan:
+def build_install_plan_from_bundle(
+    bundle_id: str,
+    resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+) -> InstallPlan:
     """Expand a curated bundle into the existing installer plan schema."""
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    selected_profile = bundle.profile_by_id(resource_profile)
     return InstallPlan.model_validate(
         {
-            "stt": bundle.stt_plan,
-            "tts": bundle.tts_plan,
-            "embeddings": bundle.embeddings_plan,
+            "stt": selected_profile.stt_plan,
+            "tts": selected_profile.tts_plan,
+            "embeddings": selected_profile.embeddings_plan,
         }
     )
 
 
-def _plan_step_names(plan: InstallPlan) -> set[str]:
+def _entry_suffix(entry: Any, attribute: str, default: str = "default") -> str:
+    values = getattr(entry, attribute, None) or []
+    normalized = [str(value).strip().replace(" ", "_") for value in values if str(value).strip()]
+    return "-".join(normalized) if normalized else default
+
+
+def _plan_step_names(
+    plan: InstallPlan,
+    *,
+    bundle_id: str,
+    resource_profile: str,
+    catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
+) -> set[str]:
     step_names: set[str] = set()
+    selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
 
     for entry in plan.stt:
-        step_names.add(f"deps:stt:{entry.engine}")
-        step_names.add(f"stt:{entry.engine}")
+        step_names.add(f"{selection_key}:deps:stt:{entry.engine}")
+        step_names.add(f"{selection_key}:stt:{entry.engine}:{_entry_suffix(entry, 'models')}")
     if plan.stt:
-        step_names.add("stt:silero_vad")
+        step_names.add(f"{selection_key}:stt:silero_vad")
 
     for entry in plan.tts:
-        step_names.add(f"deps:tts:{entry.engine}")
-        step_names.add(f"tts:{entry.engine}")
+        step_names.add(f"{selection_key}:deps:tts:{entry.engine}")
+        step_names.add(f"{selection_key}:tts:{entry.engine}:{_entry_suffix(entry, 'variants')}")
 
     if plan.embeddings.huggingface:
-        step_names.add("deps:embeddings:huggingface")
-        step_names.add("embeddings:huggingface")
+        step_names.add(f"{selection_key}:deps:embeddings:huggingface")
+        step_names.add(f"{selection_key}:embeddings:huggingface")
     if plan.embeddings.custom:
-        step_names.add("deps:embeddings:custom")
-        step_names.add("embeddings:custom")
+        step_names.add(f"{selection_key}:deps:embeddings:custom")
+        step_names.add(f"{selection_key}:embeddings:custom")
     if plan.embeddings.onnx:
-        step_names.add("deps:embeddings:onnx")
-        step_names.add("embeddings:onnx")
+        step_names.add(f"{selection_key}:deps:embeddings:onnx")
+        step_names.add(f"{selection_key}:embeddings:onnx")
 
     return step_names
 
@@ -532,17 +568,73 @@ def _system_prerequisite_status(
     return "pending", bundle_step.detail
 
 
-def execute_audio_bundle(bundle_id: str, *, safe_rerun: bool = False) -> dict[str, Any]:
+def _qualify_install_step_name(
+    name: str,
+    plan: InstallPlan,
+    *,
+    bundle_id: str,
+    resource_profile: str,
+    catalog_version: str,
+) -> str:
+    selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
+    if name.startswith("deps:") or name.startswith("embeddings:") or name == "stt:silero_vad":
+        return f"{selection_key}:{name}"
+    if name.startswith("stt:"):
+        engine = name.split(":", 1)[1]
+        entry = next((candidate for candidate in plan.stt if candidate.engine == engine), None)
+        return f"{selection_key}:stt:{engine}:{_entry_suffix(entry, 'models') if entry else 'default'}"
+    if name.startswith("tts:"):
+        engine = name.split(":", 1)[1]
+        entry = next((candidate for candidate in plan.tts if candidate.engine == engine), None)
+        return f"{selection_key}:tts:{engine}:{_entry_suffix(entry, 'variants') if entry else 'default'}"
+    return f"{selection_key}:{name}"
+
+
+def _qualify_install_result(
+    install_result: dict[str, Any],
+    plan: InstallPlan,
+    *,
+    bundle_id: str,
+    resource_profile: str,
+    catalog_version: str,
+) -> dict[str, Any]:
+    qualified = json.loads(json.dumps(install_result))
+    qualified["steps"] = [
+        {
+            **step,
+            "name": _qualify_install_step_name(
+                step.get("name", ""),
+                plan,
+                bundle_id=bundle_id,
+                resource_profile=resource_profile,
+                catalog_version=catalog_version,
+            ),
+        }
+        for step in install_result.get("steps", [])
+    ]
+    return qualified
+
+
+def execute_audio_bundle(
+    bundle_id: str,
+    *,
+    resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    safe_rerun: bool = False,
+) -> dict[str, Any]:
     """Provision a curated audio bundle using the existing installer substrate."""
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
-    plan = build_install_plan_from_bundle(bundle_id)
+    plan = build_install_plan_from_bundle(bundle_id, resource_profile=resource_profile)
     plan_payload = model_dump_compat(plan)
     machine_profile = audio_profile_service.detect_machine_profile()
     readiness = audio_readiness_store.get_audio_readiness_store()
+    selection_key = build_audio_selection_key(bundle_id, resource_profile, bundle.catalog_version)
     readiness.update(
         status="provisioning",
         selected_bundle_id=bundle_id,
+        selected_resource_profile=resource_profile,
+        catalog_version=bundle.catalog_version,
+        selection_key=selection_key,
         machine_profile=machine_profile.model_dump(),
         remediation_items=[],
         last_verification=None,
@@ -553,13 +645,18 @@ def execute_audio_bundle(bundle_id: str, *, safe_rerun: bool = False) -> dict[st
         status_value, detail = _system_prerequisite_status(prerequisite, machine_profile)
         result_steps.append(
             {
-                "name": f"system:{prerequisite.step_id}",
+                "name": f"{selection_key}:system:{prerequisite.step_id}",
                 "status": status_value,
                 "detail": detail,
             }
         )
 
-    expected_steps = _plan_step_names(plan)
+    expected_steps = _plan_step_names(
+        plan,
+        bundle_id=bundle_id,
+        resource_profile=resource_profile,
+        catalog_version=bundle.catalog_version,
+    )
     completed_steps = _completed_step_names(get_install_status_snapshot()) if safe_rerun else set()
     if safe_rerun and expected_steps and expected_steps.issubset(completed_steps):
         for step_name in sorted(expected_steps):
@@ -576,20 +673,34 @@ def execute_audio_bundle(bundle_id: str, *, safe_rerun: bool = False) -> dict[st
         )
         return {
             "bundle_id": bundle_id,
+            "resource_profile": resource_profile,
+            "selection_key": selection_key,
             "safe_rerun": True,
             "install_plan": plan_payload,
             "steps": result_steps,
             "status": "partial",
         }
 
-    install_result = execute_install_plan(plan_payload) or {"steps": [], "status": "failed"}
-    result_steps.extend(install_result.get("steps", []))
+    install_result = execute_install_plan(plan_payload) or {"steps": [], "status": "failed", "errors": []}
+    qualified_install_result = _qualify_install_result(
+        install_result,
+        plan,
+        bundle_id=bundle_id,
+        resource_profile=resource_profile,
+        catalog_version=bundle.catalog_version,
+    )
+    if qualified_install_result:
+        qualified_install_result["plan"] = plan_payload
+        _persist_install_status_snapshot(qualified_install_result)
+    result_steps.extend(qualified_install_result.get("steps", []))
     return {
         "bundle_id": bundle_id,
+        "resource_profile": resource_profile,
+        "selection_key": selection_key,
         "safe_rerun": safe_rerun,
         "install_plan": plan_payload,
         "steps": result_steps,
-        "status": install_result.get("status"),
+        "status": qualified_install_result.get("status"),
     }
 
 
