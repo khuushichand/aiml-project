@@ -155,3 +155,23 @@ def test_extract_media_text_uses_document_version_before_transcript(monkeypatch)
 
     result = jobs_worker._extract_media_text(StubDb(), 7)
     assert result == "document version fallback"
+
+
+def test_extract_media_text_uses_transcript_when_document_version_missing(monkeypatch):
+    class StubDb:
+        def get_media_by_id(self, media_id: int):
+            return {"id": media_id, "content": ""}
+
+    monkeypatch.setattr(
+        jobs_worker,
+        "get_document_version",
+        lambda db, media_id, version_number=None, include_content=True: None,
+    )
+    monkeypatch.setattr(
+        jobs_worker,
+        "get_latest_transcription",
+        lambda db, media_id: "transcript fallback",
+    )
+
+    result = jobs_worker._extract_media_text(StubDb(), 8)
+    assert result == "transcript fallback"

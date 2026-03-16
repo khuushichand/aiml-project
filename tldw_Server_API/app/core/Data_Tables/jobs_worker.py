@@ -51,6 +51,8 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
