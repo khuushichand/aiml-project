@@ -59,6 +59,18 @@ class RoutingPolicy:
 
 
 @dataclass(frozen=True)
+class RouterRequest:
+    """Normalized request context passed into the router service."""
+
+    model: str
+    surface: str
+    latest_user_turn: str | None = None
+    scope: str | None = None
+    requested_capabilities: dict[str, Any] = field(default_factory=dict)
+    routing_context: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class RoutingDecision:
     """Concrete provider/model pair chosen by the router."""
 
