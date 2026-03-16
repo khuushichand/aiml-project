@@ -18,6 +18,7 @@ try:
     from tldw_Server_API.app.core.Jobs.manager import JobManager
 except ImportError:  # pragma: no cover - optional
     JobManager = None  # type: ignore
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _CONNECTOR_NONCRITICAL_EXCEPTIONS = (
@@ -217,6 +218,38 @@ def _safe_positive_int(value: Any, default: int) -> int:
     except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
         return int(default)
     return parsed if parsed > 0 else int(default)
+
+
+def _ingest_connector_media(
+    *,
+    media_db: Any,
+    url: str,
+    title: str,
+    media_type: str,
+    content: str,
+    keywords: list[str],
+    overwrite: bool = False,
+    **kwargs: Any,
+) -> tuple[Any, Any, Any]:
+    """Route connector ingest through the repository API for real DB sessions.
+
+    Lightweight test doubles that only expose ``add_media_with_keywords`` keep
+    using that method directly so worker tests can stay narrow.
+    """
+    media_writer = (
+        get_media_repository(media_db)
+        if hasattr(media_db, "backend") or hasattr(media_db, "db_path")
+        else media_db
+    )
+    return media_writer.add_media_with_keywords(
+        url=url,
+        title=title,
+        media_type=media_type,
+        content=content,
+        keywords=keywords,
+        overwrite=overwrite,
+        **kwargs,
+    )
 
 
 def _parse_iso_utc(value: Any) -> datetime | None:
@@ -1544,7 +1577,8 @@ async def _process_import_job(
 
                     url = f"gmail://{source_id}/{fid}"
                     try:
-                        media_id, _, _ = mdb.add_media_with_keywords(
+                        media_id, _, _ = _ingest_connector_media(
+                            media_db=mdb,
                             url=url,
                             title=subject,
                             media_type="email",
@@ -1731,7 +1765,8 @@ async def _process_import_job(
                 url = f"{provider}://{fid}"
                 ingested = False
                 try:
-                    _mid, _m_uuid, _msg = mdb.add_media_with_keywords(
+                    _mid, _m_uuid, _msg = _ingest_connector_media(
+                        media_db=mdb,
                         url=url,
                         title=title,
                         media_type="document",
