@@ -11,6 +11,11 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_specific_prompt,
     get_specific_transcript,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
+    check_media_exists,
+    get_unprocessed_media,
+    mark_media_as_processed,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.repositories.chunks_repository import (
     ChunksRepository,
 )
@@ -254,6 +259,55 @@ def test_legacy_read_wrappers_round_trip_transcripts_and_prompts() -> None:
         assert specific_prompt == "Prompt 2"
         assert specific_transcript is not None
         assert specific_transcript["uuid"] == transcript["uuid"]
+    finally:
+        db.close_connection()
+
+
+def test_legacy_state_wrappers_round_trip_exists_and_processing_flags() -> None:
+    db = MediaDatabase(db_path=":memory:", client_id="legacy-state-wrappers")
+    media_repo = MediaRepository.from_legacy_db(db)
+    try:
+        media_id, media_uuid, _msg = media_repo.add_text_media(
+            title="Stateful doc",
+            content="needs vectors",
+            media_type="text",
+            url="https://example.com/stateful",
+        )
+
+        by_id = check_media_exists(db, media_id=media_id)
+        by_url = check_media_exists(db, url="https://example.com/stateful/")
+        unprocessed_before = get_unprocessed_media(db)
+
+        mark_media_as_processed(db, media_id)
+
+        unprocessed_after = get_unprocessed_media(db)
+        media_row = db.execute_query(
+            "SELECT vector_processing, version, client_id FROM Media WHERE id = ?",
+            (media_id,),
+        ).fetchone()
+        sync_row = db.execute_query(
+            """
+            SELECT operation, version, client_id
+            FROM sync_log
+            WHERE entity = 'Media' AND entity_uuid = ?
+            ORDER BY change_id DESC
+            LIMIT 1
+            """,
+            (media_uuid,),
+        ).fetchone()
+
+        assert by_id == media_id
+        assert by_url == media_id
+        assert any(row["id"] == media_id and row["uuid"] == media_uuid for row in unprocessed_before)
+        assert all(row["id"] != media_id for row in unprocessed_after)
+        assert media_row is not None
+        assert media_row["vector_processing"] == 1
+        assert media_row["version"] == 2
+        assert media_row["client_id"] == "legacy-state-wrappers"
+        assert sync_row is not None
+        assert sync_row["operation"] == "update"
+        assert sync_row["version"] == 2
+        assert sync_row["client_id"] == "legacy-state-wrappers"
     finally:
         db.close_connection()
 

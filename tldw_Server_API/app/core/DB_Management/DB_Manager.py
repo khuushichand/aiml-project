@@ -66,14 +66,20 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     ingest_article_to_db_new as sqlite_ingest_article_to_db,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
+    check_media_exists as sqlite_check_media_exists,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
+    get_unprocessed_media as sqlite_get_unprocessed_media,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
+    mark_media_as_processed as sqlite_mark_media_as_processed,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     check_media_and_whisper_model as sqlite_check_media_and_whisper_model,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    check_media_exists as sqlite_check_media_exists,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     create_automated_backup as sqlite_create_automated_backup,
@@ -92,12 +98,6 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_full_media_details_rich as sqlite_get_full_media_details_rich,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_unprocessed_media as sqlite_get_unprocessed_media,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    mark_media_as_processed as sqlite_mark_media_as_processed,
 )
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase

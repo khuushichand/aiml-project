@@ -122,6 +122,11 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_specific_prompt,
     get_specific_transcript,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
+    check_media_exists,
+    get_unprocessed_media,
+    mark_media_as_processed,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.schema.bootstrap import (
     ensure_media_schema,
 )
@@ -16326,59 +16331,6 @@ def is_valid_date(date_string: str) -> bool:
         return True
 
 
-def check_media_exists(db_instance: MediaDatabase, media_id: int | None = None, url: str | None = None, content_hash: str | None = None) -> int | None:
-    """
-    Checks if an *active* (non-deleted) media item exists using ID, URL, or hash.
-
-    Requires at least one identifier (media_id, url, or content_hash).
-    Returns the ID of the first matching active media item found.
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        media_id (Optional[int]): The media ID to check.
-        url (Optional[str]): The media URL to check.
-        content_hash (Optional[str]): The media content hash to check.
-
-    Returns:
-        Optional[int]: The integer ID of the existing active media item if found,
-                       otherwise None.
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object.
-        ValueError: If none of `media_id`, `url`, or `content_hash` are provided.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    query_parts = []
-    params = []
-    if media_id is not None:
-        query_parts.append("id = ?")
-        params.append(media_id)
-    if url:
-        url_candidates = media_dedupe_url_candidates(url)
-        if len(url_candidates) == 1:
-            query_parts.append("url = ?")
-            params.append(url_candidates[0])
-        elif url_candidates:
-            placeholders = ", ".join(["?"] * len(url_candidates))
-            query_parts.append(f"url IN ({placeholders})")
-            params.extend(url_candidates)
-    if content_hash:
-        query_parts.append("content_hash = ?")
-        params.append(content_hash)
-    if not query_parts:
-        raise ValueError("Must provide id, url, or content_hash to check.")  # noqa: TRY003
-    query = f"SELECT id FROM Media WHERE ({' OR '.join(query_parts)}) AND deleted = 0 LIMIT 1"  # nosec B608
-    try:
-        cursor = db_instance.execute_query(query, tuple(params))
-        result = cursor.fetchone()
-        return result['id'] if result else None
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error checking media existence DB '{db_instance.db_path_str}'")
-        raise DatabaseError(f"Failed check media existence: {e}") from e  # noqa: TRY003
-
-
 def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> tuple[int, int]:
     """
     Permanently removes items from the trash that are older than a threshold.
@@ -16458,64 +16410,6 @@ def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> tuple[int, i
 def check_media_and_whisper_model(*args, **kwargs):
     logger.warning("check_media_and_whisper_model is deprecated.")
     return True, "Deprecated"
-
-# Media processing state functions (unchanged logic, rely on DB fields)
-def get_unprocessed_media(db_instance: MediaDatabase) -> list[dict]:
-    """
-    Retrieves media items marked as needing vector processing.
-
-    Fetches active, non-trashed media items where `vector_processing = 0`.
-    Returns a list of dictionaries containing basic info (id, uuid, content, type, title).
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-
-    Returns:
-        List[Dict[str, Any]]: A list of media items needing processing. Empty if none.
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    try:
-        query = "SELECT id, uuid, content, type, title FROM Media WHERE vector_processing = 0 AND deleted = 0 AND is_trash = 0 ORDER BY id"
-        cursor = db_instance.execute_query(query)
-        return [dict(row) for row in cursor.fetchall()]
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error getting unprocessed media DB '{db_instance.db_path_str}'")
-        raise DatabaseError("Failed get unprocessed media") from e  # noqa: TRY003
-
-
-def mark_media_as_processed(db_instance: MediaDatabase, media_id: int):
-    """
-    Marks a media item's vector processing status as complete (`vector_processing = 1`).
-
-    Important: This function ONLY updates the `vector_processing` flag. It DOES NOT
-    update the `last_modified` timestamp, increment the sync `version`, or log a
-    sync event. It's intended for internal state tracking after a potentially long
-    vector processing task, assuming a separate mechanism handles the main media
-    updates and sync logging if content/vectors were added.
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        media_id (int): The ID of the media item to mark as processed.
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    logger.debug(f"Marking media {media_id} vector_processing=1 on DB '{db_instance.db_path_str}'.")
-    try:
-        cursor = db_instance.execute_query("UPDATE Media SET vector_processing = 1 WHERE id = ? AND deleted = 0", (media_id,), commit=True)
-        if cursor.rowcount == 0:
-            logger.warning(f"Attempted mark media {media_id} processed, but not found/deleted.")
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error marking media {media_id} processed '{db_instance.db_path_str}'")
-        raise DatabaseError(f"Failed mark media {media_id} processed") from e  # noqa: TRY003
 
 # Read functions call instance methods or query directly with filters
 def get_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> str | None:
