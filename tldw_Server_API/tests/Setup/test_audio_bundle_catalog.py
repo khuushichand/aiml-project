@@ -21,3 +21,9 @@ def test_bundle_declares_automation_tiers_for_steps():
 
     assert any(step.automation_tier == "automatic" for step in all_install_steps)
     assert any(step.automation_tier == "guided" for step in bundle.system_prerequisites)
+
+
+def test_cpu_local_bundle_exposes_named_resource_profiles():
+    bundle = get_audio_bundle_catalog().bundle_by_id("cpu_local")
+
+    assert {"light", "balanced", "performance"} <= set(bundle.resource_profiles.keys())

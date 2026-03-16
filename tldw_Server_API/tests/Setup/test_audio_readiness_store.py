@@ -9,6 +9,7 @@ def test_audio_readiness_defaults_to_not_started(tmp_path):
 
     assert readiness["status"] == "not_started"
     assert readiness["selected_bundle_id"] is None
+    assert readiness["selected_resource_profile"] == "balanced"
 
 
 def test_audio_readiness_update_persists_to_disk(tmp_path):
@@ -17,6 +18,7 @@ def test_audio_readiness_update_persists_to_disk(tmp_path):
     store.update(
         status="provisioning",
         selected_bundle_id="cpu_local",
+        selected_resource_profile="light",
         remediation_items=["Verification still pending"],
     )
 
@@ -24,7 +26,17 @@ def test_audio_readiness_update_persists_to_disk(tmp_path):
 
     assert reloaded["status"] == "provisioning"
     assert reloaded["selected_bundle_id"] == "cpu_local"
+    assert reloaded["selected_resource_profile"] == "light"
     assert reloaded["remediation_items"] == ["Verification still pending"]
+
+
+def test_readiness_defaults_missing_profile_to_balanced(tmp_path):
+    readiness_path = tmp_path / "audio_readiness.json"
+    readiness_path.write_text('{"status": "ready", "selected_bundle_id": "cpu_local"}', encoding="utf-8")
+
+    readiness = AudioReadinessStore(readiness_path).load()
+
+    assert readiness["selected_resource_profile"] == "balanced"
 
 
 def test_install_plan_success_marks_audio_readiness_partial(tmp_path, mocker):
