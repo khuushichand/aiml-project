@@ -133,6 +133,11 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_document_artifacts i
     get_chunk_text,
     get_specific_analysis,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+    fetch_keywords_for_media,
+    fetch_keywords_for_media_batch,
+    get_all_content_from_database,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
     soft_delete_transcript,
     upsert_transcript,
@@ -16421,35 +16426,6 @@ def check_media_and_whisper_model(*args, **kwargs):
     logger.warning("check_media_and_whisper_model is deprecated.")
     return True, "Deprecated"
 
-def get_all_content_from_database(db_instance: MediaDatabase) -> list[dict[str, Any]]:
-    """
-    Retrieves basic identifying information for all active, non-trashed media items.
-
-    Fetches `id`, `uuid`, `content`, `title`, `author`, `type`, `url`,
-    `ingestion_date`, `last_modified` for items where `deleted = 0` and `is_trash = 0`.
-    Ordered by `last_modified` descending.
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-
-    Returns:
-        List[Dict[str, Any]]: A list of dictionaries, each representing an active
-                              media item. Empty list if none found.
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    try:
-        cursor = db_instance.execute_query("SELECT id, uuid, content, title, author, type, url, ingestion_date, last_modified FROM Media WHERE deleted = 0 AND is_trash = 0 ORDER BY last_modified DESC")
-        return [dict(item) for item in cursor.fetchall()]
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error retrieving all content DB '{db_instance.db_path_str}'")
-        raise DatabaseError("Error retrieving all content") from e  # noqa: TRY003
-
-
 def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
     """
         Performs a HARD delete of a media item and its related data via cascades.
@@ -16515,104 +16491,6 @@ def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
         raise DatabaseError(f"Unexpected permanent delete error: {e}") from e  # noqa: TRY003
     else:
         return False
-
-
-# Keyword read functions use instance methods or query directly
-def fetch_keywords_for_media(media_id: int, db_instance: MediaDatabase) -> list[str]:
-    """
-       Fetches all active keywords associated with a specific active media item.
-
-       Filters results to only include keywords where both the Keyword itself and
-       the parent Media item are not soft-deleted (`deleted = 0`).
-       Results are sorted alphabetically (case-insensitive).
-
-       Args:
-           media_id (int): The ID of the Media item.
-           db_instance (MediaDatabase): An initialized Database instance.
-
-       Returns:
-           List[str]: A sorted list of active keyword strings linked to the media item.
-                      Returns an empty list if none are found or if the media item
-                      is inactive.
-
-       Raises:
-           TypeError: If `db_instance` is not Database object or `media_id` not int.
-           DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    logger.debug(f"Fetching keywords media_id={media_id} DB: {db_instance.db_path_str}")
-    try:
-        order_expr = db_instance._keyword_order_expression("k.keyword")  # type: ignore[attr-defined]
-        query = (
-            f"SELECT k.keyword FROM Keywords k "  # nosec B608
-            "JOIN MediaKeywords mk ON k.id = mk.keyword_id "
-            "JOIN Media m ON mk.media_id = m.id "
-            "WHERE mk.media_id = ? AND k.deleted = ? AND m.deleted = ? "
-            f"ORDER BY {order_expr}"
-        )
-        cursor = db_instance.execute_query(query, (media_id, False, False))
-        return [row['keyword'] for row in cursor.fetchall()]
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.error(f"Error fetching keywords media_id {media_id} '{db_instance.db_path_str}': {e}", exc_info=True)
-        raise DatabaseError(f"Failed fetch keywords {media_id}") from e  # noqa: TRY003
-
-
-def fetch_keywords_for_media_batch(media_ids: list[int], db_instance: MediaDatabase) -> dict[int, list[str]]:
-    """
-       Fetches active keywords for multiple active media items in a single query.
-
-       Returns a dictionary mapping each requested `media_id` to a sorted list of
-       its associated active keyword strings. Only includes media IDs that were
-       found and are active.
-
-       Args:
-           media_ids (List[int]): A list of Media item IDs.
-           db_instance (MediaDatabase): An initialized Database instance.
-
-       Returns:
-           Dict[int, List[str]]: A dictionary where keys are the input `media_id`s
-                                 (that are active and have keywords) and values are sorted
-                                 lists of their active keyword strings. IDs not found,
-                                 inactive, or without keywords will be omitted.
-
-       Raises:
-           TypeError: If `db_instance` is not Database object or `media_ids` not list.
-           InputError: If `media_ids` contains non-integer values.
-           DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    if not media_ids:
-        return {}
-    try:
-        safe_media_ids = [int(mid) for mid in media_ids]
-    except (ValueError, TypeError) as e:
-        raise InputError(f"media_ids must be list of integers: {e}") from e  # noqa: TRY003
-    if not safe_media_ids:
-        return {}
-    keywords_map = {media_id: [] for media_id in safe_media_ids}
-    placeholders = ','.join('?' * len(safe_media_ids))
-    order_expr = db_instance._keyword_order_expression("k.keyword")  # type: ignore[attr-defined]
-    query = (
-        f"SELECT mk.media_id, k.keyword FROM MediaKeywords mk "  # nosec B608
-        "JOIN Keywords k ON mk.keyword_id = k.id "
-        "JOIN Media m ON mk.media_id = m.id "
-        f"WHERE mk.media_id IN ({placeholders}) AND k.deleted = ? AND m.deleted = ? "
-        f"ORDER BY mk.media_id, {order_expr}"
-    )
-    params = tuple(safe_media_ids + [False, False])
-    try:
-        cursor = db_instance.execute_query(query, params)
-        for row in cursor.fetchall():
-            if row['media_id'] in keywords_map:
-                keywords_map[row['media_id']].append(row['keyword'])
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.error(f"Failed fetch keywords batch '{db_instance.db_path_str}': {e}", exc_info=True)
-        raise DatabaseError("Failed fetch keywords batch") from e  # noqa: TRY003
-    else:
-        return keywords_map
-
 
 # Runtime compatibility patch: ensure get_media_by_title exists on MediaDatabase
 try:

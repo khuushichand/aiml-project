@@ -75,6 +75,12 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
     mark_media_as_processed as sqlite_mark_media_as_processed,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+    fetch_keywords_for_media as sqlite_fetch_keywords_for_media,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+    get_all_content_from_database as sqlite_get_all_content_from_database,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
 )
@@ -86,12 +92,6 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     empty_trash as sqlite_empty_trash,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    fetch_keywords_for_media as sqlite_fetch_keywords_for_media,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_all_content_from_database as sqlite_get_all_content_from_database,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_full_media_details as sqlite_get_full_media_details,
