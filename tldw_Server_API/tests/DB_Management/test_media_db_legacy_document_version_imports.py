@@ -100,3 +100,26 @@ async def test_legacy_document_version_callers_use_extracted_wrapper(
 
     jobs_payload = jobs_worker._load_media_content(7, "user-1")
     assert jobs_payload["media_item"]["content"] == "document body"
+
+
+def test_media_module_imports_document_version_from_legacy_wrappers(
+    monkeypatch,
+) -> None:
+    media_db_v2 = importlib.import_module(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
+    )
+    media_module_impl = importlib.import_module(
+        "tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module"
+    )
+
+    def _shim_should_not_be_bound(*args, **kwargs):
+        raise AssertionError("media_module should not bind get_document_version from Media_DB_v2")
+
+    monkeypatch.setattr(
+        media_db_v2,
+        "get_document_version",
+        _shim_should_not_be_bound,
+    )
+
+    reloaded = importlib.reload(media_module_impl)
+    assert reloaded.get_document_version is legacy_wrappers.get_document_version

@@ -25,10 +25,10 @@ from loguru import logger
 from ....DB_Management.db_path_utils import DatabasePaths
 from ....DB_Management.Media_DB_v2 import (
     MediaDatabase,
-    get_document_version,
     get_latest_transcription,
     get_media_transcripts,
 )
+from ....DB_Management.media_db.legacy_wrappers import get_document_version
 from ....DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item,
 )
