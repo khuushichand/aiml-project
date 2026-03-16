@@ -34,6 +34,8 @@ from tldw_Server_API.app.api.v1.schemas.websearch_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user  # For User dependency
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 from tldw_Server_API.app.core.Third_Party.Arxiv import convert_xml_to_markdown, fetch_arxiv_xml, search_arxiv_custom_api
 from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import search_papers_semantic_scholar
 from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs
@@ -167,9 +169,8 @@ def process_and_ingest_arxiv_paper(paper_id, additional_keywords):
             keywords += f",{additional_keywords}"
 
         # Persist via MediaDatabase instance
-        from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
         db_instance = create_media_database(client_id="research_ingest")
-        db_instance.add_media_with_keywords(
+        get_media_repository(db_instance).add_media_with_keywords(
             url=f"https://arxiv.org/abs/{paper_id}",
             title=title,
             media_type='document',
