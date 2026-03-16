@@ -142,6 +142,11 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
     soft_delete_transcript,
     upsert_transcript,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
+    check_media_and_whisper_model,
+    empty_trash,
+    permanently_delete_item,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.schema.bootstrap import (
     ensure_media_schema,
 )
@@ -16345,152 +16350,6 @@ def is_valid_date(date_string: str) -> bool:
     else:
         return True
 
-
-def empty_trash(db_instance: MediaDatabase, days_threshold: int) -> tuple[int, int]:
-    """
-    Permanently removes items from the trash that are older than a threshold.
-
-    Finds Media items where `is_trash = 1`, `deleted = 0`, and `trash_date`
-    is older than `days_threshold` days ago. For each such item found, it calls
-    `db_instance.soft_delete_media(media_id, cascade=True)` to perform the
-    soft delete, log sync events, update FTS, and handle cascades.
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        days_threshold (int): The minimum number of days an item must have been
-                              in the trash (based on `trash_date`) to be emptied.
-                              Must be a non-negative integer.
-
-    Returns:
-        Tuple[int, int]: A tuple containing:
-            - processed_count (int): Number of items successfully moved from trash
-                                     to the soft-deleted state.
-            - remaining_count (int): Number of items still in the UI trash
-                                     (`is_trash = 1`, `deleted = 0`) after the operation.
-                                     Returns -1 for remaining_count if an error occurred
-                                     during the final count query.
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object.
-        ValueError: If `days_threshold` is not a non-negative integer.
-        DatabaseError: Can be raised by the underlying `soft_delete_media` calls if
-                       they encounter issues beyond ConflictError. Errors during the
-                       initial query or final count also raise DatabaseError.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    if not isinstance(days_threshold, int) or days_threshold < 0:
-        raise ValueError("Days must be non-negative int.")  # noqa: TRY003
-    threshold_date_str = (datetime.now(timezone.utc) - timedelta(days=days_threshold)).strftime('%Y-%m-%dT%H:%M:%SZ')  # ISO Format
-    processed_count = 0
-    logger.info(f"Emptying trash older than {days_threshold} days ({threshold_date_str}) on DB {db_instance.db_path_str}")
-    try:
-        cursor_find = db_instance.execute_query("SELECT id, title FROM Media WHERE is_trash = 1 AND deleted = 0 AND trash_date <= ?", (threshold_date_str,))
-        items_to_process = cursor_find.fetchall()
-        if not items_to_process:
-            logger.info("No items found in trash older than threshold.")
-        else:
-            logger.info(f"Found {len(items_to_process)} items to process.")
-            for item in items_to_process:
-                media_id, title = item['id'], item['title']
-                logger.debug(f"Processing item ID {media_id} ('{title}') for sync delete from trash.")  # nosec B608
-                try:
-                    success = db_instance.soft_delete_media(media_id=media_id, cascade=True)  # Instance method handles logging/FTS
-                    if success:
-                        processed_count += 1
-                    else:
-                        logger.warning(f"Failed process item ID {media_id} during trash emptying.")
-                except ConflictError as e:
-                    logger.warning(f"Conflict processing item ID {media_id} during trash emptying: {e}")
-                except DatabaseError:
-                    logger.exception(f"DB error processing item ID {media_id} during trash emptying")
-                except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-                    logger.error(f"Unexpected error processing item ID {media_id} during trash emptying: {e}", exc_info=True)
-        cursor_remain = db_instance.execute_query(
-            "SELECT COUNT(*) AS trash_remaining FROM Media WHERE is_trash = 1 AND deleted = 0"
-        )
-        remain_row = cursor_remain.fetchone()
-        remaining_count = remain_row['trash_remaining'] if remain_row else 0
-        logger.info(f"Trash emptying complete. Processed (sync deleted): {processed_count}. Remaining in UI trash: {remaining_count}.")
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.error(f"Error emptying trash DB '{db_instance.db_path_str}': {e}", exc_info=True)
-        return 0, -1
-    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-        logger.error(f"Unexpected error emptying trash DB '{db_instance.db_path_str}': {e}", exc_info=True)
-        return 0, -1
-    else:
-        return processed_count, remaining_count
-
-# Deprecated check
-def check_media_and_whisper_model(*args, **kwargs):
-    logger.warning("check_media_and_whisper_model is deprecated.")
-    return True, "Deprecated"
-
-def permanently_delete_item(db_instance: MediaDatabase, media_id: int) -> bool:
-    """
-        Performs a HARD delete of a media item and its related data via cascades.
-
-        **DANGER:** This operation bypasses the soft delete mechanism and the sync log.
-        It physically removes the row from the `Media` table. Foreign key constraints
-        with `ON DELETE CASCADE` should automatically delete related rows in child
-        tables (`Transcripts`, `MediaKeywords`, `DocumentVersions`, etc.). It also
-        explicitly removes the corresponding FTS entry. Use with extreme caution,
-        especially in synchronized environments, as this change will not be propagated
-        through the sync log. Primarily intended for cleanup or specific admin tasks.
-
-        Args:
-            db_instance (MediaDatabase): An initialized Database instance.
-            media_id (int): The ID of the Media item to permanently delete.
-
-        Returns:
-            bool: True if the item was found and deleted, False otherwise.
-
-        Raises:
-            TypeError: If `db_instance` is not a Database object.
-            DatabaseError: For database errors during deletion.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    logger.warning(f"!!! PERMANENT DELETE initiated Media ID: {media_id} DB {db_instance.db_path_str}. NOT SYNCED !!!")
-    try:
-        with db_instance.transaction() as conn:
-            # Existence check (backend-aware placeholders handled by execute_query)
-            sel_cur = db_instance.execute_query("SELECT 1 AS one FROM Media WHERE id = ?", (media_id,))
-            row = sel_cur.fetchone()
-            if not row:
-                logger.warning(f"Permanent delete failed: Media {media_id} not found.")
-                return False
-
-            # Hard delete - Cascades should handle children via FKs
-            del_cur = db_instance.execute_query("DELETE FROM Media WHERE id = ?", (media_id,), commit=False)
-            deleted_count = getattr(del_cur, "rowcount", 0) or 0
-
-            # Manually clear/update FTS vectors as a belt-and-suspenders
-            try:
-                db_instance._delete_fts_media(conn, media_id)
-            except _MEDIA_NONCRITICAL_EXCEPTIONS as _fts_exc:
-                logger.debug(f"FTS cleanup during permanent delete skipped/failed: {_fts_exc}")
-
-        if int(deleted_count) > 0:
-            logger.info(f"Permanently deleted Media ID: {media_id}. NO sync log generated.")
-            # Invalidate agentic intra-doc vectors
-            try:
-                from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
-                    invalidate_intra_doc_vectors,  # lazy import
-                )
-                invalidate_intra_doc_vectors(str(media_id))
-            except _MEDIA_NONCRITICAL_EXCEPTIONS:
-                pass
-            return True
-        logger.error(f"Permanent delete failed unexpectedly Media {media_id}.")
-    except sqlite3.Error as e:
-        logger.error(f"Error permanently deleting Media {media_id}: {e}", exc_info=True)
-        raise DatabaseError(f"Failed permanently delete item: {e}") from e  # noqa: TRY003
-    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-        (logger.error(f"Unexpected error permanently deleting Media {media_id}: {e}", exc_info=True))
-        raise DatabaseError(f"Unexpected permanent delete error: {e}") from e  # noqa: TRY003
-    else:
-        return False
 
 # Runtime compatibility patch: ensure get_media_by_title exists on MediaDatabase
 try:

@@ -81,17 +81,17 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries impo
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
     get_all_content_from_database as sqlite_get_all_content_from_database,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
+    check_media_and_whisper_model as sqlite_check_media_and_whisper_model,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
+    empty_trash as sqlite_empty_trash,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    check_media_and_whisper_model as sqlite_check_media_and_whisper_model,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     create_automated_backup as sqlite_create_automated_backup,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    empty_trash as sqlite_empty_trash,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_full_media_details as sqlite_get_full_media_details,
