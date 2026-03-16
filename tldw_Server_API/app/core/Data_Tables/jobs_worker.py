@@ -51,8 +51,10 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
-    get_document_version,
     get_latest_transcription,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    get_document_version,
 )
 from tldw_Server_API.app.core.exceptions import DataTablesJobError
 from tldw_Server_API.app.core.Jobs.manager import JobManager

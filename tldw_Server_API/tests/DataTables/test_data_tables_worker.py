@@ -129,3 +129,29 @@ def test_extract_json_payload_rejects_malformed_json():
     with pytest.raises(DataTablesJobError) as exc:
         jobs_worker._extract_json_payload("not valid json")
     assert "llm_response_invalid_json" in str(exc.value)
+
+
+def test_extract_media_text_uses_document_version_before_transcript(monkeypatch):
+    class StubDb:
+        def get_media_by_id(self, media_id: int):
+            return {"id": media_id, "content": ""}
+
+    monkeypatch.setattr(
+        jobs_worker,
+        "get_document_version",
+        lambda db, media_id, version_number=None, include_content=True: {
+            "content": "document version fallback"
+        },
+    )
+
+    def _should_not_call_transcription(*args, **kwargs):
+        raise AssertionError("get_latest_transcription should not be called when document version exists")
+
+    monkeypatch.setattr(
+        jobs_worker,
+        "get_latest_transcription",
+        _should_not_call_transcription,
+    )
+
+    result = jobs_worker._extract_media_text(StubDb(), 7)
+    assert result == "document version fallback"

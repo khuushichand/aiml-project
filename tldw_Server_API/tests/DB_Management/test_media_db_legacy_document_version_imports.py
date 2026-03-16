@@ -25,6 +25,9 @@ async def test_legacy_document_version_callers_use_extracted_wrapper(
     jobs_worker = importlib.import_module(
         "tldw_Server_API.app.core.Embeddings.services.jobs_worker"
     )
+    data_tables_jobs_worker = importlib.import_module(
+        "tldw_Server_API.app.core.Data_Tables.jobs_worker"
+    )
 
     def _shim_should_not_be_used(*args, **kwargs):
         raise AssertionError("Media_DB_v2.get_document_version should not be used here")
@@ -101,6 +104,18 @@ async def test_legacy_document_version_callers_use_extracted_wrapper(
     jobs_payload = jobs_worker._load_media_content(7, "user-1")
     assert jobs_payload["media_item"]["content"] == "document body"
 
+    class StubDataTablesDb:
+        def get_media_by_id(self, media_id: int):
+            return {"id": media_id, "content": ""}
+
+    monkeypatch.setattr(
+        data_tables_jobs_worker,
+        "get_document_version",
+        _fake_get_document_version,
+    )
+    media_text = data_tables_jobs_worker._extract_media_text(StubDataTablesDb(), 7)
+    assert media_text == "document body"
+
 
 def test_media_module_imports_document_version_from_legacy_wrappers(
     monkeypatch,
@@ -168,4 +183,29 @@ def test_versions_endpoint_imports_document_version_from_legacy_wrappers(
     )
 
     reloaded = importlib.reload(versions_endpoint)
+    assert reloaded.get_document_version is legacy_wrappers.get_document_version
+
+
+def test_data_tables_jobs_worker_imports_document_version_from_legacy_wrappers(
+    monkeypatch,
+) -> None:
+    media_db_v2 = importlib.import_module(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
+    )
+    data_tables_jobs_worker = importlib.import_module(
+        "tldw_Server_API.app.core.Data_Tables.jobs_worker"
+    )
+
+    def _shim_should_not_be_bound(*args, **kwargs):
+        raise AssertionError(
+            "data_tables.jobs_worker should not bind get_document_version from Media_DB_v2"
+        )
+
+    monkeypatch.setattr(
+        media_db_v2,
+        "get_document_version",
+        _shim_should_not_be_bound,
+    )
+
+    reloaded = importlib.reload(data_tables_jobs_worker)
     assert reloaded.get_document_version is legacy_wrappers.get_document_version
