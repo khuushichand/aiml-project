@@ -115,6 +115,13 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     import_obsidian_note_to_db,
     ingest_article_to_db_new,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_latest_transcription,
+    get_media_prompts,
+    get_media_transcripts,
+    get_specific_prompt,
+    get_specific_transcript,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.schema.bootstrap import (
     ensure_media_schema,
 )
@@ -16511,138 +16518,6 @@ def mark_media_as_processed(db_instance: MediaDatabase, media_id: int):
         raise DatabaseError(f"Failed mark media {media_id} processed") from e  # noqa: TRY003
 
 # Read functions call instance methods or query directly with filters
-def get_media_transcripts(db_instance: MediaDatabase, media_id: int) -> list[dict]:
-    """
-    Retrieves all active transcripts associated with an active media item.
-
-    Filters results to only include transcripts where both the Transcript itself
-    and the parent Media item are not soft-deleted (`deleted = 0`).
-    Results are ordered by creation date descending (newest first).
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        media_id (int): The ID of the parent Media item.
-
-    Returns:
-        List[Dict[str, Any]]: A list of dictionaries, each representing an active
-                              transcript. Returns an empty list if none are found.
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object or `media_id` is not int.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    logger.debug(f"Fetching transcripts for media_id={media_id} DB: {db_instance.db_path_str}")
-    try:
-        query = (
-            "SELECT t.* FROM Transcripts t "
-            "JOIN Media m ON t.media_id = m.id "
-            "WHERE t.media_id = ? AND t.deleted = 0 AND m.deleted = 0 "
-            "ORDER BY t.created_at DESC"
-        )
-        with db_instance.transaction() as conn:
-            rows = db_instance._fetchall_with_connection(conn, query, (media_id,))
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error getting transcripts media {media_id} '{db_instance.db_path_str}'")
-        raise DatabaseError(f"Failed get transcripts {media_id}") from e  # noqa: TRY003
-    else:
-        return rows
-
-
-def get_latest_transcription(db_instance: MediaDatabase, media_id: int) -> str | None:
-    """
-    Retrieves the text content of the latest active transcript for an active media item.
-
-    Filters for active transcripts and media, orders by creation date descending,
-    and returns only the `transcription` field of the newest one.
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        media_id (int): The ID of the parent Media item.
-
-    Returns:
-        Optional[str]: The transcription text if found, otherwise None.
-
-    Raises:
-        TypeError: If `db_instance` is not a Database object or `media_id` is not int.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    try:
-        query = (
-            "SELECT t.transcription FROM Transcripts t "
-            "JOIN Media m ON t.media_id = m.id "
-            "WHERE t.media_id = ? AND t.deleted = 0 AND m.deleted = 0 "
-            "ORDER BY t.created_at DESC LIMIT 1"
-        )
-        with db_instance.transaction() as conn:
-            result = db_instance._fetchone_with_connection(conn, query, (media_id,))
-        raw = (result or {}).get("transcription")
-        if raw is None:
-            return None
-        if isinstance(raw, dict):
-            text_val = raw.get("text")
-            if text_val is None:
-                return ""
-            return text_val if isinstance(text_val, str) else str(text_val)
-        if isinstance(raw, str):
-            stripped = raw.lstrip()
-            if stripped.startswith("{") or stripped.startswith("["):
-                try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    return raw
-                if isinstance(data, dict):
-                    text_val = data.get("text")
-                    if text_val is None:
-                        return ""
-                    return text_val if isinstance(text_val, str) else str(text_val)
-            return raw
-        return str(raw)
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error get latest transcript {media_id} '{db_instance.db_path_str}'")
-        raise DatabaseError(f"Failed get latest transcript {media_id}") from e  # noqa: TRY003
-
-
-def get_specific_transcript(db_instance: MediaDatabase, transcript_uuid: str) -> dict | None:
-    """
-    Retrieves a specific active transcript by its UUID, ensuring parent media is active.
-
-    Filters results to only include the transcript if both it and its parent
-    Media item are not soft-deleted (`deleted = 0`).
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        transcript_uuid (str): The UUID of the transcript to retrieve.
-
-    Returns:
-        Optional[Dict[str, Any]]: A dictionary representing the transcript if found
-                                   and active, otherwise None.
-
-    Raises:
-        TypeError: If `db_instance` is not Database object or `transcript_uuid` not str.
-        InputError: If `transcript_uuid` is empty.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    try:
-        query = (
-            "SELECT t.* FROM Transcripts t "
-            "JOIN Media m ON t.media_id = m.id "
-            "WHERE t.uuid = ? AND t.deleted = 0 AND m.deleted = 0"
-        )
-        with db_instance.transaction() as conn:
-            result = db_instance._fetchone_with_connection(conn, query, (transcript_uuid,))
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error get transcript UUID {transcript_uuid} '{db_instance.db_path_str}'")
-        raise DatabaseError(f"Failed get transcript {transcript_uuid}") from e  # noqa: TRY003
-    else:
-        return result
-
-
 def get_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> str | None:
     """
     Retrieves the `analysis_content` from a specific active DocumentVersion.
@@ -16675,87 +16550,6 @@ def get_specific_analysis(db_instance: MediaDatabase, version_uuid: str) -> str 
     except (DatabaseError, sqlite3.Error) as e:
         logger.exception(f"Error get analysis UUID {version_uuid} '{db_instance.db_path_str}'")
         raise DatabaseError(f"Failed get analysis {version_uuid}") from e  # noqa: TRY003
-
-
-def get_media_prompts(db_instance: MediaDatabase, media_id: int) -> list[dict]:
-    """
-    Retrieves all non-empty prompts from active DocumentVersions for an active media item.
-
-    Filters for active versions and media, excludes rows where `prompt` is NULL or empty,
-    and orders by version number descending (newest first).
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        media_id (int): The ID of the parent Media item.
-
-    Returns:
-        List[Dict[str, Any]]: A list of dictionaries, each containing 'id', 'uuid',
-                              'content' (the prompt text), 'created_at', and
-                              'version_number' for matching prompts. Empty list if none.
-
-    Raises:
-        TypeError: If `db_instance` is not Database object or `media_id` not int.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    try:
-        query = (
-            "SELECT dv.id, dv.uuid, dv.prompt, dv.created_at, dv.version_number "
-            "FROM DocumentVersions dv JOIN Media m ON dv.media_id = m.id "
-            "WHERE dv.media_id = ? AND dv.deleted = 0 AND m.deleted = 0 "
-            "AND dv.prompt IS NOT NULL AND dv.prompt != '' "
-            "ORDER BY dv.version_number DESC"
-        )
-        with db_instance.transaction() as conn:
-            rows = db_instance._fetchall_with_connection(conn, query, (media_id,))
-        return [
-            {
-                'id': r['id'],
-                'uuid': r['uuid'],
-                'content': r['prompt'],
-                'created_at': r['created_at'],
-                'version_number': r['version_number'],
-            }
-            for r in rows
-        ]
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error get prompts media {media_id} '{db_instance.db_path_str}'")
-        raise DatabaseError(f"Failed get prompts {media_id}") from e  # noqa: TRY003
-
-
-def get_specific_prompt(db_instance: MediaDatabase, version_uuid: str) -> str | None:
-    """
-    Retrieves the `prompt` text from a specific active DocumentVersion.
-
-    Ensures both the DocumentVersion and its parent Media item are active (`deleted=0`).
-
-    Args:
-        db_instance (MediaDatabase): An initialized Database instance.
-        version_uuid (str): The UUID of the DocumentVersion.
-
-    Returns:
-        Optional[str]: The prompt string if found and active, otherwise None.
-
-    Raises:
-        TypeError: If `db_instance` is not Database object or `version_uuid` not str.
-        InputError: If `version_uuid` is empty.
-        DatabaseError: For database query errors.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    try:
-        query = (
-            "SELECT dv.prompt FROM DocumentVersions dv "
-            "JOIN Media m ON dv.media_id = m.id "
-            "WHERE dv.uuid = ? AND dv.deleted = 0 AND m.deleted = 0"
-        )
-        with db_instance.transaction() as conn:
-            result = db_instance._fetchone_with_connection(conn, query, (version_uuid,))
-        return (result or {}).get('prompt')
-    except (DatabaseError, sqlite3.Error) as e:
-        logger.exception(f"Error get prompt UUID {version_uuid} '{db_instance.db_path_str}'")
-        raise DatabaseError(f"Failed get prompt {version_uuid}") from e  # noqa: TRY003
 
 
 # Specific deletes call instance methods

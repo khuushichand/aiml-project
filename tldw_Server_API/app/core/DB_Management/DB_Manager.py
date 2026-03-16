@@ -42,6 +42,21 @@ from tldw_Server_API.app.core.DB_Management.content_backend import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_latest_transcription as sqlite_get_latest_transcription,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_media_prompts as sqlite_get_media_prompts,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_media_transcripts as sqlite_get_media_transcripts,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_specific_prompt as sqlite_get_specific_prompt,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_specific_transcript as sqlite_get_specific_transcript,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version as sqlite_get_document_version,
 )
@@ -77,21 +92,6 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_full_media_details_rich as sqlite_get_full_media_details_rich,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_latest_transcription as sqlite_get_latest_transcription,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_media_prompts as sqlite_get_media_prompts,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_media_transcripts as sqlite_get_media_transcripts,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_specific_prompt as sqlite_get_specific_prompt,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_specific_transcript as sqlite_get_specific_transcript,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_unprocessed_media as sqlite_get_unprocessed_media,

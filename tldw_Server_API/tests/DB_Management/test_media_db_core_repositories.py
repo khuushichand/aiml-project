@@ -1,8 +1,15 @@
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, upsert_transcript
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version,
     import_obsidian_note_to_db,
     ingest_article_to_db_new,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_latest_transcription,
+    get_media_prompts,
+    get_media_transcripts,
+    get_specific_prompt,
+    get_specific_transcript,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.repositories.chunks_repository import (
     ChunksRepository,
@@ -207,6 +214,46 @@ def test_get_document_version_wrapper_uses_document_versions_repository(monkeypa
             "version_number": 2,
             "include_content": False,
         }
+    finally:
+        db.close_connection()
+
+
+def test_legacy_read_wrappers_round_trip_transcripts_and_prompts() -> None:
+    db = MediaDatabase(db_path=":memory:", client_id="legacy-read-wrappers")
+    media_repo = MediaRepository.from_legacy_db(db)
+    versions_repo = DocumentVersionsRepository.from_legacy_db(db)
+    try:
+        media_id, _media_uuid, _msg = media_repo.add_text_media(
+            title="Prompted doc",
+            content="v1",
+            media_type="text",
+        )
+        version = versions_repo.create(
+            media_id=media_id,
+            content="v2",
+            prompt="Prompt 2",
+            analysis_content="Analysis 2",
+        )
+        transcript = upsert_transcript(
+            db,
+            media_id=media_id,
+            transcription='{"text": "Transcript text"}',
+            whisper_model="base",
+        )
+
+        prompts = get_media_prompts(db, media_id)
+        transcripts = get_media_transcripts(db, media_id)
+        latest_transcript = get_latest_transcription(db, media_id)
+        specific_prompt = get_specific_prompt(db, version["uuid"])
+        specific_transcript = get_specific_transcript(db, transcript["uuid"])
+
+        assert [item["content"] for item in prompts] == ["Prompt 2"]
+        assert len(transcripts) == 1
+        assert transcripts[0]["uuid"] == transcript["uuid"]
+        assert latest_transcript == "Transcript text"
+        assert specific_prompt == "Prompt 2"
+        assert specific_transcript is not None
+        assert specific_transcript["uuid"] == transcript["uuid"]
     finally:
         db.close_connection()
 
