@@ -2,145 +2,146 @@
 
 ## Overview
 
-The tldw_server setup wizard runs automatically on first launch when no admin account exists. It walks you through creating the initial admin user and confirming essential settings.
+`/setup` is the operator-facing first-run workflow for `tldw_server`.
+It now covers both configuration review and curated audio provisioning, so the default path is:
 
-**URL:** `http://localhost:8000/setup`
+1. Start the server
+2. Open `http://127.0.0.1:8000/setup`
+3. Save any required config changes
+4. Accept or change the recommended audio bundle
+5. Provision, verify, and review the audio readiness report
+6. Mark setup complete
 
-The server redirects to this page if setup has not been completed. Once an admin account is created, the wizard is disabled and the endpoint returns 404.
+Use this guide when you want the shortest supported path to a working local or hybrid speech stack without hand-picking every STT/TTS provider.
 
-## Prerequisites
+## Before You Start
 
-Before starting the server for the first time, ensure:
+Make sure the machine can run the installer and any local speech backends you want:
 
-1. **Python environment** is set up: `pip install -e .`
-2. **FFmpeg** is installed (required for audio/video processing)
-3. **Environment file** exists: copy the example and edit it:
+1. Activate the project environment and install the project:
+   ```bash
+   source .venv/bin/activate
+   pip install -e .
+   ```
+2. Copy the environment template if you have not done it yet:
    ```bash
    cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
    ```
+3. Install FFmpeg:
+   - macOS: `brew install ffmpeg`
+   - Ubuntu/Debian: `sudo apt-get install -y ffmpeg`
+4. If you want local Kokoro TTS, install eSpeak NG as well:
+   - macOS: `brew install espeak-ng`
+   - Ubuntu/Debian: `sudo apt-get install -y espeak-ng`
 
-### Required Environment Variables
+## Recommended Flow
 
-Set these in `.env` before first run:
+1. Start the API server:
+   ```bash
+   source .venv/bin/activate
+   python -m uvicorn tldw_Server_API.app.main:app --reload
+   ```
+2. Open `http://127.0.0.1:8000/setup`.
+3. Work through the guided questions so the setup UI can highlight the sections that matter for your deployment.
+4. In the audio stage:
+   - review the detected machine profile
+   - accept the recommended bundle or choose a different curated bundle
+   - click `Provision recommended bundle` or `Provision selected bundle`
+   - complete any guided prerequisites the report calls out
+   - click `Run verification`
+   - inspect `View readiness report`
+5. Save config changes, then click `Mark Setup Complete`.
 
-| Variable | Purpose | Example |
-|----------|---------|---------|
-| `AUTH_MODE` | Authentication mode | `single_user` or `multi_user` |
-| `SINGLE_USER_API_KEY` | API key (single-user mode only) | Any strong random string |
-| `SECRET_KEY` | JWT signing key (multi-user mode) | `openssl rand -hex 32` |
-| `DATABASE_URL` | AuthNZ database location | `sqlite:///./Databases/users.db` |
+The setup UI tracks audio separately from global setup completion. You can safely rerun audio provisioning or verification without reopening the whole first-run flow.
 
-### Optional Variables
+## Curated Audio Bundles
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `CORS_ORIGINS` | Allowed CORS origins | `*` |
-| `LOG_LEVEL` | Logging verbosity | `INFO` |
+_Generated from `Helper_Scripts/generate_audio_bundle_docs.py` and the setup bundle catalog._
 
-## What the Wizard Does
+| Bundle ID | Label | Offline runtime after provisioning | Default STT | Default TTS | Automatic steps | Guided prerequisites |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Yes | faster_whisper [small] | kokoro | Install CPU-local Python dependencies, Download CPU-local speech model assets | Install FFmpeg, Install eSpeak NG |
+| `apple_silicon_local` | Apple Silicon Local | Yes | faster_whisper [small] | kokoro | Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets | Install FFmpeg, Install eSpeak NG |
+| `nvidia_local` | NVIDIA Local | Yes | faster_whisper [small] | kokoro | Install NVIDIA local Python dependencies, Download NVIDIA speech model assets | Install FFmpeg, Install eSpeak NG |
+| `hosted_plus_local_backup` | Hosted With Local Backup | No | faster_whisper [small] | kokoro | Install hybrid Python dependencies, Download local fallback speech model assets | Install FFmpeg, Install eSpeak NG |
 
-1. **Checks for existing admin** -- if one exists, the wizard is skipped
-2. **Presents a form** to create the first admin account (username, email, password)
-3. **Initializes the AuthNZ database** schema if not already present
-4. **Creates the admin user** with full privileges
-5. **Redirects to the API docs** (`/docs`) on success
+### `cpu_local`
 
-## Running the Wizard
+- Label: CPU Local
+- Offline runtime after provisioning: Yes
+- Default STT: faster_whisper [small]
+- Default TTS: kokoro
+- Automatic steps: Install CPU-local Python dependencies, Download CPU-local speech model assets
+- Guided prerequisites: Install FFmpeg, Install eSpeak NG
 
-```bash
-# Start the server
-python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
+### `apple_silicon_local`
 
-# Open in browser
-open http://localhost:8000/setup
-```
+- Label: Apple Silicon Local
+- Offline runtime after provisioning: Yes
+- Default STT: faster_whisper [small]
+- Default TTS: kokoro
+- Automatic steps: Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets
+- Guided prerequisites: Install FFmpeg, Install eSpeak NG
 
-In Docker, the wizard is available at the same path on whatever port you mapped.
+### `nvidia_local`
 
-## Post-Setup Configuration
+- Label: NVIDIA Local
+- Offline runtime after provisioning: Yes
+- Default STT: faster_whisper [small]
+- Default TTS: kokoro
+- Automatic steps: Install NVIDIA local Python dependencies, Download NVIDIA speech model assets
+- Guided prerequisites: Install FFmpeg, Install eSpeak NG
 
-After the admin account is created, configure the remaining settings.
+### `hosted_plus_local_backup`
 
-### LLM Providers
+- Label: Hosted With Local Backup
+- Offline runtime after provisioning: No
+- Default STT: faster_whisper [small]
+- Default TTS: kokoro
+- Automatic steps: Install hybrid Python dependencies, Download local fallback speech model assets
+- Guided prerequisites: Install FFmpeg, Install eSpeak NG
 
-Edit `tldw_Server_API/Config_Files/config.txt` or set environment variables:
+## Verification After Provisioning
 
-**OpenAI:**
-```
-[API_Keys]
-openai_api_key = sk-...
-```
-Or: `export OPENAI_API_KEY=sk-...`
+The bundle stage is only considered healthy after verification succeeds. Use these checkpoints:
 
-**Anthropic:**
-```
-[API_Keys]
-anthropic_api_key = sk-ant-...
-```
-Or: `export ANTHROPIC_API_KEY=sk-ant-...`
+- In `/setup`, click `Run verification` and confirm the readiness report reaches `ready` or `ready_with_warnings`.
+- Review guided prerequisite items if the report is `partial` or `failed`.
+- Keep a note of the selected bundle id if you plan to reproduce the same setup on another machine.
 
-**Local LLMs (Ollama, llama.cpp, etc.):**
-```
-[Local-API]
-local_llm_api_ip = http://localhost:11434
-```
-
-No API key is needed for most local providers. Set the base URL to wherever the model server listens.
-
-### Embedding Providers
-
-Configure in `config.txt` under `[Embeddings]`:
-```
-embedding_provider = openai
-embedding_model = text-embedding-3-small
-```
-
-Or use a local provider:
-```
-embedding_provider = local
-embedding_model = all-MiniLM-L6-v2
-```
-
-### Storage
-
-Default database paths work out of the box. To use PostgreSQL for AuthNZ:
-```
-DATABASE_URL=postgresql://user:pass@localhost:5432/tldw_auth
-```
-
-See `Docs/Deployment/Postgres_Migration_Guide.md` for full migration steps.
-
-### SMTP (Optional)
-
-For password reset emails in multi-user mode, configure SMTP in `.env`:
-```
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_USER=noreply@example.com
-SMTP_PASSWORD=...
-SMTP_FROM=noreply@example.com
-```
-
-## Quick Verification
-
-After setup, confirm the server is working:
+For API-level verification after the setup UI completes:
 
 ```bash
-# Health check
-curl http://localhost:8000/api/v1/health
+curl -s http://127.0.0.1:8000/api/v1/audio/voices/catalog \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" | jq
+```
 
-# List providers (single-user mode)
-curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/api/v1/llm/providers
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "file=@sample.wav" \
+  -F "model=whisper-1"
+```
 
-# Interactive API docs
-open http://localhost:8000/docs
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "kokoro",
+        "voice": "af_bella",
+        "input": "Setup verification complete",
+        "response_format": "mp3"
+      }' \
+  --output setup-check.mp3
 ```
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Setup page not appearing | Check if admin already exists; check `AUTH_MODE` is set |
-| "Database locked" on setup | Stop other processes accessing the DB; ensure write permissions on `Databases/` |
-| Can't reach `/setup` in Docker | Verify port mapping in `docker-compose.yml` |
-| Setup completes but can't log in | In single-user mode, use `X-API-Key` header; in multi-user mode, use `/api/v1/auth/login` |
+| Problem | What to check |
+| --- | --- |
+| No audio recommendation appears | Make sure `/setup` can reach `/api/v1/setup/audio/recommendations`; reload the page and inspect the setup message panel. |
+| Provisioning returns `partial` | Guided prerequisites are still missing. Install FFmpeg and/or eSpeak NG, then run `Safe rerun` and `Run verification`. |
+| Verification returns `failed` | Check the readiness report for remediation items such as missing FFmpeg, missing eSpeak NG, or an unusable STT/TTS path. |
+| `/setup` redirects away immediately | The global setup flow is already marked complete. Re-enable the first-time setup flag if you need the guided UI again. |
+| Local speech is required offline later | Prefer `cpu_local`, `apple_silicon_local`, or `nvidia_local` instead of `hosted_plus_local_backup`. |

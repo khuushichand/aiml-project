@@ -7,6 +7,25 @@ Scope:
 - Use [Getting Started — STT and TTS](./Getting-Started-STT_and_TTS.md) for quick dual STT+TTS bring-up.
 - Use [TTS Provider Setup Guide](./TTS-SETUP-GUIDE.md) to jump to deep provider runbooks and tuning docs.
 
+## Recommended Setup Path - Bundle First
+
+For fresh installs, the default operator path is now `/setup`, not manual provider-by-provider bring-up.
+Open `http://127.0.0.1:8000/setup`, review the detected hardware profile, provision the recommended audio bundle, and run verification before tuning individual TTS providers in this guide.
+
+Use manual provider setup below when:
+- you need a provider that is not the bundle default
+- you want to override the curated bundle choice
+- you are debugging a specific TTS adapter or voice path
+
+Current curated bundle matrix (generated from `Helper_Scripts/generate_audio_bundle_docs.py`):
+
+| Bundle ID | Label | Offline runtime after provisioning | Default STT | Default TTS | Automatic steps | Guided prerequisites |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Yes | faster_whisper [small] | kokoro | Install CPU-local Python dependencies, Download CPU-local speech model assets | Install FFmpeg, Install eSpeak NG |
+| `apple_silicon_local` | Apple Silicon Local | Yes | faster_whisper [small] | kokoro | Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets | Install FFmpeg, Install eSpeak NG |
+| `nvidia_local` | NVIDIA Local | Yes | faster_whisper [small] | kokoro | Install NVIDIA local Python dependencies, Download NVIDIA speech model assets | Install FFmpeg, Install eSpeak NG |
+| `hosted_plus_local_backup` | Hosted With Local Backup | No | faster_whisper [small] | kokoro | Install hybrid Python dependencies, Download local fallback speech model assets | Install FFmpeg, Install eSpeak NG |
+
 ## YAML Quick Start
 
 Minimal configuration to get going. Save to `tldw_Server_API/Config_Files/tts_providers_config.yaml` (canonical location; alternate config roots are supported).

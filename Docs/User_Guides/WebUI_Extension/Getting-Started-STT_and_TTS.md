@@ -12,10 +12,34 @@ See design doc: [`Docs/Design/STT_TTS_Audio_API_Design.md`](../../Design/STT_TTS
 
 ## TL;DR Choices
 
+- Best first-run path after install: `/setup` -> accept the recommended audio bundle -> provision -> run verification.
 - Fastest TTS (hosted): OpenAI TTS — requires `OPENAI_API_KEY`.
 - Local TTS (offline): Kokoro ONNX — requires model files + eSpeak library.
 - Local STT (offline): faster-whisper — requires FFmpeg; optional GPU.
 - Advanced STT (optional): NeMo Parakeet/Canary, Qwen2Audio — larger setup, GPU recommended.
+
+## Recommended Setup Path - Use `/setup` Audio Bundles First
+
+For new installs, prefer the guided `/setup` flow over hand-picking providers.
+The setup UI now detects local hardware, recommends a curated audio bundle, provisions it, and gives you a verification + readiness report before you start making STT/TTS API calls.
+
+Recommended operator flow:
+
+1. Start the server and open `http://127.0.0.1:8000/setup`
+2. Save any required config changes
+3. In the audio stage, click `Provision recommended bundle`
+4. Complete any guided prerequisites called out in the report
+5. Click `Run verification`
+6. Use the API examples below only after the readiness report reaches `ready` or `ready_with_warnings`
+
+Current curated bundle matrix (generated from `Helper_Scripts/generate_audio_bundle_docs.py`):
+
+| Bundle ID | Label | Offline runtime after provisioning | Default STT | Default TTS | Automatic steps | Guided prerequisites |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Yes | faster_whisper [small] | kokoro | Install CPU-local Python dependencies, Download CPU-local speech model assets | Install FFmpeg, Install eSpeak NG |
+| `apple_silicon_local` | Apple Silicon Local | Yes | faster_whisper [small] | kokoro | Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets | Install FFmpeg, Install eSpeak NG |
+| `nvidia_local` | NVIDIA Local | Yes | faster_whisper [small] | kokoro | Install NVIDIA local Python dependencies, Download NVIDIA speech model assets | Install FFmpeg, Install eSpeak NG |
+| `hosted_plus_local_backup` | Hosted With Local Backup | No | faster_whisper [small] | kokoro | Install hybrid Python dependencies, Download local fallback speech model assets | Install FFmpeg, Install eSpeak NG |
 
 ## Prerequisites
 
