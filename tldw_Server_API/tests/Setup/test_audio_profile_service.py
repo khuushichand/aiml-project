@@ -24,6 +24,29 @@ def test_nvidia_machine_prefers_nvidia_bundle():
     )
 
     assert ranked[0].bundle_id == "nvidia_local"
+    assert ranked[0].resource_profile in {"balanced", "performance"}
+
+
+def test_disk_constrained_cpu_machine_prefers_light_profile():
+    profile = MachineProfile(
+        platform="linux",
+        arch="x86_64",
+        apple_silicon=False,
+        cuda_available=False,
+        ffmpeg_available=True,
+        espeak_available=True,
+        free_disk_gb=1.2,
+        network_available_for_downloads=True,
+    )
+
+    ranked = rank_audio_bundles(
+        profile,
+        prefer_offline_runtime=True,
+        allow_hosted_fallbacks=True,
+    )
+
+    assert ranked[0].bundle_id == "cpu_local"
+    assert ranked[0].resource_profile == "light"
 
 
 def test_hosted_bundle_drops_when_hosted_fallbacks_disabled():
@@ -71,3 +94,5 @@ def test_unsupported_hardware_bundles_move_to_excluded_list():
     assert "nvidia_local" not in recommendation_ids
     assert "apple_silicon_local" not in recommendation_ids
     assert {"nvidia_local", "apple_silicon_local"} <= excluded_ids
+    assert "resource_profile" in result["recommendations"][0]
+    assert "confidence" in result["recommendations"][0]

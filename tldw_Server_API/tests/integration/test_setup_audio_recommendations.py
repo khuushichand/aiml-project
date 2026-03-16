@@ -33,7 +33,14 @@ def test_setup_audio_recommendations_endpoint_returns_profile_and_ranked_bundles
         "recommend_audio_bundles",
         return_value={
             "recommendations": [
-                {"bundle_id": "cpu_local", "label": "CPU Local", "reasons": ["Local-first default"]}
+                {
+                    "bundle_id": "cpu_local",
+                    "resource_profile": "balanced",
+                    "selection_key": "v2:cpu_local:balanced",
+                    "confidence": "high",
+                    "label": "CPU Local",
+                    "reasons": ["Local-first default"],
+                }
             ],
             "excluded": [
                 {"bundle_id": "nvidia_local", "reasons": ["CUDA not detected"]}
@@ -48,4 +55,7 @@ def test_setup_audio_recommendations_endpoint_returns_profile_and_ranked_bundles
     body = response.json()
     assert body["machine_profile"]["platform"] == "linux"
     assert body["recommendations"][0]["bundle_id"] == "cpu_local"
+    assert body["recommendations"][0]["resource_profile"] == "balanced"
+    assert body["recommendations"][0]["selection_key"] == "v2:cpu_local:balanced"
+    assert body["recommendations"][0]["confidence"] == "high"
     assert body["excluded"][0]["bundle_id"] == "nvidia_local"

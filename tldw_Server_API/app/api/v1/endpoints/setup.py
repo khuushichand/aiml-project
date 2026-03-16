@@ -148,6 +148,9 @@ async def get_audio_recommendations(
         bundle_id = recommendation.get("bundle_id")
         if bundle_id in bundle_lookup:
             recommendation["bundle"] = bundle_lookup[bundle_id]
+            resource_profile = recommendation.get("resource_profile")
+            if resource_profile:
+                recommendation["profile"] = bundle_lookup[bundle_id].get("resource_profiles", {}).get(resource_profile)
     for excluded_bundle in recommendations.get("excluded", []):
         bundle_id = excluded_bundle.get("bundle_id")
         if bundle_id in bundle_lookup:

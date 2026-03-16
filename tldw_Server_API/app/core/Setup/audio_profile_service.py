@@ -9,7 +9,12 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from tldw_Server_API.app.core.Setup.audio_bundle_catalog import get_audio_bundle_catalog
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    AudioBundle,
+    AudioResourceProfile,
+    build_audio_selection_key,
+    get_audio_bundle_catalog,
+)
 from tldw_Server_API.app.core.Setup import install_manager
 
 
@@ -31,6 +36,9 @@ class BundleRecommendation(BaseModel):
 
     bundle_id: str
     label: str
+    resource_profile: str
+    selection_key: str
+    confidence: str
     reasons: list[str]
     score: int
 
@@ -91,55 +99,111 @@ def rank_audio_bundles(
         if bundle.bundle_id == "apple_silicon_local" and not profile.apple_silicon:
             continue
 
-        score = 50
-        reasons: list[str] = []
-
-        if prefer_offline_runtime and bundle.offline_runtime_supported:
-            score += 15
-            reasons.append("Supports offline runtime after provisioning")
-
-        if bundle.bundle_id == "nvidia_local":
-            if profile.cuda_available:
-                score += 40
-                reasons.append("CUDA detected")
-            else:
-                score -= 30
-                reasons.append("CUDA not detected")
-        elif bundle.bundle_id == "apple_silicon_local":
-            if profile.apple_silicon:
-                score += 40
-                reasons.append("Apple Silicon detected")
-            else:
-                score -= 20
-                reasons.append("Apple Silicon not detected")
-        elif bundle.bundle_id == "cpu_local":
-            score += 20
-            reasons.append("Conservative local-first default")
-        elif bundle.bundle_id == "hosted_plus_local_backup":
-            if allow_hosted_fallbacks:
-                score += 10
-                reasons.append("Hosted fallbacks allowed")
-            if prefer_offline_runtime:
-                score -= 15
-                reasons.append("Offline runtime preferred")
-
-        if not profile.ffmpeg_available:
-            score -= 5
-            reasons.append("FFmpeg prerequisite still needed")
-        if not profile.espeak_available:
-            score -= 5
-            reasons.append("eSpeak prerequisite still needed")
-
-        recommendations.append(
-            BundleRecommendation(
-                bundle_id=bundle.bundle_id,
-                label=bundle.label,
-                reasons=reasons,
-                score=score,
+        for resource_profile, profile_definition in bundle.resource_profiles.items():
+            score, reasons, confidence = _score_bundle_profile(
+                bundle,
+                profile_definition,
+                profile,
+                prefer_offline_runtime=prefer_offline_runtime,
+                allow_hosted_fallbacks=allow_hosted_fallbacks,
             )
-        )
+            recommendations.append(
+                BundleRecommendation(
+                    bundle_id=bundle.bundle_id,
+                    label=bundle.label,
+                    resource_profile=resource_profile,
+                    selection_key=build_audio_selection_key(bundle.bundle_id, resource_profile, bundle.catalog_version),
+                    confidence=confidence,
+                    reasons=reasons,
+                    score=score,
+                )
+            )
 
     return sorted(recommendations, key=lambda item: item.score, reverse=True)
+
+
+def _score_bundle_profile(
+    bundle: AudioBundle,
+    profile_definition: AudioResourceProfile,
+    machine_profile: MachineProfile,
+    *,
+    prefer_offline_runtime: bool,
+    allow_hosted_fallbacks: bool,
+) -> tuple[int, list[str], str]:
+    score = 50
+    reasons: list[str] = []
+    confidence = "medium"
+    profile_id = profile_definition.profile_id
+    estimated_disk = profile_definition.estimated_disk_gb or 0.0
+
+    if prefer_offline_runtime and bundle.offline_runtime_supported:
+        score += 15
+        reasons.append("Supports offline runtime after provisioning")
+
+    if bundle.bundle_id == "nvidia_local":
+        score += 40
+        reasons.append("CUDA detected")
+    elif bundle.bundle_id == "apple_silicon_local":
+        score += 40
+        reasons.append("Apple Silicon detected")
+    elif bundle.bundle_id == "cpu_local":
+        score += 20
+        reasons.append("Conservative local-first default")
+    elif bundle.bundle_id == "hosted_plus_local_backup":
+        if allow_hosted_fallbacks:
+            score += 10
+            reasons.append("Hosted fallbacks allowed")
+        if prefer_offline_runtime:
+            score -= 15
+            reasons.append("Offline runtime preferred")
+
+    if profile_id == "light":
+        if machine_profile.free_disk_gb and estimated_disk and machine_profile.free_disk_gb <= max(estimated_disk * 1.5, 3.0):
+            score += 25
+            reasons.append("Low-disk machine profile favors the light tier")
+            confidence = "high"
+        else:
+            score -= 5
+            reasons.append("Balanced tier preferred when disk pressure is low")
+            confidence = "medium"
+    elif profile_id == "balanced":
+        score += 8
+        reasons.append("Balanced tier is the conservative default")
+        confidence = "high"
+    elif profile_id == "performance":
+        confidence = "low"
+        if estimated_disk and machine_profile.free_disk_gb >= estimated_disk + 2.0:
+            score += 12
+            reasons.append("Sufficient disk headroom for the performance tier")
+        else:
+            score -= 20
+            reasons.append("Insufficient disk headroom for the performance tier")
+
+        if bundle.bundle_id == "nvidia_local" and machine_profile.cuda_available:
+            score += 12
+            reasons.append("GPU-backed local profile can support the performance tier")
+            confidence = "high"
+        elif bundle.bundle_id == "apple_silicon_local" and machine_profile.apple_silicon:
+            score += 6
+            reasons.append("Apple Silicon can support the performance tier")
+            confidence = "medium"
+        else:
+            score -= 10
+            reasons.append("No strong acceleration signal for the performance tier")
+
+    if estimated_disk and machine_profile.free_disk_gb < estimated_disk:
+        score -= 15
+        reasons.append("Available disk is below the estimated bundle footprint")
+        confidence = "low"
+
+    if not machine_profile.ffmpeg_available:
+        score -= 5
+        reasons.append("FFmpeg prerequisite still needed")
+    if not machine_profile.espeak_available:
+        score -= 5
+        reasons.append("eSpeak prerequisite still needed")
+
+    return score, reasons, confidence
 
 
 def recommend_audio_bundles(
