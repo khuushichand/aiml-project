@@ -67,6 +67,7 @@ from tldw_Server_API.app.api.v1.schemas.research_schemas import (
     SemanticScholarSearchResponse,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 from tldw_Server_API.app.core.http_client import (
     RetryPolicy as _RetryPolicy,
 )
@@ -139,6 +140,34 @@ def _raise_http_error_from_exception(
     if force_status is not None:
         raise HTTPException(status_code=force_status, detail=_PROVIDER_ERROR_DETAIL) from exc
     raise HTTPException(status_code=status_code, detail=_PROVIDER_ERROR_DETAIL) from exc
+
+
+def _ingest_paper_search_media(
+    *,
+    media_db: Any,
+    url: str,
+    title: str,
+    media_type: str,
+    content: str,
+    keywords: list[str],
+    overwrite: bool = False,
+    **kwargs: Any,
+) -> tuple[Any, Any, Any]:
+    """Route paper-search ingest through the repository API for real DB sessions."""
+    media_writer = (
+        get_media_repository(media_db)
+        if hasattr(media_db, "backend") or hasattr(media_db, "db_path")
+        else media_db
+    )
+    return media_writer.add_media_with_keywords(
+        url=url,
+        title=title,
+        media_type=media_type,
+        content=content,
+        keywords=keywords,
+        overwrite=overwrite,
+        **kwargs,
+    )
 
 
 async def _download_pdf_bytes(
@@ -908,7 +937,8 @@ async def pmc_oa_ingest_pdf(
 
                 db_id, media_uuid, db_msg = await loop.run_in_executor(
                     None,
-                    lambda: db.add_media_with_keywords(
+                    lambda: _ingest_paper_search_media(
+                        media_db=db,
                         url=f"pmcid:{pmcid}",
                         title=metadata_for_db.get('title') or title or (filename or pmcid),
                         media_type="pdf",
@@ -1091,7 +1121,8 @@ async def arxiv_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"arxiv:{arxiv_id}",
                 title=title_for_db,
                 media_type="pdf",
@@ -1510,7 +1541,8 @@ async def s2_ingest(
         author_for_db = sm.get('authors')
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"s2:{paper_id}",
                 title=title_for_db,
                 media_type="pdf",

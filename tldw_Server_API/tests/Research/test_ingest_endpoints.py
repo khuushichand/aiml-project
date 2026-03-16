@@ -55,6 +55,7 @@ async def test_arxiv_ingest_success(monkeypatch, paper_search_app):
 
     monkeypatch.setattr(_Arxiv, "fetch_arxiv_xml", _fake_fetch_arxiv_xml)
     monkeypatch.setattr(_Arxiv, "parse_arxiv_feed", _fake_parse_arxiv_feed)
+    monkeypatch.setattr(_Arxiv, "fetch_arxiv_pdf_url", lambda paper_id: None)
 
     # Fake session returns a PDF
     monkeypatch.setattr(paper_search, "_http_session", lambda: _FakeSession(b"%PDF-1.5\n..."))
