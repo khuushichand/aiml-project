@@ -10,6 +10,57 @@ from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_reposito
 )
 
 
+def test_media_database_add_media_with_keywords_delegates_to_media_repository(monkeypatch) -> None:
+    db = MediaDatabase(db_path=":memory:", client_id="media-delegate")
+    sentinel = (321, "repo-uuid", "delegated")
+    captured: dict[str, object] = {}
+
+    def fake_add_media_with_keywords(self, **kwargs):
+        captured["session"] = self.session
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(
+        MediaRepository,
+        "add_media_with_keywords",
+        fake_add_media_with_keywords,
+        raising=False,
+    )
+
+    try:
+        result = db.add_media_with_keywords(
+            title="Delegated doc",
+            content="delegate me",
+            media_type="text",
+            keywords=["alpha", "beta"],
+            visibility="personal",
+        )
+
+        assert result == sentinel
+        assert captured["session"] is db
+        assert captured["kwargs"] == {
+            "url": None,
+            "title": "Delegated doc",
+            "media_type": "text",
+            "content": "delegate me",
+            "keywords": ["alpha", "beta"],
+            "prompt": None,
+            "analysis_content": None,
+            "safe_metadata": None,
+            "source_hash": None,
+            "transcription_model": None,
+            "author": None,
+            "ingestion_date": None,
+            "overwrite": False,
+            "chunk_options": None,
+            "chunks": None,
+            "visibility": "personal",
+            "owner_user_id": None,
+        }
+    finally:
+        db.close_connection()
+
+
 def test_media_repository_add_text_media_creates_row() -> None:
     db = MediaDatabase(db_path=":memory:", client_id="media-repo")
     repo = MediaRepository.from_legacy_db(db)
