@@ -62,10 +62,15 @@ def test_setup_audio_verification_endpoint_persists_readiness(mocker, tmp_path):
     )
 
     with _make_client() as client:
-        response = client.post("/api/v1/setup/audio/verify", json={"bundle_id": "cpu_local"})
+        response = client.post(
+            "/api/v1/setup/audio/verify",
+            json={"bundle_id": "cpu_local", "resource_profile": "balanced"},
+        )
         readiness = client.get("/api/v1/setup/audio/readiness")
 
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
+    assert response.json()["selected_resource_profile"] == "balanced"
     assert readiness.status_code == 200
     assert readiness.json()["status"] == "ready"
+    assert readiness.json()["selected_resource_profile"] == "balanced"

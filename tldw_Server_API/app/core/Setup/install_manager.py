@@ -718,15 +718,24 @@ def _remediation_item(code: str, message: str, *, action: str = "safe_rerun") ->
     }
 
 
-async def verify_audio_bundle_async(bundle_id: str) -> dict[str, Any]:
-    """Verify the primary STT/TTS paths for a curated audio bundle."""
+async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: Any) -> dict[str, Any]:
+    """Verify the primary STT/TTS paths for a selected bundle profile."""
 
-    bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    bundle_id = bundle.bundle_id
+    resource_profile = selected_profile.profile_id
     machine_profile = audio_profile_service.detect_machine_profile()
-    stt_health = await _resolve_health_call(audio_health.collect_setup_stt_health())
+    selection_key = build_audio_selection_key(bundle_id, resource_profile, bundle.catalog_version)
+    expected_stt_model = None
+    if selected_profile.stt_plan:
+        expected_stt_model = (
+            (selected_profile.stt_plan[0].get("models") or [None])[0]
+            if isinstance(selected_profile.stt_plan[0], dict)
+            else None
+        )
+    stt_health = await _resolve_health_call(audio_health.collect_setup_stt_health(model=expected_stt_model))
     tts_health = await _resolve_health_call(audio_health.collect_setup_tts_health())
 
-    primary_tts_engine = bundle.tts_plan[0]["engine"] if bundle.tts_plan else None
+    primary_tts_engine = selected_profile.tts_plan[0]["engine"] if selected_profile.tts_plan else None
     remediation_items: list[dict[str, str]] = []
     warning_items: list[dict[str, str]] = []
 
@@ -791,6 +800,8 @@ async def verify_audio_bundle_async(bundle_id: str) -> dict[str, Any]:
     verified_at = _utc_now()
     result = {
         "bundle_id": bundle_id,
+        "selected_resource_profile": resource_profile,
+        "selection_key": selection_key,
         "status": status,
         "machine_profile": machine_profile.model_dump(),
         "stt_health": stt_health,
@@ -802,9 +813,14 @@ async def verify_audio_bundle_async(bundle_id: str) -> dict[str, Any]:
     audio_readiness_store.get_audio_readiness_store().update(
         status=status,
         selected_bundle_id=bundle_id,
+        selected_resource_profile=resource_profile,
+        catalog_version=bundle.catalog_version,
+        selection_key=selection_key,
         machine_profile=machine_profile.model_dump(),
         last_verification={
             "bundle_id": bundle_id,
+            "selected_resource_profile": resource_profile,
+            "selection_key": selection_key,
             "verified_at": verified_at,
             "stt_health": stt_health,
             "tts_health": tts_health,
@@ -814,10 +830,26 @@ async def verify_audio_bundle_async(bundle_id: str) -> dict[str, Any]:
     return result
 
 
-def verify_audio_bundle(bundle_id: str) -> dict[str, Any]:
+async def verify_audio_bundle_async(
+    bundle_id: str,
+    *,
+    resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+) -> dict[str, Any]:
+    """Verify the primary STT/TTS paths for a curated audio bundle."""
+
+    bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    selected_profile = bundle.profile_by_id(resource_profile)
+    return await verify_audio_bundle_async_for_profile(bundle, selected_profile)
+
+
+def verify_audio_bundle(
+    bundle_id: str,
+    *,
+    resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+) -> dict[str, Any]:
     """Synchronous wrapper for setup verification tests and scripts."""
 
-    return asyncio.run(verify_audio_bundle_async(bundle_id))
+    return asyncio.run(verify_audio_bundle_async(bundle_id, resource_profile=resource_profile))
 
 def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     any_stt = False

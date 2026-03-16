@@ -69,6 +69,11 @@ class AudioBundleProvisionRequest(BaseModel):
 
 class AudioBundleVerificationRequest(BaseModel):
     bundle_id: str = Field(..., min_length=1, description="Curated audio bundle identifier to verify.")
+    resource_profile: str = Field(
+        DEFAULT_AUDIO_RESOURCE_PROFILE,
+        min_length=1,
+        description="Selected resource profile within the curated audio bundle.",
+    )
 
 
 async def require_admin_and_system_configure(
@@ -238,7 +243,10 @@ async def verify_audio_bundle(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
 
     try:
-        return await install_manager.verify_audio_bundle_async(payload.bundle_id)
+        return await install_manager.verify_audio_bundle_async(
+            payload.bundle_id,
+            resource_profile=payload.resource_profile,
+        )
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
