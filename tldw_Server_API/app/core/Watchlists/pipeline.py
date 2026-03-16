@@ -46,6 +46,7 @@ from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddi
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
@@ -140,6 +141,34 @@ async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
+
+
+def _ingest_watchlist_media(
+    *,
+    media_db: Any,
+    url: str,
+    title: str,
+    media_type: str,
+    content: str,
+    author: str | None,
+    keywords: list[str],
+    overwrite: bool = False,
+) -> tuple[Any, Any, Any]:
+    """Route watchlist media ingest through the repository API for real DB sessions."""
+    media_writer = (
+        get_media_repository(media_db)
+        if hasattr(media_db, "backend") or hasattr(media_db, "db_path")
+        else media_db
+    )
+    return media_writer.add_media_with_keywords(
+        url=url,
+        title=title,
+        media_type=media_type,
+        content=content,
+        author=author,
+        keywords=keywords,
+        overwrite=overwrite,
+    )
 
 
 def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
@@ -1075,7 +1104,8 @@ async def run_watchlist_job(
                         summary_text = article.get("content") or it.get("summary") or ""
                         if persist_to_media_db and mdb is not None:
                             try:
-                                media_id, media_uuid, _msg = mdb.add_media_with_keywords(
+                                media_id, media_uuid, _msg = _ingest_watchlist_media(
+                                    media_db=mdb,
                                     url=article.get("url") or link,
                                     title=article.get("title") or (it.get("title") or "Untitled"),
                                     media_type="article",
@@ -1388,7 +1418,8 @@ async def run_watchlist_job(
                             flagged = False
                         if persist_to_media_db and mdb is not None:
                             try:
-                                media_id, media_uuid, _msg = mdb.add_media_with_keywords(
+                                media_id, media_uuid, _msg = _ingest_watchlist_media(
+                                    media_db=mdb,
                                     url=article.get("url") or page_url,
                                     title=article.get("title") or src.name,
                                     media_type="article",
