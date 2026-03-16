@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib.util
+import inspect
 import json
 import os
 import shutil
@@ -20,15 +22,12 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_health
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup import setup_manager
-from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
-    AudioBundleStep,
-    AutomationTier,
-    get_audio_bundle_catalog,
-)
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import AudioBundleStep, AutomationTier, get_audio_bundle_catalog
 from tldw_Server_API.app.core.Setup.install_schema import DEFAULT_WHISPER_MODELS, InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
@@ -592,6 +591,122 @@ def execute_audio_bundle(bundle_id: str, *, safe_rerun: bool = False) -> dict[st
         "steps": result_steps,
         "status": install_result.get("status"),
     }
+
+
+async def _resolve_health_call(result: Any) -> Any:
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _remediation_item(code: str, message: str, *, action: str = "safe_rerun") -> dict[str, str]:
+    return {
+        "code": code,
+        "message": message,
+        "action": action,
+    }
+
+
+async def verify_audio_bundle_async(bundle_id: str) -> dict[str, Any]:
+    """Verify the primary STT/TTS paths for a curated audio bundle."""
+
+    bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    machine_profile = audio_profile_service.detect_machine_profile()
+    stt_health = await _resolve_health_call(audio_health.collect_setup_stt_health())
+    tts_health = await _resolve_health_call(audio_health.collect_setup_tts_health())
+
+    primary_tts_engine = bundle.tts_plan[0]["engine"] if bundle.tts_plan else None
+    remediation_items: list[dict[str, str]] = []
+    warning_items: list[dict[str, str]] = []
+
+    stt_usable = bool((stt_health or {}).get("usable", False))
+    tts_usable = str((tts_health or {}).get("status", "")).lower() == "healthy"
+
+    if not machine_profile.ffmpeg_available:
+        remediation_items.append(
+            _remediation_item(
+                "FFMPEG_MISSING",
+                "Install FFmpeg and rerun verification.",
+            )
+        )
+
+    providers = (tts_health or {}).get("providers", {})
+    kokoro_info = providers.get("kokoro") if isinstance(providers, dict) else None
+    if primary_tts_engine == "kokoro" and not bool((kokoro_info or {}).get("espeak_lib_exists", False)):
+        remediation_items.append(
+            _remediation_item(
+                "KOKORO_ESPEAK_MISSING",
+                "Install espeak-ng and rerun verification.",
+            )
+        )
+        tts_usable = False
+
+    if not stt_usable:
+        remediation_items.append(
+            _remediation_item(
+                "STT_UNUSABLE",
+                "Primary STT path is not usable. Rerun provisioning or inspect model downloads.",
+            )
+        )
+    if not tts_usable:
+        remediation_items.append(
+            _remediation_item(
+                "TTS_UNHEALTHY",
+                "Primary TTS path is not healthy. Rerun provisioning or inspect TTS logs.",
+            )
+        )
+
+    provider_details = (tts_health or {}).get("providers", {})
+    if isinstance(provider_details, dict):
+        for provider_name, details in provider_details.items():
+            if provider_name == primary_tts_engine or not isinstance(details, dict):
+                continue
+            if str(details.get("status", details.get("availability", ""))).lower() == "failed":
+                warning_items.append(
+                    _remediation_item(
+                        "SECONDARY_PROVIDER_FAILED",
+                        f"Secondary TTS provider {provider_name} is unavailable.",
+                        action="advisory",
+                    )
+                )
+
+    if remediation_items:
+        status = "partial" if (stt_usable or tts_usable) else "failed"
+    elif warning_items:
+        status = "ready_with_warnings"
+    else:
+        status = "ready"
+
+    verified_at = _utc_now()
+    result = {
+        "bundle_id": bundle_id,
+        "status": status,
+        "machine_profile": machine_profile.model_dump(),
+        "stt_health": stt_health,
+        "tts_health": tts_health,
+        "remediation_items": remediation_items + warning_items,
+        "verified_at": verified_at,
+    }
+
+    audio_readiness_store.get_audio_readiness_store().update(
+        status=status,
+        selected_bundle_id=bundle_id,
+        machine_profile=machine_profile.model_dump(),
+        last_verification={
+            "bundle_id": bundle_id,
+            "verified_at": verified_at,
+            "stt_health": stt_health,
+            "tts_health": tts_health,
+        },
+        remediation_items=result["remediation_items"],
+    )
+    return result
+
+
+def verify_audio_bundle(bundle_id: str) -> dict[str, Any]:
+    """Synchronous wrapper for setup verification tests and scripts."""
+
+    return asyncio.run(verify_audio_bundle_async(bundle_id))
 
 def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     any_stt = False

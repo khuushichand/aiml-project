@@ -58,6 +58,10 @@ class AudioBundleProvisionRequest(BaseModel):
     )
 
 
+class AudioBundleVerificationRequest(BaseModel):
+    bundle_id: str = Field(..., min_length=1, description="Curated audio bundle identifier to verify.")
+
+
 async def require_admin_and_system_configure(
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
 ) -> AuthPrincipal:
@@ -191,6 +195,23 @@ async def provision_audio_bundle(
             payload.bundle_id,
             safe_rerun=payload.safe_rerun,
         )
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/audio/verify", openapi_extra={"security": []})
+async def verify_audio_bundle(
+    payload: AudioBundleVerificationRequest,
+    _guard: None = Depends(require_local_setup_access),
+) -> dict[str, Any]:
+    """Verify the primary STT/TTS paths for a curated audio bundle."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    try:
+        return await install_manager.verify_audio_bundle_async(payload.bundle_id)
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

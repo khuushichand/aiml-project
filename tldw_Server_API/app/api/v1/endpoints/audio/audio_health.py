@@ -27,6 +27,20 @@ router = APIRouter(
 )
 
 
+def _build_internal_health_request(path: str) -> Request:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "client": ("127.0.0.1", 0),
+        "server": ("127.0.0.1", 8000),
+        "scheme": "http",
+    }
+    return Request(scope)
+
+
 def _serialize_tts_caps_for_health(tts_service: TTSServiceV2, caps: Any) -> Any:
     if caps is None:
         return None
@@ -195,6 +209,14 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
         return {"status": "error", **payload, "timestamp": datetime.utcnow().isoformat()}
 
 
+async def collect_setup_tts_health() -> dict[str, Any]:
+    """Collect TTS health without going through the HTTP routing layer."""
+
+    request = _build_internal_health_request("/api/v1/audio/health")
+    tts_service = await get_tts_service()
+    return await get_tts_health(request, tts_service)
+
+
 @router.get("/transcriptions/health", summary="Check STT transcription model health")
 async def get_stt_health(
     request: Request,
@@ -286,3 +308,14 @@ async def get_stt_health(
         health["warm"] = warm_info
 
     return health
+
+
+async def collect_setup_stt_health(
+    model: Optional[str] = None,
+    *,
+    warm: bool = False,
+) -> dict[str, Any]:
+    """Collect STT health without going through the HTTP routing layer."""
+
+    request = _build_internal_health_request("/api/v1/audio/transcriptions/health")
+    return await get_stt_health(request, model=model, warm=warm)

@@ -38,7 +38,7 @@ class AudioReadinessRecord(BaseModel):
     selected_bundle_id: str | None = None
     machine_profile: dict[str, Any] | None = None
     last_verification: dict[str, Any] | None = None
-    remediation_items: list[str] = Field(default_factory=list)
+    remediation_items: list[Any] = Field(default_factory=list)
     updated_at: str = Field(default_factory=_utc_now)
 
 
