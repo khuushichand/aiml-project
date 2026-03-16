@@ -32,6 +32,9 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     media_dedupe_url_candidates,
     normalize_media_dedupe_url,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    get_media_repository,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
     prepare_common_options,
@@ -97,6 +100,12 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         return int(default)
+
+
+def _resolve_media_writer(db_instance: Any) -> Any:
+    if hasattr(db_instance, "backend") or hasattr(db_instance, "db_path"):
+        return get_media_repository(db_instance)
+    return db_instance
 
 
 def _build_ingestion_budget_headers(
@@ -3089,7 +3098,8 @@ async def persist_primary_av_item(
             worker_db: MediaDatabase | None = None
             try:
                 worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                return worker_db.add_media_with_keywords(**db_add_kwargs)
+                media_writer = _resolve_media_writer(worker_db)
+                return media_writer.add_media_with_keywords(**db_add_kwargs)
             finally:
                 if worker_db is not None:
                     worker_db.close_connection()
@@ -5039,7 +5049,8 @@ async def persist_doc_item_and_children(
                 worker_db: MediaDatabase | None = None
                 try:
                     worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                    media_id_local, media_uuid_local, db_message_local = worker_db.add_media_with_keywords(
+                    media_writer = _resolve_media_writer(worker_db)
+                    media_id_local, media_uuid_local, db_message_local = media_writer.add_media_with_keywords(
                         **db_add_kwargs
                     )
                     email_graph_local: dict[str, Any] | None = None
@@ -5291,7 +5302,8 @@ async def persist_doc_item_and_children(
                                                 db_path=db_path_local,
                                                 client_id=client_id_local,
                                             )
-                                            child_id_local, child_uuid_local, child_msg_local = worker_db.add_media_with_keywords(
+                                            media_writer = _resolve_media_writer(worker_db)
+                                            child_id_local, child_uuid_local, child_msg_local = media_writer.add_media_with_keywords(
                                                 url=_normalize_dedupe_url_for_db(child_url),
                                                 title=child_title,
                                                 media_type=media_type_local,
@@ -5584,7 +5596,8 @@ async def persist_doc_item_and_children(
                                             db_path=db_path_local,
                                             client_id=client_id_local,
                                         )
-                                        child_id_local, child_uuid_local, child_msg_local = worker_db.add_media_with_keywords(
+                                        media_writer = _resolve_media_writer(worker_db)
+                                        child_id_local, child_uuid_local, child_msg_local = media_writer.add_media_with_keywords(
                                             url=_normalize_dedupe_url_for_db(child_url_local),
                                             title=child_title_local,
                                             media_type=media_type_local,
