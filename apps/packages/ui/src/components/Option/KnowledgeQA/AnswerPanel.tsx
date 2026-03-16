@@ -169,14 +169,18 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
     }
     return null
   }, [messages])
-  const answerWordCount = useMemo(() => {
-    if (!answer) return 0
-    return answer.trim().split(/\s+/).filter(Boolean).length
+  const normalizedAnswer = useMemo(() => {
+    if (typeof answer !== "string") return null
+    return answer.trim().length > 0 ? answer : null
   }, [answer])
+  const answerWordCount = useMemo(() => {
+    if (!normalizedAnswer) return 0
+    return normalizedAnswer.trim().split(/\s+/).filter(Boolean).length
+  }, [normalizedAnswer])
   const isLongAnswer = answerWordCount > LONG_ANSWER_WORD_THRESHOLD
   const groundingCoverage = useMemo(
-    () => computeGroundingCoverage(answer),
-    [answer]
+    () => computeGroundingCoverage(normalizedAnswer),
+    [normalizedAnswer]
   )
   const trustScore = searchDetails?.faithfulnessScore ?? searchDetails?.verificationRate ?? null
   const trustScoreLabel = searchDetails?.faithfulnessScore != null
@@ -192,7 +196,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
     setAnswerFeedback(null)
     setAnswerFeedbackError(null)
     setPendingFeedbackThumb(null)
-  }, [answer])
+  }, [normalizedAnswer])
 
   useEffect(() => {
     if (!isSearching) {
@@ -301,7 +305,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
       const payload = buildKnowledgeQaWorkspacePrefill({
         threadId: currentThreadId,
         query,
-        answer,
+        answer: normalizedAnswer,
         citations: citations.map((citation) => citation.index),
         results,
       })
@@ -324,9 +328,9 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
   }
 
   const handleCopyAnswer = async () => {
-    if (!answer) return
+    if (!normalizedAnswer) return
     try {
-      await navigator.clipboard.writeText(answer)
+      await navigator.clipboard.writeText(normalizedAnswer)
       setCopiedAnswer(true)
       messageApi.open({
         type: "success",
@@ -382,7 +386,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
   }, [preset])
 
   // Loading state
-  if (isSearching && !answer) {
+  if (isSearching && !normalizedAnswer) {
     return (
       <div className={cn("p-6 rounded-xl bg-muted/30 border border-border", className)}>
         <div className="flex items-center gap-3">
@@ -421,7 +425,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
   }
 
   // No answer yet
-  if (!answer) {
+  if (!normalizedAnswer) {
     // Show empty state only if we have no results either
     if (results.length === 0) {
       return null
@@ -649,7 +653,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
               },
             }}
           >
-            {answer}
+            {normalizedAnswer}
           </ReactMarkdown>
           {isLongAnswer && !isExpanded && (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary/10 to-transparent" />

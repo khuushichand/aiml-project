@@ -229,6 +229,41 @@ describe("KnowledgeQAProvider streaming search", () => {
     )
   })
 
+  it("normalizes whitespace-only non-stream answers to null", async () => {
+    ragSearchStreamMock.mockImplementation(async function* () {
+      throw new Error("stream endpoint unavailable")
+    })
+    ragSearchMock.mockResolvedValue({
+      results: [{ id: "blank-answer-doc", metadata: { title: "Blank Answer Doc" } }],
+      answer: "   ",
+      metadata: {},
+    })
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+    await act(async () => {
+      await latestContext!.selectThread("local-blank-answer-test")
+    })
+
+    act(() => {
+      latestContext!.setQuery("blank answer query")
+    })
+
+    await act(async () => {
+      await latestContext!.search()
+    })
+
+    expect(ragSearchMock).toHaveBeenCalledTimes(1)
+    expect(latestContext!.results).toHaveLength(1)
+    expect(latestContext!.answer).toBeNull()
+    expect(latestContext!.isSearching).toBe(false)
+  })
+
   it("surfaces query-length warning when a submitted query exceeds backend limits", async () => {
     ragSearchStreamMock.mockImplementation(async function* () {
       throw new Error("stream endpoint unavailable")
@@ -291,10 +326,12 @@ describe("KnowledgeQAProvider streaming search", () => {
 
     act(() => {
       latestContext!.updateSetting("include_media_ids", [7])
-      latestContext!.updateSetting("include_note_ids", [101])
-      latestContext!.setPinnedSourceFilters({
+      ;(latestContext as any).updateSetting("include_note_ids", [
+        "note-base-uuid",
+      ])
+      ;(latestContext as any).setPinnedSourceFilters({
         mediaIds: [42],
-        noteIds: [202],
+        noteIds: ["note-pinned-uuid"],
       })
       latestContext!.setQuery("pinned filters query")
     })
@@ -309,7 +346,7 @@ describe("KnowledgeQAProvider streaming search", () => {
       expect.arrayContaining([7, 42])
     )
     expect(ragOptions.include_note_ids).toEqual(
-      expect.arrayContaining(["note-base", "note-pinned"])
+      expect.arrayContaining(["note-base-uuid", "note-pinned-uuid"])
     )
   })
 })

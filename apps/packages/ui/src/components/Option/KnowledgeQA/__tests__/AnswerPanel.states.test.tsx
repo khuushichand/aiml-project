@@ -129,6 +129,20 @@ describe("AnswerPanel state guardrails", () => {
     expect(state.setSettingsPanelOpen).toHaveBeenCalledWith(true)
   })
 
+  it("treats whitespace-only answers as missing generated content", () => {
+    state.answer = "   "
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+
+    render(<AnswerPanel />)
+
+    expect(
+      screen.getByText(
+        "Found 1 relevant source. Enable answer generation in settings to get a synthesized response."
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText("AI Answer")).not.toBeInTheDocument()
+  })
+
   it("keeps citation jump interaction wired to source focus", () => {
     state.answer = "Use method [1] for better recall."
     state.citations = [{ index: 1 }]

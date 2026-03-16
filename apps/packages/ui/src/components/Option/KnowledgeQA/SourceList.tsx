@@ -141,7 +141,7 @@ function buildAskPrompt(template: SourceAskTemplate, title: string): string {
 
 type PinnedSourceTarget = {
   mediaId: number | null
-  noteId: number | null
+  noteId: string | null
 }
 
 function parseMediaId(value: unknown): number | null {
@@ -157,16 +157,15 @@ function parseMediaId(value: unknown): number | null {
   return null
 }
 
-function parseNoteId(value: unknown): number | null {
+function parseNoteId(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.round(value)
+    return String(Math.round(value))
   }
   if (typeof value !== "string") return null
   const normalized = value.trim()
   if (!normalized) return null
-  const rawId = normalized.startsWith("note_") ? normalized.slice(5) : normalized
-  if (!/^\d+$/.test(rawId)) return null
-  return Number.parseInt(rawId, 10)
+  const rawId = normalized.startsWith("note_") ? normalized.slice(5).trim() : normalized
+  return rawId || null
 }
 
 function resolvePinnedSourceTarget(result: RagResult): PinnedSourceTarget {
@@ -452,7 +451,7 @@ export function SourceList({ className }: SourceListProps) {
       new Set(
         pinnedTargets
           .map((target) => target.noteId)
-          .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
       )
     )
     setPinnedSourceFilters({ mediaIds, noteIds })

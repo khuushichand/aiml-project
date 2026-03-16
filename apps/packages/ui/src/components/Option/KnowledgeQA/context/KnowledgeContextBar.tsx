@@ -21,8 +21,8 @@ type KnowledgeContextBarProps = {
   onSourcesChange: (sources: RagSource[]) => void
   includeMediaIds: number[]
   onIncludeMediaIdsChange: (ids: number[]) => void
-  includeNoteIds: number[]
-  onIncludeNoteIdsChange: (ids: number[]) => void
+  includeNoteIds: string[]
+  onIncludeNoteIdsChange: (ids: string[]) => void
   webEnabled: boolean
   onToggleWeb: () => void
   contextChangedSinceLastRun: boolean
@@ -106,7 +106,7 @@ function summarizeSources(sources: RagSource[]): string {
   return `${sources.length} selected`
 }
 
-function summarizeSpecificSources(mediaIds: number[], noteIds: number[]): string {
+function summarizeSpecificSources(mediaIds: number[], noteIds: string[]): string {
   if (mediaIds.length === 0 && noteIds.length === 0) {
     return "All items"
   }
@@ -188,16 +188,16 @@ function normalizeMediaOptions(payload: unknown): GranularSourceOption<number>[]
   return normalized.sort((left, right) => left.label.localeCompare(right.label))
 }
 
-function normalizeNoteOptions(payload: unknown): GranularSourceOption<number>[] {
-  const seen = new Set<number>()
-  const normalized: GranularSourceOption<number>[] = []
+function normalizeNoteOptions(payload: unknown): GranularSourceOption<string>[] {
+  const seen = new Set<string>()
+  const normalized: GranularSourceOption<string>[] = []
 
   for (const item of extractResponseItems(payload)) {
     const record = asRecord(item)
     if (!record) continue
 
-    const id = asNumber(record.id ?? record.note_id)
-    if (id === null || id <= 0 || seen.has(id)) continue
+    const id = asString(record.id ?? record.note_id)
+    if (id === null || seen.has(id)) continue
 
     const contentPreview = asString(record.content)?.slice(0, 80)
     const label = asString(record.title) ?? asString(record.name) ?? contentPreview ?? `Note ${id}`
@@ -233,7 +233,7 @@ export function KnowledgeContextBar({
   const [granularError, setGranularError] = useState<string | null>(null)
   const [granularLoaded, setGranularLoaded] = useState(false)
   const [mediaOptions, setMediaOptions] = useState<GranularSourceOption<number>[]>([])
-  const [noteOptions, setNoteOptions] = useState<GranularSourceOption<number>[]>([])
+  const [noteOptions, setNoteOptions] = useState<GranularSourceOption<string>[]>([])
 
   const sourceMenuRef = useRef<HTMLDivElement | null>(null)
   const granularMenuRef = useRef<HTMLDivElement | null>(null)
@@ -271,9 +271,9 @@ export function KnowledgeContextBar({
       Array.from(
         new Set(
           includeNoteIds
-            .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-            .map((value) => Math.round(value))
-            .filter((value) => value > 0)
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean)
         )
       ),
     [includeNoteIds]
@@ -373,10 +373,10 @@ export function KnowledgeContextBar({
     onIncludeMediaIdsChange(next)
   }
 
-  const toggleNoteId = (id: number) => {
+  const toggleNoteId = (id: string) => {
     const next = selectedNoteSet.has(id)
       ? normalizedNoteIds.filter((value) => value !== id)
-      : [...normalizedNoteIds, id].sort((left, right) => left - right)
+      : [...normalizedNoteIds, id].sort((left, right) => left.localeCompare(right))
     onIncludeNoteIdsChange(next)
   }
 
@@ -593,7 +593,7 @@ export function KnowledgeContextBar({
                             const selected =
                               granularTab === "media"
                                 ? selectedMediaSet.has(option.id as number)
-                                : selectedNoteSet.has(option.id as number)
+                                : selectedNoteSet.has(option.id as string)
 
                             return (
                               <li key={`${granularTab}-${option.id}`}>
@@ -610,7 +610,7 @@ export function KnowledgeContextBar({
                                       if (granularTab === "media") {
                                         toggleMediaId(option.id as number)
                                       } else {
-                                        toggleNoteId(option.id as number)
+                                        toggleNoteId(option.id as string)
                                       }
                                     }}
                                     className="mt-0.5 rounded border-border"

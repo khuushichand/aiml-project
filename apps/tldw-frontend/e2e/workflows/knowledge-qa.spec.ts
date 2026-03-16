@@ -217,6 +217,56 @@ test.describe("KnowledgeQA Workflow", () => {
 
       await assertNoCriticalErrors(diagnostics)
     })
+
+    test("treats whitespace-only answers as no generated answer", async ({
+      authedPage,
+      diagnostics
+    }) => {
+      qaPage = new KnowledgeQAPage(authedPage)
+
+      await authedPage.route("**/api/v1/rag/search/stream", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/plain",
+          body: "",
+        })
+      })
+
+      await authedPage.route("**/api/v1/rag/search", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            results: [
+              {
+                id: "blank-answer-source-1",
+                content: "Relevant source excerpt",
+                metadata: {
+                  title: "Blank Answer Source",
+                  source_type: "notes",
+                },
+                score: 0.91,
+              },
+            ],
+            answer: "   ",
+          }),
+        })
+      })
+
+      await qaPage.goto()
+      await qaPage.waitForReady()
+      await qaPage.search("blank answer regression")
+      await qaPage.waitForResults()
+
+      await expect(
+        authedPage.getByText(/Found 1 relevant source\./i)
+      ).toBeVisible({ timeout: 10_000 })
+      await expect(authedPage.getByText("AI Answer")).toHaveCount(0)
+      await expect(authedPage.getByTestId("knowledge-answer-content")).toHaveCount(0)
+      await expect(await qaPage.getAnswerText()).toBe("")
+
+      await assertNoCriticalErrors(diagnostics)
+    })
   })
 
   // ═════════════════════════════════════════════════════════════════════

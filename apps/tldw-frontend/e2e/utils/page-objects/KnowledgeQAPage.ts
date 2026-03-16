@@ -75,18 +75,24 @@ export class KnowledgeQAPage {
   async waitForResults(timeoutMs = 30_000): Promise<void> {
     // Wait for answer panel, source list, or no-results state
     const resultIndicator = this.page.locator(
-      "[data-testid*='answer'], [data-testid*='source'], .answer-panel, .source-list, .ant-empty, [data-testid*='no-results']"
+      "[data-testid='knowledge-answer-content'], [data-testid*='answer'], [data-testid*='source'], .answer-panel, .source-list, .ant-empty, [data-testid*='no-results']"
     )
     await resultIndicator.first().waitFor({ state: "visible", timeout: timeoutMs }).catch(() => {})
   }
 
   async getAnswerText(): Promise<string> {
-    const answer = this.page.locator(
-      "[data-testid*='answer'], .answer-panel, .answer-content"
-    )
-    if (await answer.first().isVisible().catch(() => false)) {
-      return (await answer.first().textContent()) ?? ""
+    const answerSelectors = [
+      this.page.getByTestId("knowledge-answer-content"),
+      this.page.locator(".answer-content"),
+      this.page.locator("[data-testid*='answer']")
+    ]
+
+    for (const answer of answerSelectors) {
+      if (await answer.first().isVisible().catch(() => false)) {
+        return ((await answer.first().textContent()) ?? "").trim()
+      }
     }
+
     return ""
   }
 
