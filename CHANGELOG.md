@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 
+## [0.1.28] 2026-03-15
+
+### Added
+
+- Profile-aware curated audio bundles in `/setup`, with `light`, `balanced`, and `performance` resource tiers for the local hardware families and conservative recommendation scoring across bundle/profile pairs.
+- A v1 setup audio pack service for manifest export/import, including selection identity capture, checksum validation, and compatibility checks for platform, architecture, and Python minor version.
+- Setup readiness persistence for imported audio packs so pack metadata, compatibility status, and asset manifests are visible alongside the selected bundle/profile state.
+
+### Changed
+
+- The `/setup` audio UI now recommends both a hardware bundle and a resource profile, shows profile-specific disk/tier metadata, and sends `resource_profile` through provisioning and verification flows.
+- Audio bundle documentation and speech onboarding guides now describe per-profile footprints and the distinction between online provisioning and v1 offline-pack import.
+
+### Fixed
+
+- Safe rerun and verification flows now stay aligned with the selected bundle/profile identity instead of treating every bundle as a single undifferentiated install target.
+- Setup documentation no longer implies a fully offline dependency installer; the v1 offline-pack path is documented as manifest-and-model portability only.
+
+
 ## [0.1.27] 2026-03-15
 
 ### Added
