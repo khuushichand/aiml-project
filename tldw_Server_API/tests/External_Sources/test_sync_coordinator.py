@@ -145,6 +145,96 @@ async def test_reconcile_created_change_creates_media_binding_and_initial_versio
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_reconcile_created_change_uses_media_repository_api(
+    connectors_db: aiosqlite.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tldw_Server_API.app.core.External_Sources.sync_coordinator as sync_coordinator_module
+
+    _, source = await _create_account_and_source(connectors_db)
+    calls: list[dict[str, object]] = []
+
+    class _FakeMediaRepository:
+        def add_media_with_keywords(self, **kwargs):
+            calls.append(kwargs)
+            return 77, "repo-created", "created"
+
+    monkeypatch.setattr(
+        sync_coordinator_module,
+        "get_media_repository",
+        lambda media_db: _FakeMediaRepository(),
+        raising=False,
+    )
+
+    result = await sync_coordinator_module.reconcile_file_change(
+        connectors_db,
+        object(),
+        source_id=source["id"],
+        provider="drive",
+        change=FileSyncChange(
+            event_type="created",
+            remote_id="file-created-via-repo",
+            remote_name="created-via-repo.txt",
+            remote_parent_id="folder-1",
+            remote_path="/finance/created-via-repo.txt",
+            remote_revision="rev-1",
+            remote_hash="remote-hash-created-via-repo",
+            metadata={
+                "mime_type": "text/plain",
+                "size": 64,
+                "modified_at": "2026-03-06T12:00:00Z",
+            },
+        ),
+        content=FileSyncContentPayload(
+            text="Repository-backed create",
+            prompt="Initial sync import",
+            analysis_content="Imported from repository API",
+            safe_metadata={"export_mime": "text/plain"},
+        ),
+        job_id="job-sync-created-via-repo",
+    )
+
+    binding = await svc.get_external_item_binding(
+        connectors_db,
+        source_id=source["id"],
+        provider="drive",
+        external_id="file-created-via-repo",
+    )
+
+    assert result.action == "created"
+    assert result.media_id == 77
+    assert binding is not None
+    assert binding["media_id"] == 77
+    assert calls == [
+        {
+            "url": "drive://file-created-via-repo",
+            "title": "created-via-repo.txt",
+            "media_type": "document",
+            "content": "Repository-backed create",
+            "keywords": [],
+            "prompt": "Initial sync import",
+            "analysis_content": "Imported from repository API",
+            "safe_metadata": json.dumps(
+                {
+                    "export_mime": "text/plain",
+                    "provider": "drive",
+                    "remote_hash": "remote-hash-created-via-repo",
+                    "remote_id": "file-created-via-repo",
+                    "remote_path": "/finance/created-via-repo.txt",
+                    "remote_revision": "rev-1",
+                    "source_id": source["id"],
+                    "sync_job_id": "job-sync-created-via-repo",
+                    "sync_kind": "created",
+                },
+                sort_keys=True,
+            ),
+            "overwrite": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_reconcile_content_update_updates_media_fts_versions_and_binding(
     connectors_db: aiosqlite.Connection,
     media_db: MediaDatabase,
