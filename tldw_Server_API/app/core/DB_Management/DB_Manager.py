@@ -41,6 +41,7 @@ from tldw_Server_API.app.core.DB_Management.content_backend import (
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
 )
@@ -715,7 +716,12 @@ def import_obsidian_note_to_db(*args, **kwargs):
 def add_media_with_keywords(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
         db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'add_media_with_keywords')
-        return db_instance.add_media_with_keywords(**kwargs)
+        media_writer = (
+            get_media_repository(db_instance)
+            if hasattr(db_instance, "backend") or hasattr(db_instance, "db_path")
+            else db_instance
+        )
+        return media_writer.add_media_with_keywords(**kwargs)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("add_media_with_keywords")
     else:

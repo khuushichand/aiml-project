@@ -28,6 +28,7 @@ from loguru import logger as _base_logger
 
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 
 #
 # Local Imports
@@ -744,7 +745,12 @@ def process_single_item(
 
             # Create a DB instance and persist
             db_instance = create_media_database(client_id="mediawiki_import")
-            result = db_instance.add_media_with_keywords(
+            media_writer = (
+                get_media_repository(db_instance)
+                if hasattr(db_instance, "backend") or hasattr(db_instance, "db_path")
+                else db_instance
+            )
+            result = media_writer.add_media_with_keywords(
                 url=url,
                 title=title,
                 media_type="mediawiki_page",  # Adjusted type

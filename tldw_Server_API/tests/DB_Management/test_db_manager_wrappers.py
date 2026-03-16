@@ -73,6 +73,48 @@ def test_add_media_and_paginated_files_success():
     assert isinstance(rows, list)
 
 
+def test_add_media_with_keywords_uses_media_repository_for_media_db_sessions(monkeypatch):
+
+    class _MediaDb:
+        backend = object()
+
+    class _FakeRepo:
+        def __init__(self):
+            self.calls = []
+
+        def add_media_with_keywords(self, **kwargs):
+            self.calls.append(kwargs)
+            return 33, "repo-uuid", "stored"
+
+    fake_repo = _FakeRepo()
+    media_db = _MediaDb()
+
+    monkeypatch.setattr(DB_Manager, "get_media_repository", lambda db: fake_repo, raising=False)
+    def _fake_require_db_instance(args, kwargs, func_name):
+        kwargs.pop("db_instance", None)
+        return media_db
+
+    monkeypatch.setattr(DB_Manager, "_require_db_instance", _fake_require_db_instance, raising=False)
+
+    result = DB_Manager.add_media_with_keywords(
+        db_instance=media_db,
+        title="Repo Routed",
+        media_type="text",
+        content="body",
+        keywords=["k1"],
+    )
+
+    assert result == (33, "repo-uuid", "stored")
+    assert fake_repo.calls == [
+        {
+            "title": "Repo Routed",
+            "media_type": "text",
+            "content": "body",
+            "keywords": ["k1"],
+        }
+    ]
+
+
 def test_update_keywords_for_media_success():
 
     db = _make_memory_db()
