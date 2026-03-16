@@ -3039,7 +3039,8 @@ async def ingest_batch(
                 smj = _json.dumps({"provider": "batch", "doi": doi, "pdf_url": pdf_url, "pmcid": pmcid, "arxiv_id": arxiv_id}, ensure_ascii=False)
                 media_id, media_uuid, msg = await loop.run_in_executor(
                     None,
-                    lambda: db.add_media_with_keywords(
+                    lambda: _ingest_paper_search_media(
+                        media_db=db,
                         url=f"{('doi:'+doi) if doi else ('arxiv:'+arxiv_id) if arxiv_id else ('pmcid:'+pmcid) if pmcid else (pdf_url or 'unknown')}",
                         title=title_for_db,
                         media_type="pdf",
@@ -3143,7 +3144,8 @@ async def ingest_batch(
                 smj = _json.dumps({"provider": "batch", "pmcid": pmcid_norm}, ensure_ascii=False)
                 media_id, media_uuid, msg = await loop.run_in_executor(
                     None,
-                    lambda: db.add_media_with_keywords(
+                    lambda: _ingest_paper_search_media(
+                        media_db=db,
                         url=f"pmcid:{pmcid_norm}",
                         title=title_for_db,
                         media_type="pdf",
@@ -3252,7 +3254,8 @@ async def ingest_batch(
                 smj = _json.dumps({"provider": "batch", "arxiv_id": arxiv_id, "pdf_url": pdf_guess}, ensure_ascii=False)
                 media_id, media_uuid, msg = await loop.run_in_executor(
                     None,
-                    lambda: db.add_media_with_keywords(
+                    lambda: _ingest_paper_search_media(
+                        media_db=db,
                         url=f"arxiv:{arxiv_id}",
                         title=title_for_db,
                         media_type="pdf",
@@ -3335,7 +3338,8 @@ async def ingest_batch(
             author_for_db = author or None
             media_id, media_uuid, msg = await loop.run_in_executor(
                 None,
-                lambda: db.add_media_with_keywords(
+                lambda: _ingest_paper_search_media(
+                    media_db=db,
                     url=f"doi:{doi}" if doi else pdf_url,
                     title=title_for_db,
                     media_type="pdf",
