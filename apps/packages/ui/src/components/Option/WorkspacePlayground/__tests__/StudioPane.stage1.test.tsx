@@ -275,7 +275,10 @@ const expandGeneratedOutputsSection = () => {
   }
 }
 
-const createChatCompletionResponse = (content: string) =>
+const createChatCompletionResponse = (
+  content: string,
+  usage?: Record<string, unknown>
+) =>
   new Response(
     JSON.stringify({
       choices: [
@@ -284,7 +287,8 @@ const createChatCompletionResponse = (content: string) =>
             content
           }
         }
-      ]
+      ],
+      usage
     }),
     {
       status: 200,
@@ -580,6 +584,31 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageSuccess).toHaveBeenCalledWith(
       expect.stringContaining("generated successfully")
     )
+  })
+
+  it("preserves summary usage metrics from chat completion responses", async () => {
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse("Generated summary", {
+        total_tokens: 321,
+        total_cost_usd: 0.0123
+      })
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "completed",
+        expect.objectContaining({
+          content: "Generated summary",
+          totalTokens: 321,
+          totalCostUsd: 0.0123
+        })
+      )
+    })
   })
 
   it("uses the workspace generation_prompt and selected source content for summary generation", async () => {

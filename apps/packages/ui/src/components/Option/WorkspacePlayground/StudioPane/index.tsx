@@ -619,6 +619,30 @@ const readChatCompletionResponseText = async (response: Response): Promise<strin
   }
 }
 
+const readChatCompletionResponsePayload = async (
+  response: Response
+): Promise<{ content: string; usage: UsageMetrics }> => {
+  const bodyText = (await response.text()).trim()
+  if (!bodyText) {
+    return {
+      content: "",
+      usage: {}
+    }
+  }
+  try {
+    const parsed = JSON.parse(bodyText)
+    return {
+      content: extractChatCompletionText(parsed),
+      usage: extractUsageMetrics(parsed)
+    }
+  } catch {
+    return {
+      content: bodyText,
+      usage: {}
+    }
+  }
+}
+
 const loadStudioSourceContexts = async (
   options: SourceContentGenerationOptions
 ): Promise<StudioSourceContext[]> => {
@@ -3706,10 +3730,13 @@ ${sourceText}`
     { signal: options.abortSignal }
   )
 
-  const content = (await readChatCompletionResponseText(response)).trim()
+  const { content: rawContent, usage } =
+    await readChatCompletionResponsePayload(response)
+  const content = rawContent.trim()
 
   return {
-    content
+    content,
+    ...usage
   }
 }
 

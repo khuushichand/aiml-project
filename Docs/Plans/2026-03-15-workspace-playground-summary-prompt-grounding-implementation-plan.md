@@ -246,6 +246,8 @@ git commit -m "test: cover folder-derived workspace summary grounding"
 
 ### Task 4: Verify touched scope and record the backend follow-up
 
+**Status:** Complete
+
 **Files:**
 - Modify: `Docs/Plans/2026-03-15-workspace-playground-summary-prompt-grounding-design.md` only if needed for final notes
 - Verify: `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx`
