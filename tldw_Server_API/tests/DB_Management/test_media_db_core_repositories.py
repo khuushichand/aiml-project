@@ -1,4 +1,8 @@
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    MediaDatabase,
+    import_obsidian_note_to_db,
+    ingest_article_to_db_new,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.repositories.chunks_repository import (
     ChunksRepository,
 )
@@ -57,6 +61,111 @@ def test_media_database_add_media_with_keywords_delegates_to_media_repository(mo
             "visibility": "personal",
             "owner_user_id": None,
         }
+    finally:
+        db.close_connection()
+
+
+def test_ingest_article_wrapper_uses_media_repository(monkeypatch) -> None:
+    db = MediaDatabase(db_path=":memory:", client_id="article-wrapper")
+    sentinel = (98, "article-uuid", "article delegated")
+    captured: dict[str, object] = {}
+
+    def fake_add_media_with_keywords(self, **kwargs):
+        captured["session"] = self.session
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(
+        MediaRepository,
+        "add_media_with_keywords",
+        fake_add_media_with_keywords,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        db,
+        "add_media_with_keywords",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("legacy shim should not be used")),
+    )
+
+    try:
+        result = ingest_article_to_db_new(
+            db,
+            url="https://example.com/article",
+            title="Example Article",
+            content="Article body",
+            author="Author",
+            keywords=["alpha"],
+            summary="Summary",
+            ingestion_date="2024-01-02T03:04:05Z",
+            custom_prompt="Prompt",
+            overwrite=True,
+        )
+
+        assert result == sentinel
+        assert captured["session"] is db
+        assert captured["kwargs"] == {
+            "url": "https://example.com/article",
+            "title": "Example Article",
+            "media_type": "article",
+            "content": "Article body",
+            "keywords": ["alpha"],
+            "prompt": "Prompt",
+            "analysis_content": "Summary",
+            "author": "Author",
+            "ingestion_date": "2024-01-02T03:04:05Z",
+            "overwrite": True,
+        }
+    finally:
+        db.close_connection()
+
+
+def test_import_obsidian_note_wrapper_uses_media_repository(monkeypatch) -> None:
+    db = MediaDatabase(db_path=":memory:", client_id="obsidian-wrapper")
+    sentinel = (77, "obsidian-uuid", "obsidian delegated")
+    captured: dict[str, object] = {}
+
+    def fake_add_media_with_keywords(self, **kwargs):
+        captured["session"] = self.session
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(
+        MediaRepository,
+        "add_media_with_keywords",
+        fake_add_media_with_keywords,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        db,
+        "add_media_with_keywords",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("legacy shim should not be used")),
+    )
+
+    try:
+        result = import_obsidian_note_to_db(
+            db,
+            {
+                "title": "Daily Note",
+                "content": "Note body",
+                "tags": ["tag-a", 7, None],
+                "frontmatter": {"author": "Jane", "status": "draft"},
+                "file_created_date": "2024-01-02T03:04:05Z",
+                "overwrite": True,
+            },
+        )
+
+        assert result == sentinel
+        assert captured["session"] is db
+        assert captured["kwargs"]["url"] == "obsidian://note/Daily Note"
+        assert captured["kwargs"]["title"] == "Daily Note"
+        assert captured["kwargs"]["media_type"] == "obsidian_note"
+        assert captured["kwargs"]["content"] == "Note body"
+        assert captured["kwargs"]["keywords"] == ["tag-a", "7"]
+        assert captured["kwargs"]["author"] == "Jane"
+        assert captured["kwargs"]["prompt"] == "Obsidian Frontmatter"
+        assert "author: Jane" in str(captured["kwargs"]["analysis_content"])
+        assert captured["kwargs"]["ingestion_date"] == "2024-01-02T03:04:05Z"
+        assert captured["kwargs"]["overwrite"] is True
     finally:
         db.close_connection()
 

@@ -16558,7 +16558,8 @@ def ingest_article_to_db_new(db_instance: MediaDatabase, *,
         raise TypeError("db_instance required.")  # noqa: TRY003
     if not url or not title or content is None:
         raise InputError("URL, Title, and Content are required.")  # noqa: TRY003
-    return db_instance.add_media_with_keywords(
+    media_repo = MediaRepository.from_legacy_db(db_instance)
+    return media_repo.add_media_with_keywords(
         url=url,
         title=title,
         media_type='article',
@@ -16618,7 +16619,19 @@ def import_obsidian_note_to_db(db_instance: MediaDatabase, note_data: dict[str, 
             fm_str = yaml.dump(fm, default_flow_style=False)
         except _MEDIA_NONCRITICAL_EXCEPTIONS:
             logger.exception("Error dumping frontmatter")
-    return db_instance.add_media_with_keywords(url=url_id, title=note_data['title'], media_type='obsidian_note', content=note_data['content'], keywords=kw, author=author, prompt="Obsidian Frontmatter" if fm_str else None, analysis_content=fm_str, ingestion_date=note_data.get('file_created_date'), overwrite=note_data.get('overwrite', False))
+    media_repo = MediaRepository.from_legacy_db(db_instance)
+    return media_repo.add_media_with_keywords(
+        url=url_id,
+        title=note_data['title'],
+        media_type='obsidian_note',
+        content=note_data['content'],
+        keywords=kw,
+        author=author,
+        prompt="Obsidian Frontmatter" if fm_str else None,
+        analysis_content=fm_str,
+        ingestion_date=note_data.get('file_created_date'),
+        overwrite=note_data.get('overwrite', False),
+    )
 
 
 # Read functions call instance methods or query directly with filters
