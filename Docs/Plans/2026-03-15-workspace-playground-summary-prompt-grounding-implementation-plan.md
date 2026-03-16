@@ -12,6 +12,8 @@
 
 ### Task 1: Lock the new summary request contract with failing tests
 
+**Status:** Complete
+
 **Files:**
 - Modify: `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx`
 - Reference: `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx`
@@ -80,6 +82,8 @@ git commit -m "test: lock workspace summary prompt grounding contract"
 ```
 
 ### Task 2: Replace summary generation with direct selected-source content generation
+
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx`
@@ -194,6 +198,8 @@ git commit -m "fix: ground workspace summary generation in selected source conte
 ```
 
 ### Task 3: Add focused coverage for selected-source grounding details
+
+**Status:** Complete
 
 **Files:**
 - Modify: `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage5.folder-context.test.tsx`
