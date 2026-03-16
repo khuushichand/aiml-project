@@ -76,3 +76,28 @@ def test_quiz_source_resolver_imports_latest_transcription_from_legacy_reads(
 
     reloaded = importlib.reload(quiz_source_resolver)
     assert reloaded.get_latest_transcription is legacy_reads.get_latest_transcription
+
+
+def test_slides_endpoint_imports_latest_transcription_from_legacy_reads(
+    monkeypatch,
+) -> None:
+    media_db_v2 = importlib.import_module(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
+    )
+    slides_endpoint = importlib.import_module(
+        "tldw_Server_API.app.api.v1.endpoints.slides"
+    )
+
+    def _shim_should_not_be_bound(*args, **kwargs):
+        raise AssertionError(
+            "slides endpoint should not bind get_latest_transcription from Media_DB_v2"
+        )
+
+    monkeypatch.setattr(
+        media_db_v2,
+        "get_latest_transcription",
+        _shim_should_not_be_bound,
+    )
+
+    reloaded = importlib.reload(slides_endpoint)
+    assert reloaded.get_latest_transcription is legacy_reads.get_latest_transcription
