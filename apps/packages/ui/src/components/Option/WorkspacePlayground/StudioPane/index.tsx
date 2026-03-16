@@ -1042,6 +1042,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     generatingOutputType === "audio_overview"
   const showAudioSettingsPanel = showTtsSettings || contextualAudioSettingsVisible
   const studioControlSize = isMobile ? "large" : "small"
+  const summaryUsesDirectSourceGeneration =
+    activeOutputType === "summary" || generatingOutputType === "summary"
   const mobileSliderClassName = isMobile
     ? "[&_.ant-slider-rail]:!h-2 [&_.ant-slider-track]:!h-2 [&_.ant-slider-handle]:!h-5 [&_.ant-slider-handle]:!w-5"
     : undefined
@@ -2296,6 +2298,14 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                 {t("playground:studio.ragSettings", "RAG Settings")}
               </h4>
               <div className="space-y-3">
+                {summaryUsesDirectSourceGeneration && (
+                  <p className="rounded border border-border bg-surface px-2 py-1 text-[11px] text-text-muted">
+                    {t(
+                      "playground:studio.summaryDirectGenerationNote",
+                      "Summary uses the workspace summary prompt and selected source content directly. Retrieval settings below do not apply."
+                    )}
+                  </p>
+                )}
                 <div>
                   <label className="mb-1 block text-xs font-medium text-text-muted">
                     {t("playground:studio.ragSearchMode", "Search Mode")}
@@ -2304,6 +2314,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                     size={studioControlSize}
                     className="w-full"
                     value={ragSearchMode}
+                    disabled={summaryUsesDirectSourceGeneration}
                     onChange={(value) =>
                       setRagSearchMode(value as "hybrid" | "vector" | "fts")
                     }
@@ -2324,6 +2335,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                     max={50}
                     step={1}
                     value={resolvedStudioTopK}
+                    disabled={summaryUsesDirectSourceGeneration}
                     onChange={handleStudioTopKChange}
                   />
                 </div>
@@ -2344,6 +2356,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                     max={1}
                     step={0.01}
                     value={studioSimilarityThreshold}
+                    disabled={summaryUsesDirectSourceGeneration}
                     onChange={handleStudioSimilarityThresholdChange}
                   />
                 </div>
@@ -2354,6 +2367,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   <Switch
                     size="small"
                     checked={ragEnableGeneration}
+                    disabled={summaryUsesDirectSourceGeneration}
                     onChange={(checked) => setRagEnableGeneration(checked)}
                   />
                 </div>
@@ -2364,6 +2378,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   <Switch
                     size="small"
                     checked={ragEnableCitations}
+                    disabled={summaryUsesDirectSourceGeneration}
                     onChange={(checked) => setRagEnableCitations(checked)}
                   />
                 </div>
@@ -2374,6 +2389,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   <Switch
                     size="small"
                     checked={studioRerankingEnabled}
+                    disabled={summaryUsesDirectSourceGeneration}
                     onChange={(checked) =>
                       patchRagAdvancedOptions({ enable_reranking: checked })
                     }
