@@ -35,9 +35,11 @@ from tldw_Server_API.app.api.v1.utils.cache import cache_response, get_cached_re
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
-    get_document_version,
     get_media_transcripts,
     get_latest_transcription,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    get_document_version,
 )
 from tldw_Server_API.app.core.Storage import get_storage_backend
 from tldw_Server_API.app.core.Storage.storage_interface import StorageError

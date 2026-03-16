@@ -123,3 +123,26 @@ def test_media_module_imports_document_version_from_legacy_wrappers(
 
     reloaded = importlib.reload(media_module_impl)
     assert reloaded.get_document_version is legacy_wrappers.get_document_version
+
+
+def test_navigation_endpoint_imports_document_version_from_legacy_wrappers(
+    monkeypatch,
+) -> None:
+    media_db_v2 = importlib.import_module(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
+    )
+    navigation_endpoint = importlib.import_module(
+        "tldw_Server_API.app.api.v1.endpoints.media.navigation"
+    )
+
+    def _shim_should_not_be_bound(*args, **kwargs):
+        raise AssertionError("navigation should not bind get_document_version from Media_DB_v2")
+
+    monkeypatch.setattr(
+        media_db_v2,
+        "get_document_version",
+        _shim_should_not_be_bound,
+    )
+
+    reloaded = importlib.reload(navigation_endpoint)
+    assert reloaded.get_document_version is legacy_wrappers.get_document_version
