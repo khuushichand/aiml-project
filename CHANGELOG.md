@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 
+## [0.1.27] 2026-03-15
+
+### Added
+
+- Bundle-first audio setup provisioning in `/setup` with a curated audio bundle catalog for `cpu_local`, `apple_local`, `nvidia_local`, and `hosted_plus_local_backup`, plus backend coverage for bundle selection and expansion.
+- Hardware-aware audio bundle recommendations driven by detected setup machine profile data, with new setup APIs for recommendation retrieval and bundle provisioning.
+- A persisted `audio_readiness` state model and setup endpoints for readiness inspection and reset so audio provisioning status no longer depends on the global setup completion flag.
+- End-to-end audio verification and readiness classification for primary STT/TTS paths, including setup-facing health collection, remediation reporting, and integration coverage for recommendation, readiness, provisioning, and verification flows.
+- A generator-backed audio bundle documentation path via `Helper_Scripts/generate_audio_bundle_docs.py`, along with design and implementation plan docs for the bundle rollout.
+
+### Changed
+
+- The `/setup` audio experience now defaults to curated bundle selection instead of exposing provider-level STT/TTS choices first, with detected hardware, prerequisite visibility, provisioning progress, safe rerun, verification, and readiness-report UX.
+- Setup and speech onboarding guides were rewritten around the new bundle-first flow, including clearer separation between online provisioning, pre-seeded offline provisioning, and offline runtime after provisioning.
+
+### Fixed
+
+- Setup audio completion is now classified by real verification outcomes (`ready`, `ready_with_warnings`, `partial`, `failed`) instead of treating install completion as proof that the speech stack is usable.
+- Final setup-scope verification and security checks were tightened for the touched installer paths, including Bandit-clean subprocess annotations and docs/test alignment for the new audio bundle workflow.
+
+
 ## [0.1.26] 2026-03-15
 
 ### Consolidated Release Summary (Merged PRs #790-#897)
