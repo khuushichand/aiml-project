@@ -25,7 +25,10 @@ from tldw_Server_API.app.api.v1.utils.cache import (
     get_cached_response,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_latest_transcription,
+)
 
 router = APIRouter(tags=["Document Workspace"])
 

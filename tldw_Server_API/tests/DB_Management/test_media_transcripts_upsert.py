@@ -1,10 +1,14 @@
 import os
 import uuid
+
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, upsert_transcript
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_latest_transcription,
+)
 
 
 def _insert_minimal_media(db: MediaDatabase) -> int:
@@ -50,8 +54,6 @@ def test_sqlite_upsert_transcript_roundtrip(tmp_path):
     assert p2["version"] == p1["version"] + 1
 
     # Latest transcription should be updated
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_latest_transcription
-
     latest = get_latest_transcription(db, media_id)
     assert latest == "updated text"
 
@@ -79,8 +81,6 @@ def test_postgres_upsert_transcript_roundtrip_if_available(tmp_path, pg_eval_par
 
     p2 = upsert_transcript(db, media_id, transcription="pg updated", whisper_model="large-v3")
     assert p2["version"] == p1["version"] + 1
-
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_latest_transcription
 
     latest = get_latest_transcription(db, media_id)
     assert latest == "pg updated"
