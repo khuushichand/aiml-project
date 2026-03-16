@@ -252,7 +252,9 @@ def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
         return None
     # Fetch tags per item
     try:
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version
+        from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+            get_document_version,
+        )
         from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
             fetch_keywords_for_media,
         )

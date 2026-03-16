@@ -162,7 +162,9 @@ def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
 
     try:
         if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version
+            from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+                get_document_version,
+            )
 
             latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
             if latest and latest.get("content"):

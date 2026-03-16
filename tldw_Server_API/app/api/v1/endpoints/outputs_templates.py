@@ -198,7 +198,7 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
         # Latest version to get analysis/safe_metadata
         latest = None
         try:
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+            from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
                 get_document_version,
             )
             from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (

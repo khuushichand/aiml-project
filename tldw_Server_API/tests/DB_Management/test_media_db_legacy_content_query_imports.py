@@ -1,6 +1,7 @@
 import importlib
 
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_content_queries
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
 
 
 def test_legacy_content_query_callers_no_longer_depend_on_media_db_v2_exports(
@@ -36,7 +37,7 @@ def test_legacy_content_query_callers_no_longer_depend_on_media_db_v2_exports(
         lambda media_id, db_instance: ["alpha", "beta"],
     )
     monkeypatch.setattr(
-        media_db_v2,
+        legacy_wrappers,
         "get_document_version",
         lambda *args, **kwargs: {
             "analysis_content": "summary",
