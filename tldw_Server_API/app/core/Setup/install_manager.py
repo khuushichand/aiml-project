@@ -10,7 +10,7 @@ import inspect
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - setup provisioning intentionally invokes vetted command lists without a shell
 import sys
 import tempfile
 from collections.abc import Iterable
@@ -185,7 +185,7 @@ def _ensure_requirement(requirement: PipRequirement) -> None:
     # Prefer python -m pip when available; fall back to `uv pip` if pip isn't available
     def _pip_available() -> bool:
         try:
-            probe = subprocess.run(
+            probe = subprocess.run(  # nosec B603 - static interpreter/pip probe with fixed argv
                 [sys.executable, '-m', 'pip', '--version'],
                 check=False,
                 capture_output=True,
@@ -1091,7 +1091,12 @@ def _snapshot_repo(repo_id: str) -> None:
 
 def _run_subprocess(command: list[str]) -> None:
     logger.info('Running command: {}', ' '.join(command))
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    result = subprocess.run(  # nosec B603 - command argv is assembled from trusted setup requirement mappings
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f'Command failed with exit code {result.returncode}')
     if result.stdout:

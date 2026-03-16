@@ -616,7 +616,21 @@ Expected: PASS.
 Run:
 
 ```bash
-bunx vitest run apps/tldw-frontend/__tests__/vitest.setup-contract.test.ts
+cd apps/tldw-frontend && bunx vitest run __tests__/vitest.setup-contract.test.ts
+```
+
+Expected: PASS.
+
+**Step 2b: Run docs checks for the generated bundle guidance**
+
+Run:
+
+```bash
+source .venv/bin/activate && python -m pytest \
+  tldw_Server_API/tests/Docs/test_audio_bundle_docs.py \
+  tldw_Server_API/tests/Docs/test_stt_tts_guide_roles.py \
+  tldw_Server_API/tests/Docs/test_stt_tts_link_hygiene.py \
+  tldw_Server_API/tests/Docs/test_speech_api_guide_map.py -q
 ```
 
 Expected: PASS.
