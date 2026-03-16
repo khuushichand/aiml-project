@@ -1427,7 +1427,8 @@ async def pubmed_ingest(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"pmid:{pmid}",
                 title=title_for_db,
                 media_type="pdf",
@@ -2913,7 +2914,8 @@ async def ingest_by_doi(
 
         media_id, media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: db.add_media_with_keywords(
+            lambda: _ingest_paper_search_media(
+                media_db=db,
                 url=f"doi:{doi}",
                 title=title_for_db,
                 media_type="pdf",
