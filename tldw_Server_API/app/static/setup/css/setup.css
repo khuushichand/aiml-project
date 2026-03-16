@@ -288,6 +288,13 @@
     line-height: 1.5;
 }
 
+.audio-bundle-card-profile {
+    margin: 8px 0 0;
+    color: #c7d2fe;
+    font-size: 0.92rem;
+    font-weight: 600;
+}
+
 .audio-bundle-card-badges {
     display: flex;
     flex-wrap: wrap;
@@ -377,6 +384,89 @@
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
+}
+
+.audio-resource-profile-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: var(--spacing-md, 16px);
+    border-radius: var(--radius-md, 12px);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(12, 16, 25, 0.78);
+}
+
+.audio-resource-profile-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+}
+
+.audio-resource-profile-title {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--color-text, #e2e8f0);
+}
+
+.audio-resource-profile-note {
+    color: var(--color-text-muted, #64748b);
+    font-size: 0.9rem;
+}
+
+.audio-resource-profile-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.audio-resource-profile-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    padding: var(--spacing-sm, 12px) var(--spacing-md, 16px);
+    border-radius: var(--radius-sm, 10px);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(15, 17, 23, 0.7);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.audio-resource-profile-card.selected {
+    border-color: rgba(99, 102, 241, 0.45);
+    box-shadow: 0 12px 24px rgba(99, 102, 241, 0.14);
+}
+
+.audio-resource-profile-card.recommended {
+    background: linear-gradient(145deg, rgba(24, 33, 52, 0.92), rgba(15, 17, 23, 0.78));
+}
+
+.audio-resource-profile-card-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+.audio-resource-profile-card-title {
+    font-weight: 600;
+}
+
+.audio-resource-profile-card-description {
+    margin: 0;
+    color: var(--color-text-secondary, #94a3b8);
+    line-height: 1.45;
+    font-size: 0.92rem;
+}
+
+.audio-resource-profile-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
 .audio-bundle-alt-grid {

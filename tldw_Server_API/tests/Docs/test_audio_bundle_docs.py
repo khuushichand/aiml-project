@@ -9,6 +9,7 @@ def test_generated_bundle_docs_reference_all_v1_bundle_ids() -> None:
     assert "nvidia_local" in content
     assert "hosted_plus_local_backup" in content
     assert "Offline runtime after provisioning" in content
+    assert "Offline pack compatibility" in content
     assert "Guided prerequisites" in content
-    assert "Default STT" in content
-    assert "Default TTS" in content
+    assert "Balanced" in content
+    assert "Performance" in content

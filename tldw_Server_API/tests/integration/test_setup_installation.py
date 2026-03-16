@@ -105,6 +105,10 @@ def test_setup_ui_script_exposes_bundle_first_audio_actions():
     assert '/audio/provision' in source
     assert '/audio/verify' in source
     assert 'Recommended audio bundle' in source
+    assert 'Recommended profile' in source
+    assert 'Light' in source
+    assert 'Balanced' in source
+    assert 'Performance' in source
     assert 'Provision recommended bundle' in source
     assert 'Run verification' in source
     assert 'Safe rerun' in source

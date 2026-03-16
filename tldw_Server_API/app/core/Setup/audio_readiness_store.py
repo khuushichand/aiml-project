@@ -48,6 +48,7 @@ class AudioReadinessRecord(BaseModel):
     last_verification: dict[str, Any] | None = None
     installed_profiles: list[str] = Field(default_factory=list)
     installed_asset_manifests: list[dict[str, Any]] = Field(default_factory=list)
+    imported_packs: list[dict[str, Any]] = Field(default_factory=list)
     remediation_items: list[Any] = Field(default_factory=list)
     updated_at: str = Field(default_factory=_utc_now)
 
@@ -64,6 +65,7 @@ class AudioReadinessRecord(BaseModel):
         payload.setdefault("catalog_version", AUDIO_BUNDLE_CATALOG_VERSION)
         payload.setdefault("installed_profiles", [])
         payload.setdefault("installed_asset_manifests", [])
+        payload.setdefault("imported_packs", [])
 
         selected_bundle_id = payload.get("selected_bundle_id")
         if selected_bundle_id and not payload.get("selection_key"):

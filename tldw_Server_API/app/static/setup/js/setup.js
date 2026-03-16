@@ -11,6 +11,13 @@
     'change-me-in-production',
   ]);
   const TEXTAREA_KEY_PATTERN = /(description|prompt|instructions|notes|template|path|url|uri)/i;
+  const DEFAULT_AUDIO_RESOURCE_PROFILE = 'balanced';
+  const AUDIO_RESOURCE_PROFILE_ORDER = ['light', 'balanced', 'performance'];
+  const AUDIO_RESOURCE_PROFILE_LABELS = {
+    light: 'Light',
+    balanced: 'Balanced',
+    performance: 'Performance',
+  };
   function humaniseKey(value) {
     if (!value) {
       return '';
@@ -557,6 +564,7 @@
       excluded: [],
       catalog: {},
       selectedBundleId: null,
+      selectedResourceProfile: DEFAULT_AUDIO_RESOURCE_PROFILE,
       showAlternatives: false,
       showAdvancedInstaller: false,
       showReadiness: false,
@@ -578,11 +586,15 @@
     const selectedBundleId = preserveReadiness
       ? state.audio?.selectedBundleId || readiness?.selected_bundle_id || null
       : null;
+    const selectedResourceProfile = preserveReadiness
+      ? state.audio?.selectedResourceProfile || readiness?.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE
+      : DEFAULT_AUDIO_RESOURCE_PROFILE;
 
     state.audio = createAudioSetupState({
       readiness,
       readinessLoaded,
       selectedBundleId,
+      selectedResourceProfile,
       showReadiness: preserveReadiness && Boolean(readiness),
     });
   }
@@ -882,8 +894,39 @@
     return state.audio.catalog?.[bundleId] || null;
   }
 
-  function getAudioRecommendation(bundleId) {
+  function getAudioBundleResourceProfiles(bundle) {
+    if (!bundle?.resource_profiles) {
+      return [];
+    }
+
+    return Object.values(bundle.resource_profiles).sort((left, right) => {
+      const leftOrder = AUDIO_RESOURCE_PROFILE_ORDER.indexOf(left.profile_id);
+      const rightOrder = AUDIO_RESOURCE_PROFILE_ORDER.indexOf(right.profile_id);
+      const leftRank = leftOrder === -1 ? Number.MAX_SAFE_INTEGER : leftOrder;
+      const rightRank = rightOrder === -1 ? Number.MAX_SAFE_INTEGER : rightOrder;
+      return leftRank - rightRank;
+    });
+  }
+
+  function getAudioProfileLabel(profileId, fallbackLabel = '') {
+    return AUDIO_RESOURCE_PROFILE_LABELS[profileId] || fallbackLabel || humaniseKey(profileId);
+  }
+
+  function getAudioRecommendation(bundleId, resourceProfile) {
     ensureAudioSetupState();
+    if (!bundleId) {
+      return null;
+    }
+
+    if (resourceProfile) {
+      const exactMatch = state.audio.recommendations.find(
+        (entry) => entry.bundle_id === bundleId && entry.resource_profile === resourceProfile,
+      );
+      if (exactMatch) {
+        return exactMatch;
+      }
+    }
+
     return state.audio.recommendations.find((entry) => entry.bundle_id === bundleId) || null;
   }
 
@@ -895,18 +938,75 @@
   function getSelectedAudioRecommendation() {
     ensureAudioSetupState();
     return (
-      getAudioRecommendation(state.audio.selectedBundleId)
+      getAudioRecommendation(state.audio.selectedBundleId, state.audio.selectedResourceProfile)
       || getRecommendedAudioRecommendation()
       || null
     );
   }
 
   function getSelectedAudioBundle() {
+    ensureAudioSetupState();
     const recommendation = getSelectedAudioRecommendation();
-    if (!recommendation) {
-      return null;
+    const bundleId = state.audio.selectedBundleId || recommendation?.bundle_id;
+    if (!bundleId) {
+      return recommendation?.bundle || null;
     }
-    return getAudioCatalogEntry(recommendation.bundle_id) || recommendation.bundle || null;
+    return getAudioCatalogEntry(bundleId) || recommendation?.bundle || null;
+  }
+
+  function getSelectedAudioProfile() {
+    const recommendation = getSelectedAudioRecommendation();
+    const bundle = getSelectedAudioBundle();
+    const profileId = state.audio.selectedResourceProfile
+      || recommendation?.resource_profile
+      || bundle?.default_resource_profile
+      || DEFAULT_AUDIO_RESOURCE_PROFILE;
+    const bundleProfiles = bundle?.resource_profiles || {};
+    return (
+      bundleProfiles[profileId]
+      || recommendation?.profile
+      || bundleProfiles[bundle?.default_resource_profile]
+      || getAudioBundleResourceProfiles(bundle)[0]
+      || null
+    );
+  }
+
+  function syncSelectedAudioSelection() {
+    ensureAudioSetupState();
+
+    const readinessBundleId = state.audio.readiness?.selected_bundle_id || null;
+    const readinessProfile = state.audio.readiness?.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+    const exact = getAudioRecommendation(state.audio.selectedBundleId, state.audio.selectedResourceProfile);
+    if (exact) {
+      state.audio.selectedBundleId = exact.bundle_id;
+      state.audio.selectedResourceProfile = exact.resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      return;
+    }
+
+    const readinessExact = getAudioRecommendation(readinessBundleId, readinessProfile);
+    if (readinessExact) {
+      state.audio.selectedBundleId = readinessExact.bundle_id;
+      state.audio.selectedResourceProfile = readinessExact.resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      return;
+    }
+
+    const bundleFallback = getAudioRecommendation(state.audio.selectedBundleId);
+    if (bundleFallback) {
+      state.audio.selectedBundleId = bundleFallback.bundle_id;
+      state.audio.selectedResourceProfile = bundleFallback.resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      return;
+    }
+
+    const recommended = getRecommendedAudioRecommendation();
+    if (recommended) {
+      state.audio.selectedBundleId = recommended.bundle_id;
+      state.audio.selectedResourceProfile = recommended.resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      return;
+    }
+
+    if (!state.audio.selectedBundleId) {
+      state.audio.selectedResourceProfile = DEFAULT_AUDIO_RESOURCE_PROFILE;
+    }
   }
 
   function getSelectedAudioReadiness() {
@@ -918,7 +1018,17 @@
     if (!state.audio.selectedBundleId || !readiness.selected_bundle_id) {
       return readiness;
     }
-    return readiness.selected_bundle_id === state.audio.selectedBundleId ? readiness : null;
+    if (readiness.selected_bundle_id !== state.audio.selectedBundleId) {
+      return null;
+    }
+    if (
+      state.audio.selectedResourceProfile
+      && readiness.selected_resource_profile
+      && readiness.selected_resource_profile !== state.audio.selectedResourceProfile
+    ) {
+      return null;
+    }
+    return readiness;
   }
 
   function getAudioPrerequisiteHint(step) {
@@ -959,13 +1069,7 @@
       state.audio.recommendations = Array.isArray(response.recommendations) ? response.recommendations : [];
       state.audio.excluded = Array.isArray(response.excluded) ? response.excluded : [];
       state.audio.catalog = buildAudioCatalogMap(response.catalog);
-      if (!state.audio.selectedBundleId || !state.audio.catalog[state.audio.selectedBundleId]) {
-        state.audio.selectedBundleId = (
-          state.audio.readiness?.selected_bundle_id
-          || state.audio.recommendations[0]?.bundle_id
-          || null
-        );
-      }
+      syncSelectedAudioSelection();
       state.audio.loaded = true;
       return state.audio.recommendations;
     } catch (error) {
@@ -998,9 +1102,11 @@
       const readiness = await fetchJson(`${API_BASE}/audio/readiness`);
       state.audio.readiness = readiness;
       state.audio.readinessLoaded = true;
-      if (!state.audio.selectedBundleId && readiness?.selected_bundle_id) {
+      if (readiness?.selected_bundle_id) {
         state.audio.selectedBundleId = readiness.selected_bundle_id;
+        state.audio.selectedResourceProfile = readiness.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
       }
+      syncSelectedAudioSelection();
       return readiness;
     } catch (error) {
       if (!silent) {
@@ -1015,10 +1121,25 @@
     }
   }
 
-  function setSelectedAudioBundle(bundleId) {
+  function setSelectedAudioBundle(bundleId, resourceProfile = null) {
     ensureAudioSetupState();
     state.audio.selectedBundleId = bundleId;
+    state.audio.selectedResourceProfile = resourceProfile
+      || getAudioRecommendation(bundleId)?.resource_profile
+      || getAudioCatalogEntry(bundleId)?.default_resource_profile
+      || DEFAULT_AUDIO_RESOURCE_PROFILE;
     state.audio.showAlternatives = false;
+    if (isAudioBundleStepActive()) {
+      renderWizardStep();
+    }
+  }
+
+  function setSelectedAudioResourceProfile(resourceProfile) {
+    ensureAudioSetupState();
+    if (!state.audio.selectedBundleId) {
+      return;
+    }
+    state.audio.selectedResourceProfile = resourceProfile || DEFAULT_AUDIO_RESOURCE_PROFILE;
     if (isAudioBundleStepActive()) {
       renderWizardStep();
     }
@@ -1068,6 +1189,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           bundle_id: state.audio.selectedBundleId,
+          resource_profile: state.audio.selectedResourceProfile || DEFAULT_AUDIO_RESOURCE_PROFILE,
           safe_rerun: safeRerun,
         }),
         timeoutMs: 120000,
@@ -1115,7 +1237,10 @@
       const response = await fetchJson(`${API_BASE}/audio/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bundle_id: state.audio.selectedBundleId }),
+        body: JSON.stringify({
+          bundle_id: state.audio.selectedBundleId,
+          resource_profile: state.audio.selectedResourceProfile || DEFAULT_AUDIO_RESOURCE_PROFILE,
+        }),
         timeoutMs: 120000,
       });
       state.audio.lastVerificationResult = response;
@@ -2311,6 +2436,8 @@ function renderAudioBundleSection() {
 
   const selectedRecommendation = getSelectedAudioRecommendation();
   const recommendedRecommendation = getRecommendedAudioRecommendation();
+  const selectedBundle = getSelectedAudioBundle();
+  const selectedProfile = getSelectedAudioProfile();
 
   if (state.audio.loading && !selectedRecommendation) {
     const note = document.createElement('p');
@@ -2335,9 +2462,18 @@ function renderAudioBundleSection() {
   } else if (selectedRecommendation) {
     const card = renderAudioBundleCard(selectedRecommendation, {
       selected: true,
-      recommended: selectedRecommendation.bundle_id === recommendedRecommendation?.bundle_id,
+      recommended: selectedRecommendation.selection_key === recommendedRecommendation?.selection_key,
     });
     section.appendChild(card);
+
+    if (selectedBundle) {
+      section.appendChild(renderAudioProfileSelector(selectedBundle, {
+        selectedProfileId: selectedProfile?.profile_id || state.audio.selectedResourceProfile,
+        recommendedProfileId: recommendedRecommendation?.bundle_id === selectedBundle.bundle_id
+          ? recommendedRecommendation?.resource_profile
+          : selectedBundle.default_resource_profile,
+      }));
+    }
   } else {
     const note = document.createElement('p');
     note.className = 'audio-stage-note';
@@ -2346,9 +2482,17 @@ function renderAudioBundleSection() {
   }
 
   if (state.audio.showAlternatives) {
-    const alternatives = state.audio.recommendations.filter(
-      (entry) => entry.bundle_id !== selectedRecommendation?.bundle_id,
-    );
+    const seenBundles = new Set();
+    const alternatives = state.audio.recommendations.filter((entry) => {
+      if (entry.bundle_id === selectedRecommendation?.bundle_id) {
+        return false;
+      }
+      if (seenBundles.has(entry.bundle_id)) {
+        return false;
+      }
+      seenBundles.add(entry.bundle_id);
+      return true;
+    });
     if (alternatives.length) {
       const altHeading = document.createElement('p');
       altHeading.className = 'audio-stage-note';
@@ -2360,7 +2504,7 @@ function renderAudioBundleSection() {
       alternatives.forEach((entry) => {
         grid.appendChild(renderAudioBundleCard(entry, {
           compact: true,
-          recommended: entry.bundle_id === recommendedRecommendation?.bundle_id,
+          recommended: entry.selection_key === recommendedRecommendation?.selection_key,
         }));
       });
       section.appendChild(grid);
@@ -2482,6 +2626,86 @@ function createAudioProfileChip(label) {
   return chip;
 }
 
+function renderAudioProfileSelector(bundle, options = {}) {
+  const {
+    selectedProfileId = bundle?.default_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE,
+    recommendedProfileId = bundle?.default_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE,
+  } = options;
+
+  const profiles = getAudioBundleResourceProfiles(bundle);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'audio-resource-profile-panel';
+
+  const header = document.createElement('div');
+  header.className = 'audio-resource-profile-header';
+
+  const heading = document.createElement('p');
+  heading.className = 'audio-resource-profile-title';
+  heading.textContent = 'Recommended profile';
+  header.appendChild(heading);
+
+  const note = document.createElement('span');
+  note.className = 'audio-resource-profile-note';
+  note.textContent = 'Choose the speech footprint that fits this machine.';
+  header.appendChild(note);
+  wrapper.appendChild(header);
+
+  const grid = document.createElement('div');
+  grid.className = 'audio-resource-profile-grid';
+
+  profiles.forEach((profile) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'audio-resource-profile-card';
+    if (profile.profile_id === selectedProfileId) {
+      card.classList.add('selected');
+    }
+    if (profile.profile_id === recommendedProfileId) {
+      card.classList.add('recommended');
+    }
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'audio-resource-profile-card-header';
+
+    const title = document.createElement('span');
+    title.className = 'audio-resource-profile-card-title';
+    title.textContent = getAudioProfileLabel(profile.profile_id, profile.label);
+    titleRow.appendChild(title);
+
+    if (profile.profile_id === recommendedProfileId) {
+      const badge = document.createElement('span');
+      badge.className = 'status-badge badge-success';
+      badge.textContent = 'Recommended';
+      titleRow.appendChild(badge);
+    }
+
+    card.appendChild(titleRow);
+
+    const description = document.createElement('p');
+    description.className = 'audio-resource-profile-card-description';
+    description.textContent = profile.description || 'Curated speech profile.';
+    card.appendChild(description);
+
+    const meta = document.createElement('div');
+    meta.className = 'audio-resource-profile-meta';
+    if (profile.resource_class) {
+      meta.appendChild(createAudioProfileChip(`Class ${humaniseKey(profile.resource_class)}`));
+    }
+    if (profile.estimated_disk_gb) {
+      meta.appendChild(createAudioProfileChip(`~${profile.estimated_disk_gb} GB`));
+    }
+    card.appendChild(meta);
+
+    card.addEventListener('click', () => {
+      setSelectedAudioResourceProfile(profile.profile_id);
+    });
+    grid.appendChild(card);
+  });
+
+  wrapper.appendChild(grid);
+  return wrapper;
+}
+
 function renderAudioBundleCard(recommendation, options = {}) {
   const {
     selected = false,
@@ -2489,6 +2713,12 @@ function renderAudioBundleCard(recommendation, options = {}) {
     compact = false,
   } = options;
   const bundle = getAudioCatalogEntry(recommendation.bundle_id) || recommendation.bundle || {};
+  const profile = (
+    recommendation.profile
+    || bundle.resource_profiles?.[recommendation.resource_profile]
+    || bundle.resource_profiles?.[bundle.default_resource_profile]
+    || null
+  );
   const card = document.createElement('article');
   card.className = 'audio-bundle-card';
   if (selected) {
@@ -2514,6 +2744,13 @@ function renderAudioBundleCard(recommendation, options = {}) {
   description.className = 'audio-bundle-card-description';
   description.textContent = bundle.description || 'Curated audio setup bundle.';
   titleBlock.appendChild(description);
+
+  if (profile) {
+    const profileLine = document.createElement('p');
+    profileLine.className = 'audio-bundle-card-profile';
+    profileLine.textContent = `${getAudioProfileLabel(profile.profile_id, profile.label)} profile`;
+    titleBlock.appendChild(profileLine);
+  }
   header.appendChild(titleBlock);
 
   const badges = document.createElement('div');
@@ -2548,7 +2785,7 @@ function renderAudioBundleCard(recommendation, options = {}) {
     card.appendChild(reasons);
   }
 
-  const planSummary = buildAudioBundlePlanSummary(bundle);
+  const planSummary = buildAudioBundlePlanSummary(bundle, profile);
   if (planSummary.length) {
     const summary = document.createElement('div');
     summary.className = 'audio-bundle-meta';
@@ -2581,7 +2818,7 @@ function renderAudioBundleCard(recommendation, options = {}) {
     action.className = 'btn subtle';
     action.textContent = 'Use this bundle';
     action.addEventListener('click', () => {
-      setSelectedAudioBundle(recommendation.bundle_id);
+      setSelectedAudioBundle(recommendation.bundle_id, recommendation.resource_profile);
     });
     card.appendChild(action);
   }
@@ -2589,14 +2826,17 @@ function renderAudioBundleCard(recommendation, options = {}) {
   return card;
 }
 
-function buildAudioBundlePlanSummary(bundle) {
+function buildAudioBundlePlanSummary(bundle, profile = null) {
   if (!bundle) {
     return [];
   }
 
+  const selectedProfile = profile
+    || bundle.resource_profiles?.[bundle.default_resource_profile]
+    || null;
   const summary = [];
-  const stt = summarizeAudioPlanEntries('stt', bundle.stt_plan, 'models');
-  const tts = summarizeAudioPlanEntries('tts', bundle.tts_plan, 'variants');
+  const stt = summarizeAudioPlanEntries('stt', selectedProfile?.stt_plan || bundle.stt_plan, 'models');
+  const tts = summarizeAudioPlanEntries('tts', selectedProfile?.tts_plan || bundle.tts_plan, 'variants');
   if (stt.length) {
     summary.push(`STT: ${stt.join('; ')}`);
   }
@@ -2605,14 +2845,22 @@ function buildAudioBundlePlanSummary(bundle) {
   }
 
   const embeddingSummary = [];
-  if (bundle.embeddings_plan?.huggingface?.length) {
-    embeddingSummary.push(`HF ${bundle.embeddings_plan.huggingface.join(', ')}`);
+  const embeddingsPlan = selectedProfile?.embeddings_plan || bundle.embeddings_plan;
+  if (embeddingsPlan?.huggingface?.length) {
+    embeddingSummary.push(`HF ${embeddingsPlan.huggingface.join(', ')}`);
   }
-  if (bundle.embeddings_plan?.custom?.length) {
-    embeddingSummary.push(`Custom ${bundle.embeddings_plan.custom.join(', ')}`);
+  if (embeddingsPlan?.custom?.length) {
+    embeddingSummary.push(`Custom ${embeddingsPlan.custom.join(', ')}`);
   }
   if (embeddingSummary.length) {
     summary.push(`Embeddings: ${embeddingSummary.join(' | ')}`);
+  }
+
+  if (selectedProfile?.estimated_disk_gb) {
+    summary.push(`Disk: ~${selectedProfile.estimated_disk_gb} GB`);
+  }
+  if (selectedProfile?.resource_class) {
+    summary.push(`Tier: ${humaniseKey(selectedProfile.resource_class)}`);
   }
 
   return summary;
@@ -2714,6 +2962,11 @@ function renderAudioReadinessReport() {
   const list = document.createElement('div');
   list.className = 'audio-readiness-list';
   appendAudioReadinessItem(list, 'Selected bundle', getAudioCatalogEntry(readiness.selected_bundle_id)?.label || readiness.selected_bundle_id || 'Not selected');
+  appendAudioReadinessItem(
+    list,
+    'Selected profile',
+    getAudioProfileLabel(readiness.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE),
+  );
   appendAudioReadinessItem(list, 'Updated', formatFriendlyTimestamp(readiness.updated_at));
   appendAudioReadinessItem(list, 'Last verification', formatFriendlyTimestamp(readiness.last_verification?.verified_at));
   appendAudioReadinessItem(
@@ -2830,6 +3083,7 @@ function renderWizardSummary() {
     const recommended = recommendedNames.map((name) => escapeHtml(getSectionLabelByName(name)));
     const featureSelections = Array.from(state.wizard.answers.features || []).map((value) => escapeHtml(getWizardOptionLabel('features', value)));
     const selectedAudioBundle = getSelectedAudioBundle();
+    const selectedAudioProfile = getSelectedAudioProfile();
     const audioReadiness = getSelectedAudioReadiness();
     const installPlan = buildInstallPlan();
     const installSummaries = describeInstallPlan(installPlan);
@@ -2844,7 +3098,10 @@ function renderWizardSummary() {
     }
     if (selectedAudioBundle) {
       const readinessLabel = audioReadiness?.status ? ` (${escapeHtml(humaniseKey(audioReadiness.status))})` : '';
-      lines.push(`Audio bundle: <strong>${escapeHtml(selectedAudioBundle.label)}</strong>${readinessLabel}`);
+      const profileLabel = selectedAudioProfile
+        ? ` / ${escapeHtml(getAudioProfileLabel(selectedAudioProfile.profile_id, selectedAudioProfile.label))}`
+        : '';
+      lines.push(`Audio bundle: <strong>${escapeHtml(selectedAudioBundle.label)}</strong>${profileLabel}${readinessLabel}`);
     }
     if (installSummaries.length) {
       const installSummaryText = installSummaries.map((entry) => escapeHtml(entry)).join(' · ');

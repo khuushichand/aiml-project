@@ -19,12 +19,22 @@ Use manual provider setup below when:
 
 Current curated bundle matrix (generated from `Helper_Scripts/generate_audio_bundle_docs.py`):
 
-| Bundle ID | Label | Offline runtime after provisioning | Default STT | Default TTS | Automatic steps | Guided prerequisites |
-| --- | --- | --- | --- | --- | --- | --- |
-| `cpu_local` | CPU Local | Yes | faster_whisper [small] | kokoro | Install CPU-local Python dependencies, Download CPU-local speech model assets | Install FFmpeg, Install eSpeak NG |
-| `apple_silicon_local` | Apple Silicon Local | Yes | faster_whisper [small] | kokoro | Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets | Install FFmpeg, Install eSpeak NG |
-| `nvidia_local` | NVIDIA Local | Yes | faster_whisper [small] | kokoro | Install NVIDIA local Python dependencies, Download NVIDIA speech model assets | Install FFmpeg, Install eSpeak NG |
-| `hosted_plus_local_backup` | Hosted With Local Backup | No | faster_whisper [small] | kokoro | Install hybrid Python dependencies, Download local fallback speech model assets | Install FFmpeg, Install eSpeak NG |
+| Bundle ID | Label | Profiles | Offline runtime after provisioning | Offline pack compatibility | Default TTS |
+| --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | kokoro |
+| `apple_silicon_local` | Apple Silicon Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | kokoro |
+| `nvidia_local` | NVIDIA Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | kokoro |
+| `hosted_plus_local_backup` | Hosted With Local Backup | Balanced | No | v1 manifest import only | kokoro |
+
+Resource profile guidance:
+- `Light`: smallest local download set; use it when disk or memory pressure matters more than quality.
+- `Balanced`: the default choice for most TTS-first setups.
+- `Performance`: larger local footprint meant for stronger Apple Silicon or NVIDIA machines.
+
+Offline pack guidance:
+- `Online provisioning` remains the main path because it installs dependencies and verifies the selected TTS path immediately.
+- `Offline pack import` is available through the setup audio pack import endpoint for v1 manifest + model portability.
+- `Offline pack` v1 does not install Python dependencies, ffmpeg, or eSpeak NG on the target machine.
 
 ## YAML Quick Start
 

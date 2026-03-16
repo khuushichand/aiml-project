@@ -45,7 +45,7 @@ Make sure the machine can run the installer and any local speech backends you wa
 3. Work through the guided questions so the setup UI can highlight the sections that matter for your deployment.
 4. In the audio stage:
    - review the detected machine profile
-   - accept the recommended bundle or choose a different curated bundle
+   - accept the recommended bundle and profile, or choose a different curated bundle
    - click `Provision recommended bundle` or `Provision selected bundle`
    - complete any guided prerequisites the report calls out
    - click `Run verification`
@@ -58,48 +58,84 @@ The setup UI tracks audio separately from global setup completion. You can safel
 
 _Generated from `Helper_Scripts/generate_audio_bundle_docs.py` and the setup bundle catalog._
 
-| Bundle ID | Label | Offline runtime after provisioning | Default STT | Default TTS | Automatic steps | Guided prerequisites |
-| --- | --- | --- | --- | --- | --- | --- |
-| `cpu_local` | CPU Local | Yes | faster_whisper [small] | kokoro | Install CPU-local Python dependencies, Download CPU-local speech model assets | Install FFmpeg, Install eSpeak NG |
-| `apple_silicon_local` | Apple Silicon Local | Yes | faster_whisper [small] | kokoro | Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets | Install FFmpeg, Install eSpeak NG |
-| `nvidia_local` | NVIDIA Local | Yes | faster_whisper [small] | kokoro | Install NVIDIA local Python dependencies, Download NVIDIA speech model assets | Install FFmpeg, Install eSpeak NG |
-| `hosted_plus_local_backup` | Hosted With Local Backup | No | faster_whisper [small] | kokoro | Install hybrid Python dependencies, Download local fallback speech model assets | Install FFmpeg, Install eSpeak NG |
+| Bundle ID | Label | Profiles | Offline runtime after provisioning | Offline pack compatibility | Default STT | Default TTS | Automatic steps | Guided prerequisites |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro | Install CPU-local Python dependencies, Download CPU-local speech model assets | Install FFmpeg, Install eSpeak NG |
+| `apple_silicon_local` | Apple Silicon Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro | Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets | Install FFmpeg, Install eSpeak NG |
+| `nvidia_local` | NVIDIA Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [medium] | kokoro | Install NVIDIA local Python dependencies, Download NVIDIA speech model assets | Install FFmpeg, Install eSpeak NG |
+| `hosted_plus_local_backup` | Hosted With Local Backup | Balanced | No | v1 manifest import only | faster_whisper [small] | kokoro | Install hybrid Python dependencies, Download local fallback speech model assets | Install FFmpeg, Install eSpeak NG |
 
 ### `cpu_local`
 
 - Label: CPU Local
+- Resource profiles: Light, Balanced, Performance
 - Offline runtime after provisioning: Yes
+- Offline pack compatibility: v1 manifest import + model portability
 - Default STT: faster_whisper [small]
 - Default TTS: kokoro
 - Automatic steps: Install CPU-local Python dependencies, Download CPU-local speech model assets
 - Guided prerequisites: Install FFmpeg, Install eSpeak NG
 
+| Profile | Resource class | Estimated disk | STT plan | TTS plan |
+| --- | --- | --- | --- | --- |
+| Light | low | 1.0 GB | faster_whisper [tiny] | kokoro |
+| Balanced | medium | 2.0 GB | faster_whisper [small] | kokoro |
+| Performance | high | 4.5 GB | faster_whisper [medium] | kokoro |
+
 ### `apple_silicon_local`
 
 - Label: Apple Silicon Local
+- Resource profiles: Light, Balanced, Performance
 - Offline runtime after provisioning: Yes
+- Offline pack compatibility: v1 manifest import + model portability
 - Default STT: faster_whisper [small]
 - Default TTS: kokoro
 - Automatic steps: Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets
 - Guided prerequisites: Install FFmpeg, Install eSpeak NG
 
+| Profile | Resource class | Estimated disk | STT plan | TTS plan |
+| --- | --- | --- | --- | --- |
+| Light | low | 1.0 GB | faster_whisper [tiny] | kokoro |
+| Balanced | medium | 2.0 GB | faster_whisper [small] | kokoro |
+| Performance | high | 4.0 GB | faster_whisper [medium] | kokoro |
+
 ### `nvidia_local`
 
 - Label: NVIDIA Local
+- Resource profiles: Light, Balanced, Performance
 - Offline runtime after provisioning: Yes
-- Default STT: faster_whisper [small]
+- Offline pack compatibility: v1 manifest import + model portability
+- Default STT: faster_whisper [medium]
 - Default TTS: kokoro
 - Automatic steps: Install NVIDIA local Python dependencies, Download NVIDIA speech model assets
 - Guided prerequisites: Install FFmpeg, Install eSpeak NG
 
+| Profile | Resource class | Estimated disk | STT plan | TTS plan |
+| --- | --- | --- | --- | --- |
+| Light | low | 2.0 GB | faster_whisper [small] | kokoro |
+| Balanced | medium | 4.0 GB | faster_whisper [medium] | kokoro |
+| Performance | high | 8.0 GB | faster_whisper [large-v3] | kokoro |
+
 ### `hosted_plus_local_backup`
 
 - Label: Hosted With Local Backup
+- Resource profiles: Balanced
 - Offline runtime after provisioning: No
+- Offline pack compatibility: v1 manifest import only
 - Default STT: faster_whisper [small]
 - Default TTS: kokoro
 - Automatic steps: Install hybrid Python dependencies, Download local fallback speech model assets
 - Guided prerequisites: Install FFmpeg, Install eSpeak NG
+
+| Profile | Resource class | Estimated disk | STT plan | TTS plan |
+| --- | --- | --- | --- | --- |
+| Balanced | medium | 2.5 GB | faster_whisper [small] | kokoro |
+
+## Provisioning Modes
+
+- `Online provisioning`: `/setup` installs Python dependencies, downloads model assets, and verifies the selected bundle/profile on the current machine.
+- `Offline pack import`: the setup audio pack import endpoint validates a previously exported manifest against local platform, arch, and Python compatibility, then registers the imported pack in the readiness report.
+- `Offline pack` v1 scope: manifest + model portability only. It does not install Python dependencies or OS prerequisites on the target machine.
 
 ## Verification After Provisioning
 
@@ -143,5 +179,6 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
 | No audio recommendation appears | Make sure `/setup` can reach `/api/v1/setup/audio/recommendations`; reload the page and inspect the setup message panel. |
 | Provisioning returns `partial` | Guided prerequisites are still missing. Install FFmpeg and/or eSpeak NG, then run `Safe rerun` and `Run verification`. |
 | Verification returns `failed` | Check the readiness report for remediation items such as missing FFmpeg, missing eSpeak NG, or an unusable STT/TTS path. |
+| Offline pack import is rejected | Re-export the pack from a machine with the same platform, arch, and Python minor version. v1 imports validate compatibility but do not install missing Python dependencies. |
 | `/setup` redirects away immediately | The global setup flow is already marked complete. Re-enable the first-time setup flag if you need the guided UI again. |
 | Local speech is required offline later | Prefer `cpu_local`, `apple_silicon_local`, or `nvidia_local` instead of `hosted_plus_local_backup`. |

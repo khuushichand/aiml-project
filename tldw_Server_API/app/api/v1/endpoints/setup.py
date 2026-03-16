@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,6 +20,7 @@ from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_a
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Setup import install_manager, setup_manager
+from tldw_Server_API.app.core.Setup import audio_pack_service
 from tldw_Server_API.app.core.Setup import audio_profile_service
 from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
@@ -74,6 +76,23 @@ class AudioBundleVerificationRequest(BaseModel):
         min_length=1,
         description="Selected resource profile within the curated audio bundle.",
     )
+
+
+class AudioPackExportRequest(BaseModel):
+    bundle_id: str = Field(..., min_length=1, description="Curated audio bundle identifier to export.")
+    resource_profile: str = Field(
+        DEFAULT_AUDIO_RESOURCE_PROFILE,
+        min_length=1,
+        description="Selected resource profile within the curated audio bundle.",
+    )
+    pack_path: str | None = Field(
+        None,
+        description="Optional path to write the generated audio pack manifest.",
+    )
+
+
+class AudioPackImportRequest(BaseModel):
+    pack_path: str = Field(..., min_length=1, description="Filesystem path to an audio pack manifest JSON file.")
 
 
 async def require_admin_and_system_configure(
@@ -249,6 +268,84 @@ async def verify_audio_bundle(
         )
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/audio/packs/export", openapi_extra={"security": []})
+async def export_audio_pack(
+    payload: AudioPackExportRequest,
+    _guard: None = Depends(require_local_setup_access),
+) -> dict[str, Any]:
+    """Export a v1 audio bundle pack manifest for the selected bundle/profile."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    readiness = audio_readiness_store.get_audio_readiness_store().load()
+    machine_profile = audio_profile_service.detect_machine_profile()
+    compatibility = (
+        machine_profile.model_dump()
+        if hasattr(machine_profile, "model_dump")
+        else dict(machine_profile)
+    )
+
+    try:
+        if payload.pack_path:
+            manifest = audio_pack_service.write_audio_pack_manifest(
+                pack_path=payload.pack_path,
+                bundle_id=payload.bundle_id,
+                resource_profile=payload.resource_profile,
+                installed_assets=readiness.get("installed_asset_manifests"),
+                compatibility=compatibility,
+            )
+        else:
+            manifest = audio_pack_service.build_audio_pack_manifest(
+                bundle_id=payload.bundle_id,
+                resource_profile=payload.resource_profile,
+                installed_assets=readiness.get("installed_asset_manifests"),
+                compatibility=compatibility,
+            )
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return {
+        "success": True,
+        "manifest": manifest,
+        "pack_path": payload.pack_path,
+    }
+
+
+@router.post("/audio/packs/import", openapi_extra={"security": []})
+async def import_audio_pack(
+    payload: AudioPackImportRequest,
+    _guard: None = Depends(require_local_setup_access),
+) -> dict[str, Any]:
+    """Validate and register a v1 audio bundle pack manifest."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    machine_profile = audio_profile_service.detect_machine_profile()
+    compatibility = (
+        machine_profile.model_dump()
+        if hasattr(machine_profile, "model_dump")
+        else dict(machine_profile)
+    )
+    readiness_store = audio_readiness_store.get_audio_readiness_store()
+
+    try:
+        result = audio_pack_service.register_imported_audio_pack(
+            payload.pack_path,
+            readiness_store=readiness_store,
+            machine_profile=compatibility,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Audio pack not found: {payload.pack_path}") from exc
+    except json.JSONDecodeError as exc:  # noqa: F821
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Audio pack manifest is not valid JSON.") from exc
+
+    return result
 
 
 @router.post("/config", openapi_extra={"security": []})

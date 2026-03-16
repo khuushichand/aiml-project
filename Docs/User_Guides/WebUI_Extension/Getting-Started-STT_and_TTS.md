@@ -34,12 +34,22 @@ Recommended operator flow:
 
 Current curated bundle matrix (generated from `Helper_Scripts/generate_audio_bundle_docs.py`):
 
-| Bundle ID | Label | Offline runtime after provisioning | Default STT | Default TTS | Automatic steps | Guided prerequisites |
+| Bundle ID | Label | Profiles | Offline runtime after provisioning | Offline pack compatibility | Default STT | Default TTS |
 | --- | --- | --- | --- | --- | --- | --- |
-| `cpu_local` | CPU Local | Yes | faster_whisper [small] | kokoro | Install CPU-local Python dependencies, Download CPU-local speech model assets | Install FFmpeg, Install eSpeak NG |
-| `apple_silicon_local` | Apple Silicon Local | Yes | faster_whisper [small] | kokoro | Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets | Install FFmpeg, Install eSpeak NG |
-| `nvidia_local` | NVIDIA Local | Yes | faster_whisper [small] | kokoro | Install NVIDIA local Python dependencies, Download NVIDIA speech model assets | Install FFmpeg, Install eSpeak NG |
-| `hosted_plus_local_backup` | Hosted With Local Backup | No | faster_whisper [small] | kokoro | Install hybrid Python dependencies, Download local fallback speech model assets | Install FFmpeg, Install eSpeak NG |
+| `cpu_local` | CPU Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro |
+| `apple_silicon_local` | Apple Silicon Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro |
+| `nvidia_local` | NVIDIA Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [medium] | kokoro |
+| `hosted_plus_local_backup` | Hosted With Local Backup | Balanced | No | v1 manifest import only | faster_whisper [small] | kokoro |
+
+Resource profile guidance:
+- `Light`: lowest disk and memory footprint; best when you need a conservative local install.
+- `Balanced`: the default for most machines and the safest recommendation when hardware signals are incomplete.
+- `Performance`: larger local footprint; only pick it when disk headroom and acceleration are clearly available.
+
+Offline pack guidance:
+- `Online provisioning` is still the default. It installs Python dependencies, downloads models, and verifies the current machine.
+- `Offline pack import` is now available through the setup audio pack import endpoint for manifest + model portability.
+- `Offline pack` v1 does not install Python dependencies or OS prerequisites on the target machine. It validates compatibility and registers the imported pack in the readiness report.
 
 ## Prerequisites
 
