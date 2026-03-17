@@ -5,9 +5,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_auth_rate_limit,
+    get_auth_principal,
+)
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, reset_settings
@@ -220,6 +224,24 @@ def test_federation_callback_supports_org_scoped_provider_resolution(
     body = callback_response.json()
     payload = JWTService(get_settings()).verify_token(body["access_token"], token_type="access")
     assert int(payload["sub"]) == existing_user_id
+
+
+def test_federation_callback_uses_auth_rate_limit_dependency(
+    federation_client: TestClient,
+) -> None:
+    async def _block_rate_limit() -> None:
+        raise HTTPException(status_code=429, detail="Too many requests")
+
+    federation_client.app.dependency_overrides[check_auth_rate_limit] = _block_rate_limit
+    try:
+        response = federation_client.get(
+            "/api/v1/auth/federation/corp/callback?state=test-state&code=test-code",
+        )
+    finally:
+        federation_client.app.dependency_overrides.pop(check_auth_rate_limit, None)
+
+    assert response.status_code == 429, response.text
+    assert response.json()["detail"] == "Too many requests"
 
 
 def test_federation_callback_links_existing_user_and_returns_tokens(

@@ -298,6 +298,62 @@ class ManagedSecretRefsRepo:
             logger.error("ManagedSecretRefsRepo.get_ref failed: {}", exc)
             raise
 
+    async def list_refs_by_ids(
+        self,
+        ref_ids: list[int],
+        *,
+        include_revoked: bool = False,
+    ) -> dict[int, dict[str, Any]]:
+        """Return managed secret refs keyed by id for the supplied identifiers."""
+        normalized_ids = sorted({int(ref_id) for ref_id in ref_ids if int(ref_id) > 0})
+        if not normalized_ids:
+            return {}
+
+        try:
+            if getattr(self.db_pool, "pool", None) is not None:
+                list_refs_sql = """
+                    SELECT id, backend_name, owner_scope_type, owner_scope_id, provider_key, backend_ref,
+                           display_name, status, metadata_json, last_resolved_at, expires_at,
+                           created_by, updated_by, revoked_by, revoked_at, created_at, updated_at
+                    FROM managed_secret_refs
+                    WHERE id = ANY($1::int[]) AND revoked_at IS NULL
+                    """
+                if include_revoked:
+                    list_refs_sql = """
+                        SELECT id, backend_name, owner_scope_type, owner_scope_id, provider_key, backend_ref,
+                               display_name, status, metadata_json, last_resolved_at, expires_at,
+                               created_by, updated_by, revoked_by, revoked_at, created_at, updated_at
+                        FROM managed_secret_refs
+                        WHERE id = ANY($1::int[])
+                        """
+                rows = await self.db_pool.fetchall(list_refs_sql, normalized_ids)
+            else:
+                list_refs_sql = """
+                    SELECT id, backend_name, owner_scope_type, owner_scope_id, provider_key, backend_ref,
+                           display_name, status, metadata_json, last_resolved_at, expires_at,
+                           created_by, updated_by, revoked_by, revoked_at, created_at, updated_at
+                    FROM managed_secret_refs
+                    WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND revoked_at IS NULL
+                    """
+                if include_revoked:
+                    list_refs_sql = """
+                        SELECT id, backend_name, owner_scope_type, owner_scope_id, provider_key, backend_ref,
+                               display_name, status, metadata_json, last_resolved_at, expires_at,
+                               created_by, updated_by, revoked_by, revoked_at, created_at, updated_at
+                        FROM managed_secret_refs
+                        WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+                        """
+                rows = await self.db_pool.fetchall(list_refs_sql, (json.dumps(normalized_ids),))
+            return {
+                int(row_dict["id"]): row_dict
+                for row in rows
+                for row_dict in [self._row_to_dict(row)]
+                if row_dict.get("id") is not None
+            }
+        except Exception as exc:
+            logger.error("ManagedSecretRefsRepo.list_refs_by_ids failed: {}", exc)
+            raise
+
     async def touch_last_resolved(
         self,
         ref_id: int,

@@ -37,6 +37,12 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_registration_service_dep,
     get_session_manager_dep,
 )
+from tldw_Server_API.app.api.v1.API_Deps.federation_deps import (
+    get_federation_provisioning_service_dep,
+    get_identity_provider_repo_dep,
+    get_oidc_federation_service_dep,
+    require_enterprise_federation,
+)
 from tldw_Server_API.app.api.v1.utils.deprecation import build_deprecation_headers
 
 #
@@ -59,10 +65,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
     global_settings as _csrf_globals,
 )
-from tldw_Server_API.app.core.AuthNZ.database import (
-    get_db_pool,
-    is_postgres_backend,
-)
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError,
     DuplicateOrganizationError,
@@ -184,32 +187,6 @@ def _get_admin_module_ensure_sqlite_authnz_ready_if_test_mode():
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
     return admin_mod._ensure_sqlite_authnz_ready_if_test_mode
-
-
-def _enterprise_federation_available() -> bool:
-    settings = get_settings()
-    return bool(
-        getattr(settings, "AUTH_FEDERATION_ENABLED", False)
-        and getattr(settings, "enterprise_federation_supported", False)
-    )
-
-
-def _require_enterprise_federation() -> None:
-    if not _enterprise_federation_available():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Enterprise federation is not enabled for this deployment",
-        )
-
-
-async def _get_identity_provider_repo() -> IdentityProviderRepo:
-    repo = IdentityProviderRepo(db_pool=await get_db_pool())
-    await repo.ensure_tables()
-    return repo
-
-
-def _get_oidc_federation_service() -> OIDCFederationService:
-    return OIDCFederationService()
 
 
 def _get_federation_state_repo(session_manager: SessionManager) -> FederationStateRepo:
@@ -410,9 +387,9 @@ async def federation_login(
     session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> RedirectResponse:
     await _get_admin_module_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
+    require_enterprise_federation()
 
-    repo = await _get_identity_provider_repo()
+    repo = await get_identity_provider_repo_dep()
     provider = await _resolve_federation_provider(
         repo=repo,
         provider_slug=provider_slug,
@@ -425,7 +402,7 @@ async def federation_login(
         )
 
     redirect_uri = str(request.url_for("federation_callback", provider_slug=provider_slug))
-    oidc_service = _get_oidc_federation_service()
+    oidc_service = get_oidc_federation_service_dep()
     try:
         auth_request = await oidc_service.build_authorization_request(
             provider=provider,
@@ -454,8 +431,12 @@ async def federation_login(
     )
     return RedirectResponse(url=str(auth_request["auth_url"]), status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
-
-@router.get("/federation/{provider_slug}/callback", name="federation_callback", response_model=TokenResponse)
+@router.get(
+    "/federation/{provider_slug}/callback",
+    name="federation_callback",
+    response_model=TokenResponse,
+    dependencies=[Depends(check_auth_rate_limit)],
+)
 async def federation_callback(
     provider_slug: str,
     code: str,
@@ -465,9 +446,10 @@ async def federation_callback(
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     settings: Settings = Depends(get_settings),
+    provisioning_service: FederationProvisioningService = Depends(get_federation_provisioning_service_dep),
 ) -> TokenResponse:
     await _get_admin_module_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
+    require_enterprise_federation()
 
     code_value = str(code or "").strip()
     state_value = str(state or "").strip()
@@ -485,7 +467,7 @@ async def federation_callback(
             detail="Invalid or expired OIDC state",
         )
 
-    repo = await _get_identity_provider_repo()
+    repo = await get_identity_provider_repo_dep()
     provider_id = int(state_record.get("provider_id") or 0)
     provider = await repo.get_provider(provider_id) if provider_id > 0 else None
     if not provider or not bool(provider.get("enabled")):
@@ -507,7 +489,7 @@ async def federation_callback(
             detail="OIDC state is incomplete",
         )
 
-    oidc_service = _get_oidc_federation_service()
+    oidc_service = get_oidc_federation_service_dep()
     try:
         claims = await oidc_service.exchange_authorization_code(
             provider=provider,
@@ -530,8 +512,7 @@ async def federation_callback(
             detail="OIDC claims did not resolve a subject",
         )
 
-    db_pool = await get_db_pool()
-    provisioning_service = FederationProvisioningService(db_pool=db_pool)
+    db_pool = provisioning_service.db_pool
     user = await provisioning_service.resolve_user_for_login(
         provider=provider,
         mapped_claims=mapped_claims,

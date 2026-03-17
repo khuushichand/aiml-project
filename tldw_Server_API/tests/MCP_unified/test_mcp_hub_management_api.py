@@ -444,6 +444,31 @@ class _FakeService:
         return True
 
 
+class _FakeBrokerService:
+    async def get_slot_status(
+        self,
+        *,
+        server_id: str,
+        slot_name: str,
+        profile_id: int | None = None,
+        assignment_id: int | None = None,
+    ) -> dict[str, Any]:
+        binding_target_type = "profile" if profile_id is not None else "assignment"
+        binding_target_id = str(profile_id if profile_id is not None else assignment_id)
+        return {
+            "server_id": server_id,
+            "slot_name": slot_name,
+            "binding_target_type": binding_target_type,
+            "binding_target_id": binding_target_id,
+            "credential_ref": "server",
+            "managed_secret_ref_id": None,
+            "state": "ready",
+            "blocked_reason": None,
+            "backend_name": "local_encrypted_v1",
+            "expires_at": None,
+        }
+
+
 def _build_app(
     *,
     principal: AuthPrincipal | None,
@@ -464,6 +489,7 @@ def _build_app(
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
     app.dependency_overrides[mcp_hub_management.get_mcp_hub_service] = lambda: _FakeService()
+    app.dependency_overrides[mcp_hub_management.get_mcp_credential_broker_service] = lambda: _FakeBrokerService()
     return app
 
 
@@ -951,6 +977,28 @@ async def test_slot_binding_endpoints_round_trip() -> None:
     assert assignment_delete_resp.json()["ok"] is True
     assert preview_resp.status_code == 200
     assert preview_resp.json()["servers"][0]["slots"][1]["blocked_reason"] == "disabled_by_assignment"
+
+
+@pytest.mark.asyncio
+async def test_slot_status_endpoints_support_action_style_routes() -> None:
+    app = _build_app(
+        principal=_make_principal(roles=["admin"], permissions=[]),
+        fail_with_401=False,
+    )
+    with TestClient(app) as client:
+        profile_status_resp = client.get(
+            "/api/v1/mcp/hub/permission-profiles/7/credential-bindings/status/docs/token_readonly"
+        )
+        assignment_status_resp = client.get(
+            "/api/v1/mcp/hub/policy-assignments/11/credential-bindings/status/docs/token_write"
+        )
+
+    assert profile_status_resp.status_code == 200
+    assert profile_status_resp.json()["binding_target_type"] == "profile"
+    assert profile_status_resp.json()["slot_name"] == "token_readonly"
+    assert assignment_status_resp.status_code == 200
+    assert assignment_status_resp.json()["binding_target_type"] == "assignment"
+    assert assignment_status_resp.json()["slot_name"] == "token_write"
 
 
 @pytest.mark.asyncio

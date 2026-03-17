@@ -48,6 +48,13 @@ def _coerce_string_set(value: Any) -> set[str]:
     return set()
 
 
+_ASYMMETRIC_JWT_ALGS_BY_KTY: dict[str, set[str]] = {
+    "EC": {"ES256", "ES384", "ES512"},
+    "OKP": {"EdDSA"},
+    "RSA": {"PS256", "PS384", "PS512", "RS256", "RS384", "RS512"},
+}
+
+
 def _parse_byok_secret_ref(secret_ref: str) -> tuple[str, int, str] | None:
     lowered = secret_ref.lower()
     scope_type: str | None = None
@@ -154,7 +161,7 @@ class OIDCFederationService:
             raise ValueError("OIDC discovery issuer mismatch")
         return discovery
 
-    async def _resolve_provider_runtime_config(self, provider: dict[str, Any]) -> dict[str, str | None]:
+    async def _resolve_provider_runtime_config(self, provider: dict[str, Any]) -> dict[str, Any]:
         discovery = await self._fetch_discovery_document(provider)
         resolved = {
             "issuer": _coerce_nonempty_string(provider.get("issuer")) or _coerce_nonempty_string(discovery.get("issuer")),
@@ -166,6 +173,11 @@ class OIDCFederationService:
             or _coerce_nonempty_string(discovery.get("jwks_uri")),
             "client_id": _coerce_nonempty_string(provider.get("client_id")),
             "client_secret": await _resolve_client_secret_ref(provider.get("client_secret_ref")),
+            "signing_algorithms": sorted(
+                _coerce_string_set(provider.get("allowed_signing_algs"))
+                or _coerce_string_set(provider.get("signing_algorithms"))
+                or _coerce_string_set(discovery.get("id_token_signing_alg_values_supported"))
+            ),
         }
         return resolved
 
@@ -236,6 +248,26 @@ class OIDCFederationService:
         if len(keys) == 1 and isinstance(keys[0], dict):
             return keys[0]
         raise ValueError("OIDC id_token header is missing kid")
+
+    @staticmethod
+    def _resolve_allowed_signing_algorithms(
+        *,
+        provider_runtime_config: dict[str, Any],
+        jwk: dict[str, Any],
+    ) -> set[str]:
+        configured = _coerce_string_set(provider_runtime_config.get("signing_algorithms"))
+        if configured:
+            return configured
+
+        jwk_alg = _coerce_nonempty_string(jwk.get("alg")) if isinstance(jwk, dict) else None
+        if jwk_alg:
+            return {jwk_alg}
+
+        key_type = _coerce_nonempty_string(jwk.get("kty")) if isinstance(jwk, dict) else None
+        allowed = _ASYMMETRIC_JWT_ALGS_BY_KTY.get(str(key_type or "").upper())
+        if allowed:
+            return set(allowed)
+        raise ValueError("OIDC JWKS key type does not define a supported signing algorithm policy")
 
     async def build_authorization_request(
         self,
@@ -316,16 +348,22 @@ class OIDCFederationService:
 
         jwks_payload = await afetch_json(method="GET", url=jwks_url)
         jwk = self._resolve_jwk_for_token(id_token, jwks_payload)
+        allowed_algorithms = self._resolve_allowed_signing_algorithms(
+            provider_runtime_config=runtime_config,
+            jwk=jwk,
+        )
         header = jwt.get_unverified_header(id_token)
         algorithm = _coerce_nonempty_string(header.get("alg")) if isinstance(header, dict) else None
         if not algorithm:
             raise ValueError("OIDC id_token header is missing alg")
+        if algorithm not in allowed_algorithms:
+            raise ValueError(f"OIDC id_token uses unsupported signing algorithm: {algorithm}")
 
         try:
             claims = jwt.decode(
                 id_token,
                 jwk,
-                algorithms=[algorithm],
+                algorithms=sorted(allowed_algorithms),
                 audience=client_id,
                 issuer=issuer,
             )

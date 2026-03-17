@@ -303,6 +303,50 @@ async def test_exchange_authorization_code_resolves_byok_org_client_secret_refer
 
 
 @pytest.mark.asyncio
+async def test_exchange_authorization_code_rejects_untrusted_token_header_algorithm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _private_pem, jwk = _rsa_signing_material()
+    token_url = "https://issuer.example.com/oauth2/token"
+    jwks_url = "https://issuer.example.com/.well-known/jwks.json"
+    id_token = jwt.encode(
+        {
+            "sub": "external-user-unsafe",
+            "email": "mallory@example.com",
+            "iss": "https://issuer.example.com",
+            "aud": "client-123",
+            "nonce": "nonce-unsafe",
+        },
+        "shared-secret",
+        algorithm="HS256",
+        headers={"kid": "oidc-key-1"},
+    )
+
+    async def _fake_afetch_json(*, method: str, url: str, **kwargs) -> dict:  # noqa: ANN003
+        if method.upper() == "POST" and url == token_url:
+            return {"id_token": id_token}
+        if method.upper() == "GET" and url == jwks_url:
+            return {"keys": [jwk]}
+        raise AssertionError(f"Unexpected OIDC fetch: {method} {url}")
+
+    monkeypatch.setattr(oidc_module, "afetch_json", _fake_afetch_json, raising=False)
+
+    with pytest.raises(ValueError, match="unsupported signing algorithm"):
+        await OIDCFederationService().exchange_authorization_code(
+            provider={
+                "issuer": "https://issuer.example.com",
+                "token_url": token_url,
+                "jwks_url": jwks_url,
+                "client_id": "client-123",
+            },
+            code="code-unsafe",
+            redirect_uri="http://testserver/callback",
+            code_verifier="verifier-unsafe",
+            nonce="nonce-unsafe",
+        )
+
+
+@pytest.mark.asyncio
 async def test_inspect_provider_configuration_rejects_missing_byok_org_client_secret_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

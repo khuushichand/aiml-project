@@ -3398,8 +3398,14 @@ async def delete_assignment_slot_credential_binding(
 
 
 @router.get(
+    "/permission-profiles/{profile_id}/credential-bindings/status/{server_id}/{slot_name}",
+    response_model=McpCredentialSlotStatusResponse,
+)
+@router.get(
     "/permission-profiles/{profile_id}/credential-bindings/{server_id}/{slot_name}/status",
     response_model=McpCredentialSlotStatusResponse,
+    include_in_schema=False,
+    deprecated=True,
 )
 async def get_profile_slot_credential_status(
     profile_id: int,
@@ -3423,8 +3429,14 @@ async def get_profile_slot_credential_status(
 
 
 @router.get(
+    "/policy-assignments/{assignment_id}/credential-bindings/status/{server_id}/{slot_name}",
+    response_model=McpCredentialSlotStatusResponse,
+)
+@router.get(
     "/policy-assignments/{assignment_id}/credential-bindings/{server_id}/{slot_name}/status",
     response_model=McpCredentialSlotStatusResponse,
+    include_in_schema=False,
+    deprecated=True,
 )
 async def get_assignment_slot_credential_status(
     assignment_id: int,

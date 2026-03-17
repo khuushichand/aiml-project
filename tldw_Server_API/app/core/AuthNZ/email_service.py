@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import smtplib
+import re
 from datetime import datetime, timezone
 from email import encoders
 from email.mime.base import MIMEBase
@@ -249,8 +250,6 @@ If you did not request this, you can ignore this email.
             <center>
                 <a href="{{ reauth_link }}" class="button">Confirm admin action</a>
             </center>
-            <p>If you need to enter the token manually, use this code:</p>
-            <div class="code-box">{{ reauth_token }}</div>
             <div class="note">
                 <strong>Security notice:</strong> This step-up token only authorizes a high-risk admin action. If you did not request this, ignore the email.
             </div>
@@ -269,9 +268,6 @@ Hello{{ user_label }},
 
 Use this link to complete your admin reauthentication (expires in {{ expiry_minutes }} minute(s)):
 {{ reauth_link }}
-
-Manual token:
-{{ reauth_token }}
 
 If you did not request this, ignore this email.
 """
@@ -394,7 +390,9 @@ class EmailService:
         html_body: str,
         text_body: Optional[str] = None,
         from_email: Optional[str] = None,
-        attachments: Optional[list[dict[str, Any]]] = None
+        attachments: Optional[list[dict[str, Any]]] = None,
+        *,
+        redact_mock_tokens: bool = False,
     ) -> bool:
         """
         Send an email
@@ -406,6 +404,7 @@ class EmailService:
             text_body: Plain text version (optional)
             from_email: Sender email (uses default if not provided)
             attachments: List of attachments
+            redact_mock_tokens: Whether mock transport should redact token-bearing content
 
         Returns:
             True if email was sent successfully
@@ -414,7 +413,13 @@ class EmailService:
 
         if self.provider == "mock":
             return await self._send_mock_email(
-                to_email, subject, html_body, text_body, from_email, attachments
+                to_email,
+                subject,
+                html_body,
+                text_body,
+                from_email,
+                attachments,
+                redact_mock_tokens=redact_mock_tokens,
             )
         elif self.provider == "smtp":
             return await self._send_smtp_email(
@@ -431,12 +436,20 @@ class EmailService:
         html_body: str,
         text_body: Optional[str],
         from_email: str,
-        attachments: Optional[list[dict[str, Any]]]
+        attachments: Optional[list[dict[str, Any]]],
+        *,
+        redact_mock_tokens: bool = False,
     ) -> bool:
         """Send mock email for development/testing"""
 
         timestamp = datetime.now(timezone.utc).isoformat()
         email_id = f"{timestamp}_{to_email.replace('@', '_at_')}"
+        stored_html_body = self._redact_mock_email_body(html_body) if redact_mock_tokens else html_body
+        stored_text_body = (
+            self._redact_mock_email_body(text_body or "")
+            if redact_mock_tokens
+            else (text_body or "")
+        )
 
         # Create email data structure
         email_data = {
@@ -445,8 +458,8 @@ class EmailService:
             "from": from_email,
             "to": to_email,
             "subject": subject,
-            "html_body": html_body,
-            "text_body": text_body or "",
+            "html_body": stored_html_body,
+            "text_body": stored_text_body,
             "attachments": len(attachments) if attachments else 0,
             "provider": "mock"
         }
@@ -460,11 +473,14 @@ class EmailService:
             logger.info(f"To: {to_email}")
             logger.info(f"Subject: {subject}")
             logger.info("-" * 80)
-            if text_body:
+            if stored_text_body:
                 logger.info("Text Body:")
-                logger.info(text_body[:500] + ("..." if len(text_body) > 500 else ""))
+                logger.info(
+                    stored_text_body[:500]
+                    + ("..." if len(stored_text_body) > 500 else "")
+                )
             logger.info("-" * 80)
-            logger.info(f"HTML Body Length: {len(html_body)} characters")
+            logger.info(f"HTML Body Length: {len(stored_html_body)} characters")
             if attachments:
                 logger.info(f"Attachments: {len(attachments)}")
             logger.info("=" * 80)
@@ -478,7 +494,7 @@ class EmailService:
             # Also save HTML for viewing
             html_path = self.mock_file_path / f"{email_id}.html"
             with open(html_path, "w") as f:
-                f.write(html_body)
+                f.write(stored_html_body)
 
             logger.debug(f"Mock email saved to: {file_path}")
 
@@ -486,6 +502,21 @@ class EmailService:
         await asyncio.sleep(0.1)
 
         return True
+
+    @staticmethod
+    def _redact_mock_email_body(body: str) -> str:
+        """Redact token-bearing content before mock transport persists it."""
+        redacted = re.sub(
+            r"([?&]token=)([^&\"'\\s<]+)",
+            r"\1[REDACTED]",
+            body,
+        )
+        redacted = re.sub(
+            r"(?im)(manual token:\s*)(\S+)",
+            r"\1[REDACTED]",
+            redacted,
+        )
+        return redacted
 
     async def _send_smtp_email(
         self,
@@ -676,7 +707,13 @@ class EmailService:
         text_body = text_template.render(**template_data)
         subject = Template(EMAIL_TEMPLATES["admin_reauth"]["subject"]).render(**template_data)
 
-        return await self.send_email(to_email, subject, html_body, text_body)
+        return await self.send_email(
+            to_email,
+            subject,
+            html_body,
+            text_body,
+            redact_mock_tokens=True,
+        )
 
     async def send_mfa_enabled_email(
         self,

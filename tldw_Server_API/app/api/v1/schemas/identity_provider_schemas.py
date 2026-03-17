@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _blank_string_to_none(value: Any) -> Any:
@@ -43,25 +43,27 @@ class IdentityProviderUpsertRequest(BaseModel):
     def normalize_blank_optionals(cls, value: Any) -> Any:
         return _blank_string_to_none(value)
 
-    @field_validator("slug")
+    @field_validator("slug", mode="before")
     @classmethod
-    def normalize_slug(cls, value: str) -> str:
-        return value.strip().lower()
-
-    @field_validator("issuer")
-    @classmethod
-    def normalize_issuer(cls, value: str) -> str:
-        return value.strip()
-
-    @field_validator("owner_scope_id")
-    @classmethod
-    def validate_owner_scope_id(cls, value: int | None, info) -> int | None:
-        owner_scope_type = info.data.get("owner_scope_type", "global")
-        if owner_scope_type == "org" and value is None:
-            raise ValueError("owner_scope_id is required for org-scoped providers")
-        if owner_scope_type == "global":
-            return None
+    def normalize_slug(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
         return value
+
+    @field_validator("issuer", mode="before")
+    @classmethod
+    def normalize_issuer(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @model_validator(mode="after")
+    def validate_scope_pair(self) -> "IdentityProviderUpsertRequest":
+        if self.owner_scope_type == "org" and self.owner_scope_id is None:
+            raise ValueError("owner_scope_id is required for org-scoped providers")
+        if self.owner_scope_type == "global":
+            self.owner_scope_id = None
+        return self
 
     model_config = ConfigDict(from_attributes=True)
 

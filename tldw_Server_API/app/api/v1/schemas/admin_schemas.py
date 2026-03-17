@@ -30,8 +30,8 @@ class UserUpdateRequest(BaseModel):
     is_locked: bool | None = None
     storage_quota_mb: int | None = Field(None, ge=100)
     reason: str | None = Field(default=None, min_length=8, max_length=500)
-    admin_password: str | None = Field(default=None, max_length=128)
-    admin_reauth_token: str | None = Field(default=None, max_length=4096)
+    admin_password: str | None = Field(default=None, max_length=128, repr=False)
+    admin_reauth_token: str | None = Field(default=None, max_length=4096, repr=False)
 
     @field_validator("admin_password", "admin_reauth_token", mode="before")
     @classmethod
@@ -45,8 +45,8 @@ class AdminPrivilegedActionRequest(BaseModel):
     """Request payload for privileged admin actions."""
 
     reason: str = Field(..., min_length=8, max_length=500)
-    admin_password: str | None = Field(default=None, max_length=128)
-    admin_reauth_token: str | None = Field(default=None, max_length=4096)
+    admin_password: str | None = Field(default=None, max_length=128, repr=False)
+    admin_reauth_token: str | None = Field(default=None, max_length=4096, repr=False)
 
     @field_validator("admin_password", "admin_reauth_token", mode="before")
     @classmethod

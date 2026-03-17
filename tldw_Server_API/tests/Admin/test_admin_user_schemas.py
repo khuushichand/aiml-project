@@ -64,3 +64,16 @@ def test_user_update_request_allows_blank_admin_password_for_single_user_mode() 
     )
 
     assert payload.admin_password is None
+
+
+def test_admin_privileged_action_request_repr_redacts_sensitive_fields() -> None:
+    payload = AdminPrivilegedActionRequest(
+        reason="Support case 123",
+        admin_password="AdminPass123!",
+        admin_reauth_token="reauth-token-123",
+    )
+
+    rendered = repr(payload)
+
+    assert "AdminPass123!" not in rendered
+    assert "reauth-token-123" not in rendered

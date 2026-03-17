@@ -1,12 +1,20 @@
+"""Admin endpoints for enterprise identity provider management."""
+
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
     get_auth_principal,
+)
+from tldw_Server_API.app.api.v1.API_Deps.federation_deps import (
+    get_federation_provisioning_service_dep,
+    get_identity_provider_repo_dep,
+    get_oidc_federation_service_dep,
+    require_enterprise_federation,
 )
 from tldw_Server_API.app.api.v1.schemas.identity_provider_schemas import (
     IdentityProviderDryRunRequest,
@@ -21,7 +29,6 @@ from tldw_Server_API.app.api.v1.schemas.identity_provider_schemas import (
     IdentityProviderTestResponse,
     IdentityProviderUpsertRequest,
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.federation.claim_mapping import preview_claim_mapping
 from tldw_Server_API.app.core.AuthNZ.federation.oidc_service import OIDCFederationService
 from tldw_Server_API.app.core.AuthNZ.federation.provisioning_service import (
@@ -31,22 +38,18 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.identity_provider_repo import (
     IdentityProviderRepo,
 )
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 router = APIRouter()
 
 
-def _get_oidc_federation_service() -> OIDCFederationService:
-    return OIDCFederationService()
-
-
 async def _validate_provider_for_enablement(
     payload: IdentityProviderUpsertRequest,
+    oidc_service: OIDCFederationService,
 ) -> None:
+    """Reject enablement when the provider runtime configuration is invalid."""
     if not payload.enabled:
         return
-    oidc_service = _get_oidc_federation_service()
     try:
         await oidc_service.inspect_provider_configuration(
             provider=payload.model_dump(),
@@ -58,38 +61,18 @@ async def _validate_provider_for_enablement(
         ) from exc
 
 
-def _get_ensure_sqlite_authnz_ready_if_test_mode():
+def _get_ensure_sqlite_authnz_ready_if_test_mode() -> Callable[[], Awaitable[None]]:
+    """Return the shared SQLite AuthNZ bootstrap helper used in tests."""
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
     return admin_mod._ensure_sqlite_authnz_ready_if_test_mode
 
 
-def _enterprise_federation_available() -> bool:
-    settings = get_settings()
-    return bool(
-        getattr(settings, "AUTH_FEDERATION_ENABLED", False)
-        and getattr(settings, "enterprise_federation_supported", False)
-    )
-
-
-def _require_enterprise_federation() -> None:
-    if not _enterprise_federation_available():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Enterprise federation is not enabled for this deployment",
-        )
-
-
-async def get_identity_provider_repo() -> IdentityProviderRepo:
-    repo = IdentityProviderRepo(db_pool=await get_db_pool())
-    await repo.ensure_tables()
-    return repo
-
-
 async def _get_provider_or_404(
     provider_id: int,
     repo: IdentityProviderRepo,
-) -> dict:
+) -> dict[str, object]:
+    """Load an identity provider row or raise a 404 error."""
     provider = await repo.get_provider(provider_id)
     if provider is None:
         raise HTTPException(
@@ -107,11 +90,13 @@ async def _get_provider_or_404(
 async def admin_create_identity_provider(
     payload: IdentityProviderUpsertRequest,
     principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
-    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo)],
+    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo_dep)],
+    oidc_service: Annotated[OIDCFederationService, Depends(get_oidc_federation_service_dep)],
 ) -> IdentityProviderResponse:
+    """Create a new enterprise identity provider definition."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
-    await _validate_provider_for_enablement(payload)
+    require_enterprise_federation()
+    await _validate_provider_for_enablement(payload, oidc_service)
     return await repo.create_provider(
         slug=payload.slug,
         provider_type=payload.provider_type,
@@ -139,13 +124,14 @@ async def admin_create_identity_provider(
     dependencies=[Depends(get_auth_principal), Depends(check_rate_limit)],
 )
 async def admin_list_identity_providers(
+    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo_dep)],
     owner_scope_type: str | None = Query(None),
     owner_scope_id: int | None = Query(None, ge=1),
     enabled: bool | None = Query(None),
-    repo: IdentityProviderRepo = Depends(get_identity_provider_repo),
 ) -> IdentityProviderListResponse:
+    """List identity providers filtered by scope and enabled state."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
+    require_enterprise_federation()
     providers = await repo.list_providers(
         owner_scope_type=owner_scope_type,
         owner_scope_id=owner_scope_id,
@@ -161,10 +147,11 @@ async def admin_list_identity_providers(
 )
 async def admin_test_identity_provider(
     payload: IdentityProviderTestRequest,
+    oidc_service: Annotated[OIDCFederationService, Depends(get_oidc_federation_service_dep)],
 ) -> IdentityProviderTestResponse:
+    """Validate an unsaved provider configuration and resolve runtime metadata."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
-    oidc_service = _get_oidc_federation_service()
+    require_enterprise_federation()
     try:
         result = await oidc_service.inspect_provider_configuration(
             provider=payload.provider.model_dump(),
@@ -184,16 +171,21 @@ async def admin_test_identity_provider(
 )
 async def admin_dry_run_identity_provider(
     payload: IdentityProviderDryRunRequest,
-    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo)],
+    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo_dep)],
+    oidc_service: Annotated[OIDCFederationService, Depends(get_oidc_federation_service_dep)],
+    provisioning_service: Annotated[
+        FederationProvisioningService,
+        Depends(get_federation_provisioning_service_dep),
+    ],
 ) -> IdentityProviderDryRunResponse:
+    """Preview provider mapping and provisioning behavior without persisting changes."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
+    require_enterprise_federation()
 
     provider_payload = payload.provider.model_dump()
     if payload.provider_id is not None:
         await _get_provider_or_404(payload.provider_id, repo)
         provider_payload["id"] = int(payload.provider_id)
-    oidc_service = _get_oidc_federation_service()
     try:
         provider_result = await oidc_service.inspect_provider_configuration(
             provider=provider_payload,
@@ -208,7 +200,6 @@ async def admin_dry_run_identity_provider(
         provider_payload.get("claim_mapping"),
         payload.claims,
     )
-    provisioning_service = FederationProvisioningService(db_pool=await get_db_pool())
     resolution = await provisioning_service.dry_run_login_resolution(
         provider=provider_payload,
         mapped_claims=mapping_preview,
@@ -257,10 +248,11 @@ async def admin_dry_run_identity_provider(
 )
 async def admin_get_identity_provider(
     provider_id: int,
-    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo)],
+    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo_dep)],
 ) -> IdentityProviderResponse:
+    """Return a single identity provider definition."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
+    require_enterprise_federation()
     return await _get_provider_or_404(provider_id, repo)
 
 
@@ -273,11 +265,13 @@ async def admin_update_identity_provider(
     provider_id: int,
     payload: IdentityProviderUpsertRequest,
     principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
-    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo)],
+    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo_dep)],
+    oidc_service: Annotated[OIDCFederationService, Depends(get_oidc_federation_service_dep)],
 ) -> IdentityProviderResponse:
+    """Update an existing enterprise identity provider definition."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
-    await _validate_provider_for_enablement(payload)
+    require_enterprise_federation()
+    await _validate_provider_for_enablement(payload, oidc_service)
     updated = await repo.update_provider(
         provider_id,
         slug=payload.slug,
@@ -313,10 +307,11 @@ async def admin_update_identity_provider(
 async def admin_preview_identity_provider_mapping(
     provider_id: int,
     payload: IdentityProviderMappingPreviewRequest,
-    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo)],
+    repo: Annotated[IdentityProviderRepo, Depends(get_identity_provider_repo_dep)],
 ) -> IdentityProviderMappingPreviewResponse:
+    """Preview claim mapping output for a stored provider definition."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
-    _require_enterprise_federation()
+    require_enterprise_federation()
     provider = await _get_provider_or_404(provider_id, repo)
     preview = preview_claim_mapping(
         provider.get("claim_mapping"),
