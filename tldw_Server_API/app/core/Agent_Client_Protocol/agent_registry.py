@@ -36,6 +36,16 @@ class AgentRegistryEntry:
     install_instructions: list[str] = field(default_factory=list)
     docs_url: str | None = None
 
+    # Protocol adapter fields (new for agent workspace harness)
+    protocol: str = "stdio"  # stdio | mcp | openai_tool_use
+    tool_execution_mode: str = "agent_side"  # agent_side | server_side | hybrid
+    mcp_transport: str = "stdio"  # stdio | sse | streamable_http
+    api_base_url: str | None = None
+    model: str | None = None
+    tools_from: str = "auto"  # auto | static | none
+    sandbox: str = "none"  # required | optional | none
+    trust_level: str = "standard"  # untrusted | standard | trusted
+
     def check_availability(self) -> dict[str, Any]:
         """Check runtime availability of this agent."""
         result: dict[str, Any] = {
