@@ -85,7 +85,10 @@ import type { ChatMessage } from "@/services/tldw/TldwApiClient"
 import { useStoreChatModelSettings } from "@/store/model"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import { cn } from "@/libs/utils"
-import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
+import {
+  AUTO_MODEL_ID,
+  resolveApiProviderForModel
+} from "@/utils/resolve-api-provider"
 import { markdownToText } from "@/utils/markdown-to-text"
 import {
   buildExtraBodyPayload,
@@ -4945,6 +4948,14 @@ export const WritingPlayground = () => {
         )
       )
     }
+    if (model.toLowerCase() === AUTO_MODEL_ID) {
+      throw new Error(
+        t(
+          "option:writingPlayground.tokenInspectorAutoUnavailable",
+          "Token inspection requires a concrete model when Auto routing is enabled."
+        )
+      )
+    }
     const requestedProvider = String(
       requestedCaps?.requested?.provider || ""
     ).trim()
@@ -5289,6 +5300,12 @@ export const WritingPlayground = () => {
       return t(
         "option:writingPlayground.tokenInspectorModelMissing",
         "Select a model to use token inspection."
+      )
+    }
+    if (String(selectedModel).trim().toLowerCase() === AUTO_MODEL_ID) {
+      return t(
+        "option:writingPlayground.tokenInspectorAutoUnavailable",
+        "Token inspection requires a concrete model when Auto routing is enabled."
       )
     }
     if (requestedCapsLoading) {

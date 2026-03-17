@@ -91,4 +91,33 @@ describe("TldwApiClient chat mutations", () => {
     ])
     expect(result.version).toBe(8)
   })
+
+  it("forwards nested routing overrides when creating a chat completion", async () => {
+    mocks.bgRequest.mockResolvedValue({ id: "resp-1", object: "chat.completion" })
+
+    const client = new TldwApiClient()
+    await client.createChatCompletion({
+      model: "auto",
+      messages: [{ role: "user", content: "hello" }],
+      routing: { mode: "per_turn", cross_provider: false }
+    })
+
+    const request = mocks.bgRequest.mock.calls.at(-1)?.[0] as {
+      path?: string
+      method?: string
+      body?: {
+        routing?: {
+          mode?: string
+          cross_provider?: boolean
+        }
+      }
+    }
+
+    expect(request.path).toBe("/api/v1/chat/completions")
+    expect(request.method).toBe("POST")
+    expect(request.body?.routing).toEqual({
+      mode: "per_turn",
+      cross_provider: false
+    })
+  })
 })
