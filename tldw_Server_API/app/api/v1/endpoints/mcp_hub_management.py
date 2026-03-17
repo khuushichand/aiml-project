@@ -51,6 +51,7 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     GovernancePackSummaryResponse,
     GovernanceAuditFindingListResponse,
     MCPHubDeleteResponse,
+    McpCredentialSlotStatusResponse,
     PathScopeObjectCreateRequest,
     PathScopeObjectResponse,
     PathScopeObjectUpdateRequest,
@@ -64,6 +65,7 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     PolicyAssignmentUpdateRequest,
     PolicyOverrideResponse,
     PolicyOverrideUpsertRequest,
+    ProfileCredentialBindingUpsertRequest,
     SharedWorkspaceCreateRequest,
     SharedWorkspaceResponse,
     SharedWorkspaceUpdateRequest,
@@ -93,6 +95,9 @@ from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
     GovernancePackUpgradeConflictError,
     GovernancePackUpgradeStaleError,
     McpHubGovernancePackService,
+)
+from tldw_Server_API.app.services.mcp_credential_broker_service import (
+    McpCredentialBrokerService,
 )
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
@@ -171,6 +176,14 @@ async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
 async def get_mcp_hub_tool_registry_dep() -> McpHubToolRegistryService:
     """Resolve the derived MCP Hub tool registry service."""
     return McpHubToolRegistryService()
+
+
+async def get_mcp_credential_broker_service() -> McpCredentialBrokerService:
+    """Resolve the MCP credential broker service backed by the current MCP Hub repo."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpCredentialBrokerService(repo=repo)
 
 
 def _load_json_object(raw: Any) -> dict[str, Any]:
@@ -1255,6 +1268,11 @@ def _binding_row_to_response(row: dict[str, Any]) -> CredentialBindingResponse:
             else None
         ),
         credential_ref=str(row.get("credential_ref") or "server"),
+        managed_secret_ref_id=(
+            int(row.get("managed_secret_ref_id"))
+            if row.get("managed_secret_ref_id") is not None
+            else None
+        ),
         binding_mode=str(row.get("binding_mode") or "grant"),
         usage_rules=_load_json_object(row.get("usage_rules")),
         created_by=row.get("created_by"),
@@ -3130,6 +3148,7 @@ async def list_profile_credential_bindings(
 async def upsert_profile_credential_binding(
     profile_id: int,
     server_id: str,
+    payload: ProfileCredentialBindingUpsertRequest | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> CredentialBindingResponse:
@@ -3147,6 +3166,7 @@ async def upsert_profile_credential_binding(
         row = await svc.upsert_profile_credential_binding(
             profile_id=profile_id,
             external_server_id=server_id,
+            managed_secret_ref_id=(payload.managed_secret_ref_id if payload else None),
             actor_id=principal.user_id,
         )
     except ResourceNotFoundError as exc:
@@ -3164,6 +3184,7 @@ async def upsert_profile_slot_credential_binding(
     profile_id: int,
     server_id: str,
     slot_name: str,
+    payload: ProfileCredentialBindingUpsertRequest | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     svc: McpHubService = Depends(get_mcp_hub_service),
 ) -> CredentialBindingResponse:
@@ -3182,6 +3203,7 @@ async def upsert_profile_slot_credential_binding(
             profile_id=profile_id,
             external_server_id=server_id,
             slot_name=slot_name,
+            managed_secret_ref_id=(payload.managed_secret_ref_id if payload else None),
             actor_id=principal.user_id,
         )
     except ResourceNotFoundError as exc:
@@ -3278,6 +3300,7 @@ async def upsert_assignment_credential_binding(
             assignment_id=assignment_id,
             external_server_id=server_id,
             binding_mode=payload.binding_mode,
+            managed_secret_ref_id=payload.managed_secret_ref_id,
             actor_id=principal.user_id,
         )
     except ResourceNotFoundError as exc:
@@ -3316,6 +3339,7 @@ async def upsert_assignment_slot_credential_binding(
             external_server_id=server_id,
             slot_name=slot_name,
             binding_mode=payload.binding_mode,
+            managed_secret_ref_id=payload.managed_secret_ref_id,
             actor_id=principal.user_id,
         )
     except ResourceNotFoundError as exc:
@@ -3371,6 +3395,56 @@ async def delete_assignment_slot_credential_binding(
     if not deleted:
         raise HTTPException(status_code=404, detail="Credential binding not found")
     return MCPHubDeleteResponse(ok=True)
+
+
+@router.get(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}/{slot_name}/status",
+    response_model=McpCredentialSlotStatusResponse,
+)
+async def get_profile_slot_credential_status(
+    profile_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+    broker: McpCredentialBrokerService = Depends(get_mcp_credential_broker_service),
+) -> McpCredentialSlotStatusResponse:
+    """Return the remediation status for a profile-scoped external credential slot."""
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    try:
+        status = await broker.get_slot_status(
+            server_id=server_id,
+            slot_name=slot_name,
+            profile_id=profile_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return McpCredentialSlotStatusResponse.model_validate(status)
+
+
+@router.get(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}/{slot_name}/status",
+    response_model=McpCredentialSlotStatusResponse,
+)
+async def get_assignment_slot_credential_status(
+    assignment_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+    broker: McpCredentialBrokerService = Depends(get_mcp_credential_broker_service),
+) -> McpCredentialSlotStatusResponse:
+    """Return the remediation status for an assignment-scoped external credential slot."""
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    try:
+        status = await broker.get_slot_status(
+            server_id=server_id,
+            slot_name=slot_name,
+            assignment_id=assignment_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return McpCredentialSlotStatusResponse.model_validate(status)
 
 
 @router.get("/policy-assignments/{assignment_id}/external-access", response_model=EffectiveExternalAccessResponse)

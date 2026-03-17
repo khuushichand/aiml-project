@@ -176,11 +176,13 @@ class _FakeService:
         profile_id: int,
         external_server_id: str,
         slot_name: str | None = None,
+        managed_secret_ref_id: int | None = None,
         actor_id: int | None,
     ) -> dict[str, Any]:
         assert profile_id == 7
         assert external_server_id == "docs"
         assert slot_name in {None, "token_readonly"}
+        assert managed_secret_ref_id is None
         assert actor_id == 1
         return {
             "id": 1,
@@ -237,12 +239,14 @@ class _FakeService:
         external_server_id: str,
         slot_name: str | None = None,
         binding_mode: str,
+        managed_secret_ref_id: int | None = None,
         actor_id: int | None,
     ) -> dict[str, Any]:
         assert assignment_id == 11
         assert external_server_id == "docs"
         assert slot_name in {None, "token_write"}
         assert binding_mode == "disable"
+        assert managed_secret_ref_id is None
         assert actor_id == 1
         return {
             "id": 2,

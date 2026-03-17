@@ -19,7 +19,13 @@ from tldw_Server_API.app.core.exceptions import (
     BadRequestError,
     ResourceNotFoundError,
 )
-from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.core.AuthNZ.repos.managed_secret_refs_repo import (
+    ManagedSecretRefsRepo,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import (
+    McpHubRepo,
+    encode_managed_secret_credential_ref,
+)
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     build_secret_payload,
     dumps_envelope,
@@ -3002,6 +3008,22 @@ class McpHubService:
         )
         return updated or row
 
+    async def _resolve_binding_credential_ref(
+        self,
+        *,
+        slot_name: str | None,
+        managed_secret_ref_id: int | None,
+    ) -> str:
+        if managed_secret_ref_id is None:
+            return "slot" if slot_name else "server"
+
+        managed_refs_repo = ManagedSecretRefsRepo(self.repo.db_pool)
+        await managed_refs_repo.ensure_tables()
+        ref = await managed_refs_repo.get_ref(int(managed_secret_ref_id))
+        if not ref:
+            raise BadRequestError("Managed secret ref not found")
+        return encode_managed_secret_credential_ref(int(ref["id"]))
+
     async def list_profile_credential_bindings(
         self,
         *,
@@ -3019,6 +3041,7 @@ class McpHubService:
         profile_id: int,
         external_server_id: str,
         slot_name: str | None = None,
+        managed_secret_ref_id: int | None = None,
         actor_id: int | None,
     ) -> dict[str, Any]:
         target_row = await self._resolve_binding_target(binding_target_type="profile", binding_target_id=profile_id)
@@ -3026,12 +3049,16 @@ class McpHubService:
         if not server_row:
             raise ResourceNotFoundError("mcp_external_server", identifier=external_server_id)
         self._validate_binding_scope(server_row=server_row, target_row=target_row)
+        credential_ref = await self._resolve_binding_credential_ref(
+            slot_name=slot_name,
+            managed_secret_ref_id=managed_secret_ref_id,
+        )
         row = await self.repo.upsert_credential_binding(
             binding_target_type="profile",
             binding_target_id=str(profile_id),
             external_server_id=external_server_id,
             slot_name=slot_name,
-            credential_ref="slot" if slot_name else "server",
+            credential_ref=credential_ref,
             binding_mode="grant",
             usage_rules={},
             actor_id=actor_id,
@@ -3046,6 +3073,7 @@ class McpHubService:
                     "external_server_id": external_server_id,
                     "slot_name": slot_name,
                     "binding_mode": "grant",
+                    "managed_secret_ref_id": managed_secret_ref_id,
                     **(
                         await self._binding_audit_privilege_metadata(
                             external_server_id=external_server_id,
@@ -3102,6 +3130,7 @@ class McpHubService:
         external_server_id: str,
         slot_name: str | None = None,
         binding_mode: str,
+        managed_secret_ref_id: int | None = None,
         actor_id: int | None,
     ) -> dict[str, Any]:
         target_row = await self._resolve_binding_target(binding_target_type="assignment", binding_target_id=assignment_id)
@@ -3109,12 +3138,16 @@ class McpHubService:
         if not server_row:
             raise ResourceNotFoundError("mcp_external_server", identifier=external_server_id)
         self._validate_binding_scope(server_row=server_row, target_row=target_row)
+        credential_ref = await self._resolve_binding_credential_ref(
+            slot_name=slot_name,
+            managed_secret_ref_id=managed_secret_ref_id if binding_mode == "grant" else None,
+        )
         row = await self.repo.upsert_credential_binding(
             binding_target_type="assignment",
             binding_target_id=str(assignment_id),
             external_server_id=external_server_id,
             slot_name=slot_name,
-            credential_ref="slot" if slot_name else "server",
+            credential_ref=credential_ref,
             binding_mode=binding_mode,
             usage_rules={},
             actor_id=actor_id,
@@ -3129,6 +3162,7 @@ class McpHubService:
                     "external_server_id": external_server_id,
                     "slot_name": slot_name,
                     "binding_mode": binding_mode,
+                    "managed_secret_ref_id": managed_secret_ref_id if binding_mode == "grant" else None,
                     **(
                         await self._binding_audit_privilege_metadata(
                             external_server_id=external_server_id,
