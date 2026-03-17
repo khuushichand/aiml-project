@@ -1070,6 +1070,217 @@ test.describe("KnowledgeQA Workflow", () => {
 
       await assertNoCriticalErrors(diagnostics)
     })
+
+    test("branches from a prior turn on the thread permalink route", async ({
+      authedPage,
+      diagnostics
+    }) => {
+      qaPage = new KnowledgeQAPage(authedPage)
+      let branchCreatePayload: {
+        parent_conversation_id?: string
+        forked_from_message_id?: string
+        title?: string
+      } | null = null
+
+      await authedPage.route("**/api/v1/config/docs-info", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            info: { version: "e2e" },
+            capabilities: {}
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            conversations: [
+              {
+                id: "source-thread-1",
+                title: "Knowledge QA",
+                keywords: ["__knowledge_QA__"],
+                message_count: 4,
+                last_modified: "2026-02-19T08:01:02.000Z"
+              }
+            ]
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/characters/search?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 1,
+              name: "Helpful AI Assistant"
+            }
+          ])
+        })
+      })
+
+      await authedPage.route(
+        "**/api/v1/chat/conversations/*/messages-with-context?*",
+        async (route) => {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify([
+              {
+                id: "u1",
+                role: "user",
+                content: "Branch source question",
+                created_at: "2026-02-19T08:00:00.000Z"
+              },
+              {
+                id: "a1",
+                role: "assistant",
+                content: "Branch source answer [1]",
+                created_at: "2026-02-19T08:00:02.000Z",
+                rag_context: {
+                  search_query: "Branch source question",
+                  generated_answer: "Branch source answer [1]",
+                  retrieved_documents: [
+                    {
+                      id: "doc-a1",
+                      title: "Source A",
+                      excerpt: "Alpha"
+                    }
+                  ]
+                }
+              },
+              {
+                id: "u2",
+                role: "user",
+                content: "Latest question",
+                created_at: "2026-02-19T08:01:00.000Z"
+              },
+              {
+                id: "a2",
+                role: "assistant",
+                content: "Latest answer [1]",
+                created_at: "2026-02-19T08:01:02.000Z",
+                rag_context: {
+                  search_query: "Latest question",
+                  generated_answer: "Latest answer [1]",
+                  retrieved_documents: [
+                    {
+                      id: "doc-a2",
+                      title: "Source B",
+                      excerpt: "Beta"
+                    }
+                  ]
+                }
+              }
+            ])
+          })
+        }
+      )
+
+      await authedPage.route("**/api/v1/chats/", async (route) => {
+        branchCreatePayload = route.request().postDataJSON() as {
+          parent_conversation_id?: string
+          forked_from_message_id?: string
+          title?: string
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "branch-thread-1",
+            title: "Branch: Branch source question",
+            version: 1,
+            state: "in-progress",
+            created_at: "2026-02-19T10:00:00.000Z"
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations/branch-thread-1", async (route) => {
+        const method = route.request().method()
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body:
+            method === "GET"
+              ? JSON.stringify({
+                  id: "branch-thread-1",
+                  version: 1
+                })
+              : JSON.stringify({
+                  success: true
+                })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chats/*/messages", async (route) => {
+        const payload = route.request().postDataJSON() as {
+          role?: string
+          content?: string
+        }
+        const suffix = payload?.role === "assistant" ? "a1" : "u1"
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: `branch-${suffix}`,
+            role: payload?.role || "user",
+            content: payload?.content || "",
+            created_at:
+              payload?.role === "assistant"
+                ? "2026-02-19T10:00:02.000Z"
+                : "2026-02-19T10:00:01.000Z"
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/messages/*/rag-context", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: true
+          })
+        })
+      })
+
+      await authedPage.goto("/knowledge/thread/source-thread-1", {
+        waitUntil: "domcontentloaded"
+      })
+      await waitForConnection(authedPage)
+      await qaPage.waitForReady()
+      await qaPage.waitForResults()
+
+      await expect(
+        authedPage.getByRole("heading", { name: /Conversation Thread \(1 prior turn\)/i })
+      ).toBeVisible()
+      await expect(
+        authedPage.getByRole("button", { name: /^Start Branch$/i })
+      ).toBeVisible()
+
+      await authedPage.getByRole("button", { name: /^Start Branch$/i }).click()
+
+      await expect
+        .poll(() => branchCreatePayload, { timeout: 10_000 })
+        .toMatchObject({
+          parent_conversation_id: "source-thread-1",
+          forked_from_message_id: "u1"
+        })
+
+      const searchInput = await qaPage.getSearchInput()
+      await expect(searchInput).toHaveValue("Branch source question")
+      await expect(authedPage.getByTestId("knowledge-answer-content")).toContainText(
+        /Branch source answer/i
+      )
+      await expect(authedPage.getByText(/Branch created from selected turn/i)).toBeVisible()
+
+      await assertNoCriticalErrors(diagnostics)
+    })
   })
 
   // ═════════════════════════════════════════════════════════════════════

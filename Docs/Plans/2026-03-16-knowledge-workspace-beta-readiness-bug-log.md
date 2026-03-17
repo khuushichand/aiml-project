@@ -191,10 +191,29 @@
   - Added a deterministic route-level Playwright case that hydrates a server-backed thread, opens the export dialog from the real results shell, creates a share link, asserts the request payload uses `permission: "view"`, and revokes the resulting link.
   - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "opens the export dialog and manages share links for a server-backed thread" --reporter=line --workers=1` => `1 passed (3.8s)`
 
+### KQ-009: Branch-from-turn behavior had provider coverage but no route-level proof
+
+- Status: Resolved as test hardening
+- Route: `/knowledge/thread/:threadId`
+- Feature: branching from a prior turn into a child KnowledgeQA thread
+- Reproduction:
+  1. Open a server-backed thread permalink containing at least two user turns
+  2. Click `Start Branch` on the earlier turn
+  3. Observe that the prior suite only had provider/component coverage and did not prove the route could hydrate the thread, expose the action, and seed the child branch correctly
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts:1074`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/ConversationThread.test.tsx`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/KnowledgeQAProvider.branch-share.test.tsx`
+- Suspected layer: audit gap rather than a confirmed product defect
+- Why it matters: branching is part of the current KnowledgeQA workflow, and component tests alone do not prove the permalink route and persistence wiring create the expected child thread state
+- Resolution:
+  - Added a deterministic route-level Playwright case that hydrates `/knowledge/thread/source-thread-1`, clicks `Start Branch`, asserts the child-thread creation payload includes `parent_conversation_id` and `forked_from_message_id`, and verifies the UI rehydrates to the seeded branch turn.
+  - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1` => `1 passed (6.6s)`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
-- Current `/knowledge` offline-protected summary after repairs: `8 passed`, `13 skipped`, `0 failed`
+- Current `/knowledge` offline-protected summary after repairs: `9 passed`, `13 skipped`, `0 failed`
 - Last full live-backed `/knowledge` summary before the API listener dropped: `17 passed`, `0 failed`
 - Current `/knowledge` verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
 - Current `/knowledge` failure-cluster verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "treats whitespace-only answers as no generated answer|should open settings panel|should switch between presets|should toggle expert mode|should open history sidebar|should start new search with Cmd\\+K" --reporter=line --workers=1`
@@ -207,8 +226,10 @@
 - Current `/knowledge` export/share verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` shared-permalink verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "hydrates shared conversations from tokenized knowledge routes" --reporter=line --workers=1`
 - Current `/knowledge` shared-permalink verification summary: `1 passed`, `0 failed`
+- Current `/knowledge` branch verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
+- Current `/knowledge` branch verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `2 passed`, `0 failed`
 - Last three-spec audit rerun before the later `/knowledge` additions: `24 passed`, `0 failed`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
-- Live-backend caveat for the current session: the local API listener later dropped, and direct restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures; the handoff, citation, export/share, and shared-permalink additions were therefore verified deterministically, and the current full `/knowledge` rerun reflects offline-protected pass/skip behavior rather than a fresh live rerun
+- Live-backend caveat for the current session: the local API listener later dropped, and direct restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures; the handoff, citation, export/share, shared-permalink, and branch additions were therefore verified deterministically, and the current full `/knowledge` rerun reflects offline-protected pass/skip behavior rather than a fresh live rerun

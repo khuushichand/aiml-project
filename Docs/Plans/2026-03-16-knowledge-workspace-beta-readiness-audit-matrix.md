@@ -37,7 +37,7 @@
 | `/knowledge` | Workspace handoff from answer panel | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/AnswerPanel.workspace-handoff.test.tsx` | Mock-only | Route-level deterministic Playwright now proves answer-panel click, `/workspace-playground` navigation, source prefill selection, and imported note content | Promote to live once backend preflight is stable again |
 | `/knowledge` | Export dialog and share-link management | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/ExportDialog.a11y.test.tsx` | Mock-only | Deterministic route test now proves export dialog open plus share-link create/revoke on a server-backed thread | Promote to live once backend preflight is stable again |
 | `/knowledge` | Shared permalink hydration | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, provider/component tests | Mock-only | Deterministic route test now proves `/knowledge/shared/:token` resolves into hydrated query/answer/results, and the missing Next deep-link pages were added so direct links no longer 404 before React mounts | Promote to live once backend preflight is stable again |
-| `/knowledge` | Branch from conversation turn | provider/component tests only | Missing | `ConversationThread` and provider tests cover the action, but no route-level proof that branching persists and reloads correctly | Add deterministic route coverage, then promote to live once backend is stable |
+| `/knowledge` | Branch from conversation turn | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, provider/component tests | Mock-only | Deterministic route test now proves `/knowledge/thread/:threadId` hydrates a multi-turn thread, exposes `Start Branch`, and creates a child thread seeded from the selected turn | Promote to live once backend preflight is stable again |
 | `/knowledge` | Citation-to-source coherence | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Deterministic route test clicks `Jump to source 2`, then asserts the citation becomes current and focus transfers to `#source-card-1` while source 1 loses focus | Promote to live once backend preflight is stable again |
 
 ## `/workspace-playground`
@@ -78,7 +78,7 @@
 ## Current Route Verification
 
 - `/knowledge` command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
-- `/knowledge` current offline-protected outcome: `8 passed`, `13 skipped`, `0 failed`, runtime about `26.7s`
+- `/knowledge` current offline-protected outcome: `9 passed`, `13 skipped`, `0 failed`, runtime about `23.5s`
 - `/knowledge` last full live-backed outcome before the local API listener dropped: `17 passed`, `0 failed`, runtime about `59.3s`
 - `/knowledge` net effect:
   - removed stale selector failures from settings and history flows
@@ -87,6 +87,7 @@
   - isolated the whitespace-only mock case from live bootstrap dependencies
   - added deterministic export/share route coverage for server-backed KnowledgeQA threads
   - fixed direct `/knowledge/shared/:token` deep links by wiring the missing Next page routes and added deterministic shared-permalink hydration coverage
+  - added deterministic `/knowledge/thread/:threadId` branch coverage seeded from a multi-turn server thread
   - upgraded settings/history checks from permissive smoke tests to route-scoped behavioral assertions, with preflight skips when live backend is unavailable
 - `/knowledge` targeted handoff command:
   - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "should carry answer context into workspace route" --reporter=line --workers=1`
@@ -103,6 +104,10 @@
 - `/knowledge` targeted shared-permalink command:
   - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "hydrates shared conversations from tokenized knowledge routes" --reporter=line --workers=1`
   - outcome: `1 passed`, runtime about `8.8s`
+  - classification note: this is deterministic route coverage, not live-backend coverage
+- `/knowledge` targeted branch command:
+  - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
+  - outcome: `1 passed`, runtime about `6.6s`
   - classification note: this is deterministic route coverage, not live-backend coverage
 - `/workspace-playground` real-backend command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1`
 - `/workspace-playground` real-backend outcome after repairs: `2 passed`, `0 failed`, runtime about `6.0s`
