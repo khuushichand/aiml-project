@@ -966,6 +966,110 @@ test.describe("KnowledgeQA Workflow", () => {
 
       await assertNoCriticalErrors(diagnostics)
     })
+
+    test("hydrates shared conversations from tokenized knowledge routes", async ({
+      authedPage,
+      diagnostics
+    }) => {
+      qaPage = new KnowledgeQAPage(authedPage)
+      let resolvedShareToken = ""
+
+      await authedPage.route("**/api/v1/config/docs-info", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            info: { version: "e2e" },
+            capabilities: {}
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            conversations: []
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/characters/search?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 1,
+              name: "Helpful AI Assistant"
+            }
+          ])
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/shared/conversations/*", async (route) => {
+        const rawToken = route.request().url().split("/").pop() || ""
+        resolvedShareToken = decodeURIComponent(rawToken)
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            conversation_id: "shared-thread-9",
+            permission: "view",
+            shared_by_user_id: "1",
+            expires_at: "2030-01-01T00:00:00Z",
+            messages: [
+              {
+                id: "shared-u1",
+                role: "user",
+                content: "Shared question",
+                created_at: "2026-02-19T09:00:00.000Z"
+              },
+              {
+                id: "shared-a1",
+                role: "assistant",
+                content: "Shared answer [1]",
+                created_at: "2026-02-19T09:00:02.000Z",
+                rag_context: {
+                  search_query: "Shared question",
+                  generated_answer: "Shared answer [1]",
+                  retrieved_documents: [
+                    {
+                      id: "doc-1",
+                      title: "Shared source",
+                      excerpt: "Evidence from the shared thread."
+                    }
+                  ]
+                }
+              }
+            ]
+          })
+        })
+      })
+
+      await authedPage.goto("/knowledge/shared/share-token-route", {
+        waitUntil: "domcontentloaded"
+      })
+      await waitForConnection(authedPage)
+      await qaPage.waitForReady()
+      await qaPage.waitForResults()
+
+      await expect
+        .poll(() => resolvedShareToken, { timeout: 10_000 })
+        .toBe("share-token-route")
+      const searchInput = await qaPage.getSearchInput()
+      await expect(searchInput).toHaveValue("Shared question")
+      await expect(authedPage.getByTestId("knowledge-answer-content")).toContainText(
+        /Shared answer/i
+      )
+      await expect(
+        qaPage.getEvidencePanel().getByRole("heading", { name: /Shared source/i })
+      ).toBeVisible()
+      await expect(authedPage.getByRole("button", { name: /^Export$/i })).toBeVisible()
+
+      await assertNoCriticalErrors(diagnostics)
+    })
   })
 
   // ═════════════════════════════════════════════════════════════════════

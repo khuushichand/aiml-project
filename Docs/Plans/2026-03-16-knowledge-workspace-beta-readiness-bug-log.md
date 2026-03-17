@@ -73,6 +73,26 @@
     - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "supports core workspace interactions with live API context" --repeat-each 5 --reporter=line --workers=1` => `5 passed (22.3s)`
     - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `2 passed (6.0s)`
 
+### KQ-008: Shared KnowledgeQA links 404 because the Next app did not serve the deep-link routes
+
+- Status: Resolved in audit worktree
+- Route: `/knowledge/shared/:shareToken`
+- Feature: opening shared KnowledgeQA conversations from direct permalink URLs
+- Reproduction:
+  1. Open a direct browser URL like `/knowledge/shared/share-token-route`
+  2. Observe that the Next app renders the route-not-found page before React can mount KnowledgeQA
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts:970`
+  - `apps/tldw-frontend/test-results/workflows-knowledge-qa-Kno-bfcba--tokenized-knowledge-routes-chromium/error-context.md`
+  - `apps/tldw-frontend/pages/knowledge.tsx`
+  - `apps/packages/ui/src/routes/route-registry.tsx:672`
+- Suspected layer: Next page routing missing deep-link entry points even though the shared UI route registry supports them
+- Why it matters: beta users opening a shared KnowledgeQA link would land on a 404 page, which breaks the share feature outright
+- Resolution:
+  - Added Next page entry points for both `/knowledge/shared/[shareToken]` and `/knowledge/thread/[threadId]`, each dynamically mounting the KnowledgeQA route.
+  - Added deterministic Playwright coverage that resolves a shared token into hydrated query, answer, and evidence state from the direct `/knowledge/shared/:token` URL.
+  - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "hydrates shared conversations from tokenized knowledge routes" --reporter=line --workers=1` => `1 passed (8.8s)`
+
 ## P2
 
 ### KQ-001: Mocked delayed-loading test asserts on brittle answer text rather than stable route behavior
@@ -174,7 +194,7 @@
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
-- Current `/knowledge` offline-protected summary after repairs: `7 passed`, `13 skipped`, `0 failed`
+- Current `/knowledge` offline-protected summary after repairs: `8 passed`, `13 skipped`, `0 failed`
 - Last full live-backed `/knowledge` summary before the API listener dropped: `17 passed`, `0 failed`
 - Current `/knowledge` verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
 - Current `/knowledge` failure-cluster verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "treats whitespace-only answers as no generated answer|should open settings panel|should switch between presets|should toggle expert mode|should open history sidebar|should start new search with Cmd\\+K" --reporter=line --workers=1`
@@ -185,8 +205,10 @@
 - Current `/knowledge` citation/source verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` export/share verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "opens the export dialog and manages share links for a server-backed thread" --reporter=line --workers=1`
 - Current `/knowledge` export/share verification summary: `1 passed`, `0 failed`
+- Current `/knowledge` shared-permalink verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "hydrates shared conversations from tokenized knowledge routes" --reporter=line --workers=1`
+- Current `/knowledge` shared-permalink verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `2 passed`, `0 failed`
 - Last three-spec audit rerun before the later `/knowledge` additions: `24 passed`, `0 failed`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
-- Live-backend caveat for the current session: the local API listener later dropped, and direct restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures; the handoff, citation, and export/share additions were therefore verified deterministically, and the current full `/knowledge` rerun reflects offline-protected pass/skip behavior rather than a fresh live rerun
+- Live-backend caveat for the current session: the local API listener later dropped, and direct restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures; the handoff, citation, export/share, and shared-permalink additions were therefore verified deterministically, and the current full `/knowledge` rerun reflects offline-protected pass/skip behavior rather than a fresh live rerun
