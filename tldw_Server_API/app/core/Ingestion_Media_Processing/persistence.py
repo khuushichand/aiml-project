@@ -24,6 +24,9 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     persist_claims_if_applicable,
 )
 from tldw_Server_API.app.core.config import loaded_config_data, settings
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_media_database,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     ConflictError,
     DatabaseError,
@@ -3100,7 +3103,10 @@ async def persist_primary_av_item(
         def _db_worker() -> Any:
             worker_db: MediaDatabase | None = None
             try:
-                worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+                worker_db = create_media_database(
+                    client_id,
+                    db_path=db_path,
+                )
                 media_writer = _resolve_media_writer(worker_db)
                 return media_writer.add_media_with_keywords(**db_add_kwargs)
             finally:
@@ -3169,7 +3175,10 @@ async def persist_primary_av_item(
                 serialized_artifact = json.dumps(artifact, default=str)
 
                 def _upsert_worker() -> None:
-                    db = MediaDatabase(db_path=db_path, client_id=client_id)
+                    db = create_media_database(
+                        client_id,
+                        db_path=db_path,
+                    )
                     try:
                         upsert_transcript(
                             db_instance=db,

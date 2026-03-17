@@ -57,6 +57,10 @@ class _FakeMediaRepository:
         return idx, f"uuid-{idx}", f"Media '{kwargs.get('title')}' added."
 
 
+def _fake_create_media_database(*_args: Any, **_kwargs: Any) -> _RepoBackedWorkerDB:
+    return _RepoBackedWorkerDB()
+
+
 @pytest.mark.asyncio
 async def test_chunk_consistency_warn_policy_adds_warning_and_metric(
     monkeypatch: pytest.MonkeyPatch,
@@ -211,7 +215,18 @@ async def test_persist_primary_av_item_invokes_chunk_consistency_check(
         _fake_enforce,
     )
     monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
-    monkeypatch.setattr(ingestion_persistence, "MediaDatabase", _RepoBackedWorkerDB)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("persist_primary_av_item should not construct MediaDatabase directly")
+        ),
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
     monkeypatch.setattr(
         ingestion_persistence,
         "get_media_repository",
@@ -282,7 +297,18 @@ async def test_persist_primary_av_item_upserts_normalized_transcript_via_extract
         _fake_enforce,
     )
     monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
-    monkeypatch.setattr(ingestion_persistence, "MediaDatabase", _RepoBackedWorkerDB)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("persist_primary_av_item should not construct MediaDatabase directly")
+        ),
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
     monkeypatch.setattr(
         ingestion_persistence,
         "get_media_repository",
