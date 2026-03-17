@@ -10,6 +10,7 @@ from tldw_Server_API.app.core.Claims_Extraction import (
     claims_notifications,
     claims_rebuild_service,
     claims_service,
+    claims_utils,
 )
 from tldw_Server_API.app.core.Evaluations import embeddings_abtest_jobs_worker
 from tldw_Server_API.app.core.Embeddings.services import (
@@ -189,6 +190,11 @@ def test_workflow_media_ingest_imports_managed_media_database_from_media_db_api(
 
 def test_visual_ingestion_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(visual_ingestion)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_claims_utils_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(claims_utils)
     assert module.managed_media_database is media_db_api.managed_media_database
 
 

@@ -4,10 +4,10 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 23
+- Raw `MediaDatabase(...)` constructors in app code: 22
 - Operational `create_media_database(...)` call sites in app code: 28
-- Operational `managed_media_database(...)` call sites in app code: 14
-- `Media_DB_v2` references in app code: 141
+- Operational `managed_media_database(...)` call sites in app code: 20
+- `Media_DB_v2` references in app code: 140
 
 Notes:
 
@@ -38,6 +38,7 @@ Notes:
 | `app/core/MCP_unified/modules/implementations/quizzes_module.py` | 1 | `MOVE_MANAGED` already satisfied | Local media lookup for quiz generation now uses the managed helper with `initialize=False` |
 | `app/core/Workflows/adapters/media/ingest.py` | 1 | `MOVE_MANAGED` already satisfied | Local workflow indexing now scopes its DB write through the managed helper with `initialize=False` |
 | `app/core/Ingestion_Media_Processing/visual_ingestion.py` | 1 | `MOVE_MANAGED` already satisfied | Visual document persistence now scopes its DB writes through the managed helper with `initialize=False` |
+| `app/core/Claims_Extraction/claims_utils.py` | 1 | `MOVE_MANAGED` already satisfied | Claims persistence worker now scopes its DB writes through the managed helper with `initialize=False` and close-error suppression |
 
 ## Operational `create_media_database(...)` Inventory
 
@@ -72,7 +73,6 @@ Notes:
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | local claims persistence fallback | `MOVE_MANAGED` | local scope, no clear reason to stay raw |
-| `app/core/Claims_Extraction/claims_utils.py` | 1 | local worker DB and close | `MOVE_MANAGED` | candidate for helper or direct managed conversion |
 | `app/core/Claims_Extraction/claims_service.py` | 4 | cross-user SQLite override DBs | `NEW_HELPER` | needs one dedicated override helper, not four duplicated constructors |
 | `app/core/Chunking/template_initialization.py` | 3 | optional startup DB owner when `db is None` | `MOVE_FACTORY` | preserve explicit owner behavior but stop raw constructor use |
 | `app/core/Sync/Sync_Client.py` | 1 | long-lived client sync owner | `KEEP_RAW` | explicit owner lifecycle is part of the design |
