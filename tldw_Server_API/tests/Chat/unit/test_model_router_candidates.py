@@ -37,3 +37,45 @@ def test_candidate_pool_uses_admin_order_when_quality_rank_missing():
 
     assert chosen is not None
     assert chosen.model == "gpt-4.1"
+
+
+@pytest.mark.unit
+def test_candidate_pool_rejects_unknown_context_window_when_minimum_is_required():
+    candidates = build_candidate_pool(
+        boundary_mode="cross_provider",
+        requested_capabilities={"context_window": 64000},
+        catalog=[
+            {"provider": "openai", "model": "gpt-4.1-mini", "context_window": None},
+            {"provider": "anthropic", "model": "claude-sonnet-4.5", "context_window": 200000},
+        ],
+    )
+
+    assert [(candidate.provider, candidate.model) for candidate in candidates] == [
+        ("anthropic", "claude-sonnet-4.5"),
+    ]
+
+
+@pytest.mark.unit
+def test_choose_ranked_candidate_balances_quality_latency_and_cost():
+    chosen = choose_ranked_candidate(
+        candidates=[
+            {
+                "provider": "provider-a",
+                "model": "quality-only",
+                "quality_rank": 10,
+                "latency_rank": 90,
+                "cost_rank": 90,
+            },
+            {
+                "provider": "provider-b",
+                "model": "balanced-winner",
+                "quality_rank": 30,
+                "latency_rank": 20,
+                "cost_rank": 20,
+            },
+        ],
+        objective="balanced",
+    )
+
+    assert chosen is not None
+    assert chosen.model == "balanced-winner"

@@ -181,8 +181,12 @@ def apply_llm_provider_overrides_to_listing(payload: dict[str, Any]) -> dict[str
             merged["models_info"] = filtered_info
         if isinstance(merged.get("models_info"), list) and preferred_order:
             order_index = {name: index for index, name in enumerate(preferred_order)}
+            models_info_entries = [
+                model_info for model_info in merged["models_info"]
+                if isinstance(model_info, dict)
+            ]
             merged["models_info"] = sorted(
-                merged["models_info"],
+                models_info_entries,
                 key=lambda model_info: (
                     order_index.get(str(model_info.get("name") or ""), len(order_index)),
                     str(model_info.get("name") or ""),

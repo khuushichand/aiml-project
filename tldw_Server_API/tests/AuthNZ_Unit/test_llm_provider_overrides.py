@@ -104,3 +104,42 @@ def test_get_override_model_priority_reads_routing_rankings() -> None:
     ] == ["gpt-4.1", "gpt-4.1-mini"]
 
     set_llm_provider_overrides_cache_for_tests({})
+
+
+def test_apply_overrides_sorts_models_info_without_crashing_on_non_dict_entries() -> None:
+    set_llm_provider_overrides_cache_for_tests(
+        {
+            "openai": LLMProviderOverride(
+                provider="openai",
+                config={
+                    "routing": {
+                        "model_rankings": {
+                            "highest_quality": ["gpt-4.1", "gpt-4.1-mini"],
+                        }
+                    }
+                },
+            )
+        }
+    )
+
+    updated = apply_llm_provider_overrides_to_listing(
+        {
+            "providers": [
+                {
+                    "name": "openai",
+                    "models_info": [
+                        None,
+                        {"name": "gpt-4.1-mini"},
+                        "broken",
+                        {"name": "gpt-4.1"},
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert [
+        model["name"] for model in updated["providers"][0]["models_info"]
+    ] == ["gpt-4.1", "gpt-4.1-mini"]
+
+    set_llm_provider_overrides_cache_for_tests({})

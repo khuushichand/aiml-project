@@ -1096,14 +1096,8 @@ def resolve_provider_and_model(
     provider_explicit = bool(str(raw_api_provider or "").strip())
 
     if routing_decision is not None and routing_decision.canonical:
-        try:
-            setattr(request_data, "api_provider", routing_decision.provider)
-        except _CHAT_NONCRITICAL_EXCEPTIONS:
-            pass
-        try:
-            setattr(request_data, "model", routing_decision.model)
-        except _CHAT_NONCRITICAL_EXCEPTIONS:
-            pass
+        request_data.api_provider = routing_decision.provider
+        request_data.model = routing_decision.model
 
         debug_info: dict[str, Any] = {
             "raw": {

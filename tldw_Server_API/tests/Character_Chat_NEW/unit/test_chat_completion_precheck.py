@@ -275,3 +275,44 @@ def test_complete_v2_auto_model_routes_before_strict_availability_check(
         "model": "local-test-routed",
         "streaming": False,
     }
+
+
+@pytest.mark.unit
+def test_complete_v2_rejects_routing_overrides_for_non_auto_models(
+    test_client,
+    auth_headers,
+):
+    char_resp = test_client.post(
+        "/api/v1/characters/",
+        json={
+            "name": "RoutingValidatorCharacter",
+            "description": "",
+            "personality": "",
+            "first_message": "Hello there",
+        },
+        headers=auth_headers,
+    )
+    assert char_resp.status_code == 201
+    char_id = char_resp.json()["id"]
+
+    chat_resp = test_client.post(
+        "/api/v1/chats/",
+        json={"character_id": char_id, "title": "Routing validator"},
+        headers=auth_headers,
+    )
+    assert chat_resp.status_code == 201
+    chat_id = chat_resp.json()["id"]
+
+    resp = test_client.post(
+        f"/api/v1/chats/{chat_id}/complete-v2",
+        json={
+            "model": "local-test",
+            "routing": {"mode": "per_turn"},
+            "append_user_message": "Hello",
+            "stream": False,
+            "include_character_context": False,
+        },
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 422

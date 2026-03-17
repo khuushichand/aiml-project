@@ -211,3 +211,150 @@ def test_chat_endpoint_auto_routing_runs_llm_router_logs_usage_and_wires_sticky_
     }
     assert captured["router_call"]["model"] == "anthropic/claude-4.5-sonnet"
     assert captured["router_usage"][0]["provider"] == "openrouter"
+
+
+@pytest.mark.integration
+def test_chat_endpoint_disables_provider_fallback_for_pinned_provider_auto_routing(
+    authenticated_client,
+    mock_chacha_db,
+    setup_dependencies,
+):
+    request_data = ChatCompletionRequest(
+        model="auto",
+        api_provider="openai",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Route inside OpenAI")],
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_execute_non_stream_call(**kwargs):
+        captured["enable_provider_fallback"] = kwargs.get("enable_provider_fallback")
+        return {
+            "id": "chatcmpl-auto-routing",
+            "object": "chat.completion",
+            "model": kwargs.get("model"),
+            "choices": [
+                {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+            ],
+        }
+
+    with (
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.route_model",
+            return_value=RoutingDecision(
+                provider="openai",
+                model="gpt-4.1-mini",
+                canonical=True,
+                decision_source="rules_router",
+            ),
+        ),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.get_configured_providers",
+            return_value={
+                "providers": [
+                    {
+                        "name": "openai",
+                        "default_model": "gpt-4.1-mini",
+                        "models_info": [
+                            {
+                                "name": "gpt-4.1-mini",
+                                "tool_support": True,
+                                "quality_rank": 10,
+                            }
+                        ],
+                    }
+                ],
+                "default_provider": "openai",
+            },
+        ),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.execute_non_stream_call",
+            side_effect=fake_execute_non_stream_call,
+        ),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS",
+            {"openai": "test-key"},
+        ),
+    ):
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+    assert response.status_code == status.HTTP_200_OK
+    assert captured["enable_provider_fallback"] is False
+
+
+@pytest.mark.integration
+def test_chat_endpoint_auto_routing_uses_post_validation_tool_capabilities(
+    authenticated_client,
+    mock_chacha_db,
+    setup_dependencies,
+):
+    request_data = ChatCompletionRequest(
+        model="auto",
+        messages=[ChatCompletionUserMessageParam(role="user", content="Route after tool injection")],
+    )
+    captured: dict[str, object] = {}
+
+    def fake_route_model(**kwargs):
+        captured["requested_capabilities"] = kwargs["request"].requested_capabilities
+        return RoutingDecision(
+            provider="openai",
+            model="gpt-4.1-mini",
+            canonical=True,
+            decision_source="rules_router",
+        )
+
+    async def fake_execute_non_stream_call(**kwargs):
+        return {
+            "id": "chatcmpl-auto-routing",
+            "object": "chat.completion",
+            "model": kwargs.get("model"),
+            "choices": [
+                {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+            ],
+        }
+
+    with (
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.route_model",
+            side_effect=fake_route_model,
+        ),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.get_configured_providers",
+            return_value={
+                "providers": [
+                    {
+                        "name": "openai",
+                        "default_model": "gpt-4.1-mini",
+                        "models_info": [
+                            {
+                                "name": "gpt-4.1-mini",
+                                "tool_support": True,
+                                "quality_rank": 10,
+                            }
+                        ],
+                    }
+                ],
+                "default_provider": "openai",
+            },
+        ),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.add_skill_tool_to_tools_list",
+            return_value=[
+                {
+                    "type": "function",
+                    "function": {"name": "skills.lookup", "parameters": {"type": "object"}},
+                }
+            ],
+        ),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.execute_non_stream_call",
+            side_effect=fake_execute_non_stream_call,
+        ),
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS",
+            {"openai": "test-key"},
+        ),
+    ):
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
+
+    assert response.status_code == status.HTTP_200_OK
+    assert captured["requested_capabilities"]["tools"] is True

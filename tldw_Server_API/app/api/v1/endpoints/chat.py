@@ -2150,6 +2150,65 @@ async def create_chat_completion(
     )
     routing_decision = None
     routing_debug: dict[str, Any] | None = None
+
+    client_id = getattr(chat_db, 'client_id', 'unknown_client')
+
+    # Get user ID for rate limiting and audit (use authenticated user)
+    user_id = str(current_user.id) if current_user and getattr(current_user, 'id', None) is not None else client_id
+    user_base_dir = None
+    if current_user and getattr(current_user, "id", None) is not None:
+        try:
+            user_base_dir = DatabasePaths.get_user_base_directory(current_user.id)
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            user_base_dir = None
+
+    # Validate request payload using helper function before routing so auto model
+    # selection sees the finalized request shape, including validated/injected tools.
+    validation_start = time.time()
+    is_valid, error_message = await validate_request_payload(
+        request_data,
+        max_messages=MAX_MESSAGES_PER_REQUEST,
+        max_images=MAX_IMAGES_PER_REQUEST,
+        max_text_length=MAX_TEXT_LENGTH,
+        enforce_image_max_bytes=enforce_image_size,
+        max_image_bytes=max_image_bytes,
+    )
+    metrics.metrics.validation_duration.record(time.time() - validation_start)
+
+    if not is_valid:
+        metrics.track_validation_failure("payload", error_message)
+        logger.warning(f"Request validation failed: {error_message}")
+        if any(term in error_message.lower() for term in ("too many", "too long", "too large")):
+            raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
+
+    try:
+        if request_data.conversation_id:
+            request_data.conversation_id = validate_conversation_id(request_data.conversation_id)
+        if request_data.character_id:
+            request_data.character_id = validate_character_id(request_data.character_id)
+        if request_data.tools:
+            tools_as_dicts = [
+                tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool
+                for tool in request_data.tools
+            ]
+            provider_hint = request_data.api_provider or _get_default_provider()
+            request_data.tools = validate_tool_definitions(tools_as_dicts, provider=provider_hint)
+        if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
+            request_data.tools = add_skill_tool_to_tools_list(
+                request_data.tools,
+                user_id=current_user.id,
+                base_path=user_base_dir,
+                db=chat_db,
+            )
+        if request_data.temperature is not None:
+            request_data.temperature = validate_temperature(request_data.temperature)
+        if request_data.max_tokens is not None:
+            request_data.max_tokens = validate_max_tokens(request_data.max_tokens)
+    except ValueError as e:
+        logger.warning(f"Input validation error: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from e
+
     if auto_model_requested:
         routing_decision, routing_debug = await _resolve_auto_chat_routing_decision(
             request_data,
@@ -2180,8 +2239,9 @@ async def create_chat_completion(
                     "routing": routing_debug or {},
                 },
             )
+        if str((routing_debug or {}).get("policy", {}).get("boundary_mode") or "").strip().lower() == "pinned_provider":
+            allow_provider_fallback_for_request = False
 
-    # Resolve provider/model for both metrics and execution, and record decision path
     (
         metrics_provider,
         metrics_model,
@@ -2195,7 +2255,6 @@ async def create_chat_completion(
         routing_decision=routing_decision,
     )
 
-    # Use metrics_* for request-level metrics/audit; selected_* for downstream calls
     provider = metrics_provider
     model = metrics_model
     initial_provider = metrics_provider
@@ -2205,18 +2264,6 @@ async def create_chat_completion(
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as log_err:  # pragma: no cover - defensive
         logger.debug("Provider/model resolution logging skipped: {}", log_err)
 
-    client_id = getattr(chat_db, 'client_id', 'unknown_client')
-
-    # Get user ID for rate limiting and audit (use authenticated user)
-    user_id = str(current_user.id) if current_user and getattr(current_user, 'id', None) is not None else client_id
-    user_base_dir = None
-    if current_user and getattr(current_user, "id", None) is not None:
-        try:
-            user_base_dir = DatabasePaths.get_user_base_directory(current_user.id)
-        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            user_base_dir = None
-
-    # Initialize audit context for logging
     context = None
     if audit_service:
         try:
@@ -2237,14 +2284,12 @@ async def create_chat_completion(
                     "message_count": len(request_data.messages),
                     "streaming": request_data.stream,
                     "has_tools": bool(request_data.tools),
-                    "conversation_id": request_data.conversation_id
+                    "conversation_id": request_data.conversation_id,
                 }
             )
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as log_error:
             logger.warning(f"Failed to log audit event: {log_error}")
-            # Continue without logging rather than failing the request
 
-    # Log lightweight usage event for personalization (best-effort)
     try:
         usage_log.log_event(
             "chat.completions",
@@ -2254,11 +2299,6 @@ async def create_chat_completion(
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _usage_log_err:
         logger.debug(f"Usage event logging failed: {_usage_log_err}")
 
-    # Start tracking the request
-
-    # Resource Governor token reservation handle (endpoint-level). This is used to
-    # enforce token budgets with correct per-request units and to commit/refund
-    # after the completion is generated.
     _rg_handle_id = None
     _rg_policy_id = None
     rg_finalized = False
@@ -2273,56 +2313,6 @@ async def create_chat_completion(
     try:
         # Authentication is enforced via get_request_user dependency (JWT or X-API-KEY).
         # If it fails, FastAPI raises 401 before reaching here. No further checks needed.
-
-        # Validate request payload using helper function
-        validation_start = time.time()
-        is_valid, error_message = await validate_request_payload(
-            request_data,
-            max_messages=MAX_MESSAGES_PER_REQUEST,
-            max_images=MAX_IMAGES_PER_REQUEST,
-            max_text_length=MAX_TEXT_LENGTH,
-            enforce_image_max_bytes=enforce_image_size,
-            max_image_bytes=max_image_bytes,
-        )
-        metrics.metrics.validation_duration.record(time.time() - validation_start)
-
-        if not is_valid:
-            metrics.track_validation_failure("payload", error_message)
-            logger.warning(f"Request validation failed: {error_message}")
-            if any(term in error_message.lower() for term in ("too many", "too long", "too large")):
-                raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
-            else:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
-
-        # Validate specific fields with validators
-        try:
-            if request_data.conversation_id:
-                request_data.conversation_id = validate_conversation_id(request_data.conversation_id)
-            if request_data.character_id:
-                request_data.character_id = validate_character_id(request_data.character_id)
-            if request_data.tools:
-                # Convert ToolDefinition objects to dictionaries for validation
-                tools_as_dicts = [tool.model_dump(exclude_none=True) if hasattr(tool, 'model_dump') else tool
-                                  for tool in request_data.tools]
-                provider_hint = request_data.api_provider or _get_default_provider()
-                validated_tools = validate_tool_definitions(tools_as_dicts, provider=provider_hint)
-                # Keep the validated tools as dicts since that's what the LLM API expects
-                request_data.tools = validated_tools
-            if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
-                request_data.tools = add_skill_tool_to_tools_list(
-                    request_data.tools,
-                    user_id=current_user.id,
-                    base_path=user_base_dir,
-                    db=chat_db,
-                )
-            if request_data.temperature is not None:
-                request_data.temperature = validate_temperature(request_data.temperature)
-            if request_data.max_tokens is not None:
-                request_data.max_tokens = validate_max_tokens(request_data.max_tokens)
-
-        except ValueError as e:
-            logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from e
 
         # Slash command handling: compute, moderate, then optionally inject
         try:

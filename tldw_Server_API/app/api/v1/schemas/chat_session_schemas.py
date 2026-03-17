@@ -473,6 +473,12 @@ class CharacterChatCompletionV2Request(BaseModel):
     tool_choice: Optional[dict[str, Any]] = Field(None, description="Tool choice specification")
     stream: Optional[bool] = Field(False, description="If true, stream the assistant response (SSE)")
 
+    @model_validator(mode="after")
+    def _validate_routing_requires_auto_model(self) -> "CharacterChatCompletionV2Request":
+        if self.routing is not None and str(self.model or "").strip().lower() != "auto":
+            raise ValueError("routing overrides are only allowed when model='auto'")
+        return self
+
 
 class CharacterChatCompletionV2Response(BaseModel):
     chat_id: str

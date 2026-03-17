@@ -117,7 +117,9 @@ def _matches_capabilities(
         return False
 
     required_context = _to_optional_int(requested_capabilities.get("context_window"))
-    if required_context is not None and candidate.context_window is not None:
+    if required_context is not None:
+        if candidate.context_window is None:
+            return False
         if candidate.context_window < required_context:
             return False
 
@@ -176,7 +178,6 @@ def choose_ranked_candidate(
         "highest_quality": "quality_rank",
         "lowest_cost": "cost_rank",
         "lowest_latency": "latency_rank",
-        "balanced": "quality_rank",
     }.get(objective, "quality_rank")
 
     provider_order = provider_order or {}
@@ -188,12 +189,31 @@ def choose_ranked_candidate(
         except ValueError:
             return len(provider_models) if provider_models else 10_000
 
-    def _sort_key(candidate: RoutingCandidate) -> tuple[int, int, str, str]:
+    def _rank_or_max(value: int | None) -> int:
+        return value if value is not None else 10_000
+
+    def _sort_key(candidate: RoutingCandidate) -> tuple[int, ...]:
+        if objective == "balanced":
+            quality_rank = _rank_or_max(candidate.quality_rank)
+            latency_rank = _rank_or_max(candidate.latency_rank)
+            cost_rank = _rank_or_max(candidate.cost_rank)
+            return (
+                quality_rank + latency_rank + cost_rank,
+                quality_rank,
+                latency_rank,
+                cost_rank,
+                _admin_index(candidate),
+                0,
+                candidate.provider,
+                candidate.model,
+            )
+
         rank_value = getattr(candidate, rank_attr)
-        primary_rank = rank_value if rank_value is not None else 10_000
+        primary_rank = _rank_or_max(rank_value)
         return (
             primary_rank,
             _admin_index(candidate),
+            0,
             candidate.provider,
             candidate.model,
         )
