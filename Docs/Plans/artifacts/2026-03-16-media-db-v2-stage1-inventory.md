@@ -4,10 +4,10 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 22
+- Raw `MediaDatabase(...)` constructors in app code: 21
 - Operational `create_media_database(...)` call sites in app code: 28
 - Operational `managed_media_database(...)` call sites in app code: 20
-- `Media_DB_v2` references in app code: 140
+- `Media_DB_v2` references in app code: 139
 
 Notes:
 
@@ -47,6 +47,7 @@ Notes:
 | `app/core/Ingestion_Media_Processing/persistence.py` | 8 | repeated local worker/pre-check DB creation | `NEW_HELPER` | highest-priority lifecycle cleanup hotspot |
 | `app/services/document_processing_service.py` | 1 | local create/use/close in one function | `MOVE_MANAGED` | straightforward conversion candidate |
 | `app/services/media_ingest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | owner is the caller, not the helper |
+| `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | caller still owns sink DB lifetime |
 | `app/api/v1/endpoints/research.py` | 1 | deprecated helper creates local DB | `MOVE_MANAGED` | local ingest path, no reason to stay raw |
 | `app/core/Web_Scraping/Article_Extractor_Lib.py` | 1 | local create and ingest | `MOVE_MANAGED` | local scope; currently no obvious close in the helper |
 | `app/core/Workflows/adapters/knowledge/crud.py` | 2 | per-user lazy import path | `NEW_HELPER` | currently calls `create_media_database(user_id=...)`; signature mismatch hazard |
@@ -69,7 +70,6 @@ Notes:
 | --- | ---: | --- | --- | --- |
 | `app/services/tts_history_cleanup_service.py` | 2 | probe DB plus per-user loop DBs | `NEW_HELPER` | needs backend-aware cleanup helper, not a mechanical rewrite |
 | `app/services/connectors_worker.py` | 1 | per-sync DB reused across a large function | `NEW_HELPER` | better as a dedicated sync DB helper than an inlined raw constructor |
-| `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle | `MOVE_FACTORY` | returned owner should use factory, not raw constructor |
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | local claims persistence fallback | `MOVE_MANAGED` | local scope, no clear reason to stay raw |

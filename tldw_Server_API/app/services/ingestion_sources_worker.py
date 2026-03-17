@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
     build_archive_snapshot_from_bytes_with_failures,
     load_archive_artifact_bytes,
@@ -184,11 +185,9 @@ def _create_sink_db(*, sink_type: str, user_id: int):
             client_id=str(user_id),
         )
 
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    return MediaDatabase(
-        db_path=str(DatabasePaths.get_media_db_path(user_id)),
+    return create_media_database(
         client_id=str(user_id),
+        db_path=str(DatabasePaths.get_media_db_path(user_id)),
     )
 
 

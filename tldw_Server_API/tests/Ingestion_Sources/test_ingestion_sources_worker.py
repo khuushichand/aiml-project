@@ -65,6 +65,35 @@ class _SQLitePool:
         yield self._db
 
 
+@pytest.mark.unit
+def test_create_sink_db_uses_media_db_api_factory_for_media_sink(monkeypatch, tmp_path):
+    import tldw_Server_API.app.services.ingestion_sources_worker as worker
+
+    captured = {}
+    sentinel = object()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_media_db_path",
+        staticmethod(lambda user_id: tmp_path / f"user-{user_id}.sqlite3"),
+    )
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, **kwargs: captured.update(
+            {"client_id": client_id, **kwargs}
+        ) or sentinel,
+        raising=False,
+    )
+
+    result = worker._create_sink_db(sink_type="media", user_id=7)
+
+    assert result is sentinel
+    assert captured == {
+        "client_id": "7",
+        "db_path": str(tmp_path / "user-7.sqlite3"),
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_process_sync_job_local_directory_notes_source_creates_binding_and_snapshot(

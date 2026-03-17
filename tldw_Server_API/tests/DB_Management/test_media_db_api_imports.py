@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Proce
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
 from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
+from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import slides_module
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
@@ -95,6 +96,11 @@ def test_research_endpoint_imports_create_media_database_from_media_db_api():
 
 def test_xml_ingestion_imports_create_media_database_from_media_db_api():
     module = importlib.reload(XML_Ingestion_Lib)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_ingestion_sources_worker_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(ingestion_sources_worker)
     assert module.create_media_database is media_db_api.create_media_database
 
 
