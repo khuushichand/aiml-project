@@ -47,7 +47,8 @@
 | `/workspace-playground` | Pane collapse/restore | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts` | Mock-only | Pure UI exercise | Support coverage only |
 | `/workspace-playground` | Add Sources modal open/close | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts` | Mock-only | Modal shell only, no ingestion | Add live intake/ingestion test |
 | `/workspace-playground` | Boot against live backend | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed boot/bootstrap health check | Candidate for beta gate |
-| `/workspace-playground` | Source selection with seeded store data | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, real-backend spec | Misleading | Baseline mocked suite passed, but real interaction suite failed before pane toggle due blocking overlay | See `WP-001`; replace with live add-source path and robust interaction handling |
+| `/workspace-playground` | Live core interaction shell (workspace search, pane toggles, add-source modal open/close) | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Real-backend interaction flow now passes and the formerly flaky sequence is stable across `--repeat-each 5` | Resolved `WP-001`; candidate for beta gate |
+| `/workspace-playground` | Source selection with seeded store data | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, real-backend spec | Misleading | The route is stable again, but source selection still depends on store seeding rather than a real ingestion flow | Replace with live add-source path; keep current checks as support coverage only |
 | `/workspace-playground` | Chat grounding on selected source | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed grounding request assertions | Candidate for beta gate |
 | `/workspace-playground` | Studio compare-sources generation | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed compare-sources generation | Add cancel/recovery coverage |
 | `/workspace-playground` | Global search across live chat turns | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed live global-search flow | Candidate for broader live coverage |
@@ -80,3 +81,11 @@
   - removed stale selector failures from settings and history flows
   - replaced brittle mocked delayed-answer text assertion with rendered citation/evidence assertions
   - upgraded settings/history checks from permissive smoke tests to route-scoped behavioral assertions
+- `/workspace-playground` real-backend command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1`
+- `/workspace-playground` real-backend outcome after repairs: `2 passed`, `0 failed`, runtime about `6.0s`
+- `/workspace-playground` stability verification:
+  - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "supports core workspace interactions with live API context" --repeat-each 5 --reporter=line --workers=1`
+  - outcome: `5 passed`, `0 failed`, runtime about `22.3s`
+- Original three-spec audit rerun:
+  - command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1`
+  - outcome: `24 passed`, `0 failed`, runtime about `1.1m`

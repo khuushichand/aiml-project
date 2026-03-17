@@ -1253,6 +1253,13 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const handleSearchInputKeyDown = (
     event: React.KeyboardEvent<HTMLInputElement>
   ) => {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      closeGlobalSearch()
+      return
+    }
+
     if (event.key === "ArrowDown") {
       event.preventDefault()
       if (globalSearchResults.length === 0) return

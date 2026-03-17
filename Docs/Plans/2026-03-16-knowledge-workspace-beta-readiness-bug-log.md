@@ -51,6 +51,7 @@
 
 ### WP-001: Workspace live interaction flow is blocked by a fixed overlay intercepting pane controls
 
+- Status: Resolved in audit worktree
 - Route: `/workspace-playground`
 - Feature: hide/show sources and related core workspace interactions
 - Reproduction:
@@ -60,9 +61,17 @@
 - Evidence:
   - `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts:165`
   - `apps/tldw-frontend/e2e/utils/page-objects/WorkspacePlaygroundPage.ts:52`
-  - `test-results/workflows-workspace-playgr-4f79f-tions-with-live-API-context-chromium/error-context.md`
+  - repeated repro of the same failure during `--repeat-each 5`
 - Suspected layer: modal/backdrop cleanup, pointer-event interception, or brittle interaction helper logic in `WorkspacePlaygroundPage`
 - Why it matters: this breaks the current real-backend interaction suite and suggests the route can wedge on leftover overlays
+- Resolution:
+  - Reproduced the flake repeatedly and confirmed that the workspace search modal and command-palette backdrops could remain active across shortcut flows.
+  - Hardened `WorkspacePlaygroundPage` to wait for the actual workspace search input, clear leftover command-palette/modal backdrops, and avoid trial-clicking through active overlays.
+  - Fixed a real route bug in `WorkspacePlayground` so pressing `Escape` inside the workspace search input closes the modal.
+  - Verification:
+    - `bunx vitest run ../packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx` => `14 passed (14)`
+    - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "supports core workspace interactions with live API context" --repeat-each 5 --reporter=line --workers=1` => `5 passed (22.3s)`
+    - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `2 passed (6.0s)`
 
 ## P2
 
@@ -89,5 +98,7 @@
 - Baseline summary: `17 passed`, `7 failed`
 - Current `/knowledge` summary after repairs: `17 passed`, `0 failed`
 - Current `/knowledge` verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
+- Current `/workspace-playground` real-backend summary after repairs: `2 passed`, `0 failed`
+- Current three-spec audit rerun: `24 passed`, `0 failed`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run

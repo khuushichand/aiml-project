@@ -229,6 +229,28 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     })
   })
 
+  it("closes workspace search when Escape is pressed inside the search input", async () => {
+    render(<WorkspacePlayground />)
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true })
+
+    const dialog = await screen.findByRole("dialog", { name: "Search workspace" })
+    expect(dialog).toBeInTheDocument()
+
+    const searchInput = screen.getByPlaceholderText(/Search sources, chat, and notes/i)
+    searchInput.focus()
+    fireEvent.keyDown(searchInput, { key: "Escape" })
+
+    await waitFor(() => {
+      const nextDialog = screen.queryByRole("dialog", { name: "Search workspace" })
+      if (!nextDialog) {
+        expect(nextDialog).not.toBeInTheDocument()
+        return
+      }
+      expect(nextDialog).toHaveClass("ant-zoom-leave")
+    })
+  })
+
   it("routes pane focus shortcuts and workspace creation shortcuts", () => {
     render(<WorkspacePlayground />)
 
