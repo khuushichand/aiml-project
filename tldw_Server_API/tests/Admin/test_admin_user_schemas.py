@@ -49,9 +49,11 @@ def test_admin_privileged_action_request_allows_blank_admin_password_for_single_
     payload = AdminPrivilegedActionRequest(
         reason="Support case 123",
         admin_password="",
+        admin_reauth_token="",
     )
 
     assert payload.admin_password is None
+    assert payload.admin_reauth_token is None
 
 
 def test_user_update_request_allows_blank_admin_password_for_single_user_mode() -> None:

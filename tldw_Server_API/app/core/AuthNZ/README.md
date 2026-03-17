@@ -36,6 +36,11 @@ Note: This README follows the project-wide template to help contributors quickly
   - Single-user: `X-API-KEY` is validated; optional IP allowlist; JWT stack bypassed.
   - Multi-user: username/password (+MFA) → JWT access/refresh; sessions persisted with rotation and blacklist revocation.
   - Service tokens: intended for internal use; by default only loopback clients are accepted unless `SERVICE_TOKEN_ALLOWED_IPS` is configured.
+- Enterprise feature flags:
+  - `AUTH_FEDERATION_ENABLED`, `SECRET_BACKENDS_ENABLED`, and `MCP_CREDENTIAL_BROKER_ENABLED` are available for the enterprise roadmap.
+  - Current support matrix is fail-closed: `AUTH_MODE=multi_user` plus a PostgreSQL `DATABASE_URL` are required.
+  - `MCP_CREDENTIAL_BROKER_ENABLED` also requires `SECRET_BACKENDS_ENABLED`.
+  - Explicit `PROFILE` values must be enterprise-compatible (`multi-user-postgres` / `enterprise*`) or the derived helpers report the feature as unsupported.
 - Key Classes/Functions:
   - `settings.py` (`get_settings`, `is_single_user_mode`) for configuration.
   - `jwt_service.JWTService` issues/verifies tokens, password reset/email verification/virtual access tokens.

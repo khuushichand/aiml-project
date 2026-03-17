@@ -59,6 +59,28 @@ def _settings_stub() -> SimpleNamespace:
     )
 
 
+class _SQLiteRegisterConn:
+    def __init__(self) -> None:
+        self.execute_calls: list[tuple[str, Any]] = []
+        self.committed = False
+
+    async def execute(self, query: str, params: Any) -> _CursorStub:
+        lowered = str(query).lower()
+        self.execute_calls.append((lowered, params))
+        if "select username, email" in lowered:
+            return _CursorStub(row=None)
+        if "insert into users" in lowered:
+            return _CursorStub(lastrowid=29)
+        if "insert into password_history" in lowered:
+            return _CursorStub(lastrowid=1)
+        if "insert into audit_log" in lowered:
+            return _CursorStub(lastrowid=1)
+        raise AssertionError(f"Unexpected SQLite query: {query!r}")
+
+    async def commit(self) -> None:
+        self.committed = True
+
+
 class _SQLiteConnWithFetchvalTrap:
     """
     SQLite-like connection shim that intentionally exposes ``fetchval``.
@@ -177,3 +199,33 @@ async def test_validate_registration_code_sqlite_backend_selection_ignores_conn_
     assert info["id"] == 1
     assert info["role_to_grant"] == "user"
     assert conn.update_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_register_user_system_provisioning_bypasses_disabled_registration_and_required_code():
+    conn = _SQLiteRegisterConn()
+    settings = _settings_stub()
+    settings.ENABLE_REGISTRATION = False
+    settings.REQUIRE_REGISTRATION_CODE = True
+    service = RegistrationService(
+        db_pool=_PoolStub(conn, postgres=False),
+        password_service=_PasswordServiceStub(),
+        settings=settings,
+    )
+    service._create_user_directories = lambda user_id: True  # noqa: ARG005
+
+    payload = await service.register_user(
+        username="federated-user",
+        email="federated@example.com",
+        password="Strong!Pass9",
+        role_override="member",
+        is_verified_override=True,
+        system_provisioning=True,
+    )
+
+    assert payload["user_id"] == 29
+    assert payload["role"] == "member"
+    assert payload["is_verified"] is True
+    assert payload["registration_code_id"] is None
+    assert conn.committed is False
+    assert not any("from registration_codes" in query for query, _ in conn.execute_calls)

@@ -268,6 +268,7 @@ class RegistrationService:
         is_active_override: Optional[bool] = None,
         is_verified_override: Optional[bool] = None,
         storage_quota_override: Optional[int] = None,
+        system_provisioning: bool = False,
     ) -> dict[str, Any]:
         """
         Register a new user with full transaction safety
@@ -282,6 +283,7 @@ class RegistrationService:
             is_active_override: Optional admin override for active status
             is_verified_override: Optional admin override for verification status
             storage_quota_override: Optional admin override for storage quota
+            system_provisioning: Internal provisioning bypass for IdP/JIT-created users
 
         Returns:
             Dictionary with user information
@@ -289,8 +291,10 @@ class RegistrationService:
         Raises:
             Various registration exceptions
         """
+        privileged_creation = created_by is not None or system_provisioning
+
         # Check if registration is enabled
-        if not self.registration_enabled and not created_by:
+        if not self.registration_enabled and not privileged_creation:
             raise RegistrationDisabledError()
 
         # Initialize if needed
@@ -339,13 +343,13 @@ class RegistrationService:
                 role = self.settings.DEFAULT_USER_ROLE
                 storage_quota = self.settings.DEFAULT_STORAGE_QUOTA_MB
 
-                if created_by is not None:
+                if privileged_creation:
                     if role_override:
                         role = role_override
                     if storage_quota_override is not None:
                         storage_quota = storage_quota_override
 
-                if registration_code and not created_by:
+                if registration_code and not privileged_creation:
                     # Validate and use registration code (optional when not required)
                     code_info = await self._validate_and_use_registration_code(
                         registration_code,
@@ -357,7 +361,7 @@ class RegistrationService:
                     # Check if code specifies storage quota
                     if 'storage_quota_mb' in code_info:
                         storage_quota = code_info['storage_quota_mb']
-                elif self.require_code and not created_by:
+                elif self.require_code and not privileged_creation:
                     raise InvalidRegistrationCodeError("Registration code required")
 
                 # Hash the password
@@ -368,11 +372,11 @@ class RegistrationService:
 
                 # Create user
                 is_active = True
-                if created_by is not None and is_active_override is not None:
+                if privileged_creation and is_active_override is not None:
                     is_active = bool(is_active_override)
 
                 is_verified = not self.require_code
-                if created_by is not None:
+                if privileged_creation:
                     is_verified = bool(is_verified_override) if is_verified_override is not None else True
 
                 if self._is_postgres_backend():

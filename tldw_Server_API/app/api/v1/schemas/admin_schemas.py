@@ -31,8 +31,9 @@ class UserUpdateRequest(BaseModel):
     storage_quota_mb: int | None = Field(None, ge=100)
     reason: str | None = Field(default=None, min_length=8, max_length=500)
     admin_password: str | None = Field(default=None, max_length=128)
+    admin_reauth_token: str | None = Field(default=None, max_length=4096)
 
-    @field_validator("admin_password", mode="before")
+    @field_validator("admin_password", "admin_reauth_token", mode="before")
     @classmethod
     def normalize_blank_admin_password(cls, value: Any) -> Any:
         return _blank_string_to_none(value)
@@ -45,8 +46,9 @@ class AdminPrivilegedActionRequest(BaseModel):
 
     reason: str = Field(..., min_length=8, max_length=500)
     admin_password: str | None = Field(default=None, max_length=128)
+    admin_reauth_token: str | None = Field(default=None, max_length=4096)
 
-    @field_validator("admin_password", mode="before")
+    @field_validator("admin_password", "admin_reauth_token", mode="before")
     @classmethod
     def normalize_blank_admin_password(cls, value: Any) -> Any:
         return _blank_string_to_none(value)

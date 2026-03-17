@@ -1480,6 +1480,144 @@ _CREATE_ORG_PROVIDER_SECRETS = [
     ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider)", ()),
 ]
 
+_CREATE_IDENTITY_PROVIDERS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS identity_providers (
+            id SERIAL PRIMARY KEY,
+            slug TEXT NOT NULL,
+            provider_type TEXT NOT NULL DEFAULT 'oidc',
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER NULL,
+            enabled BOOLEAN NOT NULL DEFAULT FALSE,
+            display_name TEXT NULL,
+            issuer TEXT NOT NULL,
+            discovery_url TEXT NULL,
+            authorization_url TEXT NULL,
+            token_url TEXT NULL,
+            jwks_url TEXT NULL,
+            client_id TEXT NULL,
+            client_secret_ref TEXT NULL,
+            claim_mapping_json TEXT NOT NULL DEFAULT '{}',
+            provisioning_policy_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT 'oidc'", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS owner_scope_type TEXT NOT NULL DEFAULT 'global'", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS owner_scope_id INTEGER", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT FALSE", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS display_name TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS issuer TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS discovery_url TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS authorization_url TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS token_url TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS jwks_url TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS client_id TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS client_secret_ref TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS claim_mapping_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS provisioning_policy_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS created_by INTEGER", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS updated_by INTEGER", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_scope "
+        "ON identity_providers(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_enabled "
+        "ON identity_providers(enabled)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_providers_scope_slug "
+        "ON identity_providers(slug, owner_scope_type, COALESCE(owner_scope_id, 0))",
+        (),
+    ),
+]
+
+_CREATE_FEDERATED_IDENTITIES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS federated_identities (
+            id SERIAL PRIMARY KEY,
+            identity_provider_id INTEGER NOT NULL REFERENCES identity_providers(id) ON DELETE CASCADE,
+            external_subject TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            external_username TEXT NULL,
+            external_email TEXT NULL,
+            last_claims_hash TEXT NULL,
+            last_seen_at TIMESTAMPTZ NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS external_username TEXT", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS external_email TEXT", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS last_claims_hash TEXT", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_identities_provider_subject "
+        "ON federated_identities(identity_provider_id, external_subject)",
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_federated_identities_user_id ON federated_identities(user_id)", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_federated_identities_provider_id "
+        "ON federated_identities(identity_provider_id)",
+        (),
+    ),
+]
+
+_CREATE_FEDERATED_MANAGED_GRANTS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS federated_managed_grants (
+            id SERIAL PRIMARY KEY,
+            identity_provider_id INTEGER NOT NULL REFERENCES identity_providers(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            grant_kind TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE federated_managed_grants ADD COLUMN IF NOT EXISTS grant_kind TEXT NOT NULL DEFAULT 'org'", ()),
+    ("ALTER TABLE federated_managed_grants ADD COLUMN IF NOT EXISTS target_ref TEXT NOT NULL DEFAULT ''", ()),
+    ("ALTER TABLE federated_managed_grants ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE federated_managed_grants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_managed_grants_target "
+        "ON federated_managed_grants(identity_provider_id, user_id, grant_kind, target_ref)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_user_id "
+        "ON federated_managed_grants(user_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_provider_id "
+        "ON federated_managed_grants(identity_provider_id)",
+        (),
+    ),
+]
+
 _CREATE_BYOK_OAUTH_STATE = [
     (
         """
@@ -2826,6 +2964,36 @@ async def ensure_org_provider_secrets_pg(pool: DatabasePool | None = None) -> bo
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL org_provider_secrets table: {exc}")
+        return False
+
+
+async def ensure_identity_federation_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure identity federation tables exist for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"ensure_identity_federation_tables_pg: core table ensure skipped/failed: {exc}")
+
+        for ddl_group in (
+            _CREATE_IDENTITY_PROVIDERS,
+            _CREATE_FEDERATED_IDENTITIES,
+            _CREATE_FEDERATED_MANAGED_GRANTS,
+        ):
+            for sql, params in ddl_group:
+                try:
+                    await db_pool.execute(sql, *params)
+                except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                    logger.debug(f"PG ensure identity federation DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL identity federation tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL identity federation tables: {exc}")
         return False
 
 

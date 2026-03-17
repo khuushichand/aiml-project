@@ -253,6 +253,7 @@ async def update_user(
                 password_service,
                 reason=request.reason,
                 admin_password=request.admin_password,
+                admin_reauth_token=request.admin_reauth_token,
             )
 
         is_pg = await is_pg_fn()
@@ -386,6 +387,7 @@ async def reset_user_password(
             password_service,
             reason=request.reason,
             admin_password=request.admin_password,
+            admin_reauth_token=request.admin_reauth_token,
         )
 
         temporary_password = request.temporary_password
@@ -506,6 +508,7 @@ async def set_user_mfa_requirement(
             password_service,
             reason=request.reason,
             admin_password=request.admin_password,
+            admin_reauth_token=request.admin_reauth_token,
         )
 
         require_mfa = bool(request.require_mfa)
@@ -618,6 +621,7 @@ async def delete_user(
             password_service,
             reason=getattr(request, "reason", None),
             admin_password=getattr(request, "admin_password", None),
+            admin_reauth_token=getattr(request, "admin_reauth_token", None),
         )
 
         is_pg = await is_pg_fn()

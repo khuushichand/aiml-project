@@ -85,6 +85,7 @@ async def revoke_user_session(
             password_service,
             reason=getattr(request, "reason", None),
             admin_password=getattr(request, "admin_password", None),
+            admin_reauth_token=getattr(request, "admin_reauth_token", None),
         )
         await session_manager.revoke_session(session_id=session_id, revoked_by=principal.user_id)
         await _emit_admin_account_audit_event(
@@ -129,6 +130,7 @@ async def revoke_all_user_sessions(
             password_service,
             reason=getattr(request, "reason", None),
             admin_password=getattr(request, "admin_password", None),
+            admin_reauth_token=getattr(request, "admin_reauth_token", None),
         )
         await session_manager.revoke_all_user_sessions(user_id=user_id)
         await _emit_admin_account_audit_event(
@@ -192,6 +194,7 @@ async def disable_user_mfa(
             password_service,
             reason=getattr(request, "reason", None),
             admin_password=getattr(request, "admin_password", None),
+            admin_reauth_token=getattr(request, "admin_reauth_token", None),
         )
         mfa_service = get_mfa_service()
         success = await mfa_service.disable_mfa(user_id)

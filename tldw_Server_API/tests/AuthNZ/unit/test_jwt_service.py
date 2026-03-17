@@ -64,6 +64,28 @@ class TestJWTServiceUnit:
         assert "iat" in payload
         assert "jti" in payload
 
+    def test_create_admin_reauth_token(self, jwt_service):
+
+        """Test creating a dedicated admin reauthentication token."""
+        token = jwt_service.create_admin_reauth_token(
+            email="admin@example.com",
+            user_id=7,
+            expires_in_minutes=5,
+        )
+
+        assert token is not None
+        assert isinstance(token, str)
+
+        payload = jwt_service.verify_token(token, token_type="admin_reauth")
+
+        assert payload["sub"] == "7"
+        assert payload["user_id"] == 7
+        assert payload["email"] == "admin@example.com"
+        assert payload["type"] == "admin_reauth"
+        assert "exp" in payload
+        assert "iat" in payload
+        assert "jti" in payload
+
     def test_decode_access_token_valid(self, jwt_service):
 
         """Test decoding a valid access token."""
