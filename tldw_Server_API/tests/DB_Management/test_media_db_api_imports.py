@@ -119,9 +119,9 @@ def test_mediawiki_imports_create_media_database_from_media_db_api():
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_article_extractor_imports_create_media_database_from_media_db_api():
+def test_article_extractor_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(Article_Extractor_Lib)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_book_processing_imports_create_media_database_from_media_db_api():
