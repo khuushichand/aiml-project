@@ -91,6 +91,7 @@ from tldw_Server_API.app.core.LLM_Calls.structured_generation import (
     negotiate_structured_response_mode,
     parse_and_validate_structured_output,
 )
+from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingDecision
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.testing import (
@@ -1074,6 +1075,7 @@ def resolve_provider_and_model(
     request_data: Any,
     metrics_default_provider: str,
     normalize_default_provider: str,
+    routing_decision: RoutingDecision | None = None,
 ) -> tuple[str, str, str, str, dict[str, Any]]:
     """Resolve provider/model for metrics and execution and record the decision path.
 
@@ -1092,6 +1094,40 @@ def resolve_provider_and_model(
     raw_model = getattr(request_data, "model", None)
     raw_api_provider = getattr(request_data, "api_provider", None)
     provider_explicit = bool(str(raw_api_provider or "").strip())
+
+    if routing_decision is not None and routing_decision.canonical:
+        request_data.api_provider = routing_decision.provider
+        request_data.model = routing_decision.model
+
+        debug_info: dict[str, Any] = {
+            "raw": {
+                "api_provider": raw_api_provider,
+                "model": raw_model,
+                "provider_explicit": provider_explicit,
+            },
+            "routing": {
+                "canonical": True,
+                "decision_source": routing_decision.decision_source,
+                "provider": routing_decision.provider,
+                "model": routing_decision.model,
+            },
+            "metrics": {
+                "default_provider": metrics_default_provider,
+                "provider": routing_decision.provider,
+                "model": routing_decision.model,
+            },
+            "selected": {
+                "provider": routing_decision.provider,
+                "model": routing_decision.model,
+            },
+        }
+        return (
+            routing_decision.provider,
+            routing_decision.model,
+            routing_decision.provider,
+            routing_decision.model,
+            debug_info,
+        )
 
     # Step 1: derive metrics-facing provider/model without mutating the request
     metrics_provider, metrics_model = parse_provider_model_for_metrics(

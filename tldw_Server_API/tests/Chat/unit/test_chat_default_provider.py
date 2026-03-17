@@ -1,6 +1,7 @@
 import pytest
 
 from tldw_Server_API.app.api.v1.endpoints import chat
+from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingDecision
 
 
 def _clear_cached_provider() -> None:
@@ -56,3 +57,38 @@ def test_default_provider_uses_tldw_test_mode_single_letter_y(monkeypatch):
     monkeypatch.setenv("TLDW_TEST_MODE", "y")
     assert chat._get_default_provider() == "local-llm"
     _clear_cached_provider()
+
+
+@pytest.mark.unit
+def test_resolve_provider_and_model_respects_canonical_routing_decision():
+    class RequestData:
+        api_provider = None
+        model = "auto"
+
+    (
+        metrics_provider,
+        metrics_model,
+        selected_provider,
+        selected_model,
+        debug_info,
+    ) = chat.resolve_provider_and_model(
+        request_data=RequestData(),
+        metrics_default_provider="openai",
+        normalize_default_provider="openai",
+        routing_decision=RoutingDecision(
+            provider="openrouter",
+            model="anthropic/claude-4.5-sonnet",
+            canonical=True,
+            decision_source="rules_router",
+        ),
+    )
+
+    assert (metrics_provider, metrics_model) == (
+        "openrouter",
+        "anthropic/claude-4.5-sonnet",
+    )
+    assert (selected_provider, selected_model) == (
+        "openrouter",
+        "anthropic/claude-4.5-sonnet",
+    )
+    assert debug_info["routing"]["canonical"] is True

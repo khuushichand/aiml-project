@@ -248,6 +248,7 @@ const normalizeChatTools = (
 
 export interface TldwChatOptions {
   model: string
+  routing?: ChatCompletionRequest["routing"]
   temperature?: number
   logprobs?: boolean
   topLogprobs?: number
@@ -352,6 +353,7 @@ export class TldwChatService {
         frequency_penalty: options.frequencyPenalty,
         presence_penalty: options.presencePenalty,
         reasoning_effort: options.reasoningEffort,
+        routing: options.routing,
         tool_choice: toolChoice,
         tools: normalizedTools,
         save_to_db: options.saveToDb,
@@ -432,6 +434,7 @@ export class TldwChatService {
         frequency_penalty: options.frequencyPenalty,
         presence_penalty: options.presencePenalty,
         reasoning_effort: options.reasoningEffort,
+        routing: options.routing,
         tool_choice: toolChoice,
         tools: normalizedTools,
         save_to_db: options.saveToDb,

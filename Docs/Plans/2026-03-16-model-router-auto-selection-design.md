@@ -243,6 +243,8 @@ Any validation logic that currently assumes a concrete model ID must bypass or s
 - playground validation
 - any availability checks that compare the selected model directly to server catalog IDs
 
+Tokenizer-dependent tooling remains a special case. Writing playground generation may submit `model="auto"`, but token inspection, token counting, and tokenizer previews still require a concrete model because those features need provider/model-specific tokenizer resolution.
+
 ### Client Request Shape
 
 Shared client request types should add an optional `routing` object rather than proliferating additional top-level request fields.
