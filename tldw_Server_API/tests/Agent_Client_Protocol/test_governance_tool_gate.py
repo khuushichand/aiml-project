@@ -27,7 +27,7 @@ def gov(bus):
 
 @pytest.fixture
 def gate(gov):
-    return GovernanceToolGate(governance_filter=gov, session_id="s1")
+    return GovernanceToolGate(governance_filter=gov)
 
 
 @pytest.mark.asyncio

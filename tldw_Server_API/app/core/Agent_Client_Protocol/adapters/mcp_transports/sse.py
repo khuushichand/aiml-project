@@ -254,29 +254,39 @@ class MCPSSETransport(MCPTransport):
 
         if self._http_client is None:
             raise RuntimeError("HTTP client not initialized")
+        if self._post_url is None:
+            raise RuntimeError("post_url must be set before making calls")
 
-        await self._http_client.post(
-            self._post_url,  # type: ignore[arg-type]
-            json={
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "method": method,
-                "params": params,
-            },
-        )
-
-        return await asyncio.wait_for(future, timeout=self._timeout_sec)
+        try:
+            response = await self._http_client.post(
+                self._post_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "method": method,
+                    "params": params,
+                },
+            )
+            response.raise_for_status()
+            return await asyncio.wait_for(future, timeout=self._timeout_sec)
+        finally:
+            pending = self._pending.pop(req_id, None)
+            if pending is not None and not pending.done():
+                pending.cancel()
 
     async def _json_rpc_notify(self, method: str, params: dict[str, Any]) -> None:
         """Send a JSON-RPC notification (no id, no response expected)."""
         if self._http_client is None:
             raise RuntimeError("HTTP client not initialized")
+        if self._post_url is None:
+            raise RuntimeError("post_url must be set before making calls")
 
-        await self._http_client.post(
-            self._post_url,  # type: ignore[arg-type]
+        response = await self._http_client.post(
+            self._post_url,
             json={
                 "jsonrpc": "2.0",
                 "method": method,
                 "params": params,
             },
         )
+        response.raise_for_status()

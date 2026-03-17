@@ -236,3 +236,60 @@ async def test_llm_driven_transport_error():
     assert tool_result_ev.kind == AgentEventKind.TOOL_RESULT
     assert tool_result_ev.payload["is_error"] is True
     assert "transport failed" in tool_result_ev.payload["output"]
+
+
+@pytest.mark.asyncio
+async def test_llm_driven_with_governance_filter_emits_single_permission_request():
+    """Governance-backed runs should not re-enter approval for already-approved tool calls."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.event_bus import SessionEventBus
+    from tldw_Server_API.app.core.Agent_Client_Protocol.governance_filter import (
+        GovernanceFilter,
+        GovernanceToolGate,
+    )
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_runners import (
+        LLMDrivenRunner,
+    )
+
+    tc = LLMToolCall(id="tc1", name="bash", arguments={"cmd": "ls"})
+    transport = AsyncMock()
+    transport.call_tool.return_value = {"content": [{"type": "text", "text": "ok"}]}
+    llm_caller = AsyncMock()
+    llm_caller.call.side_effect = [
+        LLMResponse(tool_calls=[tc]),
+        LLMResponse(text="done"),
+    ]
+
+    bus = SessionEventBus(session_id=SESSION_ID)
+    gov = GovernanceFilter(bus=bus)
+    gate = GovernanceToolGate(governance_filter=gov)
+    queue = bus.subscribe("test")
+
+    async def approve_once():
+        permission_request = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert permission_request.kind == AgentEventKind.PERMISSION_REQUEST
+        await gov.on_permission_response(permission_request.payload["request_id"], decision="approve")
+
+    approve_task = asyncio.create_task(approve_once())
+
+    runner = LLMDrivenRunner(
+        transport=transport,
+        event_callback=gov.process,
+        session_id=SESSION_ID,
+        cancel_event=asyncio.Event(),
+        llm_caller=llm_caller,
+        tool_gate=gate,
+        tools=MCP_TOOLS,
+    )
+
+    await runner.run([{"role": "user", "content": "run ls"}])
+    await approve_task
+
+    events = []
+    while not queue.empty():
+        events.append(await queue.get())
+
+    assert [event.kind for event in events] == [
+        AgentEventKind.TOOL_CALL,
+        AgentEventKind.TOOL_RESULT,
+        AgentEventKind.COMPLETION,
+    ]

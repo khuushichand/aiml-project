@@ -189,6 +189,49 @@ async def test_sse_transport_json_rpc_call():
     assert posted_json["id"] == "1"
     assert posted_json["method"] == "tools/list"
     assert posted_json["params"] == {}
+    assert "1" not in t._pending
+
+
+@pytest.mark.asyncio
+async def test_sse_transport_json_rpc_call_requires_post_url():
+    """_json_rpc_call should require that post_url has been initialized."""
+    t = _make_transport(post_url=None)
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=MagicMock(status_code=200))
+    t._http_client = mock_http
+
+    with pytest.raises(RuntimeError, match="post_url must be set"):
+        await t._json_rpc_call("tools/list", {})
+
+
+@pytest.mark.asyncio
+async def test_sse_transport_json_rpc_call_cleans_pending_on_timeout():
+    """Timed-out JSON-RPC calls should not leak pending futures."""
+    t = _make_transport(timeout_sec=0)
+    t._post_url = "http://localhost:8080/messages"
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=MagicMock(status_code=200))
+    t._http_client = mock_http
+
+    with pytest.raises(asyncio.TimeoutError):
+        await t._json_rpc_call("tools/list", {})
+
+    assert t._pending == {}
+
+
+@pytest.mark.asyncio
+async def test_sse_transport_json_rpc_call_cleans_pending_on_post_error():
+    """POST failures should remove any pending future for the request."""
+    t = _make_transport()
+    t._post_url = "http://localhost:8080/messages"
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(side_effect=RuntimeError("post failed"))
+    t._http_client = mock_http
+
+    with pytest.raises(RuntimeError, match="post failed"):
+        await t._json_rpc_call("tools/list", {})
+
+    assert t._pending == {}
 
 
 @pytest.mark.asyncio
@@ -208,6 +251,18 @@ async def test_sse_transport_json_rpc_notify():
     assert posted_json["method"] == "initialized"
     assert posted_json["params"] == {}
     assert "id" not in posted_json
+
+
+@pytest.mark.asyncio
+async def test_sse_transport_json_rpc_notify_requires_post_url():
+    """_json_rpc_notify should require that post_url has been initialized."""
+    t = _make_transport(post_url=None)
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=MagicMock(status_code=200))
+    t._http_client = mock_http
+
+    with pytest.raises(RuntimeError, match="post_url must be set"):
+        await t._json_rpc_notify("initialized", {})
 
 
 @pytest.mark.asyncio

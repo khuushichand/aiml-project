@@ -181,12 +181,18 @@ class LLMDrivenRunner:
 
     # -- helpers --
 
-    async def _emit_event(self, kind: AgentEventKind, payload: dict[str, Any]) -> None:
+    async def _emit_event(
+        self,
+        kind: AgentEventKind,
+        payload: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         event = AgentEvent(
             session_id=self._session_id,
             kind=kind,
             payload=payload,
             sequence=self._seq,
+            metadata=metadata or {},
         )
         self._seq += 1
         await self._emit(event)
@@ -249,6 +255,7 @@ class LLMDrivenRunner:
                     await self._emit_event(
                         AgentEventKind.TOOL_CALL,
                         {"tool_name": tc.name, "arguments": tc.arguments},
+                        metadata={"_already_approved": True},
                     )
 
                     try:

@@ -8,7 +8,6 @@ import pytest
 
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.base import (
     AdapterConfig,
-    PromptOptions,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
 
@@ -219,6 +218,31 @@ async def test_mcp_adapter_send_prompt_llm_driven(mock_transport, event_callback
     completion_events = _events_of_kind(collected_events, AgentEventKind.COMPLETION)
     assert len(completion_events) == 1
     assert completion_events[0].payload["text"] == "LLM final answer"
+
+
+@pytest.mark.asyncio
+async def test_mcp_adapter_send_prompt_llm_driven_requires_llm_caller_and_tool_gate(
+    mock_transport,
+    event_callback,
+):
+    """LLM-driven mode should fail with a clear error when required config is missing."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter import MCPAdapter
+
+    adapter = MCPAdapter()
+    config = _make_config(event_callback, protocol_config={
+        "mcp_transport": "stdio",
+        "command": "echo",
+        "mcp_orchestration": "llm_driven",
+    })
+
+    with patch(
+        "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.create_transport",
+        return_value=mock_transport,
+    ):
+        await adapter.connect(config)
+
+    with pytest.raises(ValueError, match="llm_driven.*llm_caller.*tool_gate"):
+        await adapter.send_prompt([{"role": "user", "content": "hello"}])
 
 
 @pytest.mark.asyncio

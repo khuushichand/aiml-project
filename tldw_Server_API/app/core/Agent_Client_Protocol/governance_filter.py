@@ -24,18 +24,20 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.tool_gate import ToolGate, T
 class _PendingEntry:
     """A held tool_call with its creation time for timeout enforcement."""
 
-    __slots__ = ("event", "created_at", "timeout_task", "approval_future")
+    __slots__ = ("event", "created_at", "timeout_task", "approval_future", "internal_only")
 
     def __init__(
         self,
         event: AgentEvent,
         timeout_task: asyncio.Task[None] | None = None,
         approval_future: asyncio.Future | None = None,
+        internal_only: bool = False,
     ) -> None:
         self.event = event
         self.created_at = time.monotonic()
         self.timeout_task = timeout_task
         self.approval_future = approval_future
+        self.internal_only = internal_only
 
 
 class GovernanceFilter:
@@ -82,23 +84,33 @@ class GovernanceFilter:
             await self._bus.publish(event)
             return
 
+        if event.metadata.get("_already_approved"):
+            await self._bus.publish(event)
+            return
+
         tool_name: str = event.payload.get("tool_name", "")
         # Use the adapter-provided tier if present; fall back to re-resolving
         tier = event.payload.get("permission_tier") or determine_permission_tier(tool_name)
 
         approval_future = event.metadata.get("_approval_future")
+        internal_only = approval_future is not None
 
         if tier == "auto":
-            await self._bus.publish(event)
             if approval_future is not None and not approval_future.done():
                 approval_future.set_result(("approve", None))
+            if internal_only:
+                return
+            await self._bus.publish(event)
             return
 
         # Hold the event and publish a permission request
         request_id = str(uuid.uuid4())
         timeout_task = asyncio.create_task(self._timeout_pending(request_id, self._default_timeout_sec))
         self._pending[request_id] = _PendingEntry(
-            event=event, timeout_task=timeout_task, approval_future=approval_future,
+            event=event,
+            timeout_task=timeout_task,
+            approval_future=approval_future,
+            internal_only=internal_only,
         )
 
         perm_request = AgentEvent(
@@ -158,6 +170,14 @@ class GovernanceFilter:
         # Resolve the approval future if one was attached
         if entry.approval_future is not None and not entry.approval_future.done():
             entry.approval_future.set_result((decision, reason))
+
+        if entry.internal_only:
+            logger.info(
+                "Governance: resolved internal approval request_id={} decision={}",
+                request_id,
+                decision,
+            )
+            return
 
         if decision == "approve":
             await self._bus.publish(held_event)
@@ -226,9 +246,8 @@ class GovernanceToolGate(ToolGate):
     metadata, and awaits the governance decision.
     """
 
-    def __init__(self, governance_filter: GovernanceFilter, session_id: str) -> None:
+    def __init__(self, governance_filter: GovernanceFilter) -> None:
         self._filter = governance_filter
-        self._session_id = session_id
 
     async def request_approval(
         self,

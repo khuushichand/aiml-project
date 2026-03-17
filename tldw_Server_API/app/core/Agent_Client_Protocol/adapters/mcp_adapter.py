@@ -89,13 +89,20 @@ class MCPAdapter(ProtocolAdapter):
         try:
             orchestration = pc.get("mcp_orchestration", "agent_driven")
             if orchestration == "llm_driven":
+                llm_caller = pc.get("llm_caller")
+                tool_gate = pc.get("tool_gate")
+                if llm_caller is None or tool_gate is None:
+                    raise ValueError(
+                        "MCP llm_driven orchestration requires protocol_config keys: "
+                        "llm_caller and tool_gate"
+                    )
                 runner = LLMDrivenRunner(
                     transport=self._transport,
                     event_callback=self._config.event_callback,
                     session_id=self._config.session_id,
                     cancel_event=self._cancel_event,
-                    llm_caller=pc["llm_caller"],
-                    tool_gate=pc["tool_gate"],
+                    llm_caller=llm_caller,
+                    tool_gate=tool_gate,
                     tools=self._tools,
                     max_iterations=pc.get("mcp_max_iterations", 20),
                 )
