@@ -47,6 +47,16 @@ _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _create_workflow_media_db(user_id: str) -> Any:
+    """Create a per-user Media DB handle for workflow knowledge adapters."""
+    from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+
+    return create_media_database(
+        client_id=f"workflow_engine:{user_id}",
+        db_path=str(DatabasePaths.get_media_db_path(int(user_id))),
+    )
+
+
 @registry.register(
     "notes",
     category="knowledge",
@@ -771,10 +781,7 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
             limit = int(config.get("limit") or 50)
             offset = int(config.get("offset") or 0)
 
-            # Search claims in media database
-            from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
-
-            media_db = create_media_database(user_id=int(user_id))
+            media_db = _create_workflow_media_db(user_id)
             results = media_db.search_claims(query=query, limit=limit, offset=offset)
 
             claims_list = []
@@ -797,9 +804,7 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
             offset = int(config.get("offset") or 0)
             media_id = config.get("media_id")
 
-            from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
-
-            media_db = create_media_database(user_id=int(user_id))
+            media_db = _create_workflow_media_db(user_id)
 
             if media_id is not None:
                 results = media_db.list_claims_for_media(media_id=int(media_id), limit=limit, offset=offset)

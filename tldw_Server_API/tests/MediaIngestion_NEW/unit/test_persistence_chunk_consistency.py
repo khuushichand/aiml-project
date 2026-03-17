@@ -74,6 +74,35 @@ class _ChunkCountDb:
         self.closed = True
 
 
+class _HelperSessionDb:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close_connection(self) -> None:
+        self.closed = True
+
+
+def test_with_media_db_session_closes_connection_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub_db = _HelperSessionDb()
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        lambda client_id, *, db_path=None, **_kwargs: stub_db,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        ingestion_persistence._with_media_db_session(
+            db_path=":memory:",
+            client_id="test-client",
+            operation=lambda _db: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+    assert stub_db.closed is True
+
+
 @pytest.mark.asyncio
 async def test_chunk_consistency_warn_policy_adds_warning_and_metric(
     monkeypatch: pytest.MonkeyPatch,

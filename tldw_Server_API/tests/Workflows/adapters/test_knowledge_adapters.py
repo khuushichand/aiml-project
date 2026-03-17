@@ -846,6 +846,7 @@ async def test_claims_extract_adapter_list_success(monkeypatch):
 async def test_claims_extract_adapter_search_uses_media_db_api_factory(monkeypatch):
     """Test production search path resolves the media DB factory from media_db.api."""
     from tldw_Server_API.app.core.DB_Management import DB_Manager
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
     from tldw_Server_API.app.core.Workflows.adapters.knowledge import crud as knowledge_crud
 
@@ -856,8 +857,11 @@ async def test_claims_extract_adapter_search_uses_media_db_api_factory(monkeypat
             assert offset == 0
             return [{"id": 1, "claim_text": "Climate change is real", "media_id": 9, "relevance_score": 0.9}]
 
-    def _fake_create_media_database(user_id=None, **kwargs):  # noqa: ARG001
-        assert user_id == 1
+    expected_db_path = str(DatabasePaths.get_media_db_path(1))
+
+    def _fake_create_media_database(client_id, *, db_path=None, **kwargs):  # noqa: ARG001
+        assert client_id == "workflow_engine:1"
+        assert db_path == expected_db_path
         return _FakeMediaDB()
 
     def _raise_legacy_factory(*args, **kwargs):  # noqa: ARG001
@@ -881,6 +885,7 @@ async def test_claims_extract_adapter_search_uses_media_db_api_factory(monkeypat
 async def test_claims_extract_adapter_list_uses_media_db_api_factory(monkeypatch):
     """Test production list path resolves the media DB factory from media_db.api."""
     from tldw_Server_API.app.core.DB_Management import DB_Manager
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
     from tldw_Server_API.app.core.Workflows.adapters.knowledge import crud as knowledge_crud
 
@@ -890,8 +895,11 @@ async def test_claims_extract_adapter_list_uses_media_db_api_factory(monkeypatch
             assert offset == 5
             return [{"id": 2, "claim_text": "Listed claim", "media_id": 12}]
 
-    def _fake_create_media_database(user_id=None, **kwargs):  # noqa: ARG001
-        assert user_id == 7
+    expected_db_path = str(DatabasePaths.get_media_db_path(7))
+
+    def _fake_create_media_database(client_id, *, db_path=None, **kwargs):  # noqa: ARG001
+        assert client_id == "workflow_engine:7"
+        assert db_path == expected_db_path
         return _FakeMediaDB()
 
     def _raise_legacy_factory(*args, **kwargs):  # noqa: ARG001
