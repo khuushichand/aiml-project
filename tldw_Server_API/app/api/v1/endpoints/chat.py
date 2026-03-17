@@ -38,10 +38,12 @@ from fastapi import (
 
 from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
 from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    apply_llm_provider_overrides_to_listing,
     get_llm_provider_override,
     get_llm_provider_overrides_snapshot,
     get_override_credentials,
     get_override_default_model,
+    get_override_model_priority,
     validate_provider_override,
 )
 
@@ -167,6 +169,14 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (  # noqa: F40
     apply_template_to_string,
     load_template,
 )
+from tldw_Server_API.app.core.LLM_Calls.routing import (
+    RouterRequest,
+    resolve_routing_policy,
+    route_model,
+)
+from tldw_Server_API.app.core.LLM_Calls.routing.candidate_pool import (
+    build_candidate_pool,
+)
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.Chat.request_queue import RequestPriority, get_request_queue
@@ -243,6 +253,7 @@ from tldw_Server_API.app.core.testing import (
 from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
 
 from . import chat_dictionaries, chat_documents, chat_grammars
+from .llm_providers import get_configured_providers
 
 _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -649,6 +660,132 @@ def _extract_latest_user_turn_text(messages: list[Any]) -> str:
         if text:
             return text
     return ""
+
+
+def _request_uses_vision_input(messages: list[Any]) -> bool:
+    """Return True when the request includes image content parts."""
+    for message in messages or []:
+        content = getattr(message, "content", None) if not isinstance(message, dict) else message.get("content")
+        if isinstance(content, dict):
+            content = [content]
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict):
+                if str(part.get("type") or "").strip().lower() == "image_url":
+                    return True
+                continue
+            if str(getattr(part, "type", "") or "").strip().lower() == "image_url":
+                return True
+    return False
+
+
+def _extract_routing_requested_capabilities(
+    request_data: ChatCompletionRequest,
+) -> dict[str, Any]:
+    """Derive hard capability filters from the incoming request."""
+    response_format = getattr(request_data, "response_format", None)
+    if isinstance(response_format, dict):
+        response_type = str(response_format.get("type") or "").strip().lower()
+    else:
+        response_type = str(getattr(response_format, "type", "") or "").strip().lower()
+
+    return {
+        "tools": bool(getattr(request_data, "tools", None)),
+        "vision": _request_uses_vision_input(getattr(request_data, "messages", [])),
+        "json_mode": response_type in {"json_object", "json_schema"},
+        "reasoning": bool(getattr(request_data, "thinking_budget_tokens", None)),
+    }
+
+
+def _flatten_provider_listing_for_routing(provider_listing: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten the providers endpoint payload into routing candidate records."""
+    catalog: list[dict[str, Any]] = []
+    for provider in provider_listing.get("providers", []) or []:
+        provider_name = str(provider.get("name") or "").strip().lower()
+        if not provider_name:
+            continue
+        if provider.get("is_configured") is False:
+            continue
+        for model_info in provider.get("models_info", []) or []:
+            model_name = str(model_info.get("name") or model_info.get("id") or "").strip()
+            if not model_name:
+                continue
+            candidate_record = dict(model_info)
+            candidate_record["provider"] = provider_name
+            candidate_record["model"] = model_name
+            catalog.append(candidate_record)
+    return catalog
+
+
+def _build_provider_order_for_routing(
+    provider_listing: dict[str, Any],
+    *,
+    objective: str,
+) -> dict[str, list[str]]:
+    """Collect admin-curated model ordering hints for deterministic fallback."""
+    provider_order: dict[str, list[str]] = {}
+    for provider in provider_listing.get("providers", []) or []:
+        provider_name = str(provider.get("name") or "").strip().lower()
+        if not provider_name:
+            continue
+        preferred_models = get_override_model_priority(provider_name, objective=objective)
+        if preferred_models:
+            provider_order[provider_name] = preferred_models
+    return provider_order
+
+
+def _resolve_auto_chat_routing_decision(
+    request_data: ChatCompletionRequest,
+) -> tuple[Any | None, dict[str, Any]]:
+    """Resolve `model='auto'` into a canonical provider/model pair."""
+    provider_listing = apply_llm_provider_overrides_to_listing(get_configured_providers())
+    default_provider = str(
+        provider_listing.get("default_provider") or _get_default_provider()
+    ).strip().lower() or _get_default_provider()
+    policy = resolve_routing_policy(
+        request_model=str(getattr(request_data, "model", "") or ""),
+        explicit_provider=getattr(request_data, "api_provider", None),
+        routing_override=getattr(request_data, "routing", None),
+        server_default_provider=default_provider,
+    )
+    requested_capabilities = _extract_routing_requested_capabilities(request_data)
+    candidates = build_candidate_pool(
+        boundary_mode=policy.boundary_mode,
+        pinned_provider=policy.pinned_provider,
+        server_default_provider=policy.server_default_provider,
+        requested_capabilities=requested_capabilities,
+        catalog=_flatten_provider_listing_for_routing(provider_listing),
+    )
+    decision = route_model(
+        request=RouterRequest(
+            model="auto",
+            surface="chat",
+            latest_user_turn=_extract_latest_user_turn_text(getattr(request_data, "messages", [])),
+            scope=getattr(request_data, "conversation_id", None),
+            requested_capabilities=requested_capabilities,
+            routing_context={
+                "stream": bool(getattr(request_data, "stream", False)),
+                "response_format": bool(getattr(request_data, "response_format", None)),
+            },
+        ),
+        policy=policy,
+        candidates=candidates,
+        provider_order=_build_provider_order_for_routing(
+            provider_listing,
+            objective=policy.objective,
+        ),
+    )
+    return decision, {
+        "policy": {
+            "boundary_mode": policy.boundary_mode,
+            "pinned_provider": policy.pinned_provider,
+            "server_default_provider": policy.server_default_provider,
+            "objective": policy.objective,
+            "mode": policy.mode,
+        },
+        "candidate_count": len(candidates),
+    }
 
 
 def _normalize_string_list(value: Any) -> list[str]:
@@ -1920,12 +2057,26 @@ async def create_chat_completion(
 
     # Capture raw model input before any normalization for later decisions
     raw_model_input = request_data.model
-    explicit_model_requested = bool(str(raw_model_input or "").strip())
+    auto_model_requested = str(raw_model_input or "").strip().lower() == "auto"
+    explicit_model_requested = bool(str(raw_model_input or "").strip()) and not auto_model_requested
     strict_model_selection = _should_enforce_strict_model_selection()
     allow_provider_fallback_for_request = (
         ENABLE_PROVIDER_FALLBACK
         and not (strict_model_selection and explicit_model_requested)
     )
+    routing_decision = None
+    routing_debug: dict[str, Any] | None = None
+    if auto_model_requested:
+        routing_decision, routing_debug = _resolve_auto_chat_routing_decision(request_data)
+        if routing_decision is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "auto_routing_no_candidates",
+                    "message": "No eligible models matched the current auto-routing constraints.",
+                    "routing": routing_debug or {},
+                },
+            )
 
     # Resolve provider/model for both metrics and execution, and record decision path
     (
@@ -1938,6 +2089,7 @@ async def create_chat_completion(
         request_data=request_data,
         metrics_default_provider=DEFAULT_LLM_PROVIDER,
         normalize_default_provider=_get_default_provider(),
+        routing_decision=routing_decision,
     )
 
     # Use metrics_* for request-level metrics/audit; selected_* for downstream calls
