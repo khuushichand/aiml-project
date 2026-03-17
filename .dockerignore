@@ -33,6 +33,7 @@ apps/extension/.wxt/
 
 # Runtime/local data (never bake into images)
 Databases/
+docker-data/
 cache/
 dlq/
 models/
