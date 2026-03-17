@@ -33,9 +33,9 @@ def test_llm_caller_is_abstract():
         LLMCaller()
 
 
-def test_llm_caller_concrete():
+@pytest.mark.asyncio
+async def test_llm_caller_concrete():
     """A concrete subclass of LLMCaller can be instantiated and called."""
-    import asyncio
     from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_llm_caller import (
         LLMCaller,
         LLMResponse,
@@ -46,9 +46,7 @@ def test_llm_caller_concrete():
             return LLMResponse(text="Hello!")
 
     llm = FakeLLM()
-    resp = asyncio.get_event_loop().run_until_complete(
-        llm.call(messages=[{"role": "user", "content": "hi"}], tools=[])
-    )
+    resp = await llm.call(messages=[{"role": "user", "content": "hi"}], tools=[])
     assert resp.text == "Hello!"
     assert resp.tool_calls == []
 

@@ -48,15 +48,14 @@ def _make_runner(
     return runner, transport, callback
 
 
-def test_agent_driven_simple_text():
+@pytest.mark.asyncio
+async def test_agent_driven_simple_text():
     """Transport returns plain text content; verify single COMPLETION event."""
     runner, transport, callback = _make_runner(
         transport_return={"content": [{"type": "text", "text": "Answer"}]}
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "hello"}])
-    )
+    await runner.run([{"role": "user", "content": "hello"}])
 
     transport.call_tool.assert_awaited_once_with(
         "execute", {"messages": [{"role": "user", "content": "hello"}]}
@@ -68,7 +67,8 @@ def test_agent_driven_simple_text():
     assert event.session_id == SESSION_ID
 
 
-def test_agent_driven_structured_steps():
+@pytest.mark.asyncio
+async def test_agent_driven_structured_steps():
     """Transport returns structured JSON steps; verify multiple events in order."""
     steps = {
         "steps": [
@@ -83,9 +83,7 @@ def test_agent_driven_structured_steps():
         structured_response=True,
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "search for test"}])
-    )
+    await runner.run([{"role": "user", "content": "search for test"}])
 
     assert callback.await_count == 4
     events = [call[0][0] for call in callback.call_args_list]
@@ -105,7 +103,8 @@ def test_agent_driven_structured_steps():
     assert events[3].payload["text"] == "Here is the answer"
 
 
-def test_agent_driven_structured_no_completion_step():
+@pytest.mark.asyncio
+async def test_agent_driven_structured_no_completion_step():
     """If structured response has no completion step, emit one with raw text."""
     steps = {
         "steps": [
@@ -118,9 +117,7 @@ def test_agent_driven_structured_no_completion_step():
         structured_response=True,
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "go"}])
-    )
+    await runner.run([{"role": "user", "content": "go"}])
 
     events = [call[0][0] for call in callback.call_args_list]
     assert events[0].kind == AgentEventKind.THINKING
@@ -129,15 +126,14 @@ def test_agent_driven_structured_no_completion_step():
     assert events[-1].payload["text"] == raw_text
 
 
-def test_agent_driven_tool_error():
+@pytest.mark.asyncio
+async def test_agent_driven_tool_error():
     """Transport.call_tool raises; verify ERROR event is emitted."""
     runner, transport, callback = _make_runner(
         transport_side_effect=RuntimeError("connection lost")
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "hi"}])
-    )
+    await runner.run([{"role": "user", "content": "hi"}])
 
     assert callback.await_count == 1
     event: AgentEvent = callback.call_args_list[0][0][0]
@@ -145,28 +141,26 @@ def test_agent_driven_tool_error():
     assert "connection lost" in event.payload["error"]
 
 
-def test_agent_driven_cancel():
+@pytest.mark.asyncio
+async def test_agent_driven_cancel():
     """Cancel event is set; verify no call_tool and no events."""
     runner, transport, callback = _make_runner(cancel=True)
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "hi"}])
-    )
+    await runner.run([{"role": "user", "content": "hi"}])
 
     transport.call_tool.assert_not_awaited()
     callback.assert_not_awaited()
 
 
-def test_agent_driven_custom_entry_tool():
+@pytest.mark.asyncio
+async def test_agent_driven_custom_entry_tool():
     """Verify custom entry_tool name is used in call_tool."""
     runner, transport, callback = _make_runner(
         transport_return={"content": [{"type": "text", "text": "ok"}]},
         entry_tool="run_agent",
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "go"}])
-    )
+    await runner.run([{"role": "user", "content": "go"}])
 
     transport.call_tool.assert_awaited_once_with(
         "run_agent", {"messages": [{"role": "user", "content": "go"}]}

@@ -92,15 +92,14 @@ def _make_runner(
     return runner, transport, llm_caller, tool_gate, callback, cancel_event
 
 
-def test_llm_driven_single_turn():
+@pytest.mark.asyncio
+async def test_llm_driven_single_turn():
     """LLM returns text immediately; verify single COMPLETION event."""
     runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
         llm_responses=[LLMResponse(text="The answer is 42")]
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "what is the answer?"}])
-    )
+    await runner.run([{"role": "user", "content": "what is the answer?"}])
 
     assert callback.await_count == 1
     event: AgentEvent = callback.call_args_list[0][0][0]
@@ -110,7 +109,8 @@ def test_llm_driven_single_turn():
     transport.call_tool.assert_not_awaited()
 
 
-def test_llm_driven_multi_turn():
+@pytest.mark.asyncio
+async def test_llm_driven_multi_turn():
     """LLM returns tool_call first, then text. Verify TOOL_CALL -> TOOL_RESULT -> COMPLETION."""
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "hello"})
     runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
@@ -123,9 +123,7 @@ def test_llm_driven_multi_turn():
         ],
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "search hello"}])
-    )
+    await runner.run([{"role": "user", "content": "search hello"}])
 
     events = [call[0][0] for call in callback.call_args_list]
     assert len(events) == 3
@@ -143,7 +141,8 @@ def test_llm_driven_multi_turn():
     assert events[2].payload["text"] == "Found the answer"
 
 
-def test_llm_driven_max_iterations():
+@pytest.mark.asyncio
+async def test_llm_driven_max_iterations():
     """LLM always returns tool_calls; verify max_iterations COMPLETION."""
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "loop"})
     # Return tool_calls every time (more than max_iterations)
@@ -153,9 +152,7 @@ def test_llm_driven_max_iterations():
         max_iterations=3,
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "loop"}])
-    )
+    await runner.run([{"role": "user", "content": "loop"}])
 
     events = [call[0][0] for call in callback.call_args_list]
     # Last event should be COMPLETION with max_iterations
@@ -164,7 +161,8 @@ def test_llm_driven_max_iterations():
     assert last.payload["stop_reason"] == "max_iterations"
 
 
-def test_llm_driven_cancel():
+@pytest.mark.asyncio
+async def test_llm_driven_cancel():
     """Cancel event set after first iteration; verify loop stops."""
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "test"})
     responses = [
@@ -179,15 +177,14 @@ def test_llm_driven_cancel():
         cancel_after=2,
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "test"}])
-    )
+    await runner.run([{"role": "user", "content": "test"}])
 
     # LLM should have been called once (first iteration), then cancel kicks in
     assert llm_caller.call.await_count == 1
 
 
-def test_llm_driven_governance_denial():
+@pytest.mark.asyncio
+async def test_llm_driven_governance_denial():
     """ToolGate returns denied; verify TOOL_RESULT with is_error."""
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "forbidden"})
     runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
@@ -198,9 +195,7 @@ def test_llm_driven_governance_denial():
         gate_results=[ToolGateResult(approved=False, reason="Not allowed")],
     )
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "do forbidden thing"}])
-    )
+    await runner.run([{"role": "user", "content": "do forbidden thing"}])
 
     events = [call[0][0] for call in callback.call_args_list]
     # Should have: denied TOOL_RESULT, then COMPLETION
@@ -216,7 +211,8 @@ def test_llm_driven_governance_denial():
     assert completion.kind == AgentEventKind.COMPLETION
 
 
-def test_llm_driven_transport_error():
+@pytest.mark.asyncio
+async def test_llm_driven_transport_error():
     """Transport raises during tool execution; verify ERROR event."""
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "boom"})
     runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
@@ -229,9 +225,7 @@ def test_llm_driven_transport_error():
     # Override: side_effect with exception
     transport.call_tool.side_effect = RuntimeError("transport failed")
 
-    asyncio.get_event_loop().run_until_complete(
-        runner.run([{"role": "user", "content": "boom"}])
-    )
+    await runner.run([{"role": "user", "content": "boom"}])
 
     events = [call[0][0] for call in callback.call_args_list]
     # TOOL_CALL, then TOOL_RESULT with error
