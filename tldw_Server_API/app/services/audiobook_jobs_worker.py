@@ -30,7 +30,6 @@ from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookCha
 from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
     extract_epub_metadata_from_text,
     process_epub,
@@ -42,6 +41,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.testing import is_truthy
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.TTS.adapter_registry import TTSProvider
 from tldw_Server_API.app.core.TTS.audio_converter import AudioConverter
 from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
@@ -557,8 +557,12 @@ def _load_source_text(source: dict[str, Any], user_id: int) -> tuple[str, dict[s
             except (TypeError, ValueError) as exc:
                 raise AudiobookJobError("invalid_media_id", retryable=False) from exc
             db_path = DatabasePaths.get_media_db_path(user_id)
-            media_db = MediaDatabase(db_path=str(db_path), client_id="audiobook_worker")
-            record = media_db.get_media_by_id(media_id_int)
+            with managed_media_database(
+                "audiobook_worker",
+                db_path=str(db_path),
+                initialize=False,
+            ) as media_db:
+                record = media_db.get_media_by_id(media_id_int)
             if not record:
                 raise AudiobookJobError("media_not_found", retryable=False)
             text = record.get("content") or ""
