@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -259,6 +260,116 @@ async def test_persist_primary_av_item_invokes_chunk_consistency_check(
     assert _FakeMediaRepository.calls[0]["media_type"] == "audio"
     assert _RepoBackedWorkerDB.instances
     assert _RepoBackedWorkerDB.instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_persist_primary_av_item_upserts_normalized_transcript_via_extracted_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _RepoBackedWorkerDB.instances = []
+    _FakeMediaRepository.calls = []
+    transcript_calls: list[dict[str, Any]] = []
+
+    async def _fake_enforce(**_kwargs: Any) -> None:
+        return None
+
+    async def _fake_persist_claims(**_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "_enforce_chunk_consistency_after_persist",
+        _fake_enforce,
+    )
+    monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
+    monkeypatch.setattr(ingestion_persistence, "MediaDatabase", _RepoBackedWorkerDB)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "get_media_repository",
+        lambda db: _FakeMediaRepository(),
+        raising=False,
+    )
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
+        Audio_Transcription_Lib,
+        stt_provider_adapter,
+    )
+
+    monkeypatch.setattr(
+        stt_provider_adapter,
+        "get_stt_provider_registry",
+        lambda: SimpleNamespace(
+            resolve_provider_for_model=lambda _model: ("fake-provider", "resolved-model", None)
+        ),
+    )
+    monkeypatch.setattr(
+        Audio_Transcription_Lib,
+        "to_normalized_stt_artifact",
+        lambda text, segments, language, provider, model: {
+            "text": text,
+            "segments": segments,
+            "language": language,
+            "metadata": {"provider": provider, "model": model},
+        },
+    )
+
+    def _fake_upsert_transcript(**kwargs: Any) -> dict[str, Any]:
+        transcript_calls.append(kwargs)
+        return {"id": len(transcript_calls)}
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "upsert_transcript",
+        _fake_upsert_transcript,
+        raising=False,
+    )
+
+    process_result = {
+        "status": "Success",
+        "input_ref": "clip.mp3",
+        "processing_source": "clip.mp3",
+        "metadata": {"model": "base-model"},
+        "content": "hello world",
+        "transcript": "hello world",
+        "segments": [{"text": "hello world", "start": 0.0, "end": 1.0}],
+        "summary": None,
+        "analysis": None,
+        "analysis_details": {"transcription_language": "en"},
+        "warnings": None,
+        "error": None,
+    }
+
+    await ingestion_persistence.persist_primary_av_item(
+        process_result=process_result,
+        form_data=SimpleNamespace(
+            keywords=[],
+            custom_prompt=None,
+            overwrite_existing=True,
+            transcription_model=None,
+            chunk_consistency_policy="warn",
+        ),
+        media_type="audio",
+        original_input_ref="clip.mp3",
+        chunk_options=None,
+        path_kind="upload",
+        db_path=":memory:",
+        client_id="test-client",
+        loop=asyncio.get_running_loop(),
+        claims_context=None,
+    )
+
+    assert len(transcript_calls) == 1
+    assert transcript_calls[0]["media_id"] == 1
+    assert transcript_calls[0]["whisper_model"] == "resolved-model"
+    assert json.loads(transcript_calls[0]["transcription"]) == {
+        "text": "hello world",
+        "segments": [{"text": "hello world", "start": 0.0, "end": 1.0}],
+        "language": "en",
+        "metadata": {"provider": "fake-provider", "model": "resolved-model"},
+    }
+    assert process_result["normalized_stt"]["metadata"]["model"] == "resolved-model"
+    assert len(_RepoBackedWorkerDB.instances) == 2
+    assert all(instance.closed for instance in _RepoBackedWorkerDB.instances)
 
 
 @pytest.mark.asyncio

@@ -137,10 +137,6 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries impo
     fetch_keywords_for_media as _fetch_keywords_for_media,
     get_all_content_from_database,
 )
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
-    soft_delete_transcript,
-    upsert_transcript,
-)
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item as _permanently_delete_item,
 )

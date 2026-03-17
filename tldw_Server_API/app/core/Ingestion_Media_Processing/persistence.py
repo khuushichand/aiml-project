@@ -35,6 +35,9 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     get_media_repository,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
+    upsert_transcript,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
     prepare_common_options,
@@ -3142,12 +3145,6 @@ async def persist_primary_av_item(
                 and transcription_model_used
                 and content_for_db
             ):
-                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # type: ignore
-                    MediaDatabase as _MediaDBForStt,
-                )
-                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-                    upsert_transcript,
-                )
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
                     to_normalized_stt_artifact,
                 )
@@ -3172,7 +3169,7 @@ async def persist_primary_av_item(
                 serialized_artifact = json.dumps(artifact, default=str)
 
                 def _upsert_worker() -> None:
-                    db = _MediaDBForStt(db_path=db_path, client_id=client_id)
+                    db = MediaDatabase(db_path=db_path, client_id=client_id)
                     try:
                         upsert_transcript(
                             db_instance=db,
