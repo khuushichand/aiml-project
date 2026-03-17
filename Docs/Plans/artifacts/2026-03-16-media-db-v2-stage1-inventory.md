@@ -5,8 +5,8 @@
 ## Normalized Counts
 
 - Raw `MediaDatabase(...)` constructors in app code: 13
-- Operational `create_media_database(...)` call sites in app code: 25
-- Operational `managed_media_database(...)` call sites in app code: 28
+- Operational `create_media_database(...)` call sites in app code: 24
+- Operational `managed_media_database(...)` call sites in app code: 29
 - `Media_DB_v2` references in app code: 137
 
 Notes:
@@ -46,6 +46,7 @@ Notes:
 | `app/core/Ingestion_Media_Processing/visual_ingestion.py` | 1 | `MOVE_MANAGED` already satisfied | Visual document persistence now scopes its DB writes through the managed helper with `initialize=False` |
 | `app/core/Claims_Extraction/claims_utils.py` | 1 | `MOVE_MANAGED` already satisfied | Claims persistence worker now scopes its DB writes through the managed helper with `initialize=False` and close-error suppression |
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | `MOVE_MANAGED` already satisfied | Ingestion-claims SQL fallback now uses the managed helper with `initialize=False` and suppressed close failures |
+| `app/core/Embeddings/services/jobs_worker.py` | 1 | `MOVE_MANAGED` already satisfied | Local media-content reads now scope their DB session through the managed helper with `initialize=False` |
 | `app/core/Embeddings/services/vector_compactor.py` | 1 | `MOVE_MANAGED` already satisfied | Soft-delete lookup now scopes its Media DB read through the managed helper with `initialize=False` and suppressed close failures |
 
 ## Operational `create_media_database(...)` Inventory
@@ -60,7 +61,6 @@ Notes:
 | `app/core/Workflows/adapters/knowledge/crud.py` | 2 | per-user lazy import path | `NEW_HELPER` | currently calls `create_media_database(user_id=...)`; signature mismatch hazard |
 | `app/core/Watchlists/pipeline.py` | 1 | per-job DB used through ingest flow | `MOVE_MANAGED` | likely function-scope context-manager conversion |
 | `app/core/Data_Tables/jobs_worker.py` | 1 | cached per-user DB owner | `KEEP_RAW` | explicit cache owner is intentional |
-| `app/core/Embeddings/services/jobs_worker.py` | 1 | local read helper | `MOVE_MANAGED` | no reason to hold explicit lifecycle |
 | `app/core/Claims_Extraction/claims_notifications.py` | 1 | local delivery helper init/close | `MOVE_MANAGED` | could also be folded into a notification DB helper |
 | `app/core/Claims_Extraction/claims_rebuild_service.py` | 2 | local health/task DB open-close | `NEW_HELPER` | repeated pattern with health-init semantics |
 | `app/core/Claims_Extraction/claims_service.py` | 2 | local event/health persistence DB | `NEW_HELPER` | likely same helper family as rebuild/notifications |
