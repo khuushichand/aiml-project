@@ -57,7 +57,8 @@ from tldw_Server_API.app.core.Chunking import ChunkingError, InvalidChunkingMeth
 
 #
 # Import Local
-from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords, create_media_database
+from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
