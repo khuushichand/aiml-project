@@ -17,6 +17,7 @@ from tldw_Server_API.app.api.v1.endpoints.media import navigation as media_navig
 from tldw_Server_API.app.api.v1.endpoints.media import process_documents
 from tldw_Server_API.app.api.v1.endpoints.media import process_pdfs
 from tldw_Server_API.app.api.v1.utils import http_errors
+from tldw_Server_API.app.api.v1.endpoints.media import versions as media_versions
 from tldw_Server_API.app.core.Claims_Extraction import (
     claims_notifications,
     claims_rebuild_service,
@@ -46,6 +47,7 @@ from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_state as media_db_state
 from tldw_Server_API.app.services import media_files_cleanup_service
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import claims_alerts_scheduler
@@ -188,6 +190,22 @@ def test_media_item_imports_db_errors_from_media_db_errors_and_not_media_db_v2(m
     assert module.ConflictError is media_db_errors.ConflictError
     assert module.DatabaseError is media_db_errors.DatabaseError
     assert module.InputError is media_db_errors.InputError
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_versions_imports_errors_and_state_helpers_outside_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "ConflictError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "check_media_exists", object(), raising=False)
+
+    module = importlib.reload(media_versions)
+
+    assert module.ConflictError is media_db_errors.ConflictError
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.InputError is media_db_errors.InputError
+    assert module.check_media_exists is media_db_state.check_media_exists
     assert "MediaDatabase" not in module.__dict__
 
 

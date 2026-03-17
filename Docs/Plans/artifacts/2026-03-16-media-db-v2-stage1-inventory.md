@@ -115,7 +115,6 @@ Assessment:
 
 Representative files:
 
-- `app/api/v1/endpoints/media/versions.py`
 - `app/core/Claims_Extraction/review_assignment.py`
 - `app/core/External_Sources/sync_coordinator.py`
 - `app/services/quiz_generator.py`
