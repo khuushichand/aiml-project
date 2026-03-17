@@ -25,6 +25,16 @@ def _make_event(
     return AgentEvent(session_id=session_id, kind=kind, payload={"data": kind.value})
 
 
+async def _wait_for(predicate, *, timeout: float = 2.0, interval: float = 0.02):
+    """Poll *predicate* until it returns True or *timeout* elapses."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError(f"Timed out waiting for predicate after {timeout}s")
+
+
 # --------------------------------------------------------------------------- #
 # AuditLogger
 # --------------------------------------------------------------------------- #
@@ -39,20 +49,19 @@ async def test_audit_logger_batches_events():
     async def fake_write(batch: list[AgentEvent]) -> None:
         written_batches.append(list(batch))
 
-    logger = AuditLogger(
+    audit = AuditLogger(
         write_batch_fn=fake_write,
         batch_size=3,
         flush_interval=10.0,  # long interval so only batch_size triggers
     )
-    await logger.start(bus)
+    await audit.start(bus)
 
     for _ in range(3):
         await bus.publish(_make_event())
 
-    await asyncio.sleep(0.15)
-    await logger.stop()
+    await _wait_for(lambda: len(written_batches) >= 1)
+    await audit.stop()
 
-    # Should have flushed exactly one batch of 3
     assert len(written_batches) == 1
     assert len(written_batches[0]) == 3
 
@@ -66,20 +75,18 @@ async def test_audit_logger_flushes_on_interval():
     async def fake_write(batch: list[AgentEvent]) -> None:
         written_batches.append(list(batch))
 
-    logger = AuditLogger(
+    audit = AuditLogger(
         write_batch_fn=fake_write,
         batch_size=100,  # high batch size so it never triggers
-        flush_interval=0.15,
+        flush_interval=0.1,
     )
-    await logger.start(bus)
+    await audit.start(bus)
 
     await bus.publish(_make_event())
 
-    # Wait longer than flush_interval
-    await asyncio.sleep(0.35)
-    await logger.stop()
+    await _wait_for(lambda: sum(len(b) for b in written_batches) >= 1)
+    await audit.stop()
 
-    assert len(written_batches) >= 1
     total_events = sum(len(b) for b in written_batches)
     assert total_events == 1
 
@@ -100,7 +107,7 @@ async def test_metrics_recorder_counts_tool_calls():
     await bus.publish(_make_event(AgentEventKind.TOOL_CALL))
     await bus.publish(_make_event(AgentEventKind.COMPLETION))
 
-    await asyncio.sleep(0.1)
+    await _wait_for(lambda: sum(recorder.counters.values()) >= 3)
     await recorder.stop()
 
     assert recorder.counters["tool_call"] == 2

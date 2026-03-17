@@ -75,3 +75,26 @@ def test_agent_event_all_payload_shapes():
         ev = AgentEvent(session_id="s", kind=kind, payload=payload)
         d = ev.to_dict()
         json.dumps(d)
+
+
+def test_agent_event_from_dict_roundtrip():
+    """to_dict -> from_dict should produce an equivalent event."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
+
+    original = AgentEvent(
+        session_id="sess-rt",
+        kind=AgentEventKind.TOOL_CALL,
+        payload={"tool_id": "t1", "tool_name": "bash", "arguments": {}},
+        sequence=42,
+        metadata={"adapter": "stdio"},
+    )
+    d = original.to_dict()
+    restored = AgentEvent.from_dict(d)
+
+    assert restored.session_id == original.session_id
+    assert restored.kind == original.kind
+    assert restored.payload == original.payload
+    assert restored.sequence == original.sequence
+    assert restored.metadata == original.metadata
+    # Timestamps should match (ISO roundtrip)
+    assert restored.timestamp.isoformat() == original.timestamp.isoformat()

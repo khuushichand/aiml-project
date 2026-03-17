@@ -46,3 +46,20 @@ class AgentEvent:
             "payload": self.payload,
             "metadata": self.metadata,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AgentEvent":
+        """Reconstruct an AgentEvent from a dict (e.g., from audit DB replay)."""
+        ts = data.get("timestamp")
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts)
+        elif not isinstance(ts, datetime):
+            ts = datetime.now(timezone.utc)
+        return cls(
+            session_id=data["session_id"],
+            kind=AgentEventKind(data["kind"]),
+            payload=data.get("payload", {}),
+            sequence=data.get("sequence", 0),
+            timestamp=ts,
+            metadata=data.get("metadata", {}),
+        )

@@ -61,6 +61,7 @@ class WSBroadcaster(EventConsumer):
         self._queue: asyncio.Queue[AgentEvent] | None = None
         self._task: asyncio.Task[None] | None = None
         self._running: bool = False
+        self._stop_event: asyncio.Event = asyncio.Event()
 
     # ------------------------------------------------------------------ #
     # Connection management
@@ -115,11 +116,13 @@ class WSBroadcaster(EventConsumer):
         self._bus = bus
         self._queue = bus.subscribe(self.consumer_id)
         self._running = True
+        self._stop_event.clear()
         self._task = asyncio.create_task(self._consume_loop())
 
     async def stop(self) -> None:
-        """Cancel the consume loop and unsubscribe."""
+        """Signal the consume loop to exit and unsubscribe."""
         self._running = False
+        self._stop_event.set()
         if self._task is not None:
             self._task.cancel()
             try:
@@ -137,15 +140,23 @@ class WSBroadcaster(EventConsumer):
 
     async def _consume_loop(self) -> None:
         """Read events from the queue and dispatch to connections."""
-        assert self._queue is not None  # noqa: S101
-        while self._running:
-            try:
-                event = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-                await self.on_event(event)
-            except asyncio.TimeoutError:
-                continue
-            except asyncio.CancelledError:
-                break
+        if self._queue is None:
+            return
+        stop_task = asyncio.create_task(self._stop_event.wait())
+        try:
+            while self._running:
+                get_task = asyncio.create_task(self._queue.get())
+                done, _ = await asyncio.wait(
+                    {get_task, stop_task}, return_when=asyncio.FIRST_COMPLETED,
+                )
+                if stop_task in done:
+                    get_task.cancel()
+                    break
+                await self.on_event(get_task.result())
+        except asyncio.CancelledError:
+            pass
+        finally:
+            stop_task.cancel()
 
 
 def _passes_filter(kind: AgentEventKind, verbosity: str) -> bool:
