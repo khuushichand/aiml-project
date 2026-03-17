@@ -5,8 +5,8 @@
 ## Normalized Counts
 
 - Raw `MediaDatabase(...)` constructors in app code: 7
-- Operational `create_media_database(...)` call sites in app code: 10
-- Operational `managed_media_database(...)` call sites in app code: 34
+- Operational `create_media_database(...)` call sites in app code: 9
+- Operational `managed_media_database(...)` call sites in app code: 35
 - `Media_DB_v2` references in app code: 135
 
 Notes:
@@ -53,6 +53,7 @@ Notes:
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | `MOVE_MANAGED` already satisfied | Ingestion-claims SQL fallback now uses the managed helper with `initialize=False` and suppressed close failures |
 | `app/core/Embeddings/services/jobs_worker.py` | 1 | `MOVE_MANAGED` already satisfied | Local media-content reads now scope their DB session through the managed helper with `initialize=False` |
 | `app/core/Embeddings/services/vector_compactor.py` | 1 | `MOVE_MANAGED` already satisfied | Soft-delete lookup now scopes its Media DB read through the managed helper with `initialize=False` and suppressed close failures |
+| `app/core/Workflows/adapters/knowledge/crud.py` | 1 | `MOVE_MANAGED` already satisfied | Workflow claims search/list reads now scope their per-user Media DB through a local managed-helper wrapper with `initialize=False` |
 | `app/core/RAG/rag_service/unified_pipeline.py` | 1 | `MOVE_MANAGED` already satisfied | Pre-extracted claims verification now scopes its local Media DB read through the managed helper with `initialize=False` and suppressed close failures |
 | `app/core/Watchlists/pipeline.py` | 1 | `MOVE_MANAGED` already satisfied | The optional per-run media DB now scopes through the managed helper with `initialize=False` and suppressed close failures |
 
@@ -65,7 +66,6 @@ Notes:
 | `app/services/connectors_worker.py` | 1 | connector-owned per-sync DB helper through shared factory | `MOVE_FACTORY` already satisfied | `_process_import_job(...)` now opens via `_create_connector_media_db(...)` and closes on every exit path |
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | caller still owns sink DB lifetime |
 | `app/services/tts_history_cleanup_service.py` | 1 | local cleanup DB helper wraps probe and per-user loops | `NEW_HELPER` already satisfied | preserves explicit close behavior while removing raw constructors |
-| `app/core/Workflows/adapters/knowledge/crud.py` | 1 | workflow-owned per-user helper | `NEW_HELPER` | signature mismatch is fixed; remaining helper should be revisited only if workflow DB ownership changes |
 | `app/core/Data_Tables/jobs_worker.py` | 1 | cached per-user DB owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Evaluations/embeddings_abtest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | explicit owner-controlled lifetime is fine |
 | `app/core/DB_Management/Users_DB.py` | 1 | factory wrapper returns DB instance | `KEEP_RAW` | wrapper boundary, not local scope |
@@ -144,7 +144,7 @@ File:
 
 Status:
 
-- Resolved in the worktree by introducing a workflow-specific helper that calls `create_media_database(client_id=..., db_path=...)` with the real API contract.
+- Resolved in the worktree by introducing a workflow-specific helper that scopes short-lived claims reads through `managed_media_database(client_id=..., db_path=..., initialize=False)`.
 - Keep the workflow helper in place until the broader workflow DB surface is revisited.
 
 ### 2. Local-scope DB creation without obvious close in the same helper

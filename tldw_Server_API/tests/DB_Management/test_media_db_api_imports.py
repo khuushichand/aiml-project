@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.Embeddings import ChromaDB_Library
 from tldw_Server_API.app.core.Chunking import template_initialization
 from tldw_Server_API.app.core.Ingestion_Media_Processing import visual_ingestion
 from tldw_Server_API.app.core.TTS import tts_jobs_worker
+from tldw_Server_API.app.core.Workflows.adapters.knowledge import crud as knowledge_crud
 from tldw_Server_API.app.core.Workflows.adapters.media import ingest as workflow_media_ingest
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Processing_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
@@ -212,6 +213,11 @@ def test_template_initialization_imports_managed_media_database_from_media_db_ap
 
 def test_watchlists_pipeline_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(watchlists_pipeline)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_workflow_knowledge_crud_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(knowledge_crud)
     assert module.managed_media_database is media_db_api.managed_media_database
 
 
