@@ -27,7 +27,7 @@ import yaml
 from loguru import logger as _base_logger
 
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 
 #

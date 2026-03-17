@@ -2,6 +2,9 @@ import configparser
 import importlib
 
 from tldw_Server_API.app.core.DB_Management import DB_Manager
+from tldw_Server_API.app.api.v1.endpoints import research
+from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
+from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import enhanced_web_scraping_service
@@ -53,4 +56,19 @@ def test_media_ingest_jobs_worker_imports_create_media_database_from_media_db_ap
 
 def test_enhanced_web_scraping_service_imports_create_media_database_from_media_db_api():
     module = importlib.reload(enhanced_web_scraping_service)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_research_endpoint_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(research)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_xml_ingestion_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(XML_Ingestion_Lib)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_mediawiki_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(Media_Wiki)
     assert module.create_media_database is media_db_api.create_media_database

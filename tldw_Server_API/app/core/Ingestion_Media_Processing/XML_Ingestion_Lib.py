@@ -10,17 +10,13 @@ try:  # Prefer hardened XML parser
 except Exception:  # pragma: no cover - defusedxml is an optional dependency
     DET = None  # type: ignore
     _DEFUSED_AVAILABLE = False
-
-try:  # Fallback parse error type used when defusedxml is unavailable
-    from xml.etree.ElementTree import ParseError as _StdXMLParseError  # type: ignore
-except Exception:  # pragma: no cover - extremely unlikely to be missing
-    _StdXMLParseError = Exception  # type: ignore
 #
 # External Imports
 #
 # Local Imports
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords, create_media_database
+from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import logging
 
@@ -175,7 +171,7 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
 
         return f"XML file '{display_name}' import complete. Database result: {result}"
 
-    except getattr(DET, "ParseError", _StdXMLParseError) as e:  # type: ignore[arg-type]
+    except getattr(DET, "ParseError", ValueError) as e:  # type: ignore[arg-type]
         logging.error(f"XML parsing error: {str(e)}")
         return f"Error parsing XML file: {str(e)}"
     except Exception as e:
