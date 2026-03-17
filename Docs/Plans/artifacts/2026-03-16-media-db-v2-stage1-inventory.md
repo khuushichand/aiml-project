@@ -5,8 +5,8 @@
 ## Normalized Counts
 
 - Raw `MediaDatabase(...)` constructors in app code: 13
-- Operational `create_media_database(...)` call sites in app code: 27
-- Operational `managed_media_database(...)` call sites in app code: 26
+- Operational `create_media_database(...)` call sites in app code: 26
+- Operational `managed_media_database(...)` call sites in app code: 27
 - `Media_DB_v2` references in app code: 137
 
 Notes:
@@ -33,6 +33,7 @@ Notes:
 | `app/core/Web_Scraping/Article_Extractor_Lib.py` | 1 | `MOVE_MANAGED` already satisfied | Local article ingest helper now scopes its DB write through the managed helper with `initialize=False` |
 | `app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py` | 1 | `MOVE_MANAGED` already satisfied | Local XML import now scopes its DB write through the managed helper with `initialize=False` |
 | `app/core/Ingestion_Media_Processing/Books/Book_Processing_Lib.py` | 1 | `MOVE_MANAGED` already satisfied | Local text-file ingest now scopes its DB write through the managed helper with `initialize=False` |
+| `app/core/Ingestion_Media_Processing/MediaWiki/Media_Wiki.py` | 1 | `MOVE_MANAGED` already satisfied | Local MediaWiki import now scopes its DB write through the managed helper with `initialize=False` |
 | `app/services/web_scraping_service.py` | 1 | `MOVE_MANAGED` already satisfied | Correct `initialize=False` local scope |
 | `app/services/enhanced_web_scraping_service.py` | 1 | `MOVE_MANAGED` already satisfied | Correct `initialize=False` local scope |
 | `app/services/media_files_cleanup_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local MediaFiles lookup now scoped through managed helper with `initialize=False` |
@@ -57,7 +58,6 @@ Notes:
 | `app/services/tts_history_cleanup_service.py` | 1 | local cleanup DB helper wraps probe and per-user loops | `NEW_HELPER` already satisfied | preserves explicit close behavior while removing raw constructors |
 | `app/core/Workflows/adapters/knowledge/crud.py` | 2 | per-user lazy import path | `NEW_HELPER` | currently calls `create_media_database(user_id=...)`; signature mismatch hazard |
 | `app/core/Watchlists/pipeline.py` | 1 | per-job DB used through ingest flow | `MOVE_MANAGED` | likely function-scope context-manager conversion |
-| `app/core/Ingestion_Media_Processing/MediaWiki/Media_Wiki.py` | 1 | local import helper DB | `MOVE_MANAGED` | local ingest path |
 | `app/core/Data_Tables/jobs_worker.py` | 1 | cached per-user DB owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Embeddings/services/jobs_worker.py` | 1 | local read helper | `MOVE_MANAGED` | no reason to hold explicit lifecycle |
 | `app/core/Embeddings/services/vector_compactor.py` | 1 | local query and close | `MOVE_MANAGED` | simple context-manager conversion |

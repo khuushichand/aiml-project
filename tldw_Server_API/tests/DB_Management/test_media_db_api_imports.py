@@ -114,9 +114,9 @@ def test_ingestion_sources_worker_imports_create_media_database_from_media_db_ap
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_mediawiki_imports_create_media_database_from_media_db_api():
+def test_mediawiki_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(Media_Wiki)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_article_extractor_imports_managed_media_database_from_media_db_api():
