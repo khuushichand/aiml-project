@@ -547,6 +547,125 @@ test.describe("Workspace Playground Workflow", () => {
     await assertNoCriticalErrors(diagnostics)
   })
 
+  test("generates compare-sources output for two selected sources through the studio pane", async ({
+    authedPage,
+    diagnostics
+  }) => {
+    const sourceA = {
+      mediaId: 8_844_101,
+      title: "Workspace Comparison Source A",
+      type: "document" as const
+    }
+    const sourceB = {
+      mediaId: 8_844_102,
+      title: "Workspace Comparison Source B",
+      type: "website" as const
+    }
+    const comparisonToken = "workspace-compare-sources-token"
+    const comparisonOutput = `## Agreements\n- Both sources reference ${comparisonToken}.\n\n## Disagreements\n- Source B adds extra caveats.\n\n## Evidence Strength\n- Evidence is moderate.\n\n## Open Questions\n- Verify the missing caveat.`
+    const compareRequests: Array<Record<string, unknown>> = []
+
+    await authedPage.route("**/api/v1/rag/search", async (route) => {
+      compareRequests.push((route.request().postDataJSON() as Record<string, unknown>) || {})
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          generation: comparisonOutput,
+          usage: {
+            total_tokens: 321,
+            total_cost_usd: 0.12
+          },
+          citations: [
+            { source: sourceA.title, media_id: sourceA.mediaId },
+            { source: sourceB.title, media_id: sourceB.mediaId }
+          ],
+          results: [
+            {
+              id: "compare-source-a",
+              content: "Source A evidence",
+              metadata: {
+                title: sourceA.title,
+                media_id: sourceA.mediaId
+              },
+              score: 0.91
+            },
+            {
+              id: "compare-source-b",
+              content: "Source B evidence",
+              metadata: {
+                title: sourceB.title,
+                media_id: sourceB.mediaId
+              },
+              score: 0.88
+            }
+          ]
+        })
+      })
+    })
+
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    await workspacePage.goto()
+    await workspacePage.waitForReady()
+
+    await workspacePage.seedSources([sourceA, sourceB])
+
+    await expect
+      .poll(async () => (await workspacePage.getSourceIds()).length, {
+        timeout: 10_000
+      })
+      .toBe(2)
+
+    const sourceIds = await workspacePage.getSourceIds()
+    const compareButton = workspacePage.studioPanel.getByRole("button", {
+      name: /^Compare Sources$/i
+    })
+
+    await workspacePage.selectSourceById(sourceIds[0])
+    await workspacePage.expectSourceSelected(sourceIds[0])
+    await expect(compareButton).toBeDisabled()
+
+    await workspacePage.selectSourceById(sourceIds[1])
+    await workspacePage.expectSourceSelected(sourceIds[1])
+    await expect(workspacePage.sourcesPanel.getByText(/^2 selected$/)).toBeVisible()
+    await expect(compareButton).toBeEnabled()
+
+    await compareButton.click()
+
+    await expect
+      .poll(() => compareRequests.length, { timeout: 10_000 })
+      .toBe(1)
+    expect(compareRequests[0]?.query).toBe("agreements disagreements claims evidence")
+    expect(compareRequests[0]?.include_media_ids).toEqual([
+      sourceA.mediaId,
+      sourceB.mediaId
+    ])
+    expect(compareRequests[0]?.top_k).toBe(30)
+    expect(compareRequests[0]?.enable_generation).toBe(true)
+    expect(compareRequests[0]?.enable_citations).toBe(true)
+    expect(String(compareRequests[0]?.generation_prompt || "")).toContain(
+      "Compare the selected sources"
+    )
+
+    const artifactCard = workspacePage.studioPanel
+      .locator('[data-testid^="studio-artifact-card-"]')
+      .first()
+    await expect(artifactCard).toBeVisible({ timeout: 10_000 })
+    await expect(artifactCard).toContainText("Compare Sources")
+    await expect(artifactCard).toContainText("Tokens: 321")
+    await expect(artifactCard).toContainText("Cost: $0.120")
+    await expect(workspacePage.studioPanel).toContainText(
+      "Estimated workspace usage: 321 tokens • $0.120"
+    )
+    await artifactCard.getByRole("button", { name: /view/i }).click()
+    await expect(authedPage.getByText(comparisonToken)).toBeVisible({ timeout: 10_000 })
+    await expect(
+      artifactCard.getByRole("button", { name: /download/i })
+    ).toBeVisible({ timeout: 10_000 })
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
   test("cancels in-flight summary generation and marks the artifact failed", async ({
     authedPage,
     diagnostics

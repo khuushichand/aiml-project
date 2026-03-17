@@ -357,6 +357,32 @@
     - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `9 passed (13.7s)`
     - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `34 passed (1.5m)`
 
+### WP-007: Workspace compare-sources flow only had component-level proof
+
+- Status: Resolved as test hardening
+- Route: `/workspace-playground`
+- Feature: generating a compare-sources artifact from the selected sources
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Seed two ready sources
+  3. Select one source and observe that `Compare Sources` remains disabled
+  4. Select a second source and trigger `Compare Sources`
+  5. Observe that the prior audit had component coverage for the request builder, but no route-level proof that the page gate, request payload, artifact completion, and artifact viewing all worked together
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts:550`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx:951`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx:3814`
+- Suspected layer: route-level gap between the StudioPane button gating/artifact shell and the lower-level compare-generation helper
+- Why it matters: compare-sources is a core research synthesis action for beta, and without a route test the suite could stay green while the page stopped enabling the action, sent the wrong media scope, or failed to expose the generated comparison output
+- Resolution:
+  - Added deterministic route-level Playwright coverage for the StudioPane compare flow.
+  - The new route test proves the one-source disabled state, the two-source enabled state, the exact `/api/v1/rag/search` compare request payload, and the completed artifact usage summary plus `View` modal content.
+  - Verified that no product code change was required for this slice; the missing confidence was in route-level proof rather than the current compare implementation.
+  - Verification:
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "generates compare-sources output for two selected sources through the studio pane" --reporter=line --workers=1` => `1 passed (3.3s)`
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `11 passed (17.1s)`
+    - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `36 passed (1.7m)`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
@@ -374,23 +400,26 @@
 - Current `/knowledge` shared-permalink verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` branch verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
 - Current `/knowledge` branch verification summary: `1 passed`, `0 failed`
-- Current `/workspace-playground` deterministic summary after repairs: `10 passed`, `0 failed`
+- Current `/workspace-playground` deterministic summary after repairs: `11 passed`, `0 failed`
 - Current `/workspace-playground` targeted add-source verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted add-source verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted filter/sort remount verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "preserves advanced source filters and temporary sort across sources pane remounts" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted filter/sort remount verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted grounded-chat search verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "submits grounded chat for selected sources and reopens the matching assistant turn from workspace search" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted grounded-chat search verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` targeted compare-sources verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "generates compare-sources output for two selected sources through the studio pane" --reporter=line --workers=1`
+- Current `/workspace-playground` targeted compare-sources verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted studio cancel/recovery verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "cancels in-flight summary generation|recovers interrupted summary generation" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted studio cancel/recovery verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `3 passed`, `0 failed`
-- Current three-spec audit rerun: `35 passed`, `0 failed`
+- Current three-spec audit rerun: `36 passed`, `0 failed`
 - `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
 - `/workspace-playground` route-level advanced filter and sort persistence is now covered deterministically across sources-pane remounts
 - `/workspace-playground` route-level grounded chat plus result-backed global search is now covered deterministically, and the broken chat-focus handoff has been fixed
+- `/workspace-playground` route-level compare-sources generation is now covered deterministically from source selection through completed artifact viewing
 - `/workspace-playground` route-level studio cancel and interrupted-reload recovery is now covered deterministically
-- Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search; grounded chat and global search now have deterministic route proof, but remain `Mock-only` overall until live proof exists
+- Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search; grounded chat, compare generation, and global search now have deterministic route proof, but remain `Mock-only` overall until live proof exists
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly
