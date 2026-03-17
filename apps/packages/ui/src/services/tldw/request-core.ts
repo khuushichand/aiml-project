@@ -37,6 +37,8 @@ const normalizeKnownPathQuirks = (path: PathOrUrl): PathOrUrl => {
 
 const isMediaApiPath = (path: string): boolean => /\/api\/v1\/media(?:\/|\?|$)/.test(path)
 const isFilesApiPath = (path: string): boolean => /\/api\/v1\/files(?:\/|\?|$)/.test(path)
+const isSlidesApiPath = (path: string): boolean => /\/api\/v1\/slides(?:\/|\?|$)/.test(path)
+const SLIDES_REQUEST_TIMEOUT_FLOOR_MS = 120000
 
 export const deriveRequestTimeout = (
   cfg: TldwConfigLike,
@@ -72,6 +74,11 @@ export const deriveRequestTimeout = (
       : Number(cfg?.requestTimeoutMs) > 0
         ? Number(cfg.requestTimeoutMs)
         : 10000
+  }
+  if (isSlidesApiPath(p)) {
+    const configuredTimeout =
+      Number(cfg?.requestTimeoutMs) > 0 ? Number(cfg.requestTimeoutMs) : 0
+    return Math.max(configuredTimeout, SLIDES_REQUEST_TIMEOUT_FLOOR_MS)
   }
   return Number(cfg?.requestTimeoutMs) > 0
     ? Number(cfg.requestTimeoutMs)

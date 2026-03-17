@@ -40,7 +40,7 @@ const OUTPUTS = [
 ] as const
 
 const hasErrorText = (content: string) =>
-  /error encountered|generation failed|no usable|download failed|could not/i.test(
+  /error encountered|generation failed|generation canceled before completion|interrupted|no usable|download failed|could not/i.test(
     content,
   )
 
@@ -118,7 +118,7 @@ test.describe("Workspace Playground output matrix probe", () => {
             }
 
             const cardText = (await artifactCard.textContent()) || ""
-            if (/failed|encountered an error|no usable/i.test(cardText)) {
+            if (/failed|encountered an error|generation canceled before completion|interrupted|no usable/i.test(cardText)) {
               return `failed:${cardText}`
             }
 

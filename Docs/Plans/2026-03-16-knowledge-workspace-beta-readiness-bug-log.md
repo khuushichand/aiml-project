@@ -383,6 +383,38 @@
     - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `11 passed (17.1s)`
     - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `36 passed (1.7m)`
 
+### WP-008: Workspace live studio outputs were canceling under frontend timeouts, and the probe masked canceled artifacts as pending
+
+- Status: Resolved as product fix plus test hardening
+- Route: `/workspace-playground`
+- Feature: generating non-audio studio outputs against the live backend
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Select two real sources
+  3. Run the live studio-output matrix across report, compare, timeline, data table, mind map, slides, quiz, and flashcards
+  4. Observe that the first live probe stalled on `Slides` with the artifact text `Generation canceled before completion.`
+  5. After fixing slides timeouts, rerun the same live probe and observe that `Flashcards` then failed with the same cancellation text
+  6. Observe that the original probe classified canceled/interrupted artifacts as still pending, so it could time out without surfacing the real failed state promptly
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.output-matrix.probe.spec.ts:42`
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.output-matrix.probe.spec.ts:121`
+  - `apps/packages/ui/src/services/tldw/request-core.ts:40`
+  - `apps/packages/ui/src/services/flashcards.ts:16`
+  - `apps/packages/ui/src/services/__tests__/request-core.path-normalization.test.ts:56`
+  - `apps/packages/ui/src/services/__tests__/flashcards.test.ts:21`
+- Suspected layer: frontend request-timeout policy for long-running studio generation endpoints, plus incomplete failure-state detection in the live probe
+- Why it matters: beta users can trigger expensive studio generations that appear to have been canceled by the user when the frontend actually timed them out, and the audit suite can underreport that failure mode if canceled artifacts are treated like pending work
+- Resolution:
+  - Added a `120000ms` timeout floor for `/api/v1/slides/...` requests in shared request-core timeout derivation.
+  - Added an explicit `120000ms` timeout for `/api/v1/flashcards/generate`, mirroring the existing long-running quiz-generation contract.
+  - Added focused Vitest coverage for both timeout contracts.
+  - Hardened the live output-matrix probe so canceled/interrupted artifact states fail fast instead of looking pending.
+  - Reran the live output matrix and verified all non-audio outputs completed and downloaded successfully against the real backend.
+  - Verification:
+    - `bunx vitest run src/services/__tests__/flashcards.test.ts src/services/__tests__/quizzes.test.ts src/services/__tests__/request-core.path-normalization.test.ts` => `11 passed`
+    - `bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `1 passed (1.5m)`
+    - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `37 passed (2.8m)`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
@@ -409,17 +441,20 @@
 - Current `/workspace-playground` targeted grounded-chat search verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted compare-sources verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "generates compare-sources output for two selected sources through the studio pane" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted compare-sources verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` targeted live output-matrix verification command: `bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1`
+- Current `/workspace-playground` targeted live output-matrix verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted studio cancel/recovery verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "cancels in-flight summary generation|recovers interrupted summary generation" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted studio cancel/recovery verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `3 passed`, `0 failed`
-- Current three-spec audit rerun: `36 passed`, `0 failed`
+- Current four-spec audit rerun: `37 passed`, `0 failed`
 - `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
 - `/workspace-playground` route-level advanced filter and sort persistence is now covered deterministically across sources-pane remounts
 - `/workspace-playground` route-level grounded chat plus result-backed global search is now covered deterministically, and the broken chat-focus handoff has been fixed
 - `/workspace-playground` route-level compare-sources generation is now covered deterministically from source selection through completed artifact viewing
 - `/workspace-playground` route-level studio cancel and interrupted-reload recovery is now covered deterministically
+- `/workspace-playground` live non-audio studio output generation and downloads now pass end to end, and the timeout policies for slides plus flashcards are explicitly covered
 - Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search; grounded chat, compare generation, and global search now have deterministic route proof, but remain `Mock-only` overall until live proof exists
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly
