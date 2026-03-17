@@ -3,7 +3,7 @@
 #
 from __future__ import annotations
 
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from loguru import logger
@@ -14,7 +14,6 @@ from tldw_Server_API.app.api.v1.schemas.document_outline import (
     OutlineEntry,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Storage import get_storage_backend
 from tldw_Server_API.app.core.Storage.storage_interface import StorageError
 
@@ -111,7 +110,7 @@ def _extract_pdf_outline(pdf_data: bytes | BinaryIO) -> tuple[list[OutlineEntry]
 )
 async def get_document_outline(
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> DocumentOutlineResponse:
     """

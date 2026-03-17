@@ -29,7 +29,6 @@ from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (
 )
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessPDFsForm
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -71,7 +70,7 @@ ALLOWED_PDF_EXTENSIONS = [".pdf"]
 )
 async def process_pdfs_endpoint(
     background_tasks: BackgroundTasks,  # Parity with legacy endpoint signature
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     form_data: ProcessPDFsForm = Depends(get_process_pdfs_form),
     files: list[UploadFile] | None = File(None, description="PDF uploads"),
     vlm_enable: bool = Form(False, description="Enable VLM detection (separate from OCR)"),

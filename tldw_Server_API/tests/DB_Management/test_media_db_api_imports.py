@@ -1,5 +1,6 @@
 import configparser
 import importlib
+import sys
 
 import pytest
 
@@ -8,10 +9,13 @@ from tldw_Server_API.app.core.DB_Management import Users_DB
 from tldw_Server_API.app.core.DB_Management import Media_DB_v2 as legacy_media_db
 from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.api.v1.API_Deps import DB_Deps as media_db_deps
+from tldw_Server_API.app.api.v1.endpoints.media import document_outline
 from tldw_Server_API.app.api.v1.endpoints.media import document_insights
 from tldw_Server_API.app.api.v1.endpoints.media import document_references
 from tldw_Server_API.app.api.v1.endpoints.media import item as media_item
 from tldw_Server_API.app.api.v1.endpoints.media import navigation as media_navigation
+from tldw_Server_API.app.api.v1.endpoints.media import process_documents
+from tldw_Server_API.app.api.v1.endpoints.media import process_pdfs
 from tldw_Server_API.app.api.v1.utils import http_errors
 from tldw_Server_API.app.core.Claims_Extraction import (
     claims_notifications,
@@ -135,6 +139,40 @@ def test_navigation_endpoint_does_not_bind_media_database_from_media_db_v2(monke
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(media_navigation)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_document_outline_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(document_outline)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_process_documents_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(process_documents)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_process_pdfs_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(process_pdfs)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_reading_progress_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    module_name = "tldw_Server_API.app.api.v1.endpoints.media.reading_progress"
+    sys.modules.pop(module_name, None)
+
+    module = importlib.import_module(module_name)
 
     assert "MediaDatabase" not in module.__dict__
 
