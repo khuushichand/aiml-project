@@ -50,9 +50,15 @@ class AgentEvent:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentEvent":
         """Reconstruct an AgentEvent from a dict (e.g., from audit DB replay)."""
+        for key in ("session_id", "kind"):
+            if key not in data:
+                raise ValueError(f"AgentEvent.from_dict: missing required key {key!r}")
         ts = data.get("timestamp")
         if isinstance(ts, str):
-            ts = datetime.fromisoformat(ts)
+            # Python 3.10 fromisoformat doesn't handle +00:00; strip it
+            if ts.endswith("+00:00"):
+                ts = ts[:-6]
+            ts = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
         elif not isinstance(ts, datetime):
             ts = datetime.now(timezone.utc)
         return cls(

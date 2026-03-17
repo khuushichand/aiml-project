@@ -27,8 +27,8 @@ def _make_event(
 
 async def _wait_for(predicate, *, timeout: float = 2.0, interval: float = 0.02):
     """Poll *predicate* until it returns True or *timeout* elapses."""
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
         if predicate():
             return
         await asyncio.sleep(interval)
