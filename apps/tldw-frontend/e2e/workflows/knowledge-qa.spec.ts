@@ -17,7 +17,13 @@ import {
   assertNoCriticalErrors
 } from "../utils/fixtures"
 import { KnowledgeQAPage } from "../utils/page-objects/KnowledgeQAPage"
-import { seedAuth, generateTestId, waitForConnection } from "../utils/helpers"
+import { WorkspacePlaygroundPage } from "../utils/page-objects/WorkspacePlaygroundPage"
+import {
+  seedAuth,
+  generateTestId,
+  waitForConnection,
+  dismissConnectionModals
+} from "../utils/helpers"
 
 test.describe("KnowledgeQA Workflow", () => {
   let qaPage: KnowledgeQAPage
@@ -527,6 +533,173 @@ test.describe("KnowledgeQA Workflow", () => {
 
       // Unroute to not affect other tests
       await authedPage.unroute("**/api/v1/rag/search")
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
+  // ═════════════════════════════════════════════════════════════════════
+  // 3.6  Workspace Handoff
+  // ═════════════════════════════════════════════════════════════════════
+
+  test.describe("Workspace Handoff", () => {
+    test("should carry answer context into workspace route", async ({
+      authedPage,
+      diagnostics
+    }) => {
+      qaPage = new KnowledgeQAPage(authedPage)
+      const workspacePage = new WorkspacePlaygroundPage(authedPage)
+      const query = `knowledge workspace handoff ${generateTestId("handoff")}`
+      const answer = "Workspace-ready synthesis [1]"
+      const sourceTitle = "Workspace Handoff Source"
+      const sourceUrl = "https://example.com/workspace-handoff-source"
+
+      await authedPage.route("**/api/v1/rag/search/stream", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/plain",
+          body: ""
+        })
+      })
+
+      await authedPage.route("**/api/v1/config/docs-info", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            info: {
+              version: "e2e"
+            },
+            capabilities: {}
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/rag/search", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            results: [
+              {
+                id: "501",
+                content: "Workspace handoff excerpt",
+                metadata: {
+                  title: sourceTitle,
+                  source_type: "pdf",
+                  url: sourceUrl,
+                  media_id: 501,
+                  page_number: 7
+                },
+                score: 0.97
+              }
+            ],
+            answer,
+            expanded_queries: [query]
+          })
+        })
+      })
+
+      await qaPage.goto()
+      await qaPage.waitForReady()
+      const searchInput = await qaPage.getSearchInput()
+      await searchInput.fill(query)
+      await dismissConnectionModals(authedPage)
+      await authedPage.getByRole("button", { name: /^Ask$/i }).click({
+        force: true
+      })
+      await qaPage.waitForResults()
+
+      await expect(authedPage.getByTestId("knowledge-answer-content")).toContainText(
+        /Workspace-ready synthesis/i
+      )
+      await expect(
+        authedPage.getByRole("button", { name: /^Open in Workspace$/i })
+      ).toBeVisible()
+
+      await dismissConnectionModals(authedPage)
+      await authedPage
+        .getByRole("button", { name: /^Open in Workspace$/i })
+        .evaluate((button: HTMLButtonElement) => button.click())
+
+      await authedPage.waitForURL(/\/workspace-playground(?:\?|$)/, {
+        timeout: 10_000
+      })
+      await workspacePage.waitForReady()
+      await expect(workspacePage.sourcesPanel.getByText(sourceTitle)).toBeVisible({
+        timeout: 10_000
+      })
+
+      await expect
+        .poll(
+          async () =>
+            authedPage.evaluate(() => {
+              const store = (window as {
+                __tldw_useWorkspaceStore?: {
+                  getState?: () => {
+                    sources?: Array<{
+                      id: string
+                      mediaId?: number
+                      title?: string
+                    }>
+                    selectedSourceIds?: string[]
+                    currentNote?: {
+                      title?: string
+                      content?: string
+                    }
+                  }
+                }
+              }).__tldw_useWorkspaceStore
+
+              const state = store?.getState?.()
+              const sources = state?.sources || []
+              const handoffSource =
+                sources.find((source) => source.mediaId === 501) || null
+
+              return {
+                handoffSourcePresent: Boolean(handoffSource),
+                handoffSourceSelected: Boolean(
+                  handoffSource &&
+                    state?.selectedSourceIds?.includes(handoffSource.id)
+                ),
+                noteTitle: state?.currentNote?.title || "",
+                noteContent: state?.currentNote?.content || "",
+                prefillPending:
+                  window.localStorage.getItem(
+                    "__tldw_workspace_playground_prefill"
+                  ) !== null
+              }
+            }),
+          { timeout: 10_000 }
+        )
+        .toMatchObject({
+          handoffSourcePresent: true,
+          handoffSourceSelected: true,
+          noteTitle: `Knowledge QA: ${query}`,
+          prefillPending: false
+        })
+
+      const workspaceSnapshot = await authedPage.evaluate(() => {
+        const store = (window as {
+          __tldw_useWorkspaceStore?: {
+            getState?: () => {
+              currentNote?: {
+                content?: string
+              }
+            }
+          }
+        }).__tldw_useWorkspaceStore
+        const state = store?.getState?.()
+        return {
+          noteContent: state?.currentNote?.content || ""
+        }
+      })
+
+      expect(workspaceSnapshot.noteContent).toContain("Imported from Knowledge QA")
+      expect(workspaceSnapshot.noteContent).toContain(`Question: ${query}`)
+      expect(workspaceSnapshot.noteContent).toContain(answer)
+      expect(workspaceSnapshot.noteContent).toContain(`[1] ${sourceTitle}`)
+      expect(workspaceSnapshot.noteContent).toContain(sourceUrl)
 
       await assertNoCriticalErrors(diagnostics)
     })

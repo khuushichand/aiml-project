@@ -34,7 +34,7 @@
 | `/knowledge` | Follow-up thread continuity | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Sends second query and checks conversation turn count | Verify reload continuity separately |
 | `/knowledge` | History sidebar and restored prior searches | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Route-scoped sidebar open and `Cmd+K` reset now pass live; reload restoration is still unproven | Resolved `KQ-003`; add explicit reload-restore coverage separately |
 | `/knowledge` | Error state when API fails | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Forces `500` via route interception | Keep as non-gating edge coverage |
-| `/knowledge` | Workspace handoff from answer panel | `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/AnswerPanel.workspace-handoff.test.tsx` | Mock-only | Component test only, no real route transition or prefill proof | Add live Playwright |
+| `/knowledge` | Workspace handoff from answer panel | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/AnswerPanel.workspace-handoff.test.tsx` | Mock-only | Route-level deterministic Playwright now proves answer-panel click, `/workspace-playground` navigation, source prefill selection, and imported note content | Promote to live once backend preflight is stable again |
 | `/knowledge` | Share/export/branch flows | component tests only | Missing | No live E2E proof found yet | Baseline and add route coverage |
 | `/knowledge` | Citation-to-source coherence | partial in `knowledge-qa.spec.ts` | Misleading | Shows panel opens, but not strong source/evidence identity proof | Add targeted live assertion |
 
@@ -81,6 +81,10 @@
   - removed stale selector failures from settings and history flows
   - replaced brittle mocked delayed-answer text assertion with rendered citation/evidence assertions
   - upgraded settings/history checks from permissive smoke tests to route-scoped behavioral assertions
+- `/knowledge` targeted handoff command:
+  - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "should carry answer context into workspace route" --reporter=line --workers=1`
+  - outcome: `1 passed`, runtime about `4.3s`
+  - classification note: this handoff proof is deterministic route coverage, not live-backend coverage
 - `/workspace-playground` real-backend command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1`
 - `/workspace-playground` real-backend outcome after repairs: `2 passed`, `0 failed`, runtime about `6.0s`
 - `/workspace-playground` stability verification:
@@ -89,3 +93,5 @@
 - Original three-spec audit rerun:
   - command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1`
   - outcome: `24 passed`, `0 failed`, runtime about `1.1m`
+- Current live-backend caveat:
+  - the local API listener dropped during this task and restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures, so the new handoff test was verified deterministically rather than against a live backend in this session

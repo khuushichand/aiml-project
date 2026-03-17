@@ -98,7 +98,10 @@
 - Baseline summary: `17 passed`, `7 failed`
 - Current `/knowledge` summary after repairs: `17 passed`, `0 failed`
 - Current `/knowledge` verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
+- Current `/knowledge` handoff verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "should carry answer context into workspace route" --reporter=line --workers=1`
+- Current `/knowledge` handoff verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `2 passed`, `0 failed`
 - Current three-spec audit rerun: `24 passed`, `0 failed`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
+- Live-backend caveat for the current session: the local API listener later dropped, and direct restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures; the handoff addition was therefore verified deterministically instead of with a fresh live rerun
