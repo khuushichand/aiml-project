@@ -18,7 +18,7 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 
 _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS = (
@@ -376,62 +376,56 @@ def dispatch_claim_review_notifications(
 
     def _deliver() -> None:
         try:
-            db = create_media_database(
+            with managed_media_database(
                 client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
                 db_path=db_path,
-            )
-        except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS:
-            return
-        try:
-            with contextlib.suppress(_CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS):
-                db.initialize_db()
-            config_row = db.get_claims_monitoring_settings(str(owner_user_id)) or {}
-            if config_row and not bool(config_row.get("enabled", True)):
-                return
-            channels = _normalize_review_channels(config_row)
-            if not any(channels.values()):
-                return
-            rows = db.get_claim_notifications_by_ids(notification_ids)
-            if not rows:
-                return
-            notifications = [_normalize_notification_row(row) for row in rows]
-            payload = _build_review_digest_payload(user_id=str(owner_user_id), notifications=notifications)
-            delivered = False
+                suppress_init_exceptions=_CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS,
+                suppress_close_exceptions=_CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS,
+            ) as db:
+                config_row = db.get_claims_monitoring_settings(str(owner_user_id)) or {}
+                if config_row and not bool(config_row.get("enabled", True)):
+                    return
+                channels = _normalize_review_channels(config_row)
+                if not any(channels.values()):
+                    return
+                rows = db.get_claim_notifications_by_ids(notification_ids)
+                if not rows:
+                    return
+                notifications = [_normalize_notification_row(row) for row in rows]
+                payload = _build_review_digest_payload(user_id=str(owner_user_id), notifications=notifications)
+                delivered = False
 
-            slack_url = config_row.get("slack_webhook_url")
-            webhook_url = config_row.get("webhook_url")
-            recipients = _parse_email_recipients(config_row.get("email_recipients"))
+                slack_url = config_row.get("slack_webhook_url")
+                webhook_url = config_row.get("webhook_url")
+                recipients = _parse_email_recipients(config_row.get("email_recipients"))
 
-            if channels.get("slack") and slack_url:
-                slack_text = f"Claims review notifications: {len(notifications)} items"
-                delivered = _deliver_review_webhook(
-                    url=str(slack_url),
-                    payload={"text": slack_text},
-                    channel="slack",
-                ) or delivered
+                if channels.get("slack") and slack_url:
+                    slack_text = f"Claims review notifications: {len(notifications)} items"
+                    delivered = _deliver_review_webhook(
+                        url=str(slack_url),
+                        payload={"text": slack_text},
+                        channel="slack",
+                    ) or delivered
 
-            if channels.get("webhook") and webhook_url:
-                delivered = _deliver_review_webhook(
-                    url=str(webhook_url),
-                    payload=payload,
-                    channel="webhook",
-                ) or delivered
+                if channels.get("webhook") and webhook_url:
+                    delivered = _deliver_review_webhook(
+                        url=str(webhook_url),
+                        payload=payload,
+                        channel="webhook",
+                    ) or delivered
 
-            if channels.get("email") and recipients:
-                html_body, text_body = _build_review_email_bodies(notifications)
-                delivered = _deliver_review_email_sync(
-                    recipients=recipients,
-                    subject=f"Claims review notifications ({len(notifications)})",
-                    html_body=html_body,
-                    text_body=text_body,
-                ) or delivered
+                if channels.get("email") and recipients:
+                    html_body, text_body = _build_review_email_bodies(notifications)
+                    delivered = _deliver_review_email_sync(
+                        recipients=recipients,
+                        subject=f"Claims review notifications ({len(notifications)})",
+                        html_body=html_body,
+                        text_body=text_body,
+                    ) or delivered
 
-            if delivered:
-                db.mark_claim_notifications_delivered(notification_ids)
+                if delivered:
+                    db.mark_claim_notifications_delivered(notification_ids)
         except _CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Claims review notification delivery failed: {exc}")
-        finally:
-            with contextlib.suppress(_CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS):
-                db.close_connection()
 
     threading.Thread(target=_deliver, daemon=True).start()
