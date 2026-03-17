@@ -373,10 +373,13 @@ async def test_verify_magic_link_rejects_admin_reauth_purpose(monkeypatch):
         async def verify_token_async(self, token: str, token_type: str | None = None):
             assert token == "admin-reauth-token"
             assert token_type == "magic_link"
+            if token_type != "magic_link":
+                raise ValueError("unexpected token type")
             return {
                 "email": "alice@example.com",
                 "user_id": 7,
                 "purpose": "admin_reauth",
+                "type": "admin_reauth",
             }
 
     scope = {

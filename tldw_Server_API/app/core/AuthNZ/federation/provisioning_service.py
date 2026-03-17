@@ -387,8 +387,10 @@ class FederationProvisioningService:
                     continue
                 remaining_team_memberships = await orgs_repo.list_memberships_for_user(int(user_id))
                 if any(
-                    int(membership.get("org_id")) == int(target_ref)
-                    and int(membership.get("team_id")) not in revoke_team_ids
+                    membership.get("org_id") is not None
+                    and int(membership["org_id"]) == int(target_ref)
+                    and membership.get("team_id") is not None
+                    and int(membership["team_id"]) not in revoke_team_ids
                     and str(membership.get("team_name") or "").strip() != DEFAULT_BASE_TEAM_NAME
                     for membership in remaining_team_memberships
                 ):
@@ -641,7 +643,8 @@ class FederationProvisioningService:
                             continue
                         remaining_team_memberships = await orgs_repo.list_memberships_for_user(int(user_id))
                         if any(
-                            int(membership.get("org_id")) == org_id
+                            membership.get("org_id") is not None
+                            and int(membership["org_id"]) == org_id
                             and str(membership.get("team_name") or "").strip() != DEFAULT_BASE_TEAM_NAME
                             for membership in remaining_team_memberships
                         ):

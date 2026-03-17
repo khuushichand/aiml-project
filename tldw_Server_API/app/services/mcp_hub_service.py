@@ -3011,6 +3011,7 @@ class McpHubService:
     async def _resolve_binding_credential_ref(
         self,
         *,
+        target_row: dict[str, Any],
         slot_name: str | None,
         managed_secret_ref_id: int | None,
     ) -> str:
@@ -3022,6 +3023,13 @@ class McpHubService:
         ref = await managed_refs_repo.get_ref(int(managed_secret_ref_id))
         if not ref:
             raise BadRequestError("Managed secret ref not found")
+        self._scope_reference_allowed(
+            object_scope_type=str(ref.get("owner_scope_type") or "global"),
+            object_scope_id=ref.get("owner_scope_id"),
+            target_scope_type=str(target_row.get("owner_scope_type") or "global"),
+            target_scope_id=target_row.get("owner_scope_id"),
+            resource_name="managed secret ref",
+        )
         return encode_managed_secret_credential_ref(int(ref["id"]))
 
     async def list_profile_credential_bindings(
@@ -3050,6 +3058,7 @@ class McpHubService:
             raise ResourceNotFoundError("mcp_external_server", identifier=external_server_id)
         self._validate_binding_scope(server_row=server_row, target_row=target_row)
         credential_ref = await self._resolve_binding_credential_ref(
+            target_row=target_row,
             slot_name=slot_name,
             managed_secret_ref_id=managed_secret_ref_id,
         )
@@ -3139,6 +3148,7 @@ class McpHubService:
             raise ResourceNotFoundError("mcp_external_server", identifier=external_server_id)
         self._validate_binding_scope(server_row=server_row, target_row=target_row)
         credential_ref = await self._resolve_binding_credential_ref(
+            target_row=target_row,
             slot_name=slot_name,
             managed_secret_ref_id=managed_secret_ref_id if binding_mode == "grant" else None,
         )

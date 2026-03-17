@@ -65,6 +65,7 @@ class _BrokerAwareAdapter(ExternalMCPTransportAdapter):
         )
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_external_tool_call_uses_ephemeral_brokered_credential(monkeypatch) -> None:
     cfg = parse_external_server_registry(
@@ -88,7 +89,11 @@ async def test_external_tool_call_uses_ephemeral_brokered_credential(monkeypatch
         assert kwargs["tool_name"] == "repo.search"
         return BrokeredExternalCredential(
             headers={"Authorization": "Bearer ephemeral-token"},
-            metadata={"credential_mode": "brokered_ephemeral"},
+            metadata={
+                "credential_mode": "brokered_ephemeral",
+                "credential_source": "mcp_hub_managed_binding",
+                "unsafe_internal_note": "should-not-leak",
+            },
         )
 
     monkeypatch.setattr(manager_mod, "build_transport_adapter", lambda _server: adapter)
@@ -111,4 +116,6 @@ async def test_external_tool_call_uses_ephemeral_brokered_credential(monkeypatch
     assert adapter.seen_runtime_auth is not None
     assert adapter.seen_runtime_auth.headers == {"Authorization": "Bearer ephemeral-token"}
     assert result["metadata"]["credential_mode"] == "brokered_ephemeral"
+    assert result["metadata"]["credential_source"] == "mcp_hub_managed_binding"
+    assert "unsafe_internal_note" not in result["metadata"]
     assert result["metadata"]["credential_injection"]["headers"] == ["Authorization"]

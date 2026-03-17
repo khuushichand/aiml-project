@@ -29,6 +29,8 @@ class _JWTService:
         self.calls.append((token, token_type))
         if self.error is not None:
             raise self.error
+        if token_type is not None and self.payload.get("type") not in {None, token_type}:
+            raise ValueError("token type mismatch")
         return dict(self.payload)
 
 
@@ -157,6 +159,7 @@ async def test_verify_privileged_action_allows_magic_link_step_up_for_federated_
             "purpose": "admin_reauth",
             "jti": "magic-link-jti-1",
             "exp": datetime(2030, 1, 1, tzinfo=timezone.utc).timestamp(),
+            "type": "admin_reauth",
         }
     )
     blacklist = _Blacklist()
@@ -197,6 +200,7 @@ async def test_verify_privileged_action_rejects_magic_link_step_up_for_other_adm
             "purpose": "admin_reauth",
             "jti": "magic-link-jti-2",
             "exp": datetime(2030, 1, 1, tzinfo=timezone.utc).timestamp(),
+            "type": "admin_reauth",
         }
     )
     monkeypatch.setattr(admin_guardrails_service, "fetch_active_user_by_id", _fake_fetch)
@@ -211,6 +215,42 @@ async def test_verify_privileged_action_rejects_magic_link_step_up_for_other_adm
             reason="Customer requested restore",
             admin_password=None,
             admin_reauth_token="magic-token-456",
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail == "Admin reauthentication failed"
+
+
+@pytest.mark.asyncio
+async def test_verify_privileged_action_rejects_admin_reauth_token_without_jti(monkeypatch) -> None:
+    async def _fake_fetch(*_args, **_kwargs):
+        return {
+            "id": 7,
+            "email": "alice@example.com",
+            "password_hash": "",
+        }
+
+    jwt_service = _JWTService(
+        {
+            "user_id": 7,
+            "email": "alice@example.com",
+            "purpose": "admin_reauth",
+            "exp": datetime(2030, 1, 1, tzinfo=timezone.utc).timestamp(),
+            "type": "admin_reauth",
+        }
+    )
+    monkeypatch.setattr(admin_guardrails_service, "fetch_active_user_by_id", _fake_fetch)
+    monkeypatch.setattr(admin_guardrails_service, "get_jwt_service", lambda: jwt_service)
+    monkeypatch.setattr(admin_guardrails_service, "get_token_blacklist", lambda: _Blacklist())
+
+    with pytest.raises(HTTPException) as excinfo:
+        await admin_guardrails_service.verify_privileged_action(
+            _multi_user_admin_principal(),
+            db=object(),
+            password_service=_PasswordService(),
+            reason="Customer requested restore",
+            admin_password=None,
+            admin_reauth_token="magic-token-without-jti",
         )
 
     assert excinfo.value.status_code == 403

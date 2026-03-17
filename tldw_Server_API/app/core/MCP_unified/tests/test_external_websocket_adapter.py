@@ -303,3 +303,54 @@ async def test_websocket_adapter_uses_ephemeral_runtime_headers_without_mutating
         assert base_ws.sent_messages == [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "clientInfo": {"name": "tldw_external_federation", "version": "0.1.0"}}}]
     finally:
         await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_adapter_prefers_runtime_authorization_header_over_static_auth(monkeypatch) -> None:
+    monkeypatch.setenv("EXTERNAL_DOCS_TOKEN", "static-token")
+    cfg = _server_config(
+        auth=ExternalAuthConfig(mode=ExternalAuthMode.BEARER_ENV, token_env="EXTERNAL_DOCS_TOKEN")
+    )
+    base_ws = _FakeWebSocket()
+    runtime_ws = _FakeWebSocket()
+    base_ws.enqueue({"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "base"}}})
+    runtime_ws.enqueue({"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "runtime"}}})
+    seen_headers: list[dict[str, str]] = []
+    connect_count = 0
+
+    async def _connector(*, url: str, subprotocols: list[str], headers: dict[str, str], connect_timeout: float):
+        nonlocal connect_count
+        del url, subprotocols, connect_timeout
+        connect_count += 1
+        seen_headers.append(dict(headers))
+        return base_ws if connect_count == 1 else runtime_ws
+
+    adapter = WebSocketExternalMCPAdapter(cfg, ws_connector=_connector)
+    try:
+        await adapter.connect()
+
+        call_task = asyncio.create_task(
+            adapter.call_tool(
+                "docs.search",
+                {"q": "runtime"},
+                runtime_auth=BrokeredExternalCredential(
+                    headers={"Authorization": "Bearer runtime-token"},
+                ),
+            )
+        )
+        await _wait_for_sent(runtime_ws, expected_count=2)
+        runtime_request_id = runtime_ws.sent_messages[1]["id"]
+        runtime_ws.enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": runtime_request_id,
+                "result": {"content": [{"type": "text", "text": "ok"}]},
+            }
+        )
+        result = await call_task
+
+        assert result.is_error is False
+        assert seen_headers[0]["Authorization"] == "Bearer static-token"
+        assert seen_headers[1]["Authorization"] == "Bearer runtime-token"
+    finally:
+        await adapter.close()

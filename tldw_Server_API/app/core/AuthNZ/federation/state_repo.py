@@ -36,10 +36,9 @@ class FederationStateRepo:
         state: str,
     ) -> dict[str, Any] | None:
         cache_key = self._cache_key(state)
-        payload_raw = await self.session_manager.get_ephemeral_value(cache_key)
+        payload_raw = await self.session_manager.consume_ephemeral_value(cache_key)
         if not payload_raw:
             return None
-        await self.session_manager.delete_ephemeral_value(cache_key)
         try:
             payload = json.loads(payload_raw)
         except json.JSONDecodeError:

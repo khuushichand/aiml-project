@@ -16,6 +16,7 @@ from .base import (
     ExternalMCPTransportAdapter,
     ExternalToolCallResult,
     ExternalToolDefinition,
+    call_tool_with_ephemeral_adapter,
 )
 
 _MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -60,8 +61,8 @@ class WebSocketExternalMCPAdapter(ExternalMCPTransportAdapter):
                 return
 
             ws_cfg = self.server_config.websocket
-            headers = dict(ws_cfg.headers or {})
-            headers.update(self.server_config.auth.resolve_headers())
+            headers = dict(self.server_config.auth.resolve_headers())
+            headers.update(dict(ws_cfg.headers or {}))
             subprotocols = list(ws_cfg.subprotocols or [])
             connect_timeout = float(self.server_config.timeouts.connect_seconds)
 
@@ -252,32 +253,24 @@ class WebSocketExternalMCPAdapter(ExternalMCPTransportAdapter):
         arguments: dict[str, Any],
         runtime_auth: BrokeredExternalCredential,
     ) -> ExternalToolCallResult:
-        ephemeral_config = self._clone_server_config()
-        websocket_cfg = ephemeral_config.websocket
-        if websocket_cfg is None:
-            raise ValueError(f"Missing websocket config for server '{self.server_id}'")
-        merged_headers = dict(websocket_cfg.headers or {})
-        merged_headers.update(dict(runtime_auth.headers or {}))
-        websocket_cfg.headers = merged_headers
+        def _prepare_config(ephemeral_config: ExternalMCPServerConfig) -> None:
+            websocket_cfg = ephemeral_config.websocket
+            if websocket_cfg is None:
+                raise ValueError(f"Missing websocket config for server '{self.server_id}'")
+            merged_headers = dict(websocket_cfg.headers or {})
+            merged_headers.update(dict(runtime_auth.headers or {}))
+            websocket_cfg.headers = merged_headers
 
-        ephemeral_adapter = WebSocketExternalMCPAdapter(
-            ephemeral_config,
-            ws_connector=self._ws_connector,
+        return await call_tool_with_ephemeral_adapter(
+            server_config=self.server_config,
+            adapter_factory=lambda config: WebSocketExternalMCPAdapter(
+                config,
+                ws_connector=self._ws_connector,
+            ),
+            prepare_config=_prepare_config,
+            tool_name=tool_name,
+            arguments=arguments,
         )
-        try:
-            await ephemeral_adapter.connect()
-            return await ephemeral_adapter.call_tool(
-                tool_name,
-                arguments,
-                runtime_auth=None,
-            )
-        finally:
-            await ephemeral_adapter.close()
-
-    def _clone_server_config(self) -> ExternalMCPServerConfig:
-        if hasattr(self.server_config, "model_copy"):
-            return self.server_config.model_copy(deep=True)  # type: ignore[attr-defined]
-        return self.server_config.copy(deep=True)
 
     async def _ensure_connected(self) -> None:
         if not self._connected or not self._initialized or self._ws is None:

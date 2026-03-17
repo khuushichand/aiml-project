@@ -41,6 +41,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.identity_provider_repo import (
 
 
 router = APIRouter()
+_IDENTITY_PROVIDER_OWNER_SCOPE_TYPES = frozenset({"global", "org"})
 
 
 async def _validate_provider_for_enablement(
@@ -132,6 +133,16 @@ async def admin_list_identity_providers(
     """List identity providers filtered by scope and enabled state."""
     await _get_ensure_sqlite_authnz_ready_if_test_mode()()
     require_enterprise_federation()
+    if owner_scope_type is not None and owner_scope_type not in _IDENTITY_PROVIDER_OWNER_SCOPE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid owner_scope_type",
+        )
+    if owner_scope_id is not None and owner_scope_type != "org":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="owner_scope_id requires owner_scope_type='org'",
+        )
     providers = await repo.list_providers(
         owner_scope_type=owner_scope_type,
         owner_scope_id=owner_scope_id,

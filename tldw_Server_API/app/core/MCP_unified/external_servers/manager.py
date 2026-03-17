@@ -444,7 +444,7 @@ class ExternalServerManager:
             )
             if runtime_auth is not None:
                 metadata = dict(result.metadata or {})
-                metadata.update(dict(runtime_auth.metadata or {}))
+                metadata.update(self._public_runtime_auth_metadata(runtime_auth))
                 metadata["credential_injection"] = self._summarize_runtime_auth(runtime_auth)
                 result.metadata = metadata
             telemetry.call_successes += 1
@@ -472,6 +472,20 @@ class ExternalServerManager:
         telemetry = self._get_telemetry(server_id)
         telemetry.policy_denials += 1
         telemetry.last_error = message
+
+    @staticmethod
+    def _public_runtime_auth_metadata(
+        runtime_auth: BrokeredExternalCredential,
+    ) -> dict[str, Any]:
+        metadata = runtime_auth.metadata or {}
+        if not isinstance(metadata, dict):
+            return {}
+        public: dict[str, Any] = {}
+        for key in ("credential_mode", "credential_source"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                public[key] = value
+        return public
 
     @staticmethod
     def _extract_error_text(result: ExternalToolCallResult) -> Optional[str]:

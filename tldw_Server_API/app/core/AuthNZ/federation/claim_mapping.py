@@ -3,6 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 
+def _normalize_optional_claim_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
 def _normalize_string_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -41,6 +48,8 @@ def _mapped_group_values(
 def _coerce_int_list(values: list[Any]) -> list[int]:
     result: list[int] = []
     for value in values:
+        if isinstance(value, bool):
+            continue
         try:
             result.append(int(value))
         except (TypeError, ValueError):
@@ -55,12 +64,18 @@ def preview_claim_mapping(
     mapping = claim_mapping if isinstance(claim_mapping, dict) else {}
     claim_values = claims if isinstance(claims, dict) else {}
 
-    subject = _claim_value(claim_values, mapping.get("subject"), "sub")
-    email = _claim_value(claim_values, mapping.get("email"), "email")
-    username = _claim_value(
-        claim_values,
-        mapping.get("username"),
-        "preferred_username",
+    subject = _normalize_optional_claim_value(
+        _claim_value(claim_values, mapping.get("subject"), "sub")
+    )
+    email = _normalize_optional_claim_value(
+        _claim_value(claim_values, mapping.get("email"), "email")
+    )
+    username = _normalize_optional_claim_value(
+        _claim_value(
+            claim_values,
+            mapping.get("username"),
+            "preferred_username",
+        )
     )
     groups = _normalize_string_list(
         _claim_value(claim_values, mapping.get("groups"), "groups")
@@ -82,9 +97,9 @@ def preview_claim_mapping(
         warnings.append("No email claim resolved from the payload")
 
     return {
-        "subject": str(subject).strip() if subject is not None else None,
-        "email": str(email).strip() if email is not None else None,
-        "username": str(username).strip() if username is not None else None,
+        "subject": subject,
+        "email": email,
+        "username": username,
         "groups": sorted(dict.fromkeys(groups)),
         "derived_roles": sorted(dict.fromkeys(_normalize_string_list(derived_roles))),
         "derived_org_ids": sorted(dict.fromkeys(derived_org_ids)),

@@ -9,13 +9,26 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, SecretStr, field_validator
 
 
 def _blank_string_to_none(value: Any) -> Any:
+    if isinstance(value, SecretStr):
+        value = value.get_secret_value()
     if isinstance(value, str) and not value.strip():
         return None
     return value
+
+
+def unwrap_optional_secret(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, SecretStr):
+        raw_value = value.get_secret_value()
+    else:
+        raw_value = str(value)
+    normalized = raw_value.strip()
+    return normalized or None
 
 #######################################################################################################################
 #
@@ -30,8 +43,8 @@ class UserUpdateRequest(BaseModel):
     is_locked: bool | None = None
     storage_quota_mb: int | None = Field(None, ge=100)
     reason: str | None = Field(default=None, min_length=8, max_length=500)
-    admin_password: str | None = Field(default=None, max_length=128, repr=False)
-    admin_reauth_token: str | None = Field(default=None, max_length=4096, repr=False)
+    admin_password: SecretStr | None = Field(default=None, max_length=128, repr=False)
+    admin_reauth_token: SecretStr | None = Field(default=None, max_length=4096, repr=False)
 
     @field_validator("admin_password", "admin_reauth_token", mode="before")
     @classmethod
@@ -45,8 +58,8 @@ class AdminPrivilegedActionRequest(BaseModel):
     """Request payload for privileged admin actions."""
 
     reason: str = Field(..., min_length=8, max_length=500)
-    admin_password: str | None = Field(default=None, max_length=128, repr=False)
-    admin_reauth_token: str | None = Field(default=None, max_length=4096, repr=False)
+    admin_password: SecretStr | None = Field(default=None, max_length=128, repr=False)
+    admin_reauth_token: SecretStr | None = Field(default=None, max_length=4096, repr=False)
 
     @field_validator("admin_password", "admin_reauth_token", mode="before")
     @classmethod

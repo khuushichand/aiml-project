@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import unwrap_optional_secret
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, is_single_user_principal
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
@@ -70,18 +71,23 @@ async def _verify_admin_reauth_token(
     elif isinstance(raw_exp, datetime):
         exp_dt = raw_exp if raw_exp.tzinfo is not None else raw_exp.replace(tzinfo=timezone.utc)
 
-    if jti and exp_dt is not None:
-        blacklist = get_token_blacklist()
-        actor_id = int(actor["id"]) if isinstance(actor, dict) else None
-        await blacklist.revoke_token(
-            jti=jti,
-            expires_at=exp_dt,
-            user_id=actor_id,
-            token_type="admin_reauth",
-            reason="admin_reauth_used",
-            revoked_by=actor_id,
-            ip_address=None,
+    if not jti or exp_dt is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin reauthentication failed",
         )
+
+    blacklist = get_token_blacklist()
+    actor_id = int(actor["id"]) if isinstance(actor, dict) else None
+    await blacklist.revoke_token(
+        jti=jti,
+        expires_at=exp_dt,
+        user_id=actor_id,
+        token_type="admin_reauth",
+        reason="admin_reauth_used",
+        revoked_by=actor_id,
+        ip_address=None,
+    )
     return True
 
 
@@ -91,8 +97,8 @@ async def verify_privileged_action(
     password_service: PasswordService,
     *,
     reason: str | None,
-    admin_password: str | None,
-    admin_reauth_token: str | None = None,
+    admin_password: Any | None,
+    admin_reauth_token: Any | None = None,
 ) -> str:
     """
     Enforce step-up guardrails for high-risk admin actions.
@@ -107,8 +113,8 @@ async def verify_privileged_action(
             account.
     """
     normalized_reason = str(reason or "").strip()
-    normalized_password = str(admin_password or "").strip()
-    normalized_reauth_token = str(admin_reauth_token or "").strip()
+    normalized_password = unwrap_optional_secret(admin_password) or ""
+    normalized_reauth_token = unwrap_optional_secret(admin_reauth_token) or ""
 
     if len(normalized_reason) < 8:
         raise HTTPException(

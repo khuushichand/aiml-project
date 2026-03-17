@@ -1,5 +1,5 @@
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     AdminPasswordResetRequest,
@@ -77,3 +77,16 @@ def test_admin_privileged_action_request_repr_redacts_sensitive_fields() -> None
 
     assert "AdminPass123!" not in rendered
     assert "reauth-token-123" not in rendered
+
+
+def test_admin_privileged_action_request_stores_sensitive_fields_as_secretstr() -> None:
+    payload = AdminPrivilegedActionRequest(
+        reason="Support case 123",
+        admin_password="AdminPass123!",
+        admin_reauth_token="reauth-token-123",
+    )
+
+    assert isinstance(payload.admin_password, SecretStr)
+    assert payload.admin_password.get_secret_value() == "AdminPass123!"
+    assert isinstance(payload.admin_reauth_token, SecretStr)
+    assert payload.admin_reauth_token.get_secret_value() == "reauth-token-123"

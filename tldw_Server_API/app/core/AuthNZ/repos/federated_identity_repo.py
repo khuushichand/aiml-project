@@ -58,9 +58,8 @@ class FederatedIdentityRepo:
             keys = row.keys()
             return {key: row[key] for key in keys}
         except Exception as row_keys_error:
-            logger.debug(
-                "Federated identity row key materialization failed; falling back to dict(row)",
-                exc_info=row_keys_error,
+            logger.opt(exception=row_keys_error).debug(
+                "Federated identity row key materialization failed; falling back to dict(row)"
             )
         return dict(row)
 
@@ -93,6 +92,14 @@ class FederatedIdentityRepo:
     ) -> dict[str, Any]:
         status_value = _normalize_status(status)
         seen_at = last_seen_at or datetime.now(timezone.utc)
+        normalized_subject = external_subject.strip()
+
+        existing = await self.get_by_provider_subject(
+            identity_provider_id=int(identity_provider_id),
+            external_subject=normalized_subject,
+        )
+        if existing is not None and int(existing.get("user_id") or 0) != int(user_id):
+            raise ValueError("Federated subject is already linked to a different local user")
 
         try:
             if getattr(self.db_pool, "pool", None) is not None:
@@ -115,7 +122,7 @@ class FederatedIdentityRepo:
                               external_email, last_claims_hash, last_seen_at, status, created_at, updated_at
                     """,
                     int(identity_provider_id),
-                    external_subject.strip(),
+                    normalized_subject,
                     int(user_id),
                     external_username,
                     external_email,
@@ -143,7 +150,7 @@ class FederatedIdentityRepo:
                 """,
                 (
                     int(identity_provider_id),
-                    external_subject.strip(),
+                    normalized_subject,
                     int(user_id),
                     external_username,
                     external_email,
@@ -159,7 +166,7 @@ class FederatedIdentityRepo:
                 FROM federated_identities
                 WHERE identity_provider_id = ? AND external_subject = ?
                 """,
-                (int(identity_provider_id), external_subject.strip()),
+                (int(identity_provider_id), normalized_subject),
             )
             return self._normalize_row(row) if row else {}
         except Exception as exc:

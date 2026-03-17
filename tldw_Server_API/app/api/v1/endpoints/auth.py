@@ -379,7 +379,10 @@ async def _issue_multi_user_tokens(
     )
 
 
-@router.get("/federation/{provider_slug}/login")
+@router.get(
+    "/federation/{provider_slug}/login",
+    dependencies=[Depends(check_auth_rate_limit)],
+)
 async def federation_login(
     provider_slug: str,
     request: Request,
@@ -388,6 +391,22 @@ async def federation_login(
 ) -> RedirectResponse:
     await _get_admin_module_ensure_sqlite_authnz_ready_if_test_mode()()
     require_enterprise_federation()
+    client_ip = _auth_request_client_ip(request)
+    allowed, retry_after = await _reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.federation.login",
+        entity=f"ip:{client_ip}",
+        tags={
+            "auth_endpoint": "federation_login",
+            "provider_slug": str(provider_slug or ""),
+        },
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many federation login attempts. Please try again later.",
+            headers={"Retry-After": str(int(retry_after or 1))},
+        )
 
     repo = await get_identity_provider_repo_dep()
     provider = await _resolve_federation_provider(
@@ -457,6 +476,22 @@ async def federation_callback(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing OIDC callback parameters",
+        )
+    client_ip = _auth_request_client_ip(request)
+    allowed, retry_after = await _reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.federation.callback",
+        entity=f"ip:{client_ip}",
+        tags={
+            "auth_endpoint": "federation_callback",
+            "provider_slug": str(provider_slug or ""),
+        },
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many federation callback attempts. Please try again later.",
+            headers={"Retry-After": str(int(retry_after or 1))},
         )
 
     state_repo = _get_federation_state_repo(session_manager)

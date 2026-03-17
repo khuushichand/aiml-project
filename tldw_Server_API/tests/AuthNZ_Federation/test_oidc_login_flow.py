@@ -244,6 +244,117 @@ def test_federation_callback_uses_auth_rate_limit_dependency(
     assert response.json()["detail"] == "Too many requests"
 
 
+def test_federation_login_uses_auth_rate_limit_dependency(
+    federation_client: TestClient,
+) -> None:
+    async def _block_rate_limit() -> None:
+        raise HTTPException(status_code=429, detail="Too many requests")
+
+    federation_client.app.dependency_overrides[check_auth_rate_limit] = _block_rate_limit
+    try:
+        response = federation_client.get(
+            "/api/v1/auth/federation/corp/login",
+            follow_redirects=False,
+        )
+    finally:
+        federation_client.app.dependency_overrides.pop(check_auth_rate_limit, None)
+
+    assert response.status_code == 429, response.text
+    assert response.json()["detail"] == "Too many requests"
+
+
+def test_federation_login_respects_auth_resource_governor_limits(
+    federation_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    create_response = federation_client.post(
+        "/api/v1/admin/identity/providers",
+        json={
+            "slug": "corp-rg-login",
+            "provider_type": "oidc",
+            "owner_scope_type": "global",
+            "enabled": True,
+            "display_name": "Corp SSO",
+            "issuer": "https://issuer.example.com",
+            "authorization_url": "https://issuer.example.com/oauth2/authorize",
+            "token_url": "https://issuer.example.com/oauth2/token",
+            "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+            "client_id": "client-123",
+            "claim_mapping": {
+                "subject": "sub",
+            },
+            "provisioning_policy": {
+                "jit_create": True,
+            },
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    async def _deny_rg(*args, **kwargs):  # noqa: ANN002, ANN003
+        return False, 11
+
+    monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_rg)
+
+    response = federation_client.get(
+        "/api/v1/auth/federation/corp-rg-login/login",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 429, response.text
+    assert response.headers["Retry-After"] == "11"
+
+
+def test_federation_callback_respects_auth_resource_governor_limits(
+    federation_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    create_response = federation_client.post(
+        "/api/v1/admin/identity/providers",
+        json={
+            "slug": "corp-rg-callback",
+            "provider_type": "oidc",
+            "owner_scope_type": "global",
+            "enabled": True,
+            "display_name": "Corp SSO",
+            "issuer": "https://issuer.example.com",
+            "authorization_url": "https://issuer.example.com/oauth2/authorize",
+            "token_url": "https://issuer.example.com/oauth2/token",
+            "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+            "client_id": "client-123",
+            "claim_mapping": {
+                "subject": "sub",
+            },
+            "provisioning_policy": {
+                "jit_create": True,
+            },
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+
+    login_response = federation_client.get(
+        "/api/v1/auth/federation/corp-rg-callback/login",
+        follow_redirects=False,
+    )
+    assert login_response.status_code == 307, login_response.text
+    state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+
+    async def _deny_rg(*args, **kwargs):  # noqa: ANN002, ANN003
+        return False, 13
+
+    monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_rg)
+
+    response = federation_client.get(
+        f"/api/v1/auth/federation/corp-rg-callback/callback?state={state}&code=test-code",
+    )
+
+    assert response.status_code == 429, response.text
+    assert response.headers["Retry-After"] == "13"
+
+
 def test_federation_callback_links_existing_user_and_returns_tokens(
     federation_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -298,6 +409,7 @@ def test_federation_callback_links_existing_user_and_returns_tokens(
     )
     assert create_response.status_code == 200, create_response.text
     provider = create_response.json()
+    provider_id = int(provider["id"])
 
     login_response = federation_client.get(
         "/api/v1/auth/federation/corp/login",
@@ -316,7 +428,7 @@ def test_federation_callback_links_existing_user_and_returns_tokens(
         code_verifier: str,
         nonce: str | None = None,
     ) -> dict:
-        assert provider["id"] == provider["id"]
+        assert int(provider["id"]) == provider_id
         assert code == "code-123"
         assert redirect_uri == "http://testserver/api/v1/auth/federation/corp/callback"
         assert code_verifier

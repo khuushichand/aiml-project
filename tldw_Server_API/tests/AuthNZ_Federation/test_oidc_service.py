@@ -188,6 +188,31 @@ async def test_inspect_provider_configuration_rejects_missing_env_client_secret_
 
 
 @pytest.mark.asyncio
+async def test_build_authorization_request_ignores_discovery_when_runtime_fields_are_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unexpected_fetch(*, method: str, url: str, **kwargs) -> dict:  # noqa: ANN003
+        raise AssertionError(f"Discovery should not be fetched for pinned provider config: {method} {url}")
+
+    monkeypatch.setattr(oidc_module, "afetch_json", _unexpected_fetch, raising=False)
+
+    auth_request = await OIDCFederationService().build_authorization_request(
+        provider={
+            "issuer": "https://issuer.example.com",
+            "discovery_url": "https://issuer.example.com/.well-known/openid-configuration",
+            "authorization_url": "https://issuer.example.com/oauth2/authorize",
+            "token_url": "https://issuer.example.com/oauth2/token",
+            "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+            "client_id": "client-123",
+        },
+        redirect_uri="http://testserver/callback",
+    )
+
+    parsed = urlparse(auth_request["auth_url"])
+    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://issuer.example.com/oauth2/authorize"
+
+
+@pytest.mark.asyncio
 async def test_exchange_authorization_code_resolves_env_client_secret_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -300,6 +325,41 @@ async def test_exchange_authorization_code_resolves_byok_org_client_secret_refer
     assert seen_form["client_secret"] == "resolved::blob-123"
     assert touched == [("org", 123, "idp:corp-oidc")]
     assert claims["sub"] == "external-user-999"
+
+
+@pytest.mark.asyncio
+async def test_inspect_provider_configuration_does_not_touch_byok_secret_last_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    touched: list[tuple[str, int, str]] = []
+
+    monkeypatch.setattr(oidc_module, "get_db_pool", lambda: _async_value(object()))
+    monkeypatch.setattr(
+        oidc_module,
+        "AuthnzOrgProviderSecretsRepo",
+        lambda pool: _FakeOrgSecretRepo(pool, {"encrypted_blob": "blob-123"}, touched),
+    )
+    monkeypatch.setattr(oidc_module, "loads_envelope", lambda value: {"blob": value}, raising=False)
+    monkeypatch.setattr(
+        oidc_module,
+        "decrypt_byok_payload",
+        lambda envelope: {"api_key": f"resolved::{envelope['blob']}"},
+        raising=False,
+    )
+
+    result = await OIDCFederationService().inspect_provider_configuration(
+        provider={
+            "issuer": "https://issuer.example.com",
+            "authorization_url": "https://issuer.example.com/oauth2/authorize",
+            "token_url": "https://issuer.example.com/oauth2/token",
+            "jwks_url": "https://issuer.example.com/.well-known/jwks.json",
+            "client_id": "client-123",
+            "client_secret_ref": "byok-org:123:idp:corp-oidc",
+        }
+    )
+
+    assert result["ok"] is True
+    assert touched == []
 
 
 @pytest.mark.asyncio

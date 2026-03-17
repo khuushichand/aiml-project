@@ -81,6 +81,17 @@ def _parse_byok_secret_ref(secret_ref: str) -> tuple[str, int, str] | None:
 
 
 async def _resolve_byok_secret_ref(secret_ref: str) -> str:
+    return await _resolve_byok_secret_ref_with_options(
+        secret_ref,
+        touch_last_used=True,
+    )
+
+
+async def _resolve_byok_secret_ref_with_options(
+    secret_ref: str,
+    *,
+    touch_last_used: bool,
+) -> str:
     parsed = _parse_byok_secret_ref(secret_ref)
     if parsed is None:
         raise ValueError("OIDC client_secret_ref BYOK reference is invalid")
@@ -110,23 +121,31 @@ async def _resolve_byok_secret_ref(secret_ref: str) -> str:
     if not client_secret:
         raise ValueError("OIDC client_secret_ref BYOK secret is missing api_key")
 
-    used_at = datetime.now(timezone.utc)
-    try:
-        if scope_type == "user":
-            await repo.touch_last_used(scope_id, provider, used_at)
-        else:
-            await repo.touch_last_used(scope_type, scope_id, provider, used_at)
-    except Exception as exc:
-        logger.debug("OIDC BYOK secret touch_last_used failed for {}:{}:{}: {}", scope_type, scope_id, provider, exc)
+    if touch_last_used:
+        used_at = datetime.now(timezone.utc)
+        try:
+            if scope_type == "user":
+                await repo.touch_last_used(scope_id, provider, used_at)
+            else:
+                await repo.touch_last_used(scope_type, scope_id, provider, used_at)
+        except Exception as exc:
+            logger.debug("OIDC BYOK secret touch_last_used failed for {}:{}:{}: {}", scope_type, scope_id, provider, exc)
     return client_secret
 
 
-async def _resolve_client_secret_ref(value: Any) -> str | None:
+async def _resolve_client_secret_ref(
+    value: Any,
+    *,
+    touch_last_used: bool = True,
+) -> str | None:
     secret_ref = _coerce_nonempty_string(value)
     if not secret_ref:
         return None
     if _parse_byok_secret_ref(secret_ref) is not None:
-        return await _resolve_byok_secret_ref(secret_ref)
+        return await _resolve_byok_secret_ref_with_options(
+            secret_ref,
+            touch_last_used=touch_last_used,
+        )
     if not secret_ref.lower().startswith("env:"):
         return secret_ref
 
@@ -161,8 +180,24 @@ class OIDCFederationService:
             raise ValueError("OIDC discovery issuer mismatch")
         return discovery
 
-    async def _resolve_provider_runtime_config(self, provider: dict[str, Any]) -> dict[str, Any]:
-        discovery = await self._fetch_discovery_document(provider)
+    @staticmethod
+    def _provider_requires_discovery(provider: dict[str, Any]) -> bool:
+        if not _coerce_nonempty_string(provider.get("discovery_url")):
+            return False
+        required_fields = ("issuer", "authorization_url", "token_url", "jwks_url")
+        return any(not _coerce_nonempty_string(provider.get(field_name)) for field_name in required_fields)
+
+    async def _resolve_provider_runtime_config(
+        self,
+        provider: dict[str, Any],
+        *,
+        touch_secret_refs: bool = True,
+    ) -> dict[str, Any]:
+        discovery = (
+            await self._fetch_discovery_document(provider)
+            if self._provider_requires_discovery(provider)
+            else {}
+        )
         resolved = {
             "issuer": _coerce_nonempty_string(provider.get("issuer")) or _coerce_nonempty_string(discovery.get("issuer")),
             "authorization_url": _coerce_nonempty_string(provider.get("authorization_url"))
@@ -172,7 +207,10 @@ class OIDCFederationService:
             "jwks_url": _coerce_nonempty_string(provider.get("jwks_url"))
             or _coerce_nonempty_string(discovery.get("jwks_uri")),
             "client_id": _coerce_nonempty_string(provider.get("client_id")),
-            "client_secret": await _resolve_client_secret_ref(provider.get("client_secret_ref")),
+            "client_secret": await _resolve_client_secret_ref(
+                provider.get("client_secret_ref"),
+                touch_last_used=touch_secret_refs,
+            ),
             "signing_algorithms": sorted(
                 _coerce_string_set(provider.get("allowed_signing_algs"))
                 or _coerce_string_set(provider.get("signing_algorithms"))
@@ -186,7 +224,10 @@ class OIDCFederationService:
         *,
         provider: dict[str, Any],
     ) -> dict[str, Any]:
-        runtime_config = await self._resolve_provider_runtime_config(provider)
+        runtime_config = await self._resolve_provider_runtime_config(
+            provider,
+            touch_secret_refs=False,
+        )
         missing_fields = [
             field_name
             for field_name in ("issuer", "authorization_url", "token_url", "jwks_url", "client_id")

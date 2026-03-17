@@ -18,6 +18,7 @@ from .base import (
     ExternalMCPTransportAdapter,
     ExternalToolCallResult,
     ExternalToolDefinition,
+    call_tool_with_ephemeral_adapter,
 )
 
 _MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -225,29 +226,21 @@ class StdioExternalMCPAdapter(ExternalMCPTransportAdapter):
         arguments: dict[str, Any],
         runtime_auth: BrokeredExternalCredential,
     ) -> ExternalToolCallResult:
-        ephemeral_config = self._clone_server_config()
-        stdio_cfg = ephemeral_config.stdio
-        if stdio_cfg is None:
-            raise ValueError(f"Missing stdio config for server '{self.server_id}'")
-        merged_env = dict(stdio_cfg.env or {})
-        merged_env.update(dict(runtime_auth.env or {}))
-        stdio_cfg.env = merged_env
+        def _prepare_config(ephemeral_config: ExternalMCPServerConfig) -> None:
+            stdio_cfg = ephemeral_config.stdio
+            if stdio_cfg is None:
+                raise ValueError(f"Missing stdio config for server '{self.server_id}'")
+            merged_env = dict(stdio_cfg.env or {})
+            merged_env.update(dict(runtime_auth.env or {}))
+            stdio_cfg.env = merged_env
 
-        ephemeral_adapter = StdioExternalMCPAdapter(
-            ephemeral_config,
-            client_factory=self._client_factory,
+        return await call_tool_with_ephemeral_adapter(
+            server_config=self.server_config,
+            adapter_factory=lambda config: StdioExternalMCPAdapter(
+                config,
+                client_factory=self._client_factory,
+            ),
+            prepare_config=_prepare_config,
+            tool_name=tool_name,
+            arguments=arguments,
         )
-        try:
-            await ephemeral_adapter.connect()
-            return await ephemeral_adapter.call_tool(
-                tool_name,
-                arguments,
-                runtime_auth=None,
-            )
-        finally:
-            await ephemeral_adapter.close()
-
-    def _clone_server_config(self) -> ExternalMCPServerConfig:
-        if hasattr(self.server_config, "model_copy"):
-            return self.server_config.model_copy(deep=True)  # type: ignore[attr-defined]
-        return self.server_config.copy(deep=True)

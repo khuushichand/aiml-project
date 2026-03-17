@@ -293,7 +293,12 @@ class JWTService:
             if self.settings.PII_REDACT_LOGS:
                 logger.debug("Created {} token for authenticated user (details redacted)", token_type)
             else:
-                logger.debug("Created {} token for {}", token_type, email)
+                safe_identifier = (
+                    f"user_id={int(user_id)}"
+                    if user_id is not None
+                    else "email=redacted"
+                )
+                logger.debug("Created {} token for {}", token_type, safe_identifier)
             return token
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error("Failed to create {} token: {}", token_type, e)

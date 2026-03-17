@@ -229,3 +229,19 @@ async def test_register_user_system_provisioning_bypasses_disabled_registration_
     assert payload["registration_code_id"] is None
     assert conn.committed is False
     assert not any("from registration_codes" in query for query, _ in conn.execute_calls)
+
+
+@pytest.mark.asyncio
+async def test_register_user_rejects_negative_storage_quota_override() -> None:
+    conn = _SQLiteRegisterConn()
+    service = _make_service(_PoolStub(conn, postgres=False))
+    service._create_user_directories = lambda user_id: True  # noqa: ARG005
+
+    with pytest.raises(ValueError, match="storage_quota_override must be non-negative"):
+        await service.register_user(
+            username="federated-user",
+            email="federated@example.com",
+            password="Strong!Pass9",
+            storage_quota_override=-1,
+            system_provisioning=True,
+        )

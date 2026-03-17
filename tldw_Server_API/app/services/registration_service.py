@@ -347,6 +347,8 @@ class RegistrationService:
                     if role_override:
                         role = role_override
                     if storage_quota_override is not None:
+                        if int(storage_quota_override) < 0:
+                            raise ValueError("storage_quota_override must be non-negative")
                         storage_quota = storage_quota_override
 
                 if registration_code and not privileged_creation:

@@ -190,6 +190,18 @@ def test_identity_provider_test_resolves_discovery_runtime_config(
     assert body["client_id"] == "client-123"
 
 
+def test_identity_provider_list_rejects_invalid_owner_scope_type(
+    admin_identity_client: TestClient,
+) -> None:
+    response = admin_identity_client.get(
+        "/api/v1/admin/identity/providers",
+        params={"owner_scope_type": "user"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "invalid owner_scope_type"
+
+
 def test_identity_provider_dry_run_reports_email_link_action_when_policy_allows(
     admin_identity_client: TestClient,
 ) -> None:
