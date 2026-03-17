@@ -40,7 +40,6 @@ async def test_audit_logger_batches_events():
         written_batches.append(list(batch))
 
     logger = AuditLogger(
-        bus=bus,
         write_batch_fn=fake_write,
         batch_size=3,
         flush_interval=10.0,  # long interval so only batch_size triggers
@@ -68,7 +67,6 @@ async def test_audit_logger_flushes_on_interval():
         written_batches.append(list(batch))
 
     logger = AuditLogger(
-        bus=bus,
         write_batch_fn=fake_write,
         batch_size=100,  # high batch size so it never triggers
         flush_interval=0.15,

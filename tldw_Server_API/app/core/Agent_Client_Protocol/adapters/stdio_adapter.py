@@ -47,7 +47,8 @@ class StdioAdapter(ProtocolAdapter):
         messages: list[dict],
         options: PromptOptions | None = None,
     ) -> None:
-        assert self._client is not None, "Not connected"
+        if self._client is None:
+            raise RuntimeError("Not connected")
         await self._client.call("prompt", {"messages": messages})
 
     async def send_tool_result(
@@ -56,14 +57,16 @@ class StdioAdapter(ProtocolAdapter):
         output: str,
         is_error: bool = False,
     ) -> None:
-        assert self._client is not None, "Not connected"
+        if self._client is None:
+            raise RuntimeError("Not connected")
         await self._client.call(
             "tool_result",
             {"tool_id": tool_id, "output": output, "is_error": is_error},
         )
 
     async def cancel(self) -> None:
-        assert self._client is not None, "Not connected"
+        if self._client is None:
+            raise RuntimeError("Not connected")
         await self._client.notify("cancel", {})
 
     @property
@@ -78,7 +81,8 @@ class StdioAdapter(ProtocolAdapter):
 
     async def _handle_notification(self, msg: ACPMessage) -> None:
         """Translate a JSON-RPC notification from the agent into an AgentEvent."""
-        assert self._config is not None
+        if self._config is None:
+            return
         params: dict[str, Any] = msg.params if isinstance(msg.params, dict) else {}
         method = msg.method or ""
         msg_type = params.get("type", "")

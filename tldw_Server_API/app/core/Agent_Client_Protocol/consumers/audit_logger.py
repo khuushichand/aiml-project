@@ -25,7 +25,6 @@ class AuditLogger(EventConsumer):
 
     def __init__(
         self,
-        bus: SessionEventBus,
         write_batch_fn: WriteBatchFn,
         batch_size: int = 100,
         flush_interval: float = 5.0,

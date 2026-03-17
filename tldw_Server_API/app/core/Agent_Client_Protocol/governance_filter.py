@@ -59,7 +59,8 @@ class GovernanceFilter:
             return
 
         tool_name: str = event.payload.get("tool_name", "")
-        tier = determine_permission_tier(tool_name)
+        # Use the adapter-provided tier if present; fall back to re-resolving
+        tier = event.payload.get("permission_tier") or determine_permission_tier(tool_name)
 
         if tier == "auto":
             await self._bus.publish(event)
