@@ -36,7 +36,6 @@ from tldw_Server_API.app.core.Chunking.base import ChunkerConfig, ChunkingMethod
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Embeddings.vector_store_batches_db import (
     create_batch as db_create_batch,
 )
@@ -1554,7 +1553,7 @@ class CreateFromMediaRequest(BaseModel):
 async def create_store_from_media(
     payload: CreateFromMediaRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ):
     # Validate chunk method early to return 400/422 on invalid value before DB lookups
     valid_methods = {m.value for m in ChunkingMethod}
