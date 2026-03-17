@@ -5,8 +5,8 @@
 ## Normalized Counts
 
 - Raw `MediaDatabase(...)` constructors in app code: 13
-- Operational `create_media_database(...)` call sites in app code: 20
-- Operational `managed_media_database(...)` call sites in app code: 33
+- Operational `create_media_database(...)` call sites in app code: 18
+- Operational `managed_media_database(...)` call sites in app code: 35
 - `Media_DB_v2` references in app code: 137
 
 Notes:
@@ -47,6 +47,7 @@ Notes:
 | `app/core/Claims_Extraction/claims_utils.py` | 1 | `MOVE_MANAGED` already satisfied | Claims persistence worker now scopes its DB writes through the managed helper with `initialize=False` and close-error suppression |
 | `app/core/Claims_Extraction/claims_notifications.py` | 1 | `MOVE_MANAGED` already satisfied | Review notification delivery now scopes its DB session through the managed helper with suppressed init/close failures |
 | `app/core/Claims_Extraction/claims_rebuild_service.py` | 2 | `MOVE_MANAGED` already satisfied | Health persistence and task processing now scope their DB sessions through the managed helper while preserving first-run health DB initialization semantics |
+| `app/core/Claims_Extraction/claims_service.py` | 2 | `MOVE_MANAGED` already satisfied | Webhook event persistence and persisted rebuild-health reads now scope their DB sessions through the managed helper with suppressed init/close failures |
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | `MOVE_MANAGED` already satisfied | Ingestion-claims SQL fallback now uses the managed helper with `initialize=False` and suppressed close failures |
 | `app/core/Embeddings/services/jobs_worker.py` | 1 | `MOVE_MANAGED` already satisfied | Local media-content reads now scope their DB session through the managed helper with `initialize=False` |
 | `app/core/Embeddings/services/vector_compactor.py` | 1 | `MOVE_MANAGED` already satisfied | Soft-delete lookup now scopes its Media DB read through the managed helper with `initialize=False` and suppressed close failures |
@@ -63,7 +64,6 @@ Notes:
 | `app/services/tts_history_cleanup_service.py` | 1 | local cleanup DB helper wraps probe and per-user loops | `NEW_HELPER` already satisfied | preserves explicit close behavior while removing raw constructors |
 | `app/core/Workflows/adapters/knowledge/crud.py` | 2 | per-user lazy import path | `NEW_HELPER` | currently calls `create_media_database(user_id=...)`; signature mismatch hazard |
 | `app/core/Data_Tables/jobs_worker.py` | 1 | cached per-user DB owner | `KEEP_RAW` | explicit cache owner is intentional |
-| `app/core/Claims_Extraction/claims_service.py` | 2 | local event/health persistence DB | `NEW_HELPER` | likely same helper family as rebuild/notifications |
 | `app/core/Evaluations/embeddings_abtest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | explicit owner-controlled lifetime is fine |
 | `app/core/DB_Management/Users_DB.py` | 1 | factory wrapper returns DB instance | `KEEP_RAW` | wrapper boundary, not local scope |
 | `app/core/TTS/tts_jobs_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | `_handle_tts_job(...)` still owns close behavior |

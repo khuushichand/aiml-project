@@ -1,5 +1,6 @@
 import json
 import types
+from contextlib import contextmanager
 
 from tldw_Server_API.app.core.Claims_Extraction import claims_service
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -78,8 +79,6 @@ def test_claims_webhook_delivery_retries_and_records(monkeypatch, tmp_path):
 
 
 def test_claims_webhook_backoff_schedule(monkeypatch, tmp_path):
-
-
     db_path = tmp_path / "media.db"
     db = MediaDatabase(db_path=str(db_path), client_id="test")
     db.initialize_db()
@@ -137,3 +136,63 @@ def test_claims_webhook_backoff_schedule(monkeypatch, tmp_path):
     db.close_connection()
     total = int(row["total"]) if isinstance(row, dict) else int(row[0])
     assert total == 5
+
+
+def test_record_webhook_event_uses_managed_media_database(monkeypatch):
+    class _FakeDb:
+        def __init__(self) -> None:
+            self.insert_calls: list[dict[str, object]] = []
+
+        def insert_claims_monitoring_event(self, **kwargs) -> None:
+            self.insert_calls.append(kwargs)
+
+        def close_connection(self) -> None:
+            pass
+
+    fake_db = _FakeDb()
+    managed_calls: list[dict[str, object]] = []
+
+    @contextmanager
+    def _fake_managed_media_database(client_id, *, initialize=True, **kwargs):
+        managed_calls.append(
+            {
+                "client_id": client_id,
+                "initialize": initialize,
+                "kwargs": kwargs,
+            }
+        )
+        yield fake_db
+
+    monkeypatch.setattr(claims_service, "managed_media_database", _fake_managed_media_database, raising=False)
+    monkeypatch.setattr(
+        claims_service,
+        "create_media_database",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
+    )
+
+    claims_service._record_webhook_event(
+        db_path="/tmp/claims-webhook.db",
+        user_id="1",
+        channel="webhook",
+        status="failure",
+        attempt=2,
+        reason="timeout",
+        status_code=504,
+        alert_id=42,
+    )
+
+    assert len(fake_db.insert_calls) == 1
+    assert fake_db.insert_calls[0]["user_id"] == "1"
+    assert fake_db.insert_calls[0]["event_type"] == "webhook_delivery"
+    assert managed_calls == [
+        {
+            "client_id": claims_service.settings.get("SERVER_CLIENT_ID", "SERVER_API_V1"),
+            "initialize": True,
+            "kwargs": {
+                "db_path": "/tmp/claims-webhook.db",
+                "suppress_init_exceptions": claims_service._CLAIMS_NONCRITICAL_EXCEPTIONS,
+                "suppress_close_exceptions": claims_service._CLAIMS_NONCRITICAL_EXCEPTIONS,
+            },
+        }
+    ]

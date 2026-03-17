@@ -53,7 +53,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
-from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 from tldw_Server_API.app.core.Setup import setup_manager
 
@@ -617,37 +617,31 @@ def _record_webhook_event(
     alert_id: int | None = None,
 ) -> None:
     try:
-        db = create_media_database(
+        with managed_media_database(
             client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
             db_path=db_path,
-        )
-    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-        return
-    try:
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            db.initialize_db()
-        payload = {
-            "channel": channel,
-            "status": status,
-            "attempt": int(attempt),
-        }
-        if reason:
-            payload["reason"] = reason
-        if status_code is not None:
-            payload["status_code"] = int(status_code)
-        if alert_id is not None:
-            payload["alert_id"] = int(alert_id)
-        db.insert_claims_monitoring_event(
-            user_id=str(user_id),
-            event_type="webhook_delivery",
-            severity="info" if status == "success" else "warning",
-            payload_json=json.dumps(payload),
-        )
+            suppress_init_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+            suppress_close_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+        ) as db:
+            payload = {
+                "channel": channel,
+                "status": status,
+                "attempt": int(attempt),
+            }
+            if reason:
+                payload["reason"] = reason
+            if status_code is not None:
+                payload["status_code"] = int(status_code)
+            if alert_id is not None:
+                payload["alert_id"] = int(alert_id)
+            db.insert_claims_monitoring_event(
+                user_id=str(user_id),
+                event_type="webhook_delivery",
+                severity="info" if status == "success" else "warning",
+                payload_json=json.dumps(payload),
+            )
     except _CLAIMS_NONCRITICAL_EXCEPTIONS:
         pass
-    finally:
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            db.close_connection()
 
 
 def _deliver_claims_alert_webhook(
@@ -819,17 +813,13 @@ def _build_rebuild_health_summary_from_service(health: dict[str, Any]) -> dict[s
 def _load_persisted_rebuild_health() -> dict[str, Any]:
     user_id = _claims_monitoring_system_user_id()
     db_path = get_user_media_db_path(user_id)
-    db = create_media_database(
+    with managed_media_database(
         client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
         db_path=db_path,
-    )
-    try:
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            db.initialize_db()
+        suppress_init_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+        suppress_close_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+    ) as db:
         return db.get_claims_monitoring_health(str(user_id))
-    finally:
-        with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-            db.close_connection()
 
 
 def _dispatch_claims_alert_notifications(
