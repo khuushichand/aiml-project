@@ -1,3 +1,5 @@
+default_profile: docker_single_user
+default_entrypoint: quickstart-docker-webui
 profiles:
   local_single_user:
     title: "Local single-user"
