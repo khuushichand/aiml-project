@@ -3914,10 +3914,16 @@ class McpHubRepo:
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         usage = dict(usage_rules or {})
+        default_credential_ref = "slot" if normalized_slot_name else "server"
         normalized_credential_ref = _normalize_credential_ref(
             credential_ref,
-            default_ref="slot" if normalized_slot_name else "server",
+            default_ref=default_credential_ref,
         )
+        if (
+            normalized_binding_mode == "disable"
+            and normalized_credential_ref != default_credential_ref
+        ):
+            raise ValueError("disable bindings may not store explicit credential refs")
 
         await self.db_pool.execute(
             """
