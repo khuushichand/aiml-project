@@ -461,7 +461,6 @@ async def federation_callback(
     code: str,
     state: str,
     request: Request,
-    db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     session_manager: SessionManager = Depends(get_session_manager_dep),
     settings: Settings = Depends(get_settings),
@@ -581,14 +580,16 @@ async def federation_callback(
         user_id=int(user["id"]),
         mapped_claims=mapped_claims,
     )
-    return await _issue_multi_user_tokens(
-        request=request,
-        db=db,
-        user=user,
-        jwt_service=jwt_service,
-        session_manager=session_manager,
-        settings=settings,
-    )
+    db_pool = await get_db_pool()
+    async with db_pool.transaction() as db:
+        return await _issue_multi_user_tokens(
+            request=request,
+            db=db,
+            user=user,
+            jwt_service=jwt_service,
+            session_manager=session_manager,
+            settings=settings,
+        )
 
 
 def _current_user_value(user: Any, key: str, default: Any = None) -> Any:
