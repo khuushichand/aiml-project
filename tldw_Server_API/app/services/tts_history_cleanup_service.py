@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import os
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -20,8 +21,11 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 _TTS_HISTORY_CLEANUP_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -118,6 +122,13 @@ def _enumerate_user_ids_from_fs() -> list[str]:
     return sorted(set(uids))
 
 
+def _create_cleanup_db(db_path: str) -> MediaDatabase:
+    return create_media_database(
+        client_id="tts_history_cleanup",
+        db_path=db_path,
+    )
+
+
 def _purge_with_db(db: MediaDatabase, user_ids: Iterable[str], retention_days: int, max_rows: int) -> int:
     removed_total = 0
     for uid in user_ids:
@@ -148,9 +159,8 @@ async def run_tts_history_cleanup_loop(stop_event: asyncio.Event | None = None) 
             break
         removed_total = 0
         try:
-            probe_db = MediaDatabase(
-                db_path=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())),
-                client_id="tts_history_cleanup",
+            probe_db = _create_cleanup_db(
+                str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
             )
             if probe_db.backend_type.name.lower() == "postgresql":
                 user_ids = probe_db.list_tts_history_user_ids()
@@ -160,7 +170,7 @@ async def run_tts_history_cleanup_loop(stop_event: asyncio.Event | None = None) 
                 user_ids = _enumerate_user_ids_from_fs()
                 for uid in user_ids:
                     db_path = DatabasePaths.get_media_db_path(uid)
-                    db = MediaDatabase(db_path=str(db_path), client_id="tts_history_cleanup")
+                    db = _create_cleanup_db(str(db_path))
                     try:
                         removed_total += db.purge_tts_history_for_user(
                             user_id=str(uid),

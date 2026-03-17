@@ -38,6 +38,7 @@ from tldw_Server_API.app.services import enhanced_web_scraping_service
 from tldw_Server_API.app.services import media_ingest_jobs_worker
 from tldw_Server_API.app.services import outputs_purge_scheduler
 from tldw_Server_API.app.services import storage_cleanup_service
+from tldw_Server_API.app.services import tts_history_cleanup_service
 from tldw_Server_API.app.services import web_scraping_service
 
 
@@ -137,6 +138,11 @@ def test_storage_cleanup_service_imports_managed_media_database_from_media_db_ap
 def test_outputs_purge_scheduler_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(outputs_purge_scheduler)
     assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_tts_history_cleanup_service_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(tts_history_cleanup_service)
+    assert module.create_media_database is media_db_api.create_media_database
 
 
 def test_audiobook_jobs_worker_imports_managed_media_database_from_media_db_api():

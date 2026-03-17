@@ -4,8 +4,8 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 21
-- Operational `create_media_database(...)` call sites in app code: 28
+- Raw `MediaDatabase(...)` constructors in app code: 19
+- Operational `create_media_database(...)` call sites in app code: 29
 - Operational `managed_media_database(...)` call sites in app code: 20
 - `Media_DB_v2` references in app code: 139
 
@@ -48,6 +48,7 @@ Notes:
 | `app/services/document_processing_service.py` | 1 | local create/use/close in one function | `MOVE_MANAGED` | straightforward conversion candidate |
 | `app/services/media_ingest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | owner is the caller, not the helper |
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | caller still owns sink DB lifetime |
+| `app/services/tts_history_cleanup_service.py` | 1 | local cleanup DB helper wraps probe and per-user loops | `NEW_HELPER` already satisfied | preserves explicit close behavior while removing raw constructors |
 | `app/api/v1/endpoints/research.py` | 1 | deprecated helper creates local DB | `MOVE_MANAGED` | local ingest path, no reason to stay raw |
 | `app/core/Web_Scraping/Article_Extractor_Lib.py` | 1 | local create and ingest | `MOVE_MANAGED` | local scope; currently no obvious close in the helper |
 | `app/core/Workflows/adapters/knowledge/crud.py` | 2 | per-user lazy import path | `NEW_HELPER` | currently calls `create_media_database(user_id=...)`; signature mismatch hazard |
@@ -68,7 +69,6 @@ Notes:
 
 | File | Count | Current Pattern | Classification | Notes |
 | --- | ---: | --- | --- | --- |
-| `app/services/tts_history_cleanup_service.py` | 2 | probe DB plus per-user loop DBs | `NEW_HELPER` | needs backend-aware cleanup helper, not a mechanical rewrite |
 | `app/services/connectors_worker.py` | 1 | per-sync DB reused across a large function | `NEW_HELPER` | better as a dedicated sync DB helper than an inlined raw constructor |
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
@@ -142,16 +142,10 @@ File:
 
 - `app/core/Workflows/adapters/knowledge/crud.py`
 
-Problem:
+Status:
 
-- The code currently imports `create_media_database` from `media_db.api` and calls it as `create_media_database(user_id=int(user_id))`.
-- The public function signature is currently `create_media_database(client_id: str, *, db_path: str | None = None, backend=None, config=None)`.
-- Test doubles in `tests/Workflows/adapters/test_knowledge_adapters.py` currently accept `user_id=None`, which can mask the mismatch.
-
-Recommendation:
-
-- Treat this as a Stage 1 correctness issue, not just a cleanup issue.
-- Either introduce a proper user-aware helper for this workflow path or fix the caller to pass an explicit `client_id` and `db_path`.
+- Resolved in the worktree by introducing a workflow-specific helper that calls `create_media_database(client_id=..., db_path=...)` with the real API contract.
+- Keep the workflow helper in place until the broader workflow DB surface is revisited.
 
 ### 2. Local-scope DB creation without obvious close in the same helper
 
@@ -173,8 +167,7 @@ Recommendation:
 
 ## Recommended Next Execution Order
 
-1. Fix the `crud.py` user-id/signature mismatch and classify it under a dedicated workflow DB helper.
-2. Extract a small `persistence.py` session helper and convert the eight repeated factory sites.
-3. Centralize the claims cross-user SQLite override pattern into one helper.
-4. Convert the simple local read/write constructor sites to `managed_media_database(...)`.
-5. Revisit long-lived owners and explicitly mark which raw constructors remain acceptable.
+1. Centralize the claims cross-user SQLite override pattern into one helper.
+2. Convert the remaining simple local raw constructor sites to `managed_media_database(...)` or `create_media_database(...)` based on ownership.
+3. Revisit long-lived owners and explicitly mark which raw constructors remain acceptable.
+4. Narrow the `Media_DB_v2` boundary imports once lifecycle helper policy is stable.
