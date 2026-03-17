@@ -104,6 +104,15 @@ def _normalize_slot_name(slot_name: str | None, *, allow_blank: bool = False) ->
     return value
 
 
+def _implicit_credential_ref(slot_name: str | None) -> str:
+    return "slot" if str(slot_name or "").strip() else "server"
+
+
+def _normalize_credential_ref(credential_ref: str | None, *, slot_name: str | None = None) -> str:
+    value = str(credential_ref or "").strip().lower()
+    return value or _implicit_credential_ref(slot_name)
+
+
 def _normalize_credential_slot_privilege_class(privilege_class: str | None) -> str:
     value = str(privilege_class or "").strip().lower()
     if value not in _VALID_CREDENTIAL_SLOT_PRIVILEGE_CLASSES:
@@ -3869,6 +3878,16 @@ class McpHubRepo:
         if server.get("superseded_by_server_id"):
             raise ValueError("credential bindings cannot target superseded external servers")
         normalized_slot_name = _normalize_slot_name(slot_name, allow_blank=True)
+        normalized_credential_ref = _normalize_credential_ref(
+            credential_ref,
+            slot_name=normalized_slot_name,
+        )
+        implicit_credential_ref = _implicit_credential_ref(normalized_slot_name)
+        if (
+            normalized_binding_mode == "disable"
+            and normalized_credential_ref != implicit_credential_ref
+        ):
+            raise ValueError("disable bindings may not store explicit credential refs")
         if normalized_slot_name:
             slot = await self.get_external_server_credential_slot(
                 server_id=external_server_id,
@@ -3902,7 +3921,7 @@ class McpHubRepo:
                 target_id,
                 external_server_id.strip(),
                 normalized_slot_name,
-                str(credential_ref or "server").strip(),
+                normalized_credential_ref,
                 normalized_binding_mode,
                 json.dumps(usage),
                 actor_id,
