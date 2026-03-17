@@ -52,6 +52,7 @@ _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS = (
 _BILLING_ENFORCEMENT_FAILURE_MODE_ENV = "BILLING_ENFORCEMENT_FAILURE_MODE"
 _BILLING_ENFORCEMENT_FAILURE_MODE_OPEN = "open"
 _BILLING_ENFORCEMENT_FAILURE_MODE_CLOSED = "closed"
+_BILLING_ENFORCEMENT_POLICY_UNSET = object()
 
 try:  # pragma: no cover - optional dependency guard
     import asyncpg  # type: ignore
@@ -141,6 +142,7 @@ class BillingEnforcer:
         self._limits_cache: dict[int, tuple[dict[str, Any], float]] = {}
         # Use provided TTL, env var, or default to 60s
         self._cache_ttl = cache_ttl if cache_ttl is not None else BILLING_CACHE_TTL_SECONDS
+        self._overage_policy: Any = _BILLING_ENFORCEMENT_POLICY_UNSET
 
     @staticmethod
     def _is_postgres_pool(pool: Any) -> bool:
@@ -178,6 +180,16 @@ class BillingEnforcer:
             _BILLING_ENFORCEMENT_FAILURE_MODE_OPEN,
         )
         return _BILLING_ENFORCEMENT_FAILURE_MODE_OPEN
+
+    def _get_overage_policy(self) -> OveragePolicy | None:
+        """Load the configured overage policy once per enforcer instance."""
+        if self._overage_policy is _BILLING_ENFORCEMENT_POLICY_UNSET:
+            try:
+                self._overage_policy = OveragePolicy.from_env()
+            except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(f"Overage policy initialization skipped: {exc}")
+                self._overage_policy = None
+        return self._overage_policy
 
     @classmethod
     def _fail_closed_on_data_error(cls) -> bool:
@@ -774,7 +786,9 @@ class BillingEnforcer:
 
         # Apply overage policy to potentially upgrade the enforcement action
         try:
-            overage_policy = OveragePolicy.from_env()
+            overage_policy = self._get_overage_policy()
+            if overage_policy is None:
+                raise RuntimeError("overage policy unavailable")
             overage_result = overage_policy.evaluate(percent_used)
 
             if overage_result["blocked"]:
@@ -796,7 +810,7 @@ class BillingEnforcer:
                     f"{percent_used:.0f}% used"
                 )
         except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug(f"Overage policy evaluation skipped: {exc}")
+            logger.warning(f"Overage policy evaluation skipped: {exc}")
 
         return LimitCheckResult(
             category=category.value,

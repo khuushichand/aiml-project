@@ -9,6 +9,8 @@ Verifies that:
 """
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager, _get_fair_share
@@ -108,15 +110,32 @@ class TestFairSharePriorityAdjustment:
         import tldw_Server_API.app.core.Jobs.manager as mgr_mod
         mgr_mod._fair_share = None
 
-        # With 0 active jobs, fair-share priority = 100
-        # The explicit priority of 5 should be overridden to 100
         job = job_manager.create_job(
             domain="chatbooks", queue="default", job_type="export",
             payload={}, owner_user_id="42", priority=5,
         )
-        # The job should have been created with priority >= 100
-        # (max of explicit 5 and fair-share 100)
+        stored = job_manager.get_job(int(job["id"]))
+        assert stored is not None
+        assert int(stored["priority"]) < 5
+
+    def test_warns_when_fair_share_check_is_skipped(self, job_manager, monkeypatch):
+        monkeypatch.setenv("JOBS_MAX_PER_USER", "10")
+        import tldw_Server_API.app.core.Jobs.manager as mgr_mod
+        mgr_mod._fair_share = None
+
+        with patch.object(JobManager, "_count_active_jobs_for_user", side_effect=RuntimeError("boom")), \
+             patch.object(mgr_mod.logger, "warning") as mock_warning:
+            job = job_manager.create_job(
+                domain="chatbooks",
+                queue="default",
+                job_type="export",
+                payload={},
+                owner_user_id="42",
+                priority=5,
+            )
+
         assert job is not None
+        mock_warning.assert_called_once()
 
 
 class TestCountActiveJobs:

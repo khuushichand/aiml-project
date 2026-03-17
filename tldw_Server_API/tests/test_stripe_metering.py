@@ -11,6 +11,7 @@ Covers:
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -84,9 +85,33 @@ def _make_enabled_svc() -> StripeMeteringService:
     """Create a StripeMeteringService with billing enabled."""
     with patch.dict(
         "os.environ",
-        {"BILLING_ENABLED": "true", "STRIPE_API_KEY": "sk_test_123"},
-    ):
-        return StripeMeteringService()
+            {"BILLING_ENABLED": "true", "STRIPE_API_KEY": "sk_test_123"},
+        ):
+            return StripeMeteringService()
+
+
+class _AcquireContext:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakePool:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        return _AcquireContext(self._conn)
+
+
+class _FakeSqliteConn:
+    def __init__(self, execute_side_effect):
+        self.execute = AsyncMock(side_effect=execute_side_effect)
 
 
 class TestSyncDailyUsage:
@@ -299,6 +324,63 @@ class TestSyncDailyUsage:
 
         assert result["synced_users"] == 0
         assert result["skipped_users"] == 1
+
+    @pytest.mark.asyncio
+    async def test_query_usage_for_date_falls_back_when_bytes_in_total_missing(self):
+        svc = _make_enabled_svc()
+        legacy_cursor = MagicMock()
+        legacy_cursor.description = [
+            ("user_id",),
+            ("requests",),
+            ("errors",),
+            ("bytes_total",),
+            ("latency_avg_ms",),
+        ]
+        legacy_cursor.fetchall = AsyncMock(return_value=[(7, 12, 1, 4096, 25.0)])
+
+        conn = _FakeSqliteConn(
+            [
+                sqlite3.OperationalError("no such column: bytes_in_total"),
+                legacy_cursor,
+            ]
+        )
+
+        rows = await svc._query_usage_for_date(_FakePool(conn), "2026-03-13")
+
+        assert rows == [
+            {
+                "user_id": 7,
+                "requests": 12,
+                "errors": 1,
+                "bytes_total": 4096,
+                "bytes_in_total": 0,
+                "latency_avg_ms": 25.0,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_query_user_subscription_falls_back_to_org_owner(self):
+        svc = _make_enabled_svc()
+        miss_cursor = MagicMock()
+        miss_cursor.fetchone = AsyncMock(return_value=None)
+
+        owner_cursor = MagicMock()
+        owner_cursor.description = [
+            ("stripe_customer_id",),
+            ("stripe_subscription_id",),
+            ("org_id",),
+        ]
+        owner_cursor.fetchone = AsyncMock(return_value=("cus_owner", "sub_owner", 9))
+
+        conn = _FakeSqliteConn([miss_cursor, owner_cursor])
+
+        result = await svc._query_user_subscription(_FakePool(conn), 42)
+
+        assert result == {
+            "stripe_customer_id": "cus_owner",
+            "stripe_subscription_id": "sub_owner",
+            "org_id": 9,
+        }
 
 
 # ---------------------------------------------------------------------------

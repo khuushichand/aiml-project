@@ -6,6 +6,7 @@ Allows users to view, grant, and withdraw consent for data processing purposes.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -13,6 +14,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.schemas.consent_schemas import (
+    ConsentPreferencesResponse,
+    ConsentRecordResponse,
+)
 from tldw_Server_API.app.core.AuthNZ.consent_manager import ConsentManager
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
@@ -65,19 +70,19 @@ def _resolve_user_id(principal: AuthPrincipal) -> int:
     return principal.user_id
 
 
-@router.get("/preferences")
+@router.get("/preferences", response_model=ConsentPreferencesResponse)
 async def get_consent_preferences(
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> ConsentPreferencesResponse:
     """Get current user's consent preferences."""
     user_id = _resolve_user_id(principal)
     try:
         mgr = _get_consent_manager()
-        records = mgr.get_user_consents(user_id)
-        return {
-            "user_id": user_id,
-            "consents": records,
-        }
+        records = await asyncio.to_thread(mgr.get_user_consents, user_id)
+        return ConsentPreferencesResponse(
+            user_id=user_id,
+            consents=[ConsentRecordResponse.model_validate(record) for record in records],
+        )
     except _CONSENT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Failed to get consent preferences for user {}: {}", user_id, exc)
         raise HTTPException(
@@ -86,34 +91,27 @@ async def get_consent_preferences(
         ) from exc
 
 
-@router.post("/preferences/{purpose}")
+@router.post("/preferences/{purpose}", response_model=ConsentRecordResponse)
 async def grant_consent(
     purpose: str,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> ConsentRecordResponse:
     """Grant consent for a specific purpose."""
     user_id = _resolve_user_id(principal)
-    ip_address = None
-    user_agent = None
-    try:
-        ip_address = request.client.host if request.client else None
-    except _CONSENT_NONCRITICAL_EXCEPTIONS:
-        pass
-    try:
-        user_agent = request.headers.get("user-agent")
-    except _CONSENT_NONCRITICAL_EXCEPTIONS:
-        pass
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
 
     try:
         mgr = _get_consent_manager()
-        result = mgr.grant_consent(
+        result = await asyncio.to_thread(
+            mgr.grant_consent,
             user_id,
             purpose,
             ip_address=ip_address,
             user_agent=user_agent,
         )
-        return result
+        return ConsentRecordResponse.model_validate(result)
     except _CONSENT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Failed to grant consent for user {} purpose {}: {}", user_id, purpose, exc)
         raise HTTPException(
@@ -122,22 +120,22 @@ async def grant_consent(
         ) from exc
 
 
-@router.delete("/preferences/{purpose}")
+@router.delete("/preferences/{purpose}", response_model=ConsentRecordResponse)
 async def withdraw_consent(
     purpose: str,
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> ConsentRecordResponse:
     """Withdraw consent for a specific purpose."""
     user_id = _resolve_user_id(principal)
     try:
         mgr = _get_consent_manager()
-        result = mgr.withdraw_consent(user_id, purpose)
+        result = await asyncio.to_thread(mgr.withdraw_consent, user_id, purpose)
         if result is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No active consent found for purpose '{purpose}'.",
             )
-        return result
+        return ConsentRecordResponse.model_validate(result)
     except HTTPException:
         raise
     except _CONSENT_NONCRITICAL_EXCEPTIONS as exc:

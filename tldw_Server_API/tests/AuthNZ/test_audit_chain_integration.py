@@ -186,3 +186,63 @@ class TestAuditChainIntegration:
             await service.stop()
 
         _run(_test(), event_loop)
+
+    def test_chain_survives_service_restart(self, audit_db_path, event_loop, monkeypatch):
+        monkeypatch.setenv("TEST_MODE", "true")
+
+        async def _test():
+            service = UnifiedAuditService(
+                db_path=audit_db_path,
+                enable_pii_detection=False,
+                enable_risk_scoring=False,
+                buffer_size=100,
+            )
+            await service.initialize(start_background_tasks=False)
+            await service.log_event(
+                AuditEventType.AUTH_LOGIN_SUCCESS,
+                context=AuditContext(user_id="1"),
+                action="login",
+            )
+            await service.flush()
+            await service.stop()
+
+            restarted = UnifiedAuditService(
+                db_path=audit_db_path,
+                enable_pii_detection=False,
+                enable_risk_scoring=False,
+                buffer_size=100,
+            )
+            await restarted.initialize(start_background_tasks=False)
+            await restarted.log_event(
+                AuditEventType.DATA_EXPORT,
+                context=AuditContext(user_id="1"),
+                action="export",
+            )
+            await restarted.flush()
+
+            async with aiosqlite.connect(audit_db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT action, context_user_id, timestamp, event_type, chain_hash "
+                    "FROM audit_events ORDER BY timestamp ASC, event_id ASC"
+                ) as cur:
+                    rows = [dict(r) for r in await cur.fetchall()]
+
+            verify_events = [
+                {
+                    "action": row.get("action", ""),
+                    "user_id": row.get("context_user_id"),
+                    "timestamp": row.get("timestamp", ""),
+                    "detail": row.get("event_type", ""),
+                    "chain_hash": row.get("chain_hash", ""),
+                }
+                for row in rows
+            ]
+
+            result = verify_audit_chain(verify_events)
+            assert result["valid"] is True
+            assert result["checked"] == 2
+
+            await restarted.stop()
+
+        _run(_test(), event_loop)

@@ -256,6 +256,15 @@ class JobManager:
         finally:
             conn.close()
 
+    @staticmethod
+    def _map_fair_share_score_to_priority(score: int) -> int:
+        """Convert a higher fair-share score into a higher queue priority.
+
+        Queue priority is stored as 1..10 where lower numbers run first.
+        """
+        clamped_score = max(0, min(100, int(score)))
+        return max(1, 10 - min(9, clamped_score // 10))
+
     def _get_allowed_queues(self, domain: str | None = None) -> list[str]:
         allowed = list(self.STANDARD_QUEUES)
         if domain:
@@ -1099,13 +1108,12 @@ class JobManager:
                         f"({scheduler.max_per_user})"
                     )
                 fair_priority = scheduler.calculate_priority(int(owner_user_id), active_count)
-                # Clamp fair-share priority to DB-valid range (1-10)
-                fair_priority_clamped = max(1, min(10, fair_priority // 10))
-                priority = max(priority, fair_priority_clamped)
+                fair_priority_mapped = self._map_fair_share_score_to_priority(fair_priority)
+                priority = min(priority, fair_priority_mapped)
             except ValueError:
                 raise
             except _JOB_NONCRITICAL_EXCEPTIONS as _fs_exc:
-                logger.debug(f"Fair-share scheduling check skipped: {_fs_exc}")
+                logger.warning(f"Fair-share scheduling check skipped: {_fs_exc}")
 
         # Secret hygiene (reject/redact)
         try:

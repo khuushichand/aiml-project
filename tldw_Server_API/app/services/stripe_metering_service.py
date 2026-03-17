@@ -47,6 +47,32 @@ class StripeMeteringService:
         """Detect whether *conn* is a PostgreSQL connection (asyncpg)."""
         return hasattr(conn, "fetchrow")
 
+    @staticmethod
+    def _is_missing_usage_column_error(exc: Exception) -> bool:
+        """Return True when *exc* indicates legacy usage_daily schema."""
+        message = str(exc).lower()
+        return "bytes_in_total" in message and (
+            "no such column" in message
+            or "does not exist" in message
+            or "undefined column" in message
+        )
+
+    @staticmethod
+    def _sqlite_rows_to_dicts(
+        raw_rows: list[tuple[Any, ...]],
+        description: list[tuple[Any, ...]] | None,
+        *,
+        include_bytes_in_total: bool,
+    ) -> list[dict[str, Any]]:
+        if not raw_rows:
+            return []
+        columns = [col[0] for col in (description or [])]
+        rows = [dict(zip(columns, row)) for row in raw_rows]
+        if not include_bytes_in_total:
+            for row in rows:
+                row["bytes_in_total"] = 0
+        return rows
+
     async def _query_usage_for_date(self, pool: Any, target_date: str) -> list[dict[str, Any]]:
         """Fetch usage_daily rows for *target_date*.
 
@@ -55,25 +81,54 @@ class StripeMeteringService:
         """
         async with pool.acquire() as conn:
             if self._is_postgres(conn):
-                rows = await conn.fetch(
-                    "SELECT user_id, requests, errors, bytes_total, "
-                    "COALESCE(bytes_in_total, 0) AS bytes_in_total, latency_avg_ms "
-                    "FROM usage_daily WHERE day = $1",
-                    target_date,
-                )
-                return [dict(r) for r in rows]
+                try:
+                    rows = await conn.fetch(
+                        "SELECT user_id, requests, errors, bytes_total, "
+                        "COALESCE(bytes_in_total, 0) AS bytes_in_total, latency_avg_ms "
+                        "FROM usage_daily WHERE day = $1",
+                        target_date,
+                    )
+                    return [dict(r) for r in rows]
+                except Exception as exc:
+                    if not self._is_missing_usage_column_error(exc):
+                        raise
+                    rows = await conn.fetch(
+                        "SELECT user_id, requests, errors, bytes_total, latency_avg_ms "
+                        "FROM usage_daily WHERE day = $1",
+                        target_date,
+                    )
+                    legacy_rows = [dict(r) for r in rows]
+                    for row in legacy_rows:
+                        row["bytes_in_total"] = 0
+                    return legacy_rows
             else:
-                cur = await conn.execute(
-                    "SELECT user_id, requests, errors, bytes_total, "
-                    "COALESCE(bytes_in_total, 0) AS bytes_in_total, latency_avg_ms "
-                    "FROM usage_daily WHERE day = ?",
-                    (target_date,),
-                )
-                raw_rows = await cur.fetchall()
-                if not raw_rows:
-                    return []
-                columns = [col[0] for col in cur.description]
-                return [dict(zip(columns, row)) for row in raw_rows]
+                try:
+                    cur = await conn.execute(
+                        "SELECT user_id, requests, errors, bytes_total, "
+                        "COALESCE(bytes_in_total, 0) AS bytes_in_total, latency_avg_ms "
+                        "FROM usage_daily WHERE day = ?",
+                        (target_date,),
+                    )
+                    raw_rows = await cur.fetchall()
+                    return self._sqlite_rows_to_dicts(
+                        raw_rows,
+                        cur.description,
+                        include_bytes_in_total=True,
+                    )
+                except Exception as exc:
+                    if not self._is_missing_usage_column_error(exc):
+                        raise
+                    cur = await conn.execute(
+                        "SELECT user_id, requests, errors, bytes_total, latency_avg_ms "
+                        "FROM usage_daily WHERE day = ?",
+                        (target_date,),
+                    )
+                    raw_rows = await cur.fetchall()
+                    return self._sqlite_rows_to_dicts(
+                        raw_rows,
+                        cur.description,
+                        include_bytes_in_total=False,
+                    )
 
     async def _query_user_subscription(
         self, pool: Any, user_id: int
@@ -101,6 +156,22 @@ class StripeMeteringService:
                     """,
                     user_id,
                 )
+                if row:
+                    return dict(row)
+                row = await conn.fetchrow(
+                    """
+                    SELECT os.stripe_customer_id,
+                           os.stripe_subscription_id,
+                           os.org_id
+                    FROM org_subscriptions os
+                    JOIN organizations o ON o.id = os.org_id
+                    WHERE o.owner_user_id = $1
+                      AND os.status = 'active'
+                      AND os.stripe_subscription_id IS NOT NULL
+                    LIMIT 1
+                    """,
+                    user_id,
+                )
                 return dict(row) if row else None
             else:
                 cur = await conn.execute(
@@ -112,6 +183,24 @@ class StripeMeteringService:
                     JOIN org_members om ON om.org_id = os.org_id
                     WHERE om.user_id = ?
                       AND om.status = 'active'
+                      AND os.status = 'active'
+                      AND os.stripe_subscription_id IS NOT NULL
+                    LIMIT 1
+                    """,
+                    (user_id,),
+                )
+                row = await cur.fetchone()
+                if row:
+                    columns = [col[0] for col in cur.description]
+                    return dict(zip(columns, row))
+                cur = await conn.execute(
+                    """
+                    SELECT os.stripe_customer_id,
+                           os.stripe_subscription_id,
+                           os.org_id
+                    FROM org_subscriptions os
+                    JOIN organizations o ON o.id = os.org_id
+                    WHERE o.owner_user_id = ?
                       AND os.status = 'active'
                       AND os.stripe_subscription_id IS NOT NULL
                     LIMIT 1
@@ -403,9 +492,14 @@ class StripeMeteringService:
                         )
                         skipped += 1
                         continue
-                except Exception:
-                    # Table might not exist; proceed with sync
-                    pass
+                except Exception as exc:
+                    # Table might not exist yet; continue without duplicate-sync protection.
+                    logger.debug(
+                        "Metering sync precheck unavailable for user {} on {}: {}",
+                        user_id,
+                        target_date,
+                        exc,
+                    )
 
                 # Find the metered subscription item
                 item_id = await self._get_subscription_metered_item(subscription_id)

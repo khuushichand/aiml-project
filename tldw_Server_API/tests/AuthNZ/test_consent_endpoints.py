@@ -9,6 +9,7 @@ Verifies that:
 """
 from __future__ import annotations
 
+import importlib
 import os
 
 import pytest
@@ -117,8 +118,8 @@ class TestConsentEndpointAsync:
         mgr.grant_consent(42, "analytics")
 
         result = await get_consent_preferences(principal=principal)
-        assert result["user_id"] == 42
-        assert len(result["consents"]) == 1
+        assert result.user_id == 42
+        assert len(result.consents) == 1
 
     @pytest.mark.asyncio
     async def test_grant_consent_endpoint(self, consent_db, principal):
@@ -135,8 +136,8 @@ class TestConsentEndpointAsync:
             request=mock_request,
             principal=principal,
         )
-        assert result["user_id"] == 42
-        assert result["purpose"] == "analytics"
+        assert result.user_id == 42
+        assert result.purpose == "analytics"
 
     @pytest.mark.asyncio
     async def test_withdraw_consent_endpoint(self, consent_db, principal):
@@ -147,8 +148,8 @@ class TestConsentEndpointAsync:
         mgr.grant_consent(42, "analytics")
 
         result = await withdraw_consent(purpose="analytics", principal=principal)
-        assert result["purpose"] == "analytics"
-        assert "withdrawn_at" in result
+        assert result.purpose == "analytics"
+        assert result.withdrawn_at is not None
 
     @pytest.mark.asyncio
     async def test_withdraw_missing_raises_404(self, consent_db, principal):
@@ -157,3 +158,16 @@ class TestConsentEndpointAsync:
         with pytest.raises(HTTPException) as exc_info:
             await withdraw_consent(purpose="nonexistent", principal=principal)
         assert exc_info.value.status_code == 404
+
+
+class TestConsentRouterWiring:
+    def test_production_app_includes_consent_routes(self, monkeypatch):
+        monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+        monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+
+        from tldw_Server_API.app import main as app_main
+
+        reloaded = importlib.reload(app_main)
+        route_paths = {getattr(route, "path", "") for route in reloaded.app.routes}
+
+        assert "/api/v1/consent/preferences" in route_paths

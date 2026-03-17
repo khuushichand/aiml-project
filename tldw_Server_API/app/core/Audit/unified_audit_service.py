@@ -351,9 +351,9 @@ class AuditEventType(Enum):
     AUTH_LOGIN_SUCCESS = "auth.login.success"
     AUTH_LOGIN_FAILURE = "auth.login.failure"
     AUTH_LOGOUT = "auth.logout"
-    AUTH_TOKEN_CREATED = "auth.token.created"
-    AUTH_TOKEN_REFRESHED = "auth.token.refreshed"
-    AUTH_TOKEN_REVOKED = "auth.token.revoked"
+    AUTH_TOKEN_CREATED = "auth.token.created"  # nosec B105
+    AUTH_TOKEN_REFRESHED = "auth.token.refreshed"  # nosec B105
+    AUTH_TOKEN_REVOKED = "auth.token.revoked"  # nosec B105
     AUTH_SESSION_EXPIRED = "auth.session.expired"
 
     # User Management
@@ -362,8 +362,8 @@ class AuditEventType(Enum):
     USER_DELETED = "user.deleted"
     USER_ACTIVATED = "user.activated"
     USER_DEACTIVATED = "user.deactivated"
-    USER_PASSWORD_CHANGED = "user.password.changed"
-    USER_PASSWORD_RESET = "user.password.reset"
+    USER_PASSWORD_CHANGED = "user.password.changed"  # nosec B105
+    USER_PASSWORD_RESET = "user.password.reset"  # nosec B105
 
     # Data Operations
     DATA_READ = "data.read"
@@ -538,7 +538,7 @@ class PIIDetector:
         "bank_account": r"(?:\b\d{9}[-\s]?\d{8,17}\b|(?:account|acct|routing)[\s#:]*\d{8,17}\b)",
         "iban": r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:[A-Z0-9]?){0,16}\b",
         "api_key": r"\b(?:sk|pk|api[_-]?key)[_-]?[A-Za-z0-9]{32,}\b",
-        "jwt_token": r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
+        "jwt_token": r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",  # nosec B105
     }
 
     # Back-compat for modules that read PIIDetector.PII_PATTERNS directly
@@ -1077,6 +1077,7 @@ class UnifiedAuditService:
         """
         self._owner_loop = asyncio.get_running_loop()
         await self._init_database()
+        self._last_chain_hash = await self._load_last_chain_hash()
         # In test mode, avoid opening a persistent pooled connection to prevent
         # lingering aiosqlite worker threads that can keep the interpreter alive.
         # Non-test mode uses a pooled connection for performance.
@@ -1087,6 +1088,24 @@ class UnifiedAuditService:
         # tight loops and starve the event loop.
         if start_background_tasks and not self._test_mode:
             await self.start_background_tasks()
+
+    async def _load_last_chain_hash(self) -> str:
+        """Resume the tamper-evident chain from the most recently inserted event."""
+        try:
+            async with self._read_db() as db:
+                async with db.execute(
+                    "SELECT chain_hash FROM audit_events "
+                    "WHERE chain_hash IS NOT NULL AND chain_hash != '' "
+                    "ORDER BY rowid DESC LIMIT 1"
+                ) as cursor:
+                    row = await cursor.fetchone()
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Failed to resume audit hash chain: {exc}")
+            return ""
+
+        if not row:
+            return ""
+        return str(row[0] or "")
 
     def _build_event_columns(self) -> list[str]:
         columns = [

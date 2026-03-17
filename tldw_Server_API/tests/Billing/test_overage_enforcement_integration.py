@@ -9,10 +9,11 @@ Verifies that:
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tldw_Server_API.app.core.Billing import enforcement as enforcement_module
 from tldw_Server_API.app.core.Billing.enforcement import (
     BillingEnforcer,
     EnforcementAction,
@@ -144,3 +145,48 @@ class TestOverageUnlimited:
             result = await enforcer.check_limit(1, LimitCategory.API_CALLS_DAY)
             assert result.action == EnforcementAction.ALLOW
             assert result.unlimited is True
+
+
+class TestOveragePolicyLifecycle:
+    @pytest.mark.asyncio
+    async def test_overage_policy_is_loaded_once(self, monkeypatch):
+        monkeypatch.setenv("BILLING_OVERAGE_MODE", "notify_only")
+        monkeypatch.setenv("BILLING_OVERAGE_NOTIFY_PCT", "80")
+
+        policy = MagicMock()
+        policy.evaluate.return_value = {
+            "blocked": False,
+            "degraded": False,
+            "notify": False,
+            "mode": "notify_only",
+        }
+
+        with patch.object(enforcement_module.OveragePolicy, "from_env", return_value=policy) as mock_from_env:
+            enforcer = BillingEnforcer(cache_ttl=0)
+            with patch.object(enforcer, "get_org_limits", new_callable=AsyncMock) as mock_limits, \
+                 patch.object(enforcer, "get_org_usage", new_callable=AsyncMock) as mock_usage:
+                mock_limits.return_value = {"api_calls_day": 100}
+                mock_usage.return_value = UsageSummary(org_id=1, api_calls_today=10)
+
+                await enforcer.check_limit(1, LimitCategory.API_CALLS_DAY)
+                await enforcer.check_limit(1, LimitCategory.API_CALLS_DAY)
+
+        assert mock_from_env.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_when_overage_policy_evaluation_is_skipped(self):
+        policy = MagicMock()
+        policy.evaluate.side_effect = RuntimeError("broken policy")
+
+        with patch.object(enforcement_module.OveragePolicy, "from_env", return_value=policy):
+            enforcer = BillingEnforcer(cache_ttl=0)
+            with patch.object(enforcement_module.logger, "warning") as mock_warning, \
+                 patch.object(enforcer, "get_org_limits", new_callable=AsyncMock) as mock_limits, \
+                 patch.object(enforcer, "get_org_usage", new_callable=AsyncMock) as mock_usage:
+                mock_limits.return_value = {"api_calls_day": 100}
+                mock_usage.return_value = UsageSummary(org_id=1, api_calls_today=10)
+
+                result = await enforcer.check_limit(1, LimitCategory.API_CALLS_DAY)
+
+        assert result.action == EnforcementAction.ALLOW
+        mock_warning.assert_called_once()
