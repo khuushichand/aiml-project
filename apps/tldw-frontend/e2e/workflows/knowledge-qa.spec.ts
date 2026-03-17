@@ -138,6 +138,187 @@ test.describe("KnowledgeQA Workflow", () => {
       await assertNoCriticalErrors(diagnostics)
     })
 
+    test("keeps citation jumps aligned with the matching evidence card", async ({
+      authedPage,
+      diagnostics
+    }) => {
+      qaPage = new KnowledgeQAPage(authedPage)
+      const threadId = "knowledge-e2e-thread"
+      const query = "citation coherence regression"
+
+      await authedPage.route("**/api/v1/config/docs-info", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            info: { version: "e2e" },
+            capabilities: {}
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            conversations: []
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/characters/search?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 1,
+              name: "Helpful AI Assistant"
+            }
+          ])
+        })
+      })
+
+      await authedPage.route("**/api/v1/chats/", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: threadId,
+            title: query,
+            version: 1,
+            state: "in-progress",
+            created_at: new Date().toISOString()
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations/*", async (route) => {
+        const method = route.request().method()
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body:
+            method === "GET"
+              ? JSON.stringify({
+                  keywords: ["__knowledge_QA__"]
+                })
+              : JSON.stringify({
+                  success: true
+                })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chats/*/messages", async (route) => {
+        const payload = route.request().postDataJSON() as { role?: string; content?: string }
+        const suffix = payload?.role === "assistant" ? "assistant" : "user"
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: `msg-${suffix}-1`,
+            role: payload?.role || suffix,
+            content: payload?.content || "",
+            created_at: new Date().toISOString()
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/messages/*/rag-context", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: true
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/rag/search/stream", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/plain",
+          body: ""
+        })
+      })
+
+      await authedPage.route("**/api/v1/rag/search", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            results: [
+              {
+                id: "100",
+                content: "Alpha excerpt about the premise.",
+                metadata: {
+                  title: "Alpha Source",
+                  source_type: "pdf",
+                  media_id: 100
+                },
+                score: 0.84
+              },
+              {
+                id: "200",
+                content: "Beta excerpt about the conclusion.",
+                metadata: {
+                  title: "Beta Source",
+                  source_type: "pdf",
+                  media_id: 200
+                },
+                score: 0.96
+              }
+            ],
+            answer:
+              "Alpha source frames the premise [1]. Beta source verifies the conclusion [2].",
+            expanded_queries: [query]
+          })
+        })
+      })
+
+      await qaPage.goto()
+      await qaPage.waitForReady()
+
+      const searchInput = await qaPage.getSearchInput()
+      await searchInput.fill(query)
+      await dismissConnectionModals(authedPage)
+      await authedPage.getByRole("button", { name: /^Ask$/i }).click({
+        force: true
+      })
+
+      await qaPage.waitForResults()
+      await expect(
+        qaPage.getEvidencePanel().getByRole("heading", { name: /Alpha Source/i })
+      ).toBeVisible()
+      await expect(
+        qaPage.getEvidencePanel().getByRole("heading", { name: /Beta Source/i })
+      ).toBeVisible()
+
+      const citationTwo = authedPage
+        .getByRole("button", { name: "Jump to source 2" })
+        .first()
+      await citationTwo.click()
+
+      await expect(citationTwo).toHaveAttribute("aria-current", "true")
+      await expect
+        .poll(
+          async () => ({
+            firstSourceClass:
+              (await authedPage.locator("#source-card-0").getAttribute("class")) || "",
+            secondSourceClass:
+              (await authedPage.locator("#source-card-1").getAttribute("class")) || ""
+          }),
+          { timeout: 10_000 }
+        )
+        .toMatchObject({
+          firstSourceClass: expect.not.stringContaining("ring-2"),
+          secondSourceClass: expect.stringContaining("ring-2")
+        })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
     test("should show loading state during search", async ({
       authedPage,
       serverInfo,
@@ -233,6 +414,97 @@ test.describe("KnowledgeQA Workflow", () => {
       diagnostics
     }) => {
       qaPage = new KnowledgeQAPage(authedPage)
+      const threadId = "knowledge-whitespace-thread"
+      const query = "blank answer regression"
+
+      await authedPage.route("**/api/v1/config/docs-info", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            info: { version: "e2e" },
+            capabilities: {}
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            conversations: []
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/characters/search?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 1,
+              name: "Helpful AI Assistant"
+            }
+          ])
+        })
+      })
+
+      await authedPage.route("**/api/v1/chats/", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: threadId,
+            title: query,
+            version: 1,
+            state: "in-progress",
+            created_at: new Date().toISOString()
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations/*", async (route) => {
+        const method = route.request().method()
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body:
+            method === "GET"
+              ? JSON.stringify({
+                  keywords: ["__knowledge_QA__"]
+                })
+              : JSON.stringify({
+                  success: true
+                })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chats/*/messages", async (route) => {
+        const payload = route.request().postDataJSON() as { role?: string; content?: string }
+        const suffix = payload?.role === "assistant" ? "assistant" : "user"
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: `msg-${suffix}-blank-answer`,
+            role: payload?.role || suffix,
+            content: payload?.content || "",
+            created_at: new Date().toISOString()
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/messages/*/rag-context", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: true
+          })
+        })
+      })
 
       await authedPage.route("**/api/v1/rag/search/stream", async (route) => {
         await route.fulfill({
@@ -265,7 +537,7 @@ test.describe("KnowledgeQA Workflow", () => {
 
       await qaPage.goto()
       await qaPage.waitForReady()
-      await qaPage.search("blank answer regression")
+      await qaPage.search(query)
       await qaPage.waitForResults()
 
       await expect(
@@ -286,8 +558,10 @@ test.describe("KnowledgeQA Workflow", () => {
   test.describe("Settings & Presets", () => {
     test("should open settings panel", async ({
       authedPage,
+      serverInfo,
       diagnostics
     }) => {
+      skipIfServerUnavailable(serverInfo)
       qaPage = new KnowledgeQAPage(authedPage)
       await qaPage.goto()
       await qaPage.waitForReady()
@@ -301,8 +575,10 @@ test.describe("KnowledgeQA Workflow", () => {
 
     test("should switch between presets", async ({
       authedPage,
+      serverInfo,
       diagnostics
     }) => {
+      skipIfServerUnavailable(serverInfo)
       qaPage = new KnowledgeQAPage(authedPage)
       await qaPage.goto()
       await qaPage.waitForReady()
@@ -322,8 +598,10 @@ test.describe("KnowledgeQA Workflow", () => {
 
     test("should toggle expert mode", async ({
       authedPage,
+      serverInfo,
       diagnostics
     }) => {
+      skipIfServerUnavailable(serverInfo)
       qaPage = new KnowledgeQAPage(authedPage)
       await qaPage.goto()
       await qaPage.waitForReady()
@@ -439,8 +717,10 @@ test.describe("KnowledgeQA Workflow", () => {
   test.describe("Search History", () => {
     test("should open history sidebar", async ({
       authedPage,
+      serverInfo,
       diagnostics
     }) => {
+      skipIfServerUnavailable(serverInfo)
       qaPage = new KnowledgeQAPage(authedPage)
       await qaPage.goto()
       await qaPage.waitForReady()
@@ -456,8 +736,10 @@ test.describe("KnowledgeQA Workflow", () => {
 
     test("should start new search with Cmd+K", async ({
       authedPage,
+      serverInfo,
       diagnostics
     }) => {
+      skipIfServerUnavailable(serverInfo)
       qaPage = new KnowledgeQAPage(authedPage)
       await qaPage.goto()
       await qaPage.waitForReady()

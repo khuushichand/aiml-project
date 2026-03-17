@@ -27,16 +27,16 @@
 | --- | --- | --- | --- | --- | --- |
 | `/knowledge` | Search bar render and `/` focus | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | UI assertions only, no backend proof | Reclassify after live baseline |
 | `/knowledge` | Live search request and results | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Waits on `/api/v1/rag/search` and asserts request body | Validate actual stability in baseline run |
-| `/knowledge` | Evidence panel after live search | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Uses live search and evidence panel expectations | Check whether citations map coherently to source cards |
+| `/knowledge` | Evidence panel after live search | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Uses live search and evidence panel expectations; citation/source identity is now covered separately by a deterministic route test | Keep paired with the separate citation/source coherence row |
 | `/knowledge` | Progressive loading stages | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Intercepted flow now passes with stage text plus rendered answer/citation/evidence assertions | Keep as non-gating edge coverage; see resolved `KQ-001` |
-| `/knowledge` | Whitespace answer handling | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Intercepted API payload | Keep as edge-case non-gating unless live repro exists |
-| `/knowledge` | Settings dialog open/preset/expert/apply flows | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Route-scoped selectors now prove real drawer open, preset state, expert toggle, and applied request payload | Resolved `KQ-002`; candidate for beta gate |
+| `/knowledge` | Whitespace answer handling | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Deterministic route test now stubs the KnowledgeQA bootstrap plus intercepted blank-answer payload and asserts the source-only state | Keep as edge-case non-gating unless live repro exists |
+| `/knowledge` | Settings dialog open/preset/expert/apply flows | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Route-scoped selectors prove real drawer open, preset state, expert toggle, and applied request payload when the API is reachable; the suite now preflight-skips these checks instead of failing through a connection modal when the backend is down | Resolved `KQ-002`; candidate for beta gate once live preflight is healthy |
 | `/knowledge` | Follow-up thread continuity | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Sends second query and checks conversation turn count | Verify reload continuity separately |
-| `/knowledge` | History sidebar and restored prior searches | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Route-scoped sidebar open and `Cmd+K` reset now pass live; reload restoration is still unproven | Resolved `KQ-003`; add explicit reload-restore coverage separately |
+| `/knowledge` | History sidebar and restored prior searches | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Route-scoped sidebar open and `Cmd+K` reset passed in the earlier live run; the suite now preflight-skips these checks when the backend is unavailable instead of timing out behind the connection modal | Resolved `KQ-003`; add explicit reload-restore coverage separately |
 | `/knowledge` | Error state when API fails | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Forces `500` via route interception | Keep as non-gating edge coverage |
 | `/knowledge` | Workspace handoff from answer panel | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/AnswerPanel.workspace-handoff.test.tsx` | Mock-only | Route-level deterministic Playwright now proves answer-panel click, `/workspace-playground` navigation, source prefill selection, and imported note content | Promote to live once backend preflight is stable again |
 | `/knowledge` | Share/export/branch flows | component tests only | Missing | No live E2E proof found yet | Baseline and add route coverage |
-| `/knowledge` | Citation-to-source coherence | partial in `knowledge-qa.spec.ts` | Misleading | Shows panel opens, but not strong source/evidence identity proof | Add targeted live assertion |
+| `/knowledge` | Citation-to-source coherence | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Deterministic route test clicks `Jump to source 2`, then asserts the citation becomes current and focus transfers to `#source-card-1` while source 1 loses focus | Promote to live once backend preflight is stable again |
 
 ## `/workspace-playground`
 
@@ -76,15 +76,22 @@
 ## Current Route Verification
 
 - `/knowledge` command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
-- `/knowledge` outcome after repairs: `17 passed`, `0 failed`, runtime about `59.3s`
+- `/knowledge` current offline-protected outcome: `6 passed`, `13 skipped`, `0 failed`, runtime about `19.3s`
+- `/knowledge` last full live-backed outcome before the local API listener dropped: `17 passed`, `0 failed`, runtime about `59.3s`
 - `/knowledge` net effect:
   - removed stale selector failures from settings and history flows
   - replaced brittle mocked delayed-answer text assertion with rendered citation/evidence assertions
-  - upgraded settings/history checks from permissive smoke tests to route-scoped behavioral assertions
+  - added deterministic citation-to-source identity coverage
+  - isolated the whitespace-only mock case from live bootstrap dependencies
+  - upgraded settings/history checks from permissive smoke tests to route-scoped behavioral assertions, with preflight skips when live backend is unavailable
 - `/knowledge` targeted handoff command:
   - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "should carry answer context into workspace route" --reporter=line --workers=1`
   - outcome: `1 passed`, runtime about `4.3s`
   - classification note: this handoff proof is deterministic route coverage, not live-backend coverage
+- `/knowledge` targeted citation/source coherence command:
+  - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "keeps citation jumps aligned with the matching evidence card" --reporter=line --workers=1`
+  - outcome: `1 passed`, runtime about `4.4s`
+  - classification note: this is deterministic route coverage, not live-backend coverage
 - `/workspace-playground` real-backend command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1`
 - `/workspace-playground` real-backend outcome after repairs: `2 passed`, `0 failed`, runtime about `6.0s`
 - `/workspace-playground` stability verification:
