@@ -18,7 +18,10 @@ try:
     from tldw_Server_API.app.core.Jobs.manager import JobManager
 except ImportError:  # pragma: no cover - optional
     JobManager = None  # type: ignore
-from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    create_media_database,
+    get_media_repository,
+)
 from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _CONNECTOR_NONCRITICAL_EXCEPTIONS = (
@@ -250,6 +253,20 @@ def _ingest_connector_media(
         overwrite=overwrite,
         **kwargs,
     )
+
+
+def _create_connector_media_db(user_id: int):
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    return create_media_database(
+        client_id=str(user_id),
+        db_path=str(DatabasePaths.get_media_db_path(user_id)),
+    )
+
+
+def _close_connector_media_db(media_db: Any) -> None:
+    with contextlib.suppress(_CONNECTOR_NONCRITICAL_EXCEPTIONS):
+        media_db.close_connection()
 
 
 def _parse_iso_utc(value: Any) -> datetime | None:
@@ -657,8 +674,6 @@ async def _process_import_job(
     """Fetch source/account, enumerate items, and ingest into Media DB."""
     # DB access
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
     from tldw_Server_API.app.core.External_Sources import get_connector_by_name
     from tldw_Server_API.app.core.External_Sources.connectors_service import (
         FILE_SYNC_PROVIDERS,
@@ -749,8 +764,7 @@ async def _process_import_job(
                 raise
 
     # Prepare DB instance
-    media_db_path = str(DatabasePaths.get_media_db_path(user_id))
-    mdb = MediaDatabase(db_path=media_db_path, client_id=str(user_id))
+    mdb = _create_connector_media_db(user_id)
 
     gmail_sync_state_supported = bool(
         provider == "gmail"
@@ -825,6 +839,7 @@ async def _process_import_job(
                             status="skipped",
                         ),
                     )
+                    _close_connector_media_db(mdb)
                     return
 
                 last_run_at = _parse_iso_utc((state or {}).get("last_run_at"))
@@ -866,6 +881,7 @@ async def _process_import_job(
                                 status="skipped",
                             ),
                         )
+                        _close_connector_media_db(mdb)
                         return
 
             gmail_previous_cursor = _normalize_gmail_history_cursor((state or {}).get("cursor"))
@@ -1375,6 +1391,7 @@ async def _process_import_job(
 
     try:
         if await _process_subscription_renewal():
+            _close_connector_media_db(mdb)
             return
         if not await _process_file_sync_changes():
             bootstrap_file_sync_scan = provider in FILE_SYNC_PROVIDERS
@@ -1830,6 +1847,7 @@ async def _process_import_job(
                     status="failed",
                 ),
             )
+        _close_connector_media_db(mdb)
         raise
 
     cursor_recovery_full_backfill_required = bool(
@@ -1962,6 +1980,7 @@ async def _process_import_job(
         lease_id=lease_id,
         completion_token=lease_id,
     )
+    _close_connector_media_db(mdb)
 
 
 if __name__ == "__main__":

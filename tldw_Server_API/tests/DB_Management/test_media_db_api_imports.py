@@ -36,6 +36,7 @@ from tldw_Server_API.app.services import media_files_cleanup_service
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import claims_alerts_scheduler
 from tldw_Server_API.app.services import claims_review_metrics_scheduler
+from tldw_Server_API.app.services import connectors_worker
 from tldw_Server_API.app.services import audiobook_jobs_worker
 from tldw_Server_API.app.services import enhanced_web_scraping_service
 from tldw_Server_API.app.services import media_ingest_jobs_worker
@@ -95,6 +96,11 @@ def test_enhanced_web_scraping_service_imports_managed_media_database_from_media
 
 def test_research_endpoint_imports_create_media_database_from_media_db_api():
     module = importlib.reload(research)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_connectors_worker_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(connectors_worker)
     assert module.create_media_database is media_db_api.create_media_database
 
 

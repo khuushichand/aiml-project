@@ -165,10 +165,17 @@ async def test_worker_drive_incremental_sync_uses_delta_feed_and_advances_cursor
             sync_status="active",
         )
 
+    created_mdb = {"db": None}
+
     class _FakeMDB:
         def __init__(self, *args, **kwargs):
             self.args = args
             self.kwargs = kwargs
+            self.closed = False
+            created_mdb["db"] = self
+
+        def close_connection(self):
+            self.closed = True
 
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
     import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
@@ -185,7 +192,12 @@ async def test_worker_drive_incremental_sync_uses_delta_feed_and_advances_cursor
     monkeypatch.setattr(svc, "upsert_source_sync_state", _fake_upsert_source_sync_state)
     monkeypatch.setattr(svc, "get_external_item_binding", _fake_get_external_item_binding)
     monkeypatch.setattr(sync_coordinator, "reconcile_file_change", _fake_reconcile_file_change)
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
     monkeypatch.setattr(orgs, "list_memberships_for_user", lambda user_id: [])
 
     jm = FakeJM()
@@ -218,6 +230,8 @@ async def test_worker_drive_incremental_sync_uses_delta_feed_and_advances_cursor
     assert reconcile_calls[0]["job_id"] == "1234"
     assert sync_state_updates[-1]["cursor"] == "cursor-2"
     assert sync_state_updates[-1]["cursor_kind"] == "drive_start_page_token"
+    assert created_mdb["db"] is not None
+    assert created_mdb["db"].closed is True
 
 
 @pytest.mark.asyncio
@@ -367,7 +381,12 @@ async def test_worker_drive_created_delta_without_binding_still_reconciles(monke
     monkeypatch.setattr(svc, "upsert_source_sync_state", _fake_upsert_source_sync_state)
     monkeypatch.setattr(svc, "get_external_item_binding", _fake_get_external_item_binding)
     monkeypatch.setattr(sync_coordinator, "reconcile_file_change", _fake_reconcile_file_change)
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
     monkeypatch.setattr(orgs, "list_memberships_for_user", lambda user_id: [])
 
     jm = FakeJM()
@@ -545,7 +564,12 @@ async def test_worker_drive_incremental_policy_block_marks_existing_binding_degr
     monkeypatch.setattr(svc, "upsert_external_item_binding", _fake_upsert_external_item_binding)
     monkeypatch.setattr(svc, "record_item_event", _fake_record_item_event)
     monkeypatch.setattr(sync_coordinator, "reconcile_file_change", _unexpected_reconcile)
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
     monkeypatch.setattr(orgs, "list_memberships_for_user", lambda user_id: [])
     monkeypatch.setattr(
         policy_mod,
@@ -720,7 +744,12 @@ async def test_worker_drive_bootstrap_reconcile_failure_is_nonfatal(monkeypatch)
     monkeypatch.setattr(svc, "upsert_source_sync_state", _fake_upsert_source_sync_state)
     monkeypatch.setattr(svc, "get_external_item_binding", _fake_get_external_item_binding)
     monkeypatch.setattr(sync_coordinator, "reconcile_file_change", _fake_reconcile_file_change)
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
     monkeypatch.setattr(orgs, "list_memberships_for_user", lambda user_id: [])
 
     jm = FakeJM()

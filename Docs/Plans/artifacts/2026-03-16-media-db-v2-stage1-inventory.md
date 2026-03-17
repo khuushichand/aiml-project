@@ -4,10 +4,10 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 14
-- Operational `create_media_database(...)` call sites in app code: 31
+- Raw `MediaDatabase(...)` constructors in app code: 13
+- Operational `create_media_database(...)` call sites in app code: 32
 - Operational `managed_media_database(...)` call sites in app code: 21
-- `Media_DB_v2` references in app code: 138
+- `Media_DB_v2` references in app code: 137
 
 Notes:
 
@@ -48,6 +48,7 @@ Notes:
 | `app/core/Ingestion_Media_Processing/persistence.py` | 8 | repeated local worker/pre-check DB creation | `NEW_HELPER` | highest-priority lifecycle cleanup hotspot |
 | `app/services/document_processing_service.py` | 1 | local create/use/close in one function | `MOVE_MANAGED` | straightforward conversion candidate |
 | `app/services/media_ingest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | owner is the caller, not the helper |
+| `app/services/connectors_worker.py` | 1 | connector-owned per-sync DB helper through shared factory | `MOVE_FACTORY` already satisfied | `_process_import_job(...)` now opens via `_create_connector_media_db(...)` and closes on every exit path |
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | caller still owns sink DB lifetime |
 | `app/services/tts_history_cleanup_service.py` | 1 | local cleanup DB helper wraps probe and per-user loops | `NEW_HELPER` already satisfied | preserves explicit close behavior while removing raw constructors |
 | `app/api/v1/endpoints/research.py` | 1 | deprecated helper creates local DB | `MOVE_MANAGED` | local ingest path, no reason to stay raw |
@@ -72,7 +73,6 @@ Notes:
 
 | File | Count | Current Pattern | Classification | Notes |
 | --- | ---: | --- | --- | --- |
-| `app/services/connectors_worker.py` | 1 | per-sync DB reused across a large function | `NEW_HELPER` | better as a dedicated sync DB helper than an inlined raw constructor |
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Claims_Extraction/claims_service.py` | 4 | cross-user SQLite override DBs | `NEW_HELPER` | needs one dedicated override helper, not four duplicated constructors |
