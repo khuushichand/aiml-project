@@ -757,7 +757,219 @@ test.describe("KnowledgeQA Workflow", () => {
   })
 
   // ═════════════════════════════════════════════════════════════════════
-  // 3.5  No Results / Error States
+  // 3.5  Export & Sharing
+  // ═════════════════════════════════════════════════════════════════════
+
+  test.describe("Export & Sharing", () => {
+    test("opens the export dialog and manages share links for a server-backed thread", async ({
+      authedPage,
+      diagnostics
+    }) => {
+      qaPage = new KnowledgeQAPage(authedPage)
+      const threadId = "knowledge-export-thread"
+      const query = "shareable export regression"
+      let shareRequestBody: { permission?: string } | null = null
+      let revokeRequestUrl = ""
+
+      await authedPage.addInitScript(() => {
+        Object.defineProperty(window.navigator, "clipboard", {
+          configurable: true,
+          value: {
+            writeText: async () => undefined,
+            readText: async () => ""
+          }
+        })
+      })
+
+      await authedPage.route("**/api/v1/config/docs-info", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            info: { version: "e2e" },
+            capabilities: {}
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            conversations: []
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/characters/search?*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              id: 1,
+              name: "Helpful AI Assistant"
+            }
+          ])
+        })
+      })
+
+      await authedPage.route("**/api/v1/chats/", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: threadId,
+            title: query,
+            version: 1,
+            state: "in-progress",
+            created_at: new Date().toISOString()
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations/*", async (route) => {
+        const method = route.request().method()
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body:
+            method === "GET"
+              ? JSON.stringify({
+                  keywords: ["__knowledge_QA__"]
+                })
+              : JSON.stringify({
+                  success: true
+                })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chats/*/messages", async (route) => {
+        const payload = route.request().postDataJSON() as { role?: string; content?: string }
+        const suffix = payload?.role === "assistant" ? "assistant" : "user"
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: `msg-${suffix}-export`,
+            role: payload?.role || suffix,
+            content: payload?.content || "",
+            created_at: new Date().toISOString()
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/messages/*/rag-context", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: true
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/rag/search/stream", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/plain",
+          body: ""
+        })
+      })
+
+      await authedPage.route("**/api/v1/rag/search", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            results: [
+              {
+                id: "301",
+                content: "Exportable source excerpt.",
+                metadata: {
+                  title: "Export Source",
+                  source_type: "pdf",
+                  media_id: 301,
+                  url: "https://example.com/export-source"
+                },
+                score: 0.93
+              }
+            ],
+            answer: "Export-ready answer with citations [1].",
+            expanded_queries: [query]
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations/*/share-links", async (route) => {
+        shareRequestBody = route.request().postDataJSON() as { permission?: string }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            share_id: "share-knowledge-export",
+            token: "token-knowledge-export",
+            share_path: "/knowledge/shared/token-knowledge-export",
+            expires_at: "2030-01-01T00:00:00Z"
+          })
+        })
+      })
+
+      await authedPage.route("**/api/v1/chat/conversations/*/share-links/*", async (route) => {
+        revokeRequestUrl = route.request().url()
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: true,
+            share_id: "share-knowledge-export"
+          })
+        })
+      })
+
+      await qaPage.goto()
+      await qaPage.waitForReady()
+      const searchInput = await qaPage.getSearchInput()
+      await searchInput.fill(query)
+      await dismissConnectionModals(authedPage)
+      await authedPage.getByRole("button", { name: /^Ask$/i }).click({
+        force: true
+      })
+      await qaPage.waitForResults()
+
+      await authedPage.getByRole("button", { name: /^Export$/i }).click()
+      const exportDialog = authedPage.getByRole("dialog", { name: /Export Conversation/i })
+      await expect(exportDialog).toBeVisible()
+
+      const createShareLinkButton = exportDialog.getByRole("button", {
+        name: /Create share link/i
+      })
+      await expect(createShareLinkButton).toBeEnabled()
+      await createShareLinkButton.click()
+
+      await expect
+        .poll(() => shareRequestBody, { timeout: 10_000 })
+        .toMatchObject({ permission: "view" })
+      await expect(exportDialog.getByText(/Active link expires/i)).toBeVisible()
+
+      const revokeLinkButton = exportDialog.getByRole("button", {
+        name: /^Revoke link$/i
+      })
+      await expect(revokeLinkButton).toBeEnabled()
+      await revokeLinkButton.click()
+
+      await expect
+        .poll(() => revokeRequestUrl, { timeout: 10_000 })
+        .toContain("/share-links/share-knowledge-export")
+      await expect(exportDialog.getByText(/Active link expires/i)).toHaveCount(0)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  })
+
+  // ═════════════════════════════════════════════════════════════════════
+  // 3.6  No Results / Error States
   // ═════════════════════════════════════════════════════════════════════
 
   test.describe("No Results / Error States", () => {
@@ -821,7 +1033,7 @@ test.describe("KnowledgeQA Workflow", () => {
   })
 
   // ═════════════════════════════════════════════════════════════════════
-  // 3.6  Workspace Handoff
+  // 3.7  Workspace Handoff
   // ═════════════════════════════════════════════════════════════════════
 
   test.describe("Workspace Handoff", () => {

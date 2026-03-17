@@ -153,10 +153,28 @@
   - Added `skipIfServerUnavailable(serverInfo)` guards to the live settings and history cases so they now skip cleanly when backend preflight fails instead of timing out through the connection modal.
   - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "treats whitespace-only answers as no generated answer|should open settings panel|should switch between presets|should toggle expert mode|should open history sidebar|should start new search with Cmd\\+K" --reporter=line --workers=1` => `1 passed`, `5 skipped`
 
+### KQ-007: Export/share route surface had no E2E proof despite being exposed in the results workflow
+
+- Status: Resolved as test hardening
+- Route: `/knowledge`
+- Feature: export dialog open plus share-link create/revoke on a server-backed thread
+- Reproduction:
+  1. Open `/knowledge`
+  2. Run a server-backed search flow that renders results and exposes the `Export` button
+  3. Observe that the suite previously had only component tests for the dialog and no route-level proof that the results workflow could actually open it or manage share links
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts:764`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/ExportDialog.a11y.test.tsx`
+- Suspected layer: audit gap rather than a confirmed product defect
+- Why it matters: export/share is part of the beta-facing KnowledgeQA workflow, and component tests alone do not prove the route wires the dialog to a server-backed thread correctly
+- Resolution:
+  - Added a deterministic route-level Playwright case that hydrates a server-backed thread, opens the export dialog from the real results shell, creates a share link, asserts the request payload uses `permission: "view"`, and revokes the resulting link.
+  - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "opens the export dialog and manages share links for a server-backed thread" --reporter=line --workers=1` => `1 passed (3.8s)`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
-- Current `/knowledge` offline-protected summary after repairs: `6 passed`, `13 skipped`, `0 failed`
+- Current `/knowledge` offline-protected summary after repairs: `7 passed`, `13 skipped`, `0 failed`
 - Last full live-backed `/knowledge` summary before the API listener dropped: `17 passed`, `0 failed`
 - Current `/knowledge` verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
 - Current `/knowledge` failure-cluster verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "treats whitespace-only answers as no generated answer|should open settings panel|should switch between presets|should toggle expert mode|should open history sidebar|should start new search with Cmd\\+K" --reporter=line --workers=1`
@@ -165,8 +183,10 @@
 - Current `/knowledge` handoff verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` citation/source verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "keeps citation jumps aligned with the matching evidence card" --reporter=line --workers=1`
 - Current `/knowledge` citation/source verification summary: `1 passed`, `0 failed`
+- Current `/knowledge` export/share verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "opens the export dialog and manages share links for a server-backed thread" --reporter=line --workers=1`
+- Current `/knowledge` export/share verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `2 passed`, `0 failed`
 - Last three-spec audit rerun before the later `/knowledge` additions: `24 passed`, `0 failed`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
-- Live-backend caveat for the current session: the local API listener later dropped, and direct restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures; the handoff and citation additions were therefore verified deterministically, and the current full `/knowledge` rerun reflects offline-protected pass/skip behavior rather than a fresh live rerun
+- Live-backend caveat for the current session: the local API listener later dropped, and direct restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures; the handoff, citation, and export/share additions were therefore verified deterministically, and the current full `/knowledge` rerun reflects offline-protected pass/skip behavior rather than a fresh live rerun
