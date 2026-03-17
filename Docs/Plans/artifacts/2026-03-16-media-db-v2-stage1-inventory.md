@@ -7,7 +7,7 @@
 - Raw `MediaDatabase(...)` constructors in app code: 7
 - Operational `create_media_database(...)` call sites in app code: 9
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 135
+- `Media_DB_v2` references in app code: 133
 
 Notes:
 
@@ -89,12 +89,12 @@ Notes:
 
 Assessment:
 
-- `DB_Deps.py` is still a real app boundary, not a leaf detail. It imports `MediaDatabase`, `DatabaseError`, and `SchemaError` from the shim while also depending on `MediaDbFactory` and `MediaDbSession`.
+- `DB_Deps.py` is still a real app boundary, not a leaf detail. It now depends on `media_db.errors`, `MediaDbFactory`, and `MediaDbSession` instead of importing runtime error types or `MediaDatabase` from the shim directly, but it still owns request/session scoping and cache compatibility.
 - `DB_Manager.py` is already thinner, but it still imports `MediaDatabase` and selected compatibility exports from `Media_DB_v2.py`.
 
 Recommendation:
 
-- Treat both modules as explicit Stage 4 targets.
+- Treat `DB_Manager.py` as the remaining direct-shim Stage 4 target, and keep `DB_Deps.py` in the boundary bucket until the request-scope/session surface is explicitly finalized.
 - Do not assume app-side compatibility reduction is complete until these two files have an approved allowlist.
 
 ### 2. Intentional compatibility owners

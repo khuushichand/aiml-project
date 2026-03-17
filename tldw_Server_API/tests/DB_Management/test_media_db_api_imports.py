@@ -5,7 +5,10 @@ import pytest
 
 from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.core.DB_Management import Users_DB
+from tldw_Server_API.app.core.DB_Management import Media_DB_v2 as legacy_media_db
 from tldw_Server_API.app.api.v1.endpoints import research
+from tldw_Server_API.app.api.v1.API_Deps import DB_Deps as media_db_deps
+from tldw_Server_API.app.api.v1.utils import http_errors
 from tldw_Server_API.app.core.Claims_Extraction import (
     claims_notifications,
     claims_rebuild_service,
@@ -34,6 +37,7 @@ from tldw_Server_API.app.core.MCP_unified.modules.implementations import slides_
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
 from tldw_Server_API.app.services import media_files_cleanup_service
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import claims_alerts_scheduler
@@ -79,6 +83,32 @@ def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch):
     assert captured["runtime"].default_db_path == "/tmp/api-media.db"
     assert captured["runtime"].default_config is cfg
     assert captured["runtime"].postgres_content_mode is True
+
+
+def test_db_deps_imports_errors_from_media_db_errors_and_not_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "SchemaError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_db_deps)
+
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.SchemaError is media_db_errors.SchemaError
+    assert module.MediaDatabase is not legacy_media_db.MediaDatabase
+
+
+def test_http_errors_imports_db_errors_from_media_db_errors(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "ConflictError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "SchemaError", object(), raising=False)
+
+    module = importlib.reload(http_errors)
+
+    assert module.ConflictError is media_db_errors.ConflictError
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.InputError is media_db_errors.InputError
+    assert module.SchemaError is media_db_errors.SchemaError
 
 
 def test_document_processing_service_imports_managed_media_database_from_media_db_api():

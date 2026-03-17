@@ -6,7 +6,7 @@ import os
 import threading
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # 3rd-party Libraries
 from fastapi import Depends, HTTPException, Request, status
@@ -28,17 +28,17 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.media_db.api import MediaDbFactory, MediaDbSession
-
-# Import the specific Database class
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # Adjust import path
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError,
-    MediaDatabase,
     SchemaError,
 )
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 #######################################################################################################################
+
+# Transitional compatibility alias for legacy monkeypatch/test surfaces.
+MediaDatabase = Any
 
 # Note: Do not cache USER_DB_BASE_DIR at import time. Tests may set USER_DB_BASE_DIR
 # via environment after module import. We will resolve it at request time in helpers.
