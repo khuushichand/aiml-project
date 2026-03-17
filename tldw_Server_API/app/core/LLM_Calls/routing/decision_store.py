@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Mapping, Optional
 
 from .models import RoutingDecision
@@ -52,6 +53,13 @@ class InMemoryRoutingDecisionStore:
 
     def delete(self, scope: str) -> None:
         self._decisions.pop(scope, None)
+
+
+@lru_cache(maxsize=1)
+def get_process_routing_decision_store() -> InMemoryRoutingDecisionStore:
+    """Return the process-local sticky routing store shared by endpoint integrations."""
+
+    return InMemoryRoutingDecisionStore()
 
 
 def compute_routing_fingerprint(

@@ -160,22 +160,48 @@ def test_complete_v2_auto_model_routes_before_strict_availability_check(
     monkeypatch.setattr(
         "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.get_configured_providers",
         lambda: {
-            "default_provider": "openai",
+            "default_provider": "local-llm",
             "providers": [
                 {
                     "name": "local-llm",
                     "is_configured": True,
-                    "models_info": [{"name": "local-test-routed"}],
+                    "default_model": "local-test-router",
+                    "models_info": [
+                        {"name": "local-test-router"},
+                        {"name": "local-test-routed"},
+                    ],
                 }
             ],
         },
     )
 
-    def _stub_route_model(*, request, policy, candidates, provider_order):
+    async def _stub_router_call(**kwargs):
+        captured["router_call"] = kwargs
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"provider":"local-llm","model":"local-test-routed"}'
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 7,
+                "completion_tokens": 2,
+                "total_tokens": 9,
+            },
+        }
+
+    async def _stub_router_usage(**kwargs):
+        captured.setdefault("router_usage", []).append(kwargs)
+
+    def _stub_route_model(*, request, policy, candidates, provider_order, sticky_store=None, llm_router_choice=None):
         captured["routing_request"] = request
         captured["routing_policy"] = policy
         captured["routing_candidates"] = candidates
         captured["routing_provider_order"] = provider_order
+        captured["routing_sticky_store"] = sticky_store
+        captured["routing_llm_choice"] = llm_router_choice
         return RoutingDecision(
             provider="local-llm",
             model="local-test-routed",
@@ -185,6 +211,16 @@ def test_complete_v2_auto_model_routes_before_strict_availability_check(
     monkeypatch.setattr(
         "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.route_model",
         _stub_route_model,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.perform_chat_api_call_async",
+        _stub_router_call,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.log_model_router_usage",
+        _stub_router_usage,
+        raising=False,
     )
     monkeypatch.setattr(
         "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.is_model_known_for_provider",
@@ -224,6 +260,13 @@ def test_complete_v2_auto_model_routes_before_strict_availability_check(
     assert payload["assistant_content"] == "auto routed response"
     assert captured["routing_request"].model == "auto"
     assert captured["routing_policy"].mode == "sticky_session"
+    assert captured["routing_sticky_store"] is not None
+    assert captured["routing_llm_choice"] == {
+        "provider": "local-llm",
+        "model": "local-test-routed",
+    }
+    assert captured["router_call"]["model"] == "local-test-router"
+    assert captured["router_usage"][0]["provider"] == "local-llm"
     assert captured["provider_call"] == {
         "api_endpoint": "local-llm",
         "model": "local-test-routed",

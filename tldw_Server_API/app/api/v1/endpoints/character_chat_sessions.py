@@ -121,6 +121,7 @@ from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
 from tldw_Server_API.app.core.Chat.chat_service import (
     is_model_known_for_provider,
     perform_chat_api_call,
+    perform_chat_api_call_async,
     resolve_provider_and_model,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
@@ -131,7 +132,15 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.LLM_Calls.routing import (
     RouterRequest,
+    RoutingUsageContext,
+    build_router_messages,
+    build_router_prompt,
+    extract_router_choice,
+    extract_router_usage,
+    get_process_routing_decision_store,
+    log_model_router_usage,
     resolve_routing_policy,
+    resolve_router_model_config,
     route_model,
 )
 from tldw_Server_API.app.core.LLM_Calls.routing.candidate_pool import (
@@ -348,12 +357,113 @@ def _build_provider_order_for_routing(
     return provider_order
 
 
-def _resolve_auto_character_chat_routing_decision(
+async def _select_auto_character_llm_router_choice(
+    *,
+    router_request: RouterRequest,
+    policy: Any,
+    candidates: list[dict[str, Any]],
+    provider_listing: dict[str, Any],
+    current_user: User | None,
+) -> tuple[dict[str, str] | None, dict[str, Any]]:
+    if policy.strategy != "llm_router":
+        return None, {"skipped": "strategy_rules_router"}
+    if len(candidates) <= 1:
+        return None, {"skipped": "single_candidate"}
+
+    router_model = resolve_router_model_config(
+        provider_listing=provider_listing,
+        server_default_provider=policy.server_default_provider,
+    )
+    if router_model is None:
+        return None, {"skipped": "router_model_unavailable"}
+
+    def _fallback_resolver(name: str) -> Optional[str]:
+        try:
+            from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
+
+            return get_api_keys().get(name)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    user_id_int: Optional[int] = None
+    if hasattr(current_user, "id_int"):
+        user_id_int = current_user.id_int
+    elif hasattr(current_user, "id"):
+        with contextlib.suppress(TypeError, ValueError):
+            user_id_int = int(current_user.id)
+
+    router_start = time.time()
+    try:
+        byok_resolution = await resolve_byok_credentials(
+            router_model.provider,
+            user_id=user_id_int,
+            fallback_resolver=_fallback_resolver,
+        )
+        router_response = await perform_chat_api_call_async(
+            api_endpoint=router_model.provider,
+            messages_payload=build_router_messages(
+                build_router_prompt(
+                    request=router_request,
+                    policy=policy,
+                    candidates=candidates,
+                )
+            ),
+            api_key=byok_resolution.api_key,
+            model=router_model.model,
+            max_tokens=64,
+            streaming=False,
+            user_identifier=str(getattr(current_user, "id", "auto-router")),
+            app_config=byok_resolution.app_config,
+        )
+        await byok_resolution.touch_last_used()
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Auto character-chat LLM router call failed: {}", exc)
+        return None, {
+            "router_model": {
+                "provider": router_model.provider,
+                "model": router_model.model,
+            },
+            "error": type(exc).__name__,
+        }
+
+    usage = extract_router_usage(router_response)
+    llm_router_choice = extract_router_choice(router_response)
+
+    try:
+        await log_model_router_usage(
+            context=RoutingUsageContext(
+                surface="character_chat",
+                endpoint="POST:/api/v1/chats/{chat_id}/complete-v2",
+                user_id=user_id_int,
+                conversation_id=router_request.scope,
+            ),
+            provider=router_model.provider,
+            model=router_model.model,
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            total_tokens=usage["total_tokens"],
+            latency_ms=int((time.time() - router_start) * 1000),
+            estimated=usage["total_tokens"] == 0,
+        )
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Auto character-chat router usage logging skipped: {}", exc)
+
+    return llm_router_choice, {
+        "router_model": {
+            "provider": router_model.provider,
+            "model": router_model.model,
+        },
+        "choice_received": llm_router_choice is not None,
+    }
+
+
+async def _resolve_auto_character_chat_routing_decision(
     *,
     chat_id: str,
     body: CharacterChatCompletionV2Request,
     raw_provider: str | None,
     formatted_messages: list[dict[str, Any]],
+    current_user: User | None,
 ) -> tuple[Any | None, dict[str, Any]]:
     """Resolve `model='auto'` into a canonical provider/model pair for character chat."""
     provider_listing = apply_llm_provider_overrides_to_listing(get_configured_providers())
@@ -377,24 +487,34 @@ def _resolve_auto_character_chat_routing_decision(
         requested_capabilities=requested_capabilities,
         catalog=_flatten_provider_listing_for_routing(provider_listing),
     )
-    decision = route_model(
-        request=RouterRequest(
-            model="auto",
-            surface="character_chat",
-            latest_user_turn=_extract_character_latest_user_turn_text(
-                formatted_messages,
-                appended_user_message=body.append_user_message,
-            ),
-            scope=chat_id,
-            requested_capabilities=requested_capabilities,
-            routing_context={
-                "stream": bool(body.stream),
-                "include_character_context": bool(body.include_character_context),
-                "directed_character_id": body.directed_character_id,
-            },
+    router_request = RouterRequest(
+        model="auto",
+        surface="character_chat",
+        latest_user_turn=_extract_character_latest_user_turn_text(
+            formatted_messages,
+            appended_user_message=body.append_user_message,
         ),
+        scope=chat_id,
+        requested_capabilities=requested_capabilities,
+        routing_context={
+            "stream": bool(body.stream),
+            "include_character_context": bool(body.include_character_context),
+            "directed_character_id": body.directed_character_id,
+        },
+    )
+    llm_router_choice, llm_router_debug = await _select_auto_character_llm_router_choice(
+        router_request=router_request,
         policy=policy,
         candidates=candidates,
+        provider_listing=provider_listing,
+        current_user=current_user,
+    )
+    decision = route_model(
+        request=router_request,
+        policy=policy,
+        candidates=candidates,
+        sticky_store=get_process_routing_decision_store(),
+        llm_router_choice=llm_router_choice,
         provider_order=_build_provider_order_for_routing(
             provider_listing,
             objective=policy.objective,
@@ -407,8 +527,11 @@ def _resolve_auto_character_chat_routing_decision(
             "server_default_provider": policy.server_default_provider,
             "objective": policy.objective,
             "mode": policy.mode,
+            "strategy": policy.strategy,
+            "failure_mode": policy.failure_mode,
         },
         "candidate_count": len(candidates),
+        "llm_router": llm_router_debug,
     }
 
 def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
@@ -3668,13 +3791,27 @@ async def character_chat_completion(
         model = raw_model or "local-test"
         routing_decision = None
         if auto_model_requested:
-            routing_decision, routing_debug = _resolve_auto_character_chat_routing_decision(
+            routing_decision, routing_debug = await _resolve_auto_character_chat_routing_decision(
                 chat_id=chat_id,
                 body=body,
                 raw_provider=raw_provider,
                 formatted_messages=formatted,
+                current_user=current_user,
             )
             if routing_decision is None:
+                candidate_count = int((routing_debug or {}).get("candidate_count") or 0)
+                if candidate_count > 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "error_code": "auto_routing_failed",
+                            "message": (
+                                "Auto-routing failed and the current routing policy did not allow "
+                                "deterministic fallback."
+                            ),
+                            "routing": routing_debug or {},
+                        },
+                    )
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={

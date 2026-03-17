@@ -62,6 +62,12 @@ def route_model(
             decision_source="single_candidate",
             metadata={"objective": policy.objective},
         )
+    elif policy.strategy == "rules_router":
+        decision = route_with_rules(
+            objective=policy.objective,
+            candidates=normalized_candidates,
+            provider_order=provider_order,
+        )
     else:
         router_choice = llm_router_choice
         if router_choice is None and router_runner is not None:
@@ -86,6 +92,8 @@ def route_model(
                 decision_source="llm_router",
                 metadata={"objective": policy.objective},
             )
+        elif policy.failure_mode == "error":
+            decision = None
         else:
             decision = route_with_rules(
                 objective=policy.objective,
