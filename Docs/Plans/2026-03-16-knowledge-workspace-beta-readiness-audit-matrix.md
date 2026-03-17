@@ -28,11 +28,11 @@
 | `/knowledge` | Search bar render and `/` focus | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | UI assertions only, no backend proof | Reclassify after live baseline |
 | `/knowledge` | Live search request and results | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Waits on `/api/v1/rag/search` and asserts request body | Validate actual stability in baseline run |
 | `/knowledge` | Evidence panel after live search | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Uses live search and evidence panel expectations | Check whether citations map coherently to source cards |
-| `/knowledge` | Progressive loading stages | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Misleading | Baseline run failed on mocked delayed-answer assertion even though this is not a live workflow | See `KQ-001`; rework as non-gating edge test |
+| `/knowledge` | Progressive loading stages | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Intercepted flow now passes with stage text plus rendered answer/citation/evidence assertions | Keep as non-gating edge coverage; see resolved `KQ-001` |
 | `/knowledge` | Whitespace answer handling | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Intercepted API payload | Keep as edge-case non-gating unless live repro exists |
-| `/knowledge` | Settings dialog open/preset/expert/apply flows | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Baseline run: 4 settings tests timed out on open/switch/toggle/apply paths | See `KQ-002` |
+| `/knowledge` | Settings dialog open/preset/expert/apply flows | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Route-scoped selectors now prove real drawer open, preset state, expert toggle, and applied request payload | Resolved `KQ-002`; candidate for beta gate |
 | `/knowledge` | Follow-up thread continuity | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Sends second query and checks conversation turn count | Verify reload continuity separately |
-| `/knowledge` | History sidebar and restored prior searches | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Baseline run: history sidebar test timed out, and reload restoration is still unproven | See `KQ-003`; split sidebar breakage from reload restoration coverage |
+| `/knowledge` | History sidebar and restored prior searches | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Route-scoped sidebar open and `Cmd+K` reset now pass live; reload restoration is still unproven | Resolved `KQ-003`; add explicit reload-restore coverage separately |
 | `/knowledge` | Error state when API fails | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Forces `500` via route interception | Keep as non-gating edge coverage |
 | `/knowledge` | Workspace handoff from answer panel | `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/AnswerPanel.workspace-handoff.test.tsx` | Mock-only | Component test only, no real route transition or prefill proof | Add live Playwright |
 | `/knowledge` | Share/export/branch flows | component tests only | Missing | No live E2E proof found yet | Baseline and add route coverage |
@@ -71,3 +71,12 @@
   - `/knowledge` history sidebar flow
   - `/workspace-playground` live core interaction flow blocked by fixed overlay intercepting pane toggle clicks
 - Follow-up: create bug log entries for each failure cluster and convert them into targeted task work
+
+## Current Route Verification
+
+- `/knowledge` command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
+- `/knowledge` outcome after repairs: `17 passed`, `0 failed`, runtime about `59.3s`
+- `/knowledge` net effect:
+  - removed stale selector failures from settings and history flows
+  - replaced brittle mocked delayed-answer text assertion with rendered citation/evidence assertions
+  - upgraded settings/history checks from permissive smoke tests to route-scoped behavioral assertions

@@ -7,6 +7,7 @@
 
 ### KQ-002: Knowledge settings flows time out in the live route
 
+- Status: Resolved in audit worktree
 - Route: `/knowledge`
 - Feature: settings dialog open, preset switching, expert mode toggle, and apply-settings request flow
 - Reproduction:
@@ -24,9 +25,14 @@
   - `test-results/workflows-knowledge-qa-Kno-6a781--settings-to-search-request-chromium/error-context.md`
 - Suspected layer: route UI interaction, dialog wiring, or stale selector assumptions in `KnowledgeQAPage.openSettings()`
 - Why it matters: this is a live user-facing configuration surface and currently blocks four separate route-level checks
+- Resolution:
+  - Replaced the stale generic `KnowledgeQAPage` selectors with route-scoped `/knowledge` shells and dialog helpers.
+  - Hardened the four settings tests to assert the real drawer, preset radio state, expert-mode toggle state, and live request payload.
+  - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "Settings & Presets|should switch between presets|should toggle expert mode|should apply settings to search request" --reporter=line --workers=1` => `4 passed (12.5s)`
 
 ### KQ-003: Knowledge history sidebar flow hangs after live searches
 
+- Status: Resolved in audit worktree
 - Route: `/knowledge`
 - Feature: history sidebar open and restore interaction
 - Reproduction:
@@ -38,6 +44,10 @@
   - `test-results/workflows-knowledge-qa-Kno-a160d-should-open-history-sidebar-chromium/error-context.md`
 - Suspected layer: sidebar open control, history render timing, or route-state restore behavior
 - Why it matters: search history is part of the current KnowledgeQA workflow surface and may be non-functional in the live route
+- Resolution:
+  - The same stale page-object selector drift was sending the workflow to the wrong layout controls.
+  - Hardened the history checks to assert the actual history rail and `Cmd+K` reset behavior.
+  - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "Search History|should open history sidebar|should start new search with Cmd+K" --reporter=line --workers=1` => `2 passed (4.5s)`
 
 ### WP-001: Workspace live interaction flow is blocked by a fixed overlay intercepting pane controls
 
@@ -58,6 +68,7 @@
 
 ### KQ-001: Mocked delayed-loading test asserts on brittle answer text rather than stable route behavior
 
+- Status: Resolved as test hardening
 - Route: `/knowledge`
 - Feature: progressive loading stages for delayed long-running searches
 - Reproduction:
@@ -69,9 +80,14 @@
   - `test-results/workflows-knowledge-qa-Kno-eaedd-layed-long-running-searches-chromium/error-context.md`
 - Suspected layer: test fragility, answer rendering expectations, or a mismatch between mocked payload shape and current UI rendering
 - Why it matters: this is probably not a beta-blocking product bug, but it is a misleading failing test in the current suite
+- Resolution:
+  - Updated the test to assert the current rendered answer state: loading stages, answer panel content, citation button, and evidence-panel source heading.
+  - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "delayed long-running searches" --reporter=line --workers=1` => `1 passed (10.6s)`
 
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
+- Current `/knowledge` summary after repairs: `17 passed`, `0 failed`
+- Current `/knowledge` verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
