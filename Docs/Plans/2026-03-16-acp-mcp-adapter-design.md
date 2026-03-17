@@ -95,6 +95,8 @@ The MCPAdapter receives `ToolGate` via `protocol_config["tool_gate"]`.
 - **llm_driven mode:** `LLMDrivenRunner` calls `await tool_gate.request_approval(...)` before every `transport.call_tool()`
 - **agent_driven mode:** `ToolGate` unused — events are informational (agent already executed)
 
+**Implementation location:** `ToolGate` ABC lives in `tool_gate.py` (clean, no dependencies). The concrete `GovernanceToolGate` implementation lives in `governance_filter.py` alongside `GovernanceFilter` — it knows how to interact with the filter's pending map and futures. MCPAdapter only imports the ABC, avoiding circular dependencies.
+
 ---
 
 ## 4. Transport Layer
@@ -113,10 +115,34 @@ class MCPTransport(ABC):
 
 ### MCPStdioTransport
 
-- Spawns agent process, JSON-RPC 2.0 over newline-delimited stdin/stdout
-- Handshake: `initialize` → `initialized` notification → `tools/list`
+- **Composes `ACPStdioClient` internally** for JSON-RPC 2.0 framing, request/response matching, and process lifecycle — avoids reimplementing the wire protocol
+- Adds MCP-specific methods on top: `initialize` handshake, `tools/list`, `tools/call`
+- Handshake: `client.call("initialize", {...})` → `client.notify("initialized", {})` → `client.call("tools/list", {})`
 - Protocol version: `"2024-11-05"`
-- `is_connected` checks process is alive
+- `is_connected` delegates to `client.is_running`
+
+```python
+class MCPStdioTransport(MCPTransport):
+    def __init__(self, command, args, env):
+        self._client = ACPStdioClient(command, args, env)
+
+    async def connect(self):
+        await self._client.start()
+        await self._client.call("initialize", {
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {"name": "tldw_acp_harness", "version": "0.1.0"},
+            "capabilities": {},
+        })
+        await self._client.notify("initialized", {})
+
+    async def list_tools(self):
+        resp = await self._client.call("tools/list", {})
+        return resp.result.get("tools", [])
+
+    async def call_tool(self, name, arguments):
+        resp = await self._client.call("tools/call", {"name": name, "arguments": arguments})
+        return resp.result
+```
 
 ### MCPSSETransport
 
@@ -184,6 +210,29 @@ Two response formats:
 - Each step emitted as appropriate AgentEvent
 - tldw-specific convention for rich UI integration
 
+### LLM Integration via LLMCaller Abstraction
+
+The LLM-driven runner uses an `LLMCaller` interface rather than directly importing from `LLM_Calls`:
+
+```python
+@dataclass
+class LLMResponse:
+    text: str | None = None
+    tool_calls: list[LLMToolCall] = field(default_factory=list)
+
+@dataclass
+class LLMToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+class LLMCaller(ABC):
+    async def call(self, messages: list[dict], tools: list[dict]) -> LLMResponse:
+        """Send messages + tool definitions to LLM, return response."""
+```
+
+A default `TldwLLMCaller` implementation wraps tldw's existing `chat_completions` function, translating MCP tool `input_schema` to OpenAI-compatible `parameters` (both are JSON Schema — straightforward mapping). This keeps the runner testable (mock `LLMCaller`) and decoupled from LLM module internals.
+
 ### LLM-Driven (`mcp_orchestration: "llm_driven"`)
 
 ReAct loop with ephemeral message history:
@@ -243,10 +292,12 @@ class MCPAdapter(ProtocolAdapter):
     async def send_prompt(self, messages, options=None) -> None:
         # 1. Optionally refresh tools if mcp_refresh_tools
         # 2. Clear cancel event
-        # 3. Create appropriate runner (AgentDrivenRunner or LLMDrivenRunner)
-        # 4. Emit status_change: idle → working
-        # 5. await runner.run(messages)
-        # 6. Emit status_change: working → idle
+        # 3. Start heartbeat background task (emits heartbeat every 15s)
+        # 4. Create appropriate runner (AgentDrivenRunner or LLMDrivenRunner)
+        # 5. Emit status_change: idle → working
+        # 6. await runner.run(messages)
+        # 7. Cancel heartbeat task
+        # 8. Emit status_change: working → idle
 
     async def send_tool_result(self, tool_id, result, is_error) -> None:
         # For future use (sampling support). No-op for now.
@@ -293,13 +344,23 @@ class MCPAdapter(ProtocolAdapter):
 | Failure | Behavior |
 |---------|----------|
 | Transport connect fails | Raise `RuntimeError` from `connect()` |
-| Transport dies mid-session | `error {code: "transport_disconnect", recoverable: true}`, reconnect (max 3) |
+| Transport dies mid-session | `error {code: "transport_disconnect", recoverable: true}`, reconnect (max 3, see below) |
 | `tools/list` fails | `error {code: "tool_discovery_failed", recoverable: false}` |
 | `tools/call` returns error | `tool_result {is_error: true}`, feed to LLM (llm_driven) |
 | LLM call fails | `error {code: "llm_error", recoverable: true}`, retry once |
 | Max iterations reached | `completion {stop_reason: "max_iterations"}` |
 | Governance timeout | Handled by GovernanceFilter (Phase A) |
 | Cancel during execution | `status_change {to_status: "cancelled"}` |
+
+### Reconnection Strategy (per transport)
+
+MCPAdapter handles reconnect at the transport-agnostic level: close transport → create new transport → reconnect → re-discover tools. Max 3 attempts with exponential backoff.
+
+| Transport | What "disconnect" means | Reconnect action |
+|-----------|------------------------|-------------------|
+| Stdio | Process exited unexpectedly | Restart process, re-initialize handshake |
+| SSE | SSE stream dropped | Re-establish SSE connection, re-discover POST URL |
+| Streamable HTTP | Endpoint unreachable (health check fails) | Retry connection. Individual request failures are retried at the request level, not the transport level. |
 
 ---
 
@@ -355,20 +416,24 @@ New fields on `AgentRegistryEntry`:
 | `adapters/mcp_adapter.py` | MCPAdapter implementing ProtocolAdapter |
 | `adapters/mcp_transport.py` | MCPTransport ABC + `create_transport()` factory |
 | `adapters/mcp_transports/__init__.py` | Transport package exports |
-| `adapters/mcp_transports/stdio.py` | MCPStdioTransport |
+| `adapters/mcp_transports/stdio.py` | MCPStdioTransport (composes ACPStdioClient) |
 | `adapters/mcp_transports/sse.py` | MCPSSETransport |
 | `adapters/mcp_transports/streamable_http.py` | MCPStreamableHTTPTransport |
 | `adapters/mcp_runners.py` | AgentDrivenRunner + LLMDrivenRunner |
+| `adapters/mcp_llm_caller.py` | LLMCaller ABC + TldwLLMCaller default implementation |
 | `tool_gate.py` | ToolGate ABC + ToolGateResult |
 
 | Modified File | Change |
 |---------------|--------|
 | `agent_registry.py` | 7 new fields |
 | `adapters/__init__.py` | Export MCPAdapter |
+| `governance_filter.py` | Add GovernanceToolGate concrete implementation |
 
 ---
 
 ## Appendix: Design Review Changes
+
+### First Review
 
 | # | Issue | Severity | Resolution |
 |---|-------|----------|------------|
@@ -379,3 +444,13 @@ New fields on `AgentRegistryEntry`:
 | 5 | MCPOrchestrator god class | Medium | Split into AgentDrivenRunner and LLMDrivenRunner |
 | 6 | LLM-driven history unspecified | Medium | Ephemeral message list per-prompt in LLMDrivenRunner |
 | 7 | Cancel not specified | Medium | asyncio.Event checked between iterations |
+
+### Final Review
+
+| # | Issue | Severity | Resolution |
+|---|-------|----------|------------|
+| 8 | GovernanceToolGate concrete location unspecified | Low | Lives in `governance_filter.py`, MCPAdapter imports only ABC |
+| 9 | LLM integration underspecified | Medium | Added `LLMCaller` ABC + `TldwLLMCaller` default wrapper |
+| 10 | Heartbeat not designed | Low | Background task in `MCPAdapter.send_prompt()`, cancelled on return |
+| 11 | Stdio transport duplicates JSON-RPC logic | Medium | Compose `ACPStdioClient` internally instead of reimplementing |
+| 12 | HTTP reconnect undefined | Low | Per-transport strategy documented, adapter handles reconnect loop |
