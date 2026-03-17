@@ -11266,6 +11266,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         allowed_fields = {
             "content",
+            "memory_type",
             "salience",
             "source_conversation_id",
             "scope_snapshot_id",
@@ -11286,6 +11287,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     raise InputError("content cannot be empty.")  # noqa: TRY003
                 params.append(content)
                 set_parts.append("content = ?")
+            elif key == "memory_type":
+                mt = str(value or "").strip()
+                if not mt:
+                    raise InputError("memory_type cannot be empty.")  # noqa: TRY003
+                params.append(mt)
+                set_parts.append("memory_type = ?")
             elif key == "salience":
                 try:
                     params.append(float(value))

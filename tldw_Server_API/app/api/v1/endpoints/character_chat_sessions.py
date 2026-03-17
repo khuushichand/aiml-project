@@ -21,6 +21,7 @@ from typing import Any, Literal, Mapping, Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Body,
     Depends,
     HTTPException,
@@ -1836,6 +1837,186 @@ def _inject_author_note_from_settings(
     return _insert_author_note_message(messages, author_note_message, position)
 
 
+# ---------------------------------------------------------------------------
+# Cross-session character memory injection
+# ---------------------------------------------------------------------------
+
+_TOKEN_BUDGET_CHARACTER_MEMORY = 300  # approximate token cap for injected memory block
+
+
+def _inject_character_memory_from_db(
+    messages: list[dict[str, Any]],
+    db: Any,
+    user_id: str,
+    character_id: str,
+    char_name: str,
+    user_name: str,
+    token_budget: int = _TOKEN_BUDGET_CHARACTER_MEMORY,
+) -> list[dict[str, Any]]:
+    """Inject cross-session character memories as a system message.
+
+    Queries ``persona_memory_entries`` for this user+character, groups by
+    category, and appends a structured block after author note injection.
+    Truncates to *token_budget* (approximate: 1 token ~ 4 chars).
+    """
+    from tldw_Server_API.app.api.v1.endpoints.character_memory import _persona_id_for_character
+
+    persona_id = _persona_id_for_character(character_id)
+    try:
+        rows = db.list_persona_memory_entries(
+            user_id=user_id,
+            persona_id=persona_id,
+            include_archived=False,
+            include_deleted=False,
+            limit=200,
+        )
+    except Exception as exc:
+        logger.debug("Character memory injection skipped (DB error): {}", exc)
+        return messages
+
+    if not rows:
+        return messages
+
+    # Sort by salience DESC, then last_modified DESC
+    rows.sort(key=lambda r: (float(r.get("salience", 0)), r.get("last_modified", "")), reverse=True)
+
+    # Group by category
+    categories: dict[str, list[str]] = {}
+    for row in rows:
+        cat = row.get("memory_type", "manual")
+        content = row.get("content", "").strip()
+        if content:
+            categories.setdefault(cat, []).append(content)
+
+    # Build text block
+    category_labels = {
+        "fact": "Facts",
+        "relationship": "Relationship",
+        "event": "Events",
+        "preference": "Preferences",
+        "manual": "Notes",
+    }
+    lines: list[str] = [f"Character memory about {user_name}:"]
+    char_budget = token_budget * 4  # approximate chars
+    total_chars = len(lines[0])
+
+    for cat, label in category_labels.items():
+        entries = categories.get(cat)
+        if not entries:
+            continue
+        header = f"[{label}]"
+        lines.append(header)
+        total_chars += len(header) + 1
+        for entry in entries:
+            line = f"- {entry}"
+            if total_chars + len(line) + 1 > char_budget:
+                break
+            lines.append(line)
+            total_chars += len(line) + 1
+        if total_chars >= char_budget:
+            break
+
+    if len(lines) <= 1:
+        return messages
+
+    memory_block = "\n".join(lines)
+    memory_message = {"role": "system", "content": memory_block}
+    return [*messages, memory_message]
+
+
+# In-memory counters for extraction trigger (avoids extra DB write per message)
+_extraction_message_counters: dict[str, int] = {}
+
+
+def _maybe_trigger_character_memory_extraction(
+    *,
+    background_tasks: Any,
+    db: Any,
+    chat_id: str,
+    settings_row: Any,
+    conversation: dict[str, Any],
+    character_id: str,
+    char_name: str,
+    user_id: str,
+) -> None:
+    """Check extraction settings and trigger background extraction if threshold met."""
+    if background_tasks is None:
+        return
+
+    settings = {}
+    if isinstance(settings_row, dict):
+        settings = settings_row.get("settings", {}) or {}
+    extraction_cfg = settings.get("characterMemoryExtraction")
+    if not isinstance(extraction_cfg, dict) or not extraction_cfg.get("enabled"):
+        return
+
+    interval = int(extraction_cfg.get("intervalMessages", 10))
+    if interval < 1:
+        interval = 10
+
+    counter_key = f"{user_id}:{chat_id}"
+    count = _extraction_message_counters.get(counter_key, 0) + 1
+    _extraction_message_counters[counter_key] = count
+
+    if count < interval:
+        return
+
+    # Reset counter and trigger
+    _extraction_message_counters[counter_key] = 0
+    user_name = conversation.get("user_name", "User")
+    provider = extraction_cfg.get("provider") or "openai"
+    model = extraction_cfg.get("model")
+
+    def _run_extraction() -> None:
+        from tldw_Server_API.app.api.v1.endpoints.character_memory import (
+            get_or_create_character_persona_profile,
+            _persona_id_for_character,
+        )
+        from tldw_Server_API.app.core.Character_Chat.modules.character_memory_extraction import (
+            extract_character_memories,
+        )
+
+        try:
+            persona_id = get_or_create_character_persona_profile(db, character_id, char_name, user_id)
+            existing = db.list_persona_memory_entries(
+                user_id=user_id, persona_id=persona_id, include_archived=True, include_deleted=False, limit=1000,
+            )
+            messages = db.get_messages_for_conversation(chat_id, limit=50, offset=0) or []
+            messages = [m for m in messages if not m.get("deleted")]
+            if not messages:
+                return
+
+            new_memories = extract_character_memories(
+                messages=messages,
+                char_name=char_name,
+                user_name=user_name,
+                existing_memories=existing,
+                api_endpoint=provider,
+                model=model,
+            )
+            for mem in new_memories:
+                try:
+                    db.add_persona_memory_entry({
+                        "persona_id": persona_id,
+                        "user_id": user_id,
+                        "memory_type": mem["category"],
+                        "content": mem["content"],
+                        "salience": mem["salience"],
+                        "source_conversation_id": chat_id,
+                    })
+                except Exception as exc:
+                    logger.debug("Failed to persist auto-extracted memory: {}", exc)
+            if new_memories:
+                logger.info(
+                    "Auto-extracted {} character memories for chat {} (char={})",
+                    len(new_memories), chat_id, char_name,
+                )
+        except Exception as exc:
+            logger.warning("Background character memory extraction failed: {}", exc)
+
+    background_tasks.add_task(_run_extraction)
+
+
 def _coerce_truthy_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -3048,6 +3229,14 @@ async def prepare_chat_completion(
             char_name=char_label,
             user_name=user_name,
         )
+        formatted = _inject_character_memory_from_db(
+            formatted,
+            db=db,
+            user_id=str(current_user.id),
+            character_id=str(turn_context.get("active_character_id") or conversation.get("character_id", "")),
+            char_name=char_label,
+            user_name=user_name,
+        )
         formatted, steering_conflict = _inject_message_steering_instruction(
             formatted,
             continue_as_user=body.continue_as_user,
@@ -3325,6 +3514,14 @@ async def prompt_assembly_preview(
             char_name=char_name,
             user_name=user_name,
         )
+        formatted = _inject_character_memory_from_db(
+            formatted,
+            db=db,
+            user_id=str(current_user.id),
+            character_id=str(turn_context.get("active_character_id") or conversation.get("character_id", "")),
+            char_name=char_name,
+            user_name=user_name,
+        )
 
         continue_flag, impersonate_flag, narrate_flag, steering_conflict = (
             _resolve_message_steering_flags(
@@ -3509,7 +3706,8 @@ async def character_chat_completion(
     body: CharacterChatCompletionV2Request = None,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     routing_decision_store: InMemoryRoutingDecisionStore = Depends(get_request_routing_decision_store),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
+    background_tasks: BackgroundTasks = None,
 ):
     """Perform a character chat completion using configured providers and persist results optionally.
 
@@ -3662,6 +3860,14 @@ async def character_chat_completion(
             formatted,
             settings_row=settings_row,
             character=character,
+            char_name=char_label,
+            user_name=user_name,
+        )
+        formatted = _inject_character_memory_from_db(
+            formatted,
+            db=db,
+            user_id=str(current_user.id),
+            character_id=str(turn_context.get("active_character_id") or conversation.get("character_id", "")),
             char_name=char_label,
             user_name=user_name,
         )
@@ -4310,6 +4516,18 @@ async def character_chat_completion(
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Non-fatal: failed to persist assistant metadata: {exc}")
             saved = True
+
+            # --- Character memory extraction trigger (opt-in) ---
+            _maybe_trigger_character_memory_extraction(
+                background_tasks=background_tasks,
+                db=db,
+                chat_id=chat_id,
+                settings_row=settings_row,
+                conversation=conversation,
+                character_id=str(active_character_id or conversation.get("character_id", "")),
+                char_name=char_label,
+                user_id=str(current_user.id),
+            )
 
         return CharacterChatCompletionV2Response(
             chat_id=chat_id,

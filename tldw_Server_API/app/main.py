@@ -892,6 +892,7 @@ else:
         _HAS_AUDIO_JOBS = False
     # Chat Endpoint
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_memory import router as character_memory_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
 
     # Workspace Endpoints
@@ -1148,6 +1149,7 @@ elif _MINIMAL_TEST_APP:
     # Minimal chat/character endpoints to support lightweight tests
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_memory import router as character_memory_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
     from tldw_Server_API.app.api.v1.endpoints.workspaces import router as workspaces_router
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
@@ -5534,6 +5536,7 @@ elif _MINIMAL_TEST_APP:
     include_router_idempotent(app, chat_loop_router, prefix=f"{API_V1_PREFIX}")
     include_router_idempotent(app, conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     include_router_idempotent(app, character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    include_router_idempotent(app, character_memory_router, prefix=f"{API_V1_PREFIX}/characters", tags=["character-memory"])
     include_router_idempotent(
         app, character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
     )
