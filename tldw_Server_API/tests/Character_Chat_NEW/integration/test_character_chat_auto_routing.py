@@ -32,7 +32,9 @@ def test_complete_v2_routes_auto_model_before_provider_call(test_client, auth_he
 
     captured: dict[str, object] = {}
 
-    def _stub_chat_api_call(api_endpoint, messages_payload, **kwargs):
+    def _stub_chat_api_call(
+        api_endpoint: str, messages_payload: object, **kwargs: object
+    ) -> dict[str, list[dict[str, dict[str, str]]]]:
         captured["provider"] = api_endpoint
         captured["model"] = kwargs.get("model")
         return {"choices": [{"message": {"content": "auto routed response"}}]}

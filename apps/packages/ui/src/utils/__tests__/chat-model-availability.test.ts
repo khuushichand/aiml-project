@@ -43,4 +43,13 @@ describe("chat model availability utilities", () => {
 
     expect(unavailable).toBeNull()
   })
+
+  it("treats mixed-case prefixed auto values as the sentinel", () => {
+    const unavailable = findUnavailableChatModel(
+      [" tldw:Auto "],
+      new Set(["gpt-4o-mini"])
+    )
+
+    expect(unavailable).toBeNull()
+  })
 })

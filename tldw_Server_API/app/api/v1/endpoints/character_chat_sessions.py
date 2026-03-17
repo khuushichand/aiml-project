@@ -136,6 +136,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 from tldw_Server_API.app.core.LLM_Calls.routing import (
     InMemoryRoutingDecisionStore,
     RouterRequest,
+    RoutingPolicy,
     RoutingUsageContext,
     build_provider_order_for_routing,
     flatten_provider_listing_for_routing,
@@ -324,11 +325,13 @@ def _extract_character_routing_requested_capabilities(
 async def _select_auto_character_llm_router_choice(
     *,
     router_request: RouterRequest,
-    policy: Any,
+    policy: RoutingPolicy,
     candidates: list[dict[str, Any]],
     provider_listing: dict[str, Any],
     current_user: User | None,
 ) -> tuple[dict[str, str] | None, dict[str, Any]]:
+    """Select a concrete router-model choice for character-chat auto routing."""
+
     def _fallback_resolver(name: str) -> Optional[str]:
         try:
             from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping, Optional
+from collections.abc import Iterable, Mapping
+from typing import Optional
 
 from .candidate_pool import RoutingCandidate, choose_ranked_candidate
 from .models import RoutingDecision

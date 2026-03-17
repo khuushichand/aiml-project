@@ -100,7 +100,7 @@ describe("TldwApiClient chat mutations", () => {
       model: "auto",
       messages: [{ role: "user", content: "hello" }],
       routing: { mode: "per_turn", cross_provider: false }
-    } as any)
+    })
 
     const request = mocks.bgRequest.mock.calls.at(-1)?.[0] as {
       path?: string

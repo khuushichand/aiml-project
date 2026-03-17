@@ -1,3 +1,5 @@
+import { isAutoModelId } from "./resolve-api-provider"
+
 type ModelDescriptor = {
   model?: unknown
   name?: unknown
@@ -35,7 +37,7 @@ export function findUnavailableChatModel(
 
   for (const selectedModelId of selectedModelIds) {
     const normalized = normalizeChatModelId(selectedModelId)
-    if (normalized === AUTO_CHAT_MODEL_ID) {
+    if (isAutoModelId(normalized)) {
       continue
     }
     if (normalized && !availableModelIds.has(normalized)) {

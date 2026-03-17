@@ -91,10 +91,13 @@ def _candidate_from_mapping(record: Mapping[str, Any]) -> RoutingCandidate:
     )
 
 
-def _as_candidate(record: RoutingCandidate | Mapping[str, Any]) -> RoutingCandidate:
+def normalize_candidate(record: RoutingCandidate | Mapping[str, Any]) -> RoutingCandidate:
     if isinstance(record, RoutingCandidate):
         return record
     return _candidate_from_mapping(record)
+
+
+_as_candidate = normalize_candidate
 
 
 def _matches_capabilities(
@@ -137,7 +140,7 @@ def build_candidate_pool(
 
     candidates: list[RoutingCandidate] = []
     for record in catalog:
-        candidate = _as_candidate(record)
+        candidate = normalize_candidate(record)
         if not candidate.provider or not candidate.model:
             continue
 
@@ -165,7 +168,7 @@ def choose_ranked_candidate(
 ) -> RoutingCandidate | None:
     """Return the best candidate using explicit rank fields, then admin order."""
 
-    normalized = [_as_candidate(candidate) for candidate in candidates]
+    normalized = [normalize_candidate(candidate) for candidate in candidates]
     if not normalized:
         return None
 

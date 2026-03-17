@@ -14,6 +14,7 @@ import {
   getProviderDisplayName,
   normalizeProviderKey
 } from "@/utils/provider-registry"
+import { isAutoModelId } from "@/utils/resolve-api-provider"
 
 dayjs.extend(relativeTime)
 
@@ -204,7 +205,7 @@ export const ModelsBody = () => {
 
   useEffect(() => {
     if (!normalizedDefaultProvider || !selectedModel) return
-    if (selectedModel === "auto") return
+    if (isAutoModelId(selectedModel)) return
     if (availableModels.length === 0) return
     const selectedEntry = availableModels.find(
       (model) => model.model === selectedModel

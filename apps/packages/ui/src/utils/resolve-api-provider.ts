@@ -84,6 +84,9 @@ const normalizeModelId = (value: unknown): string =>
 
 export const AUTO_MODEL_ID = "auto"
 
+export const isAutoModelId = (value: unknown): boolean =>
+  normalizeModelId(value).toLowerCase() === AUTO_MODEL_ID
+
 const normalizeKnownProvider = (value: unknown): string => {
   const normalized = normalizeProvider(value)
   if (!normalized) return ""
@@ -162,7 +165,7 @@ export const resolveApiProviderForModel = async ({
   const rawModelId = String(modelId || "").trim()
   const normalizedModelId = normalizeModelId(rawModelId)
   const isTldwScopedModel = /^tldw:/i.test(rawModelId)
-  if (normalizedModelId.toLowerCase() === AUTO_MODEL_ID) {
+  if (isAutoModelId(rawModelId)) {
     return undefined
   }
 

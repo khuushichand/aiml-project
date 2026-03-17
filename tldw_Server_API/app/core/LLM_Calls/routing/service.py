@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterable, Mapping, Optional
 
-from .candidate_pool import RoutingCandidate, _as_candidate
+from .candidate_pool import RoutingCandidate, normalize_candidate
 from .decision_store import (
     InMemoryRoutingDecisionStore,
     compute_routing_fingerprint,
@@ -30,7 +30,7 @@ def route_model(
 ) -> RoutingDecision | None:
     """Resolve `model="auto"` to a canonical provider/model pair."""
 
-    normalized_candidates = [_as_candidate(candidate) for candidate in candidates]
+    normalized_candidates = [normalize_candidate(candidate) for candidate in candidates]
     if not normalized_candidates:
         return None
 

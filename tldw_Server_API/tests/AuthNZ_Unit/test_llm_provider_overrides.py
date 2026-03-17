@@ -84,4 +84,23 @@ def test_get_override_model_priority_reads_routing_rankings() -> None:
         "gpt-4.1-mini",
     ]
 
+    updated = apply_llm_provider_overrides_to_listing(
+        {
+            "providers": [
+                {
+                    "name": "openai",
+                    "models": ["gpt-4.1-mini", "gpt-4.1"],
+                    "models_info": [
+                        {"name": "gpt-4.1-mini"},
+                        {"name": "gpt-4.1"},
+                    ],
+                }
+            ]
+        }
+    )
+    assert updated["providers"][0]["models"] == ["gpt-4.1", "gpt-4.1-mini"]
+    assert [
+        model["name"] for model in updated["providers"][0]["models_info"]
+    ] == ["gpt-4.1", "gpt-4.1-mini"]
+
     set_llm_provider_overrides_cache_for_tests({})

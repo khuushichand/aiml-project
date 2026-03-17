@@ -309,5 +309,12 @@ describe("WritingPlayground phase1 baseline", () => {
       expect(mockState.streamCalls).toHaveLength(1)
     })
     expect(mockState.streamCalls[0]?.options.model).toBe("auto")
+    expect(mockState.streamCalls[0]?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: "Route this prompt on the server."
+        })
+      ])
+    )
   })
 })

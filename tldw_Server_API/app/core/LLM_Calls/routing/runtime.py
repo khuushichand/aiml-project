@@ -32,6 +32,13 @@ def _normalize_provider(value: Any) -> str | None:
     return text.lower() if text else None
 
 
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _provider_listing_entry(
     provider_listing: Mapping[str, Any] | None,
     provider_name: str,
@@ -252,9 +259,9 @@ def extract_router_usage(response: Any) -> dict[str, int]:
     usage = response.get("usage")
     if not isinstance(usage, Mapping):
         return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    prompt_tokens = int(usage.get("prompt_tokens") or 0)
-    completion_tokens = int(usage.get("completion_tokens") or 0)
-    total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+    prompt_tokens = _coerce_int(usage.get("prompt_tokens"))
+    completion_tokens = _coerce_int(usage.get("completion_tokens"))
+    total_tokens = _coerce_int(usage.get("total_tokens")) or (prompt_tokens + completion_tokens)
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,

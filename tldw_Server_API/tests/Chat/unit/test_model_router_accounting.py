@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from tldw_Server_API.app.core.LLM_Calls.routing.accounting import (
@@ -9,10 +11,12 @@ from tldw_Server_API.app.core.LLM_Calls.routing.accounting import (
 from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingDecision
 
 
+@pytest.mark.unit
 def test_get_router_operation_name_is_surface_specific():
     assert get_router_operation_name("chat") == "chat_router"
 
 
+@pytest.mark.unit
 def test_build_routing_telemetry_payload_separates_router_and_execution_models():
     payload = build_routing_telemetry_payload(
         decision=RoutingDecision(provider="openai", model="gpt-4.1", decision_source="llm_router"),
@@ -28,11 +32,12 @@ def test_build_routing_telemetry_payload_separates_router_and_execution_models()
     assert payload["fallback_used"] is True
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_log_model_router_usage_records_router_operation():
     calls: list[dict[str, object]] = []
 
-    async def fake_usage_logger(**kwargs):
+    async def fake_usage_logger(**kwargs: Any) -> None:
         calls.append(kwargs)
 
     await log_model_router_usage(
@@ -59,6 +64,7 @@ async def test_log_model_router_usage_records_router_operation():
     assert calls[0]["conversation_id"] == "conv-1"
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_log_model_router_usage_matches_log_llm_usage_signature():
     calls: list[dict[str, object]] = []
