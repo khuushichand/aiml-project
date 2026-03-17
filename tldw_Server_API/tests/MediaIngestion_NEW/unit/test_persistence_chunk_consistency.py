@@ -461,7 +461,20 @@ async def test_persist_doc_item_and_children_routes_email_parent_and_child_throu
     )
     monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
     monkeypatch.setattr(ingestion_persistence, "_is_email_native_persist_enabled", lambda: True)
-    monkeypatch.setattr(ingestion_persistence, "MediaDatabase", _RepoBackedWorkerDB)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "persist_doc_item_and_children should not construct MediaDatabase directly"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
     monkeypatch.setattr(
         ingestion_persistence,
         "get_media_repository",
@@ -544,7 +557,20 @@ async def test_persist_doc_item_and_children_routes_archive_children_through_med
     )
     monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
     monkeypatch.setattr(ingestion_persistence, "_is_email_native_persist_enabled", lambda: True)
-    monkeypatch.setattr(ingestion_persistence, "MediaDatabase", _RepoBackedWorkerDB)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "persist_doc_item_and_children archive path should not construct MediaDatabase directly"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
     monkeypatch.setattr(
         ingestion_persistence,
         "get_media_repository",

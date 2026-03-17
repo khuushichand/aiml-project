@@ -5063,7 +5063,10 @@ async def persist_doc_item_and_children(
             def _db_worker() -> Any:
                 worker_db: MediaDatabase | None = None
                 try:
-                    worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+                    worker_db = create_media_database(
+                        client_id,
+                        db_path=db_path,
+                    )
                     media_writer = _resolve_media_writer(worker_db)
                     media_id_local, media_uuid_local, db_message_local = media_writer.add_media_with_keywords(
                         **db_add_kwargs
@@ -5313,9 +5316,9 @@ async def persist_doc_item_and_children(
                                     ) -> Any:
                                         worker_db: MediaDatabase | None = None
                                         try:
-                                            worker_db = MediaDatabase(
+                                            worker_db = create_media_database(
+                                                client_id_local,
                                                 db_path=db_path_local,
-                                                client_id=client_id_local,
                                             )
                                             media_writer = _resolve_media_writer(worker_db)
                                             child_id_local, child_uuid_local, child_msg_local = media_writer.add_media_with_keywords(
@@ -5607,9 +5610,9 @@ async def persist_doc_item_and_children(
                                 ) -> Any:
                                     worker_db: MediaDatabase | None = None
                                     try:
-                                        worker_db = MediaDatabase(
+                                        worker_db = create_media_database(
+                                            client_id_local,
                                             db_path=db_path_local,
-                                            client_id=client_id_local,
                                         )
                                         media_writer = _resolve_media_writer(worker_db)
                                         child_id_local, child_uuid_local, child_msg_local = media_writer.add_media_with_keywords(
