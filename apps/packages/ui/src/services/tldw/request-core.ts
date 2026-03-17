@@ -347,9 +347,16 @@ export const tldwRequest = async (
       cfg?.refreshToken &&
       runtime.refreshAuth
     ) {
+      let refreshSucceeded = false
       try {
         await runtime.refreshAuth()
-      } catch {}
+        refreshSucceeded = true
+      } catch (refreshError) {
+        console.warn(
+          `${REQUEST_LOG_PREFIX} Token refresh failed — retrying with stale token`,
+          refreshError
+        )
+      }
       const updated = await runtime.getConfig()
       const retryHeaders = { ...h }
       for (const k of Object.keys(retryHeaders)) {
@@ -368,6 +375,13 @@ export const tldwRequest = async (
       if (retryTimeoutId) {
         clearTimeout(retryTimeoutId)
         retryTimeoutId = null
+      }
+      if (!refreshSucceeded && resp.status === 401) {
+        return {
+          ok: false,
+          status: 401,
+          error: "Session expired. Please log in again."
+        }
       }
     }
 
@@ -398,12 +412,25 @@ export const tldwRequest = async (
     }
 
     if (!resp.ok) {
-      const detail =
-        typeof data === "object" &&
-        data &&
-        (data.detail || data.error || data.message)
+      let detail: unknown = undefined
+      if (typeof data === "object" && data) {
+        const raw = data.detail ?? data.error ?? data.message
+        if (Array.isArray(raw)) {
+          detail = raw
+            .map((item: any) =>
+              typeof item === "string"
+                ? item
+                : typeof item?.msg === "string"
+                  ? item.msg
+                  : JSON.stringify(item)
+            )
+            .join("; ")
+        } else if (raw !== undefined && raw !== null) {
+          detail = raw
+        }
+      }
       const errorMessage = formatErrorMessage(
-        typeof detail !== "undefined" && detail !== null
+        detail !== undefined && detail !== null
           ? detail
           : resp.statusText || `HTTP ${resp.status}`,
         `HTTP ${resp.status}`

@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { generateID } from "@/db/dexie/helpers";
 import { type UploadedFile } from "@/db/dexie/types";
 
@@ -28,6 +29,12 @@ export const useFileUpload = ({
   contextFiles,
   setContextFiles,
 }: UseFileUploadOptions) => {
+  // Use refs to avoid stale closures when multiple uploads run concurrently.
+  const uploadedFilesRef = useRef(uploadedFiles);
+  uploadedFilesRef.current = uploadedFiles;
+  const contextFilesRef = useRef(contextFiles);
+  contextFilesRef.current = contextFiles;
+
   const handleFileUpload = async (file: File) => {
     try {
       const isImage = file.type.startsWith("image/");
@@ -68,8 +75,8 @@ export const useFileUpload = ({
         processed: false,
       };
 
-      setUploadedFiles([...uploadedFiles, uploadedFile]);
-      setContextFiles([...contextFiles, uploadedFile]);
+      setUploadedFiles([...uploadedFilesRef.current, uploadedFile]);
+      setContextFiles([...contextFilesRef.current, uploadedFile]);
 
       return file;
     } catch (error) {
@@ -92,8 +99,8 @@ export const useFileUpload = ({
   };
 
   const removeUploadedFile = async (fileId: string) => {
-    setUploadedFiles(uploadedFiles.filter((f) => f.id !== fileId));
-    setContextFiles(contextFiles.filter((f) => f.id !== fileId));
+    setUploadedFiles(uploadedFilesRef.current.filter((f) => f.id !== fileId));
+    setContextFiles(contextFilesRef.current.filter((f) => f.id !== fileId));
   };
 
   const clearUploadedFiles = () => {

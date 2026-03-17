@@ -2444,7 +2444,10 @@ export class TldwApiClient {
         const parsed = JSON.parse(line)
         yield parsed
       } catch (e) {
-        // Ignore non-JSON lines
+        const trimmed = line.trim()
+        if (trimmed && !trimmed.startsWith(":")) {
+          console.warn("[tldw:stream] Unparseable SSE line:", trimmed.slice(0, 200))
+        }
       }
     }
   }

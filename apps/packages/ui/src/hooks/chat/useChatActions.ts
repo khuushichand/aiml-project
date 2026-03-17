@@ -1411,6 +1411,7 @@ export const useChatActions = ({
       });
       setIsProcessing(false);
       setStreaming(false);
+      setAbortController(null);
     } finally {
       sendInFlightRef.current = false;
       if (replyActive && capturedReplyTargetId != null) {
