@@ -101,9 +101,9 @@ Optional add-on:
 
 ## Current Status
 
-Latest release: 
-- 0.1.26 (2026-03-15) Beta status -  Expect rough edges; 
-  * please report issues. 
+Latest release:
+- 0.1.26 (2026-03-15) Beta status -  Expect rough edges;
+  * please report issues.
 - See `CHANGELOG.md` for release history.
 
 <details>

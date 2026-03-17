@@ -7,7 +7,7 @@ This guide helps developers maintain feature parity between the browser extensio
 - Recommended user/self-hosting setup: `make quickstart`
 - API-only Docker setup: `make quickstart-docker`
 - Team/public deployment: `Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md`
-- Local contributor setup: `make quickstart-install` for the API and `bun run --cwd tldw-frontend dev` for the WebUI
+- Local contributor setup: `make quickstart-install` for the API and `bun run --cwd apps/tldw-frontend dev` for the WebUI
 
 Use the Docker paths when you want a stable instance. Use the local paths when you are actively changing code, debugging, or running frontend development workflows.
 
