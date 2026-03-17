@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.Embeddings.services import (
     vector_compactor,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing import visual_ingestion
+from tldw_Server_API.app.core.TTS import tts_jobs_worker
 from tldw_Server_API.app.core.Workflows.adapters.media import ingest as workflow_media_ingest
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Processing_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
@@ -222,6 +223,11 @@ def test_claims_review_metrics_scheduler_imports_managed_media_database_from_med
 
 def test_embeddings_abtest_jobs_worker_imports_create_media_database_from_media_db_api():
     module = importlib.reload(embeddings_abtest_jobs_worker)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_tts_jobs_worker_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(tts_jobs_worker)
     assert module.create_media_database is media_db_api.create_media_database
 
 

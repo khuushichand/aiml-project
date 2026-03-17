@@ -4,8 +4,8 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 19
-- Operational `create_media_database(...)` call sites in app code: 29
+- Raw `MediaDatabase(...)` constructors in app code: 18
+- Operational `create_media_database(...)` call sites in app code: 30
 - Operational `managed_media_database(...)` call sites in app code: 20
 - `Media_DB_v2` references in app code: 139
 
@@ -64,6 +64,7 @@ Notes:
 | `app/core/Claims_Extraction/claims_service.py` | 2 | local event/health persistence DB | `NEW_HELPER` | likely same helper family as rebuild/notifications |
 | `app/core/Evaluations/embeddings_abtest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | explicit owner-controlled lifetime is fine |
 | `app/core/DB_Management/Users_DB.py` | 1 | factory wrapper returns DB instance | `KEEP_RAW` | wrapper boundary, not local scope |
+| `app/core/TTS/tts_jobs_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | `_handle_tts_job(...)` still owns close behavior |
 
 ## Raw `MediaDatabase(...)` Constructor Inventory
 
@@ -78,7 +79,6 @@ Notes:
 | `app/core/Sync/Sync_Client.py` | 1 | long-lived client sync owner | `KEEP_RAW` | explicit owner lifecycle is part of the design |
 | `app/core/RAG/rag_service/unified_pipeline.py` | 1 | local fallback lookup | `MOVE_MANAGED` | local read scope |
 | `app/core/RAG/rag_service/database_retrievers.py` | 2 | retriever-owned DB instances | `KEEP_RAW` | lifetime is owned by retriever instances with explicit `close()` |
-| `app/core/TTS/tts_jobs_worker.py` | 1 | helper returns DB handle | `MOVE_FACTORY` | returned owner should use factory, not raw constructor |
 
 ## App-Side `Media_DB_v2` Compatibility Buckets
 
