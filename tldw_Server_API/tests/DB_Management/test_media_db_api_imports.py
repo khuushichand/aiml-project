@@ -184,9 +184,9 @@ def test_claims_service_imports_create_media_database_from_media_db_api():
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_claims_rebuild_service_imports_create_media_database_from_media_db_api():
+def test_claims_rebuild_service_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(claims_rebuild_service)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_embeddings_jobs_worker_imports_managed_media_database_from_media_db_api():
