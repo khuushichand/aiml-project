@@ -29,6 +29,11 @@ class StdioAdapter(ProtocolAdapter):
 
     async def connect(self, config: AdapterConfig) -> None:
         client: ACPStdioClient = config.protocol_config["client"]
+        if not getattr(client, "is_running", False):
+            raise RuntimeError(
+                "ACPStdioClient process is not running — call client.start() "
+                "before passing it to StdioAdapter.connect()"
+            )
         self._client = client
         self._config = config
         self._connected = True

@@ -50,6 +50,26 @@ async def test_stdio_adapter_connect_sets_connected():
 
 
 @pytest.mark.asyncio
+async def test_stdio_adapter_connect_rejects_unstarted_client():
+    """connect() should raise RuntimeError if the client process is not running."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.stdio_adapter import StdioAdapter
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.base import AdapterConfig
+
+    mock_client = AsyncMock()
+    mock_client.is_running = False  # process not started
+
+    adapter = StdioAdapter()
+    config = AdapterConfig(
+        event_callback=AsyncMock(),
+        session_id="sess-1",
+        protocol_config={"client": mock_client},
+    )
+    with pytest.raises(RuntimeError, match="not running"):
+        await adapter.connect(config)
+    assert adapter.is_connected is False
+
+
+@pytest.mark.asyncio
 async def test_stdio_adapter_translates_completion_notification():
     """Simulate a result notification with type=text and verify COMPLETION event."""
     from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.stdio_adapter import StdioAdapter
