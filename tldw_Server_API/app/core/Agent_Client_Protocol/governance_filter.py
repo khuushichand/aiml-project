@@ -18,17 +18,24 @@ from loguru import logger
 from tldw_Server_API.app.core.Agent_Client_Protocol.event_bus import SessionEventBus
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
 from tldw_Server_API.app.core.Agent_Client_Protocol.permission_tiers import determine_permission_tier
+from tldw_Server_API.app.core.Agent_Client_Protocol.tool_gate import ToolGate, ToolGateResult
 
 
 class _PendingEntry:
     """A held tool_call with its creation time for timeout enforcement."""
 
-    __slots__ = ("event", "created_at", "timeout_task")
+    __slots__ = ("event", "created_at", "timeout_task", "approval_future")
 
-    def __init__(self, event: AgentEvent, timeout_task: asyncio.Task[None] | None = None) -> None:
+    def __init__(
+        self,
+        event: AgentEvent,
+        timeout_task: asyncio.Task[None] | None = None,
+        approval_future: asyncio.Future | None = None,
+    ) -> None:
         self.event = event
         self.created_at = time.monotonic()
         self.timeout_task = timeout_task
+        self.approval_future = approval_future
 
 
 class GovernanceFilter:
@@ -79,14 +86,20 @@ class GovernanceFilter:
         # Use the adapter-provided tier if present; fall back to re-resolving
         tier = event.payload.get("permission_tier") or determine_permission_tier(tool_name)
 
+        approval_future = event.metadata.get("_approval_future")
+
         if tier == "auto":
             await self._bus.publish(event)
+            if approval_future is not None and not approval_future.done():
+                approval_future.set_result(("approve", None))
             return
 
         # Hold the event and publish a permission request
         request_id = str(uuid.uuid4())
         timeout_task = asyncio.create_task(self._timeout_pending(request_id, self._default_timeout_sec))
-        self._pending[request_id] = _PendingEntry(event=event, timeout_task=timeout_task)
+        self._pending[request_id] = _PendingEntry(
+            event=event, timeout_task=timeout_task, approval_future=approval_future,
+        )
 
         perm_request = AgentEvent(
             session_id=event.session_id,
@@ -141,6 +154,10 @@ class GovernanceFilter:
             entry.timeout_task.cancel()
 
         held_event = entry.event
+
+        # Resolve the approval future if one was attached
+        if entry.approval_future is not None and not entry.approval_future.done():
+            entry.approval_future.set_result((decision, reason))
 
         if decision == "approve":
             await self._bus.publish(held_event)
@@ -200,3 +217,37 @@ class GovernanceFilter:
                 decision="deny",
                 reason="session cancelled",
             )
+
+
+class GovernanceToolGate(ToolGate):
+    """Concrete ToolGate that delegates to GovernanceFilter.
+
+    Creates an ``asyncio.Future`` per tool call, attaches it to the event
+    metadata, and awaits the governance decision.
+    """
+
+    def __init__(self, governance_filter: GovernanceFilter, session_id: str) -> None:
+        self._filter = governance_filter
+        self._session_id = session_id
+
+    async def request_approval(
+        self,
+        session_id: str,
+        tool_name: str,
+        arguments: dict,
+    ) -> ToolGateResult:
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        event = AgentEvent(
+            session_id=session_id,
+            kind=AgentEventKind.TOOL_CALL,
+            payload={
+                "tool_id": str(uuid.uuid4()),
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "permission_tier": determine_permission_tier(tool_name),
+            },
+            metadata={"_approval_future": future},
+        )
+        await self._filter.process(event)
+        decision, reason = await future
+        return ToolGateResult(approved=(decision == "approve"), reason=reason)
