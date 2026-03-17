@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - defusedxml is an optional dependency
 # Local Imports
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
-from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import logging
 
@@ -155,19 +155,22 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
             summary = "No summary provided"
 
         # Add to database (ensure we have a MediaDatabase instance)
-        db_instance = create_media_database(client_id="xml_import")
-        result = add_media_with_keywords(
-            db_instance=db_instance,
-            url=display_name,  # Using filename as URL
-            info_dict=info_dict,
-            segments=segments,
-            summary=summary,
-            keywords=keyword_list,
-            custom_prompt_input=custom_prompt,
-            whisper_model="XML Import",
-            media_type="xml_document",
-            overwrite=False
-        )
+        with managed_media_database(
+            client_id="xml_import",
+            initialize=False,
+        ) as db_instance:
+            result = add_media_with_keywords(
+                db_instance=db_instance,
+                url=display_name,  # Using filename as URL
+                info_dict=info_dict,
+                segments=segments,
+                summary=summary,
+                keywords=keyword_list,
+                custom_prompt_input=custom_prompt,
+                whisper_model="XML Import",
+                media_type="xml_document",
+                overwrite=False
+            )
 
         return f"XML file '{display_name}' import complete. Database result: {result}"
 
