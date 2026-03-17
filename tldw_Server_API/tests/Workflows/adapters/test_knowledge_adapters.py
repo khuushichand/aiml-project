@@ -843,6 +843,75 @@ async def test_claims_extract_adapter_list_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_claims_extract_adapter_search_uses_media_db_api_factory(monkeypatch):
+    """Test production search path resolves the media DB factory from media_db.api."""
+    from tldw_Server_API.app.core.DB_Management import DB_Manager
+    from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+    from tldw_Server_API.app.core.Workflows.adapters.knowledge import crud as knowledge_crud
+
+    class _FakeMediaDB:
+        def search_claims(self, query, limit, offset):
+            assert query == "climate change"
+            assert limit == 20
+            assert offset == 0
+            return [{"id": 1, "claim_text": "Climate change is real", "media_id": 9, "relevance_score": 0.9}]
+
+    def _fake_create_media_database(user_id=None, **kwargs):  # noqa: ARG001
+        assert user_id == 1
+        return _FakeMediaDB()
+
+    def _raise_legacy_factory(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("legacy DB_Manager factory should not be used")
+
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.setattr(knowledge_crud, "is_test_mode", lambda: False)
+    monkeypatch.setattr(media_db_api, "create_media_database", _fake_create_media_database)
+    monkeypatch.setattr(DB_Manager, "create_media_database", _raise_legacy_factory)
+
+    result = await knowledge_crud.run_claims_extract_adapter(
+        {"action": "search", "query": "climate change", "limit": 20},
+        {"user_id": "1"},
+    )
+
+    assert result["count"] == 1
+    assert result["claims"][0]["text"] == "Climate change is real"
+
+
+@pytest.mark.asyncio
+async def test_claims_extract_adapter_list_uses_media_db_api_factory(monkeypatch):
+    """Test production list path resolves the media DB factory from media_db.api."""
+    from tldw_Server_API.app.core.DB_Management import DB_Manager
+    from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+    from tldw_Server_API.app.core.Workflows.adapters.knowledge import crud as knowledge_crud
+
+    class _FakeMediaDB:
+        def list_claims(self, limit, offset):
+            assert limit == 10
+            assert offset == 5
+            return [{"id": 2, "claim_text": "Listed claim", "media_id": 12}]
+
+    def _fake_create_media_database(user_id=None, **kwargs):  # noqa: ARG001
+        assert user_id == 7
+        return _FakeMediaDB()
+
+    def _raise_legacy_factory(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("legacy DB_Manager factory should not be used")
+
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.setattr(knowledge_crud, "is_test_mode", lambda: False)
+    monkeypatch.setattr(media_db_api, "create_media_database", _fake_create_media_database)
+    monkeypatch.setattr(DB_Manager, "create_media_database", _raise_legacy_factory)
+
+    result = await knowledge_crud.run_claims_extract_adapter(
+        {"action": "list", "limit": 10, "offset": 5},
+        {"user_id": "7"},
+    )
+
+    assert result["count"] == 1
+    assert result["claims"][0]["text"] == "Listed claim"
+
+
+@pytest.mark.asyncio
 async def test_claims_extract_adapter_missing_action(monkeypatch):
     """Test claims extract adapter returns error for missing action."""
     monkeypatch.delenv("TEST_MODE", raising=False)

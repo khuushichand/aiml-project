@@ -1,7 +1,10 @@
 import configparser
 import importlib
 
+import pytest
+
 from tldw_Server_API.app.core.DB_Management import DB_Manager
+from tldw_Server_API.app.core.DB_Management import Users_DB
 from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.core.Claims_Extraction import (
     claims_notifications,
@@ -136,3 +139,27 @@ def test_vector_compactor_imports_create_media_database_from_media_db_api():
 def test_watchlists_pipeline_imports_create_media_database_from_media_db_api():
     module = importlib.reload(watchlists_pipeline)
     assert module.create_media_database is media_db_api.create_media_database
+
+
+@pytest.mark.asyncio
+async def test_users_db_get_user_media_db_uses_media_db_api_factory(monkeypatch):
+    captured = {}
+    sentinel = object()
+
+    def _fake_create_media_database(client_id, **kwargs):
+        captured["client_id"] = client_id
+        captured.update(kwargs)
+        return sentinel
+
+    def _raise_legacy_factory(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("legacy DB_Manager factory should not be used")
+
+    monkeypatch.setattr(Users_DB, "get_user_db_path", lambda *_args, **_kwargs: "/tmp/users-media.db")
+    monkeypatch.setattr(media_db_api, "create_media_database", _fake_create_media_database)
+    monkeypatch.setattr(DB_Manager, "create_media_database", _raise_legacy_factory)
+
+    result = await Users_DB.get_user_media_db(42)
+
+    assert result is sentinel
+    assert captured["client_id"] == "42"
+    assert captured["db_path"] == "/tmp/users-media.db"

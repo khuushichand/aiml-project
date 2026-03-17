@@ -772,7 +772,7 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
             offset = int(config.get("offset") or 0)
 
             # Search claims in media database
-            from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+            from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 
             media_db = create_media_database(user_id=int(user_id))
             results = media_db.search_claims(query=query, limit=limit, offset=offset)
@@ -797,7 +797,7 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
             offset = int(config.get("offset") or 0)
             media_id = config.get("media_id")
 
-            from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+            from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 
             media_db = create_media_database(user_id=int(user_id))
 
