@@ -4,8 +4,8 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 17
-- Operational `create_media_database(...)` call sites in app code: 30
+- Raw `MediaDatabase(...)` constructors in app code: 14
+- Operational `create_media_database(...)` call sites in app code: 31
 - Operational `managed_media_database(...)` call sites in app code: 21
 - `Media_DB_v2` references in app code: 138
 
@@ -66,6 +66,7 @@ Notes:
 | `app/core/Evaluations/embeddings_abtest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | explicit owner-controlled lifetime is fine |
 | `app/core/DB_Management/Users_DB.py` | 1 | factory wrapper returns DB instance | `KEEP_RAW` | wrapper boundary, not local scope |
 | `app/core/TTS/tts_jobs_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | `_handle_tts_job(...)` still owns close behavior |
+| `app/core/Chunking/template_initialization.py` | 1 | internal helper opens via shared factory and closes owned DBs | `MOVE_FACTORY` already satisfied | preserves caller-provided DB ownership while closing internal startup DBs |
 
 ## Raw `MediaDatabase(...)` Constructor Inventory
 
@@ -75,7 +76,6 @@ Notes:
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Claims_Extraction/claims_service.py` | 4 | cross-user SQLite override DBs | `NEW_HELPER` | needs one dedicated override helper, not four duplicated constructors |
-| `app/core/Chunking/template_initialization.py` | 3 | optional startup DB owner when `db is None` | `MOVE_FACTORY` | preserve explicit owner behavior but stop raw constructor use |
 | `app/core/Sync/Sync_Client.py` | 1 | long-lived client sync owner | `KEEP_RAW` | explicit owner lifecycle is part of the design |
 | `app/core/RAG/rag_service/unified_pipeline.py` | 1 | local fallback lookup | `MOVE_MANAGED` | local read scope |
 | `app/core/RAG/rag_service/database_retrievers.py` | 2 | retriever-owned DB instances | `KEEP_RAW` | lifetime is owned by retriever instances with explicit `close()` |

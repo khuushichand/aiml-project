@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
+from tldw_Server_API.app.core.Chunking import template_initialization as template_init
 from tldw_Server_API.app.core.Chunking.template_initialization import (
     load_builtin_templates,
     initialize_chunking_templates,
@@ -303,6 +304,117 @@ class TestTemplateInitialization:
         assert academic is not None
         assert academic["is_builtin"] is True
         assert "research" in academic["tags"]
+
+    def test_initialize_chunking_templates_uses_factory_and_closes_owned_db(self, monkeypatch):
+        events = []
+
+        class FakeDb:
+            def seed_builtin_templates(self, templates):
+                events.append(("seed", templates))
+                return len(templates)
+
+            def close_connection(self):
+                events.append("close")
+
+        monkeypatch.setattr(
+            template_init,
+            "load_builtin_templates",
+            lambda: [{"name": "built-in", "template": {"name": "built-in"}}],
+        )
+        monkeypatch.setattr(
+            template_init,
+            "create_media_database",
+            lambda client_id, db_path=None, **_kwargs: events.append(("create", client_id, db_path)) or FakeDb(),
+        )
+
+        count = template_init.initialize_chunking_templates(
+            db_path="/tmp/chunking-templates.db",
+            client_id="template-test",
+        )
+
+        assert count == 1
+        assert events == [
+            ("create", "template-test", "/tmp/chunking-templates.db"),
+            ("seed", [{"name": "built-in", "template": {"name": "built-in"}}]),
+            "close",
+        ]
+
+    def test_update_builtin_templates_uses_factory_and_closes_owned_db(self, monkeypatch):
+        events = []
+
+        class FakeDb:
+            def get_chunking_template(self, name):
+                events.append(("get", name))
+                return {
+                    "name": name,
+                    "is_builtin": True,
+                    "template_json": json.dumps({"name": name, "version": 1}),
+                }
+
+            def update_chunking_template(self, **kwargs):
+                events.append(("update", kwargs["name"]))
+                return True
+
+            def close_connection(self):
+                events.append("close")
+
+        monkeypatch.setattr(
+            template_init,
+            "load_builtin_templates",
+            lambda: [
+                {
+                    "name": "built-in",
+                    "description": "desc",
+                    "tags": ["x"],
+                    "template": {"name": "built-in", "version": 2},
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            template_init,
+            "create_media_database",
+            lambda client_id, db_path=None, **_kwargs: events.append(("create", client_id, db_path)) or FakeDb(),
+        )
+
+        count = template_init.update_builtin_templates(
+            db_path="/tmp/chunking-templates.db",
+            client_id="template-test",
+        )
+
+        assert count == 1
+        assert events == [
+            ("create", "template-test", "/tmp/chunking-templates.db"),
+            ("get", "built-in"),
+            ("update", "built-in"),
+            "close",
+        ]
+
+    def test_ensure_templates_initialized_uses_factory_for_existing_check_and_closes(self, monkeypatch):
+        events = []
+
+        class FakeDb:
+            def list_chunking_templates(self, **kwargs):
+                events.append(("list", kwargs))
+                return [{"name": "built-in"}]
+
+            def close_connection(self):
+                events.append("close")
+
+        monkeypatch.setattr(template_init, "initialize_chunking_templates", lambda **_kwargs: 0)
+        monkeypatch.setattr(
+            template_init,
+            "create_media_database",
+            lambda client_id, db_path=None, **_kwargs: events.append(("create", client_id, db_path)) or FakeDb(),
+        )
+
+        result = template_init.ensure_templates_initialized(db_path="/tmp/chunking-templates.db")
+
+        assert result is True
+        assert events == [
+            ("create", "system", "/tmp/chunking-templates.db"),
+            ("list", {"include_builtin": True, "include_custom": False}),
+            "close",
+        ]
 
 
 # API Endpoint Tests
