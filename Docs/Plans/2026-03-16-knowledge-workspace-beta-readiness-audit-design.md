@@ -131,6 +131,7 @@ Primary output:
 - Store seeding, direct localStorage injection, and route interception are suspect by default
 - Features that cannot be tested live deterministically should be marked non-gating rather than overstated
 - Every gate test must correspond to a real user-critical workflow
+- New audit tests should use explicit route-specific tags from their first draft so reruns stay deterministic as the suite grows
 
 ## High-Risk Integration Points
 
@@ -154,6 +155,7 @@ Primary output:
 
 - Coverage matrix for `/knowledge`
 - Coverage matrix for `/workspace-playground`
+- Prioritized live bug log with reproduction evidence
 - Prioritized bug list with evidence
 - List of misleading or insufficient existing E2E tests
 - Proposed live-backend beta gate for both routes
@@ -163,6 +165,8 @@ Primary output:
 - The current repository is dirty; planning artifacts should avoid touching unrelated work
 - The approved implementation should execute in an isolated worktree
 - New E2E coverage should favor accuracy over test-count inflation
+- Live execution requires an explicit environment preflight for `TLDW_SERVER_URL`, `TLDW_API_KEY`, `TLDW_WEB_URL`, and Playwright web autostart behavior
+- Seeded test data must be uniquely namespaced and either cleaned up or explicitly recorded to avoid polluting the shared backend state over repeated runs
 
 ## Success Criteria
 
