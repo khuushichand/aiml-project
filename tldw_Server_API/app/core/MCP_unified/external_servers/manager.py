@@ -11,7 +11,12 @@ from typing import Any, Awaitable, Callable, Optional
 from loguru import logger
 
 from .config_schema import ExternalMCPServerConfig, load_external_server_registry
-from .transports import ExternalMCPTransportAdapter, ExternalToolCallResult, build_transport_adapter
+from .transports import (
+    BrokeredExternalCredential,
+    ExternalMCPTransportAdapter,
+    ExternalToolCallResult,
+    build_transport_adapter,
+)
 
 
 @dataclass(slots=True)
@@ -105,12 +110,20 @@ class ExternalServerManager:
         self._discovery_errors: dict[str, str] = {}
         self._telemetry: dict[str, ExternalServerTelemetry] = {}
         self._initialized = False
+        self._credential_broker: Callable[..., Awaitable[BrokeredExternalCredential | None] | BrokeredExternalCredential | None] | None = None
 
     def with_server_loader(
         self,
         server_loader: Callable[[], Awaitable[list[ExternalMCPServerConfig]] | list[ExternalMCPServerConfig]],
     ) -> "ExternalServerManager":
         self._server_loader = server_loader
+        return self
+
+    def with_credential_broker(
+        self,
+        credential_broker: Callable[..., Awaitable[BrokeredExternalCredential | None] | BrokeredExternalCredential | None],
+    ) -> "ExternalServerManager":
+        self._credential_broker = credential_broker
         return self
 
     @property
@@ -298,13 +311,20 @@ class ExternalServerManager:
             upstream_tool_name=upstream_tool_name,
             call_args=call_args,
             context=context,
+            runtime_auth=await self._resolve_runtime_auth(
+                server_id=server_id,
+                upstream_tool_name=upstream_tool_name,
+                call_args=call_args,
+                context=context,
+            ),
         )
+        metadata = dict(result.metadata or {})
         return {
             "content": result.content,
             "is_error": result.is_error,
             "server_id": server_id,
             "upstream_tool": upstream_tool_name,
-            "metadata": result.metadata,
+            "metadata": metadata,
         }
 
     @staticmethod
@@ -410,12 +430,23 @@ class ExternalServerManager:
         upstream_tool_name: str,
         call_args: dict[str, Any],
         context: Optional[Any],
+        runtime_auth: BrokeredExternalCredential | None,
     ) -> ExternalToolCallResult:
         telemetry = self._get_telemetry(server_id)
         telemetry.call_attempts += 1
         started_at = time.perf_counter()
         try:
-            result = await adapter.call_tool(upstream_tool_name, call_args, context=context)
+            result = await adapter.call_tool(
+                upstream_tool_name,
+                call_args,
+                context=context,
+                runtime_auth=runtime_auth,
+            )
+            if runtime_auth is not None:
+                metadata = dict(result.metadata or {})
+                metadata.update(self._public_runtime_auth_metadata(runtime_auth))
+                metadata["credential_injection"] = self._summarize_runtime_auth(runtime_auth)
+                result.metadata = metadata
             telemetry.call_successes += 1
             if result.is_error:
                 telemetry.call_upstream_errors += 1
@@ -443,6 +474,20 @@ class ExternalServerManager:
         telemetry.last_error = message
 
     @staticmethod
+    def _public_runtime_auth_metadata(
+        runtime_auth: BrokeredExternalCredential,
+    ) -> dict[str, Any]:
+        metadata = runtime_auth.metadata or {}
+        if not isinstance(metadata, dict):
+            return {}
+        public: dict[str, Any] = {}
+        for key in ("credential_mode", "credential_source"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                public[key] = value
+        return public
+
+    @staticmethod
     def _extract_error_text(result: ExternalToolCallResult) -> Optional[str]:
         content = result.content
         if isinstance(content, str):
@@ -464,6 +509,42 @@ class ExternalServerManager:
                     if stripped:
                         return stripped
         return None
+
+    async def _resolve_runtime_auth(
+        self,
+        *,
+        server_id: str,
+        upstream_tool_name: str,
+        call_args: dict[str, Any],
+        context: Optional[Any],
+    ) -> BrokeredExternalCredential | None:
+        if self._credential_broker is None:
+            return None
+        broker_result = self._credential_broker(
+            server_id=server_id,
+            tool_name=upstream_tool_name,
+            arguments=dict(call_args or {}),
+            context=context,
+        )
+        resolved = await broker_result if inspect.isawaitable(broker_result) else broker_result
+        if resolved is None:
+            return None
+        if isinstance(resolved, BrokeredExternalCredential):
+            return resolved
+        if isinstance(resolved, dict):
+            return BrokeredExternalCredential(
+                headers=dict(resolved.get("headers") or {}),
+                env=dict(resolved.get("env") or {}),
+                metadata=dict(resolved.get("metadata") or {}),
+            )
+        raise TypeError("credential broker must return BrokeredExternalCredential, dict, or None")
+
+    @staticmethod
+    def _summarize_runtime_auth(runtime_auth: BrokeredExternalCredential) -> dict[str, Any]:
+        return {
+            "headers": sorted(str(name) for name in runtime_auth.headers.keys()),
+            "env": sorted(str(name) for name in runtime_auth.env.keys()),
+        }
 
     @staticmethod
     def _elapsed_ms(started_at: float) -> float:

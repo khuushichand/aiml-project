@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import smtplib
+import re
 from datetime import datetime, timezone
 from email import encoders
 from email.mime.base import MIMEBase
@@ -216,6 +217,61 @@ Or copy this token into the extension:
 If you did not request this, you can ignore this email.
 """
     },
+    "admin_reauth": {
+        "subject": "Confirm admin action - {{ app_name }}",
+        "html": """
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #7c2d12; color: white; padding: 20px; text-align: center; }
+        .content { background-color: #f8f9fa; padding: 30px; margin-top: 20px; }
+        .button { display: inline-block; padding: 12px 30px; background-color: #b45309;
+                  color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+        .code-box { background: #fff; border: 1px solid #e5e7eb; padding: 12px;
+                    margin: 16px 0; border-radius: 6px; font-family: monospace; word-break: break-all; }
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6;
+                  font-size: 0.9em; color: #6c757d; }
+        .note { background-color: #fff7ed; border: 1px solid #fdba74; padding: 10px;
+                margin: 16px 0; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ app_name }}</h1>
+        </div>
+        <div class="content">
+            <h2>Confirm this admin action</h2>
+            <p>Hello{{ user_label }},</p>
+            <p>Use the link below to complete your admin reauthentication. This link expires in {{ expiry_minutes }} minute(s).</p>
+            <center>
+                <a href="{{ reauth_link }}" class="button">Confirm admin action</a>
+            </center>
+            <div class="note">
+                <strong>Security notice:</strong> This step-up token only authorizes a high-risk admin action. If you did not request this, ignore the email.
+            </div>
+        </div>
+        <div class="footer">
+            <p>This is an automated message from {{ app_name }}.</p>
+        </div>
+    </div>
+</body>
+</html>
+""",
+        "text": """
+Confirm admin action in {{ app_name }}
+
+Hello{{ user_label }},
+
+Use this link to complete your admin reauthentication (expires in {{ expiry_minutes }} minute(s)):
+{{ reauth_link }}
+
+If you did not request this, ignore this email.
+"""
+    },
     "mfa_enabled": {
         "subject": "Two-Factor Authentication Enabled - {{ app_name }}",
         "html": """
@@ -334,7 +390,9 @@ class EmailService:
         html_body: str,
         text_body: Optional[str] = None,
         from_email: Optional[str] = None,
-        attachments: Optional[list[dict[str, Any]]] = None
+        attachments: Optional[list[dict[str, Any]]] = None,
+        *,
+        redact_mock_tokens: bool = False,
     ) -> bool:
         """
         Send an email
@@ -346,6 +404,7 @@ class EmailService:
             text_body: Plain text version (optional)
             from_email: Sender email (uses default if not provided)
             attachments: List of attachments
+            redact_mock_tokens: Whether mock transport should redact token-bearing content
 
         Returns:
             True if email was sent successfully
@@ -354,7 +413,13 @@ class EmailService:
 
         if self.provider == "mock":
             return await self._send_mock_email(
-                to_email, subject, html_body, text_body, from_email, attachments
+                to_email,
+                subject,
+                html_body,
+                text_body,
+                from_email,
+                attachments,
+                redact_mock_tokens=redact_mock_tokens,
             )
         elif self.provider == "smtp":
             return await self._send_smtp_email(
@@ -371,12 +436,20 @@ class EmailService:
         html_body: str,
         text_body: Optional[str],
         from_email: str,
-        attachments: Optional[list[dict[str, Any]]]
+        attachments: Optional[list[dict[str, Any]]],
+        *,
+        redact_mock_tokens: bool = False,
     ) -> bool:
         """Send mock email for development/testing"""
 
         timestamp = datetime.now(timezone.utc).isoformat()
         email_id = f"{timestamp}_{to_email.replace('@', '_at_')}"
+        stored_html_body = self._redact_mock_email_body(html_body) if redact_mock_tokens else html_body
+        stored_text_body = (
+            self._redact_mock_email_body(text_body or "")
+            if redact_mock_tokens
+            else (text_body or "")
+        )
 
         # Create email data structure
         email_data = {
@@ -385,8 +458,8 @@ class EmailService:
             "from": from_email,
             "to": to_email,
             "subject": subject,
-            "html_body": html_body,
-            "text_body": text_body or "",
+            "html_body": stored_html_body,
+            "text_body": stored_text_body,
             "attachments": len(attachments) if attachments else 0,
             "provider": "mock"
         }
@@ -400,11 +473,14 @@ class EmailService:
             logger.info(f"To: {to_email}")
             logger.info(f"Subject: {subject}")
             logger.info("-" * 80)
-            if text_body:
+            if stored_text_body:
                 logger.info("Text Body:")
-                logger.info(text_body[:500] + ("..." if len(text_body) > 500 else ""))
+                logger.info(
+                    stored_text_body[:500]
+                    + ("..." if len(stored_text_body) > 500 else "")
+                )
             logger.info("-" * 80)
-            logger.info(f"HTML Body Length: {len(html_body)} characters")
+            logger.info(f"HTML Body Length: {len(stored_html_body)} characters")
             if attachments:
                 logger.info(f"Attachments: {len(attachments)}")
             logger.info("=" * 80)
@@ -418,7 +494,7 @@ class EmailService:
             # Also save HTML for viewing
             html_path = self.mock_file_path / f"{email_id}.html"
             with open(html_path, "w") as f:
-                f.write(html_body)
+                f.write(stored_html_body)
 
             logger.debug(f"Mock email saved to: {file_path}")
 
@@ -426,6 +502,21 @@ class EmailService:
         await asyncio.sleep(0.1)
 
         return True
+
+    @staticmethod
+    def _redact_mock_email_body(body: str) -> str:
+        """Redact token-bearing content before mock transport persists it."""
+        redacted = re.sub(
+            r"([?&]token=)([^&\"'\\s<]+)",
+            r"\1[REDACTED]",
+            body,
+        )
+        redacted = re.sub(
+            r"(?im)(manual token:\s*)(\S+)",
+            r"\1[REDACTED]",
+            redacted,
+        )
+        return redacted
 
     async def _send_smtp_email(
         self,
@@ -559,11 +650,15 @@ class EmailService:
         magic_token: str,
         expires_in_minutes: int,
         username: Optional[str] = None,
-        base_url: Optional[str] = None
+        base_url: Optional[str] = None,
+        link_path: Optional[str] = None,
     ) -> bool:
         """Send magic link sign-in email."""
         base_url = base_url or os.getenv("BASE_URL", "http://localhost:8000")
-        magic_link = f"{base_url}/magic-link?token={magic_token}"
+        normalized_path = str(link_path or "/magic-link").strip() or "/magic-link"
+        if not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+        magic_link = f"{base_url.rstrip('/')}{normalized_path}?token={magic_token}"
 
         user_label = f" {username}" if username else ""
         template_data = {
@@ -582,6 +677,43 @@ class EmailService:
         subject = Template(EMAIL_TEMPLATES["magic_link"]["subject"]).render(**template_data)
 
         return await self.send_email(to_email, subject, html_body, text_body)
+
+    async def send_admin_reauth_email(
+        self,
+        *,
+        to_email: str,
+        reauth_token: str,
+        expires_in_minutes: int,
+        username: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> bool:
+        """Send a dedicated admin reauthentication email."""
+        base_url = base_url or os.getenv("BASE_URL", "http://localhost:8000")
+        reauth_link = f"{base_url.rstrip('/')}/admin/reauth?token={reauth_token}"
+
+        user_label = f" {username}" if username else ""
+        template_data = {
+            "app_name": self.app_name,
+            "user_label": user_label,
+            "reauth_link": reauth_link,
+            "reauth_token": reauth_token,
+            "expiry_minutes": expires_in_minutes,
+        }
+
+        html_template = Template(EMAIL_TEMPLATES["admin_reauth"]["html"])
+        text_template = Template(EMAIL_TEMPLATES["admin_reauth"]["text"])
+
+        html_body = html_template.render(**template_data)
+        text_body = text_template.render(**template_data)
+        subject = Template(EMAIL_TEMPLATES["admin_reauth"]["subject"]).render(**template_data)
+
+        return await self.send_email(
+            to_email,
+            subject,
+            html_body,
+            text_body,
+            redact_mock_tokens=True,
+        )
 
     async def send_mfa_enabled_email(
         self,
