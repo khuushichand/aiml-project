@@ -11,7 +11,12 @@ from typing import Any, Awaitable, Callable, Optional
 from loguru import logger
 
 from ..config_schema import ExternalMCPServerConfig
-from .base import ExternalMCPTransportAdapter, ExternalToolCallResult, ExternalToolDefinition
+from .base import (
+    BrokeredExternalCredential,
+    ExternalMCPTransportAdapter,
+    ExternalToolCallResult,
+    ExternalToolDefinition,
+)
 
 _MCP_PROTOCOL_VERSION = "2024-11-05"
 _CLIENT_INFO = {"name": "tldw_external_federation", "version": "0.1.0"}
@@ -168,8 +173,10 @@ class WebSocketExternalMCPAdapter(ExternalMCPTransportAdapter):
         tool_name: str,
         arguments: dict[str, Any],
         context: Optional[Any] = None,
+        runtime_auth: BrokeredExternalCredential | None = None,
     ) -> ExternalToolCallResult:
         del context  # context is reserved for future adapter-aware policy hooks
+        del runtime_auth  # runtime auth is resolved by the manager and must not persist on the adapter
         await self._ensure_connected()
         response = await self._jsonrpc_request(
             method="tools/call",

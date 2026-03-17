@@ -38,11 +38,14 @@ class ExternalFederationModule(BaseModule):
 
         manager = ExternalServerManager(config_path=config_path)
         custom_loader = self.config.settings.get("external_server_loader")
+        custom_broker = self.config.settings.get("external_credential_broker")
         if callable(custom_loader):
             manager = manager.with_server_loader(custom_loader)
         else:
             registry_service = await get_mcp_hub_external_registry_service()
             manager = manager.with_server_loader(registry_service.list_runtime_servers)
+        if callable(custom_broker):
+            manager = manager.with_credential_broker(custom_broker)
         self._manager = manager
         await self._manager.initialize()
         logger.info(f"External federation module initialized with managed registry; legacy inventory path: {config_path}")

@@ -29,6 +29,15 @@ class ExternalToolCallResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class BrokeredExternalCredential:
+    """Ephemeral per-call auth material resolved outside long-lived adapter state."""
+
+    headers: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 class ExternalMCPTransportAdapter(ABC):
     """Adapter contract for connecting to and invoking external MCP servers."""
 
@@ -62,5 +71,6 @@ class ExternalMCPTransportAdapter(ABC):
         tool_name: str,
         arguments: dict[str, Any],
         context: Optional["RequestContext"] = None,
+        runtime_auth: BrokeredExternalCredential | None = None,
     ) -> ExternalToolCallResult:
         """Execute a tool on the external server and normalize the result."""

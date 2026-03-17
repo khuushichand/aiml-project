@@ -13,7 +13,12 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import (
 )
 
 from ..config_schema import ExternalMCPServerConfig
-from .base import ExternalMCPTransportAdapter, ExternalToolCallResult, ExternalToolDefinition
+from .base import (
+    BrokeredExternalCredential,
+    ExternalMCPTransportAdapter,
+    ExternalToolCallResult,
+    ExternalToolDefinition,
+)
 
 _MCP_PROTOCOL_VERSION = "2024-11-05"
 _CLIENT_INFO = {"name": "tldw_external_federation", "version": "0.1.0"}
@@ -133,8 +138,10 @@ class StdioExternalMCPAdapter(ExternalMCPTransportAdapter):
         tool_name: str,
         arguments: dict[str, Any],
         context: Optional[Any] = None,
+        runtime_auth: BrokeredExternalCredential | None = None,
     ) -> ExternalToolCallResult:
         del context  # Reserved for future policy hooks
+        del runtime_auth  # runtime auth is resolved by the manager and must not persist on the adapter
         await self._ensure_connected()
         try:
             response = await self._request(
