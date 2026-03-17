@@ -305,7 +305,7 @@ class TestTemplateInitialization:
         assert academic["is_builtin"] is True
         assert "research" in academic["tags"]
 
-    def test_initialize_chunking_templates_uses_factory_and_closes_owned_db(self, monkeypatch):
+    def test_initialize_chunking_templates_uses_managed_media_database_for_owned_db(self, monkeypatch):
         events = []
 
         class FakeDb:
@@ -313,8 +313,17 @@ class TestTemplateInitialization:
                 events.append(("seed", templates))
                 return len(templates)
 
-            def close_connection(self):
-                events.append("close")
+        class FakeManagedDbContext:
+            def __init__(self, **kwargs):
+                events.append(("managed", kwargs))
+
+            def __enter__(self):
+                events.append("enter")
+                return FakeDb()
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+                return False
 
         monkeypatch.setattr(
             template_init,
@@ -323,8 +332,8 @@ class TestTemplateInitialization:
         )
         monkeypatch.setattr(
             template_init,
-            "create_media_database",
-            lambda client_id, db_path=None, **_kwargs: events.append(("create", client_id, db_path)) or FakeDb(),
+            "managed_media_database",
+            lambda client_id, **kwargs: FakeManagedDbContext(client_id=client_id, **kwargs),
         )
 
         count = template_init.initialize_chunking_templates(
@@ -334,12 +343,13 @@ class TestTemplateInitialization:
 
         assert count == 1
         assert events == [
-            ("create", "template-test", "/tmp/chunking-templates.db"),
+            ("managed", {"client_id": "template-test", "db_path": "/tmp/chunking-templates.db", "initialize": False}),
+            "enter",
             ("seed", [{"name": "built-in", "template": {"name": "built-in"}}]),
-            "close",
+            "exit",
         ]
 
-    def test_update_builtin_templates_uses_factory_and_closes_owned_db(self, monkeypatch):
+    def test_update_builtin_templates_uses_managed_media_database_for_owned_db(self, monkeypatch):
         events = []
 
         class FakeDb:
@@ -355,8 +365,17 @@ class TestTemplateInitialization:
                 events.append(("update", kwargs["name"]))
                 return True
 
-            def close_connection(self):
-                events.append("close")
+        class FakeManagedDbContext:
+            def __init__(self, **kwargs):
+                events.append(("managed", kwargs))
+
+            def __enter__(self):
+                events.append("enter")
+                return FakeDb()
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+                return False
 
         monkeypatch.setattr(
             template_init,
@@ -372,8 +391,8 @@ class TestTemplateInitialization:
         )
         monkeypatch.setattr(
             template_init,
-            "create_media_database",
-            lambda client_id, db_path=None, **_kwargs: events.append(("create", client_id, db_path)) or FakeDb(),
+            "managed_media_database",
+            lambda client_id, **kwargs: FakeManagedDbContext(client_id=client_id, **kwargs),
         )
 
         count = template_init.update_builtin_templates(
@@ -383,13 +402,14 @@ class TestTemplateInitialization:
 
         assert count == 1
         assert events == [
-            ("create", "template-test", "/tmp/chunking-templates.db"),
+            ("managed", {"client_id": "template-test", "db_path": "/tmp/chunking-templates.db", "initialize": False}),
+            "enter",
             ("get", "built-in"),
             ("update", "built-in"),
-            "close",
+            "exit",
         ]
 
-    def test_ensure_templates_initialized_uses_factory_for_existing_check_and_closes(self, monkeypatch):
+    def test_ensure_templates_initialized_uses_managed_media_database_for_existing_check(self, monkeypatch):
         events = []
 
         class FakeDb:
@@ -397,23 +417,33 @@ class TestTemplateInitialization:
                 events.append(("list", kwargs))
                 return [{"name": "built-in"}]
 
-            def close_connection(self):
-                events.append("close")
+        class FakeManagedDbContext:
+            def __init__(self, **kwargs):
+                events.append(("managed", kwargs))
+
+            def __enter__(self):
+                events.append("enter")
+                return FakeDb()
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+                return False
 
         monkeypatch.setattr(template_init, "initialize_chunking_templates", lambda **_kwargs: 0)
         monkeypatch.setattr(
             template_init,
-            "create_media_database",
-            lambda client_id, db_path=None, **_kwargs: events.append(("create", client_id, db_path)) or FakeDb(),
+            "managed_media_database",
+            lambda client_id, **kwargs: FakeManagedDbContext(client_id=client_id, **kwargs),
         )
 
         result = template_init.ensure_templates_initialized(db_path="/tmp/chunking-templates.db")
 
         assert result is True
         assert events == [
-            ("create", "system", "/tmp/chunking-templates.db"),
+            ("managed", {"client_id": "system", "db_path": "/tmp/chunking-templates.db", "initialize": False}),
+            "enter",
             ("list", {"include_builtin": True, "include_custom": False}),
-            "close",
+            "exit",
         ]
 
 

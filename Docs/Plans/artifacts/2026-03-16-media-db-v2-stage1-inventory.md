@@ -4,14 +4,15 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 8
-- Operational `create_media_database(...)` call sites in app code: 18
-- Operational `managed_media_database(...)` call sites in app code: 37
-- `Media_DB_v2` references in app code: 136
+- Raw `MediaDatabase(...)` constructors in app code: 7
+- Operational `create_media_database(...)` call sites in app code: 10
+- Operational `managed_media_database(...)` call sites in app code: 34
+- `Media_DB_v2` references in app code: 135
 
 Notes:
 
 - The operational counts exclude helper definitions in `media_db/api.py`, `media_db/runtime/factory.py`, `DB_Manager.py`, and README examples.
+- The normalized counts also exclude test modules located under `app/**/tests`.
 - The `Media_DB_v2` reference count is not all migration debt. A significant fraction is still compatibility-oriented app boundary code.
 
 ## Classification Rubric
@@ -29,6 +30,7 @@ Notes:
 | `app/services/claims_alerts_scheduler.py` | 2 | `MOVE_MANAGED` already satisfied | Correct backend-aware scheduler pattern with suppressed init/close failures |
 | `app/services/claims_review_metrics_scheduler.py` | 2 | `MOVE_MANAGED` already satisfied | Same pattern as alerts scheduler |
 | `app/api/v1/endpoints/research.py` | 1 | `MOVE_MANAGED` already satisfied | Deprecated arXiv ingest helper now scopes its DB write through the managed helper with `initialize=False` |
+| `app/core/Chunking/template_initialization.py` | 1 | `MOVE_MANAGED` already satisfied | Built-in template initialization now centralizes owned DB lifecycle through the managed helper while preserving caller-provided DB ownership |
 | `app/services/document_processing_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local document persistence now scopes its DB write through the managed helper with `initialize=False` |
 | `app/core/Web_Scraping/Article_Extractor_Lib.py` | 1 | `MOVE_MANAGED` already satisfied | Local article ingest helper now scopes its DB write through the managed helper with `initialize=False` |
 | `app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py` | 1 | `MOVE_MANAGED` already satisfied | Local XML import now scopes its DB write through the managed helper with `initialize=False` |
@@ -58,17 +60,16 @@ Notes:
 
 | File | Count | Current Pattern | Classification | Notes |
 | --- | ---: | --- | --- | --- |
-| `app/core/Ingestion_Media_Processing/persistence.py` | 8 | repeated local worker/pre-check DB creation | `NEW_HELPER` | highest-priority lifecycle cleanup hotspot |
+| `app/core/Ingestion_Media_Processing/persistence.py` | 1 | centralized worker-session helper | `NEW_HELPER` already satisfied | `_with_media_db_session(...)` is now the single factory-owned entry point |
 | `app/services/media_ingest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | owner is the caller, not the helper |
 | `app/services/connectors_worker.py` | 1 | connector-owned per-sync DB helper through shared factory | `MOVE_FACTORY` already satisfied | `_process_import_job(...)` now opens via `_create_connector_media_db(...)` and closes on every exit path |
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | caller still owns sink DB lifetime |
 | `app/services/tts_history_cleanup_service.py` | 1 | local cleanup DB helper wraps probe and per-user loops | `NEW_HELPER` already satisfied | preserves explicit close behavior while removing raw constructors |
-| `app/core/Workflows/adapters/knowledge/crud.py` | 2 | per-user lazy import path | `NEW_HELPER` | currently calls `create_media_database(user_id=...)`; signature mismatch hazard |
+| `app/core/Workflows/adapters/knowledge/crud.py` | 1 | workflow-owned per-user helper | `NEW_HELPER` | signature mismatch is fixed; remaining helper should be revisited only if workflow DB ownership changes |
 | `app/core/Data_Tables/jobs_worker.py` | 1 | cached per-user DB owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Evaluations/embeddings_abtest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | explicit owner-controlled lifetime is fine |
 | `app/core/DB_Management/Users_DB.py` | 1 | factory wrapper returns DB instance | `KEEP_RAW` | wrapper boundary, not local scope |
 | `app/core/TTS/tts_jobs_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | `_handle_tts_job(...)` still owns close behavior |
-| `app/core/Chunking/template_initialization.py` | 1 | internal helper opens via shared factory and closes owned DBs | `MOVE_FACTORY` already satisfied | preserves caller-provided DB ownership while closing internal startup DBs |
 
 ## Raw `MediaDatabase(...)` Constructor Inventory
 
@@ -165,5 +166,5 @@ Recommendation:
 ## Recommended Next Execution Order
 
 1. Revisit long-lived owners and explicitly mark which raw constructors remain acceptable.
-2. Collapse the remaining `persistence.py` factory hotspot behind a dedicated helper.
+2. Review the remaining owner-controlled factory helpers and convert only true local-scope leftovers.
 3. Narrow the `Media_DB_v2` boundary imports once lifecycle helper policy is stable.
