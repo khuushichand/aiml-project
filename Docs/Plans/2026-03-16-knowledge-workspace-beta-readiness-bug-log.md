@@ -210,11 +210,57 @@
   - Added a deterministic route-level Playwright case that hydrates `/knowledge/thread/source-thread-1`, clicks `Start Branch`, asserts the child-thread creation payload includes `parent_conversation_id` and `forked_from_message_id`, and verifies the UI rehydrates to the seeded branch turn.
   - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1` => `1 passed (6.6s)`
 
+### WP-002: Workspace offline E2E bypass flag was ignored, so non-critical bootstrap failures spawned blocking connection modals
+
+- Status: Resolved as suite + layout hardening
+- Route: `/workspace-playground`
+- Feature: deterministic workspace coverage while the local backend is unavailable or only partially stubbed
+- Reproduction:
+  1. Seed auth through the workflow helpers, which set `__tldw_test_bypass=true`
+  2. Open `/workspace-playground` without stubbing every secondary bootstrap endpoint
+  3. Wait for a request like `/api/v1/llm/models/metadata`, `/api/v1/chat/commands`, or `/api/v1/audio/voices/catalog?provider=kokoro` to fail
+  4. Observe that `Can't reach your tldw server` modal still appears and blocks the Add Sources button
+- Evidence:
+  - `apps/tldw-frontend/e2e/utils/helpers.ts:45`
+  - `apps/tldw-frontend/components/layout/WebLayout.tsx:123`
+  - `apps/tldw-frontend/e2e/utils/page-objects/WorkspacePlaygroundPage.ts:53`
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts:13`
+- Suspected layer: dead test-bypass wiring in the web layout plus deterministic suite bootstrap gaps
+- Why it matters: the workspace mock suite could fail for unrelated connection-modal reasons before reaching the user flow under test, which made the Add Sources surface look less stable than it actually was
+- Resolution:
+  - Wired `WebLayout` to honor `__tldw_test_bypass` when backend-unreachable events fire.
+  - Narrowed the workspace page-object backdrop wait to visible masks only.
+  - Stubbed the workspace mock suite’s non-critical model/slash-command bootstrap endpoints so deterministic route tests stop depending on incidental backend availability.
+  - Verification:
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `6 passed (12.8s)`
+    - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `30 passed (1.5m)`
+
+### WP-003: Workspace add-source coverage was green without exercising the Add Sources UI
+
+- Status: Resolved as test hardening
+- Route: `/workspace-playground`
+- Feature: URL ingestion and ready-source selection from the Add Sources modal
+- Reproduction:
+  1. Review the prior workspace workflow coverage
+  2. Observe that source-selection proof depended on `seedSources()` instead of adding sources through `URL` or `My Media`
+  3. Notice that a green run therefore did not prove the modal tabs, tag updates, insertion state, or ready-source selection wiring
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts:132`
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts:208`
+  - `Docs/Plans/2026-03-16-knowledge-workspace-beta-readiness-audit-matrix.md:53`
+- Suspected layer: audit gap rather than a confirmed product defect
+- Why it matters: beta readiness would have been overstated for one of the most obvious workspace entry paths, especially around source ingestion and grounded-source selection
+- Resolution:
+  - Added deterministic route-level Playwright coverage for the `URL` tab that intercepts `/api/v1/media/add`, verifies workspace keyword tagging, and asserts the inserted source renders in `Processing` state with selection disabled.
+  - Added deterministic route-level Playwright coverage for the `My Media` tab that adds a ready source from the server list and selects it from the real workspace sources pane without store mutation.
+  - Verification:
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1` => `2 passed (9.2s)`
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `6 passed (12.8s)`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
-- Current `/knowledge` offline-protected summary after repairs: `9 passed`, `13 skipped`, `0 failed`
-- Last full live-backed `/knowledge` summary before the API listener dropped: `17 passed`, `0 failed`
+- Current `/knowledge` live-backed summary after repairs: `22 passed`, `0 failed`
 - Current `/knowledge` verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
 - Current `/knowledge` failure-cluster verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "treats whitespace-only answers as no generated answer|should open settings panel|should switch between presets|should toggle expert mode|should open history sidebar|should start new search with Cmd\\+K" --reporter=line --workers=1`
 - Current `/knowledge` failure-cluster verification summary: `1 passed`, `5 skipped`
@@ -228,8 +274,11 @@
 - Current `/knowledge` shared-permalink verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` branch verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
 - Current `/knowledge` branch verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` deterministic summary after repairs: `6 passed`, `0 failed`
+- Current `/workspace-playground` targeted add-source verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1`
+- Current `/workspace-playground` targeted add-source verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `2 passed`, `0 failed`
-- Last three-spec audit rerun before the later `/knowledge` additions: `24 passed`, `0 failed`
+- Current three-spec audit rerun: `30 passed`, `0 failed`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
-- Live-backend caveat for the current session: the local API listener later dropped, and direct restart attempts in the worktree hit missing-env then OpenMP shared-memory startup failures; the handoff, citation, export/share, shared-permalink, and branch additions were therefore verified deterministically, and the current full `/knowledge` rerun reflects offline-protected pass/skip behavior rather than a fresh live rerun
+- Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly

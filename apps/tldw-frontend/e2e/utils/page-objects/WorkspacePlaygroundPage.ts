@@ -53,7 +53,7 @@ export class WorkspacePlaygroundPage {
   private async waitForModalBackdropsToClear(): Promise<void> {
     await expect(
       this.page.locator(
-        "div.fixed.inset-0.z-50.bg-black\\/50, div.fixed.inset-0.z-50.backdrop-blur-sm, .ant-modal-mask"
+        "div.fixed.inset-0.z-50.bg-black\\/50:visible, div.fixed.inset-0.z-50.backdrop-blur-sm:visible, .ant-modal-mask:visible"
       )
     ).toHaveCount(0, { timeout: 10_000 })
   }
