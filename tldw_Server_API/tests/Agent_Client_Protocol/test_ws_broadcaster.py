@@ -20,6 +20,16 @@ def _make_event(kind: AgentEventKind, session_id: str = "sess-1") -> AgentEvent:
     return AgentEvent(session_id=session_id, kind=kind, payload={"data": kind.value})
 
 
+async def _wait_for(predicate, *, timeout: float = 2.0, interval: float = 0.02):
+    """Poll *predicate* until it returns True or *timeout* elapses."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError(f"Timed out waiting for predicate after {timeout}s")
+
+
 @pytest.mark.asyncio
 async def test_ws_broadcaster_delivers_events_full_verbosity():
     """All events should be delivered when verbosity is 'full'."""
@@ -34,12 +44,10 @@ async def test_ws_broadcaster_delivers_events_full_verbosity():
     await broadcaster.start(bus)
     broadcaster.add_connection("conn-1", fake_send, verbosity="full")
 
-    # Publish several event kinds
     for kind in (AgentEventKind.THINKING, AgentEventKind.TOOL_CALL, AgentEventKind.COMPLETION):
         await bus.publish(_make_event(kind))
 
-    # Give the consume loop time to process
-    await asyncio.sleep(0.1)
+    await _wait_for(lambda: len(received) >= 3)
     await broadcaster.stop()
 
     assert len(received) == 3
@@ -67,10 +75,10 @@ async def test_ws_broadcaster_summary_filters_thinking():
     await bus.publish(_make_event(AgentEventKind.COMPLETION))
     await bus.publish(_make_event(AgentEventKind.ERROR))
 
-    await asyncio.sleep(0.1)
+    # Wait for the 2 events that should pass (completion + error)
+    await _wait_for(lambda: len(received) >= 2)
     await broadcaster.stop()
 
-    # Only completion and error should pass through summary filter
     kinds = [e["kind"] for e in received]
     assert "thinking" not in kinds
     assert "tool_call" not in kinds
@@ -93,11 +101,12 @@ async def test_ws_broadcaster_remove_connection():
     broadcaster.add_connection("conn-1", fake_send, verbosity="full")
 
     await bus.publish(_make_event(AgentEventKind.THINKING))
-    await asyncio.sleep(0.05)
+    await _wait_for(lambda: len(received) >= 1)
 
     broadcaster.remove_connection("conn-1")
 
     await bus.publish(_make_event(AgentEventKind.COMPLETION))
+    # Give a brief window to confirm no more events arrive
     await asyncio.sleep(0.05)
     await broadcaster.stop()
 
@@ -121,15 +130,18 @@ async def test_ws_broadcaster_change_verbosity():
 
     # Thinking should be filtered at summary level
     await bus.publish(_make_event(AgentEventKind.THINKING))
-    await asyncio.sleep(0.05)
+    # Publish a summary-visible event to confirm the bus is processing
+    await bus.publish(_make_event(AgentEventKind.COMPLETION))
+    await _wait_for(lambda: len(received) >= 1)
 
     # Switch to full verbosity
     broadcaster.set_verbosity("conn-1", "full")
 
     await bus.publish(_make_event(AgentEventKind.THINKING))
-    await asyncio.sleep(0.05)
+    await _wait_for(lambda: len(received) >= 2)
     await broadcaster.stop()
 
-    # Only the second thinking event (after switching to full) should be received
-    assert len(received) == 1
-    assert received[0]["kind"] == "thinking"
+    # First received should be completion (thinking was filtered at summary)
+    # Second should be thinking (after switching to full)
+    assert received[0]["kind"] == "completion"
+    assert received[1]["kind"] == "thinking"

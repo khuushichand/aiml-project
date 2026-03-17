@@ -94,7 +94,8 @@ class AuditLogger(EventConsumer):
 
     async def _consume_loop(self) -> None:
         """Read events from the queue, dispatching and flushing on interval."""
-        assert self._queue is not None  # noqa: S101
+        if self._queue is None:
+            return
         while self._running:
             try:
                 event = await asyncio.wait_for(

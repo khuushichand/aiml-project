@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from loguru import logger
 
@@ -91,17 +91,21 @@ class WSBroadcaster(EventConsumer):
     # ------------------------------------------------------------------ #
 
     async def on_event(self, event: AgentEvent) -> None:
-        """Fan-out *event* to all connections that pass verbosity filter."""
-        msg: str | None = None  # lazily serialized
+        """Fan-out *event* to all connections that pass verbosity filter.
 
-        # Iterate over a snapshot so removals during iteration are safe
-        for info in list(self._connections.values()):
-            if not _passes_filter(event.kind, info.verbosity):
-                continue
+        Sends are dispatched concurrently so one slow connection does not
+        block delivery to others.
+        """
+        targets = [
+            info for info in self._connections.values()
+            if _passes_filter(event.kind, info.verbosity)
+        ]
+        if not targets:
+            return
 
-            if msg is None:
-                msg = json.dumps(event.to_dict())
+        msg = json.dumps(event.to_dict())
 
+        async def _safe_send(info: _ConnectionInfo) -> None:
             try:
                 await info.send_callback(msg)
             except Exception:
@@ -110,6 +114,8 @@ class WSBroadcaster(EventConsumer):
                     info.conn_id,
                 )
                 self.remove_connection(info.conn_id)
+
+        await asyncio.gather(*(_safe_send(info) for info in targets))
 
     async def start(self, bus: SessionEventBus) -> None:
         """Subscribe to *bus* and spawn the consume-loop task."""

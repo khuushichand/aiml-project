@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent
 
 
 @dataclass
@@ -19,7 +22,7 @@ class PromptOptions:
 class AdapterConfig:
     """Configuration handed to an adapter on connect()."""
 
-    event_callback: Callable[..., Awaitable[None]]
+    event_callback: Callable[["AgentEvent"], Awaitable[None]]
     session_id: str
     protocol_config: dict[str, Any] = field(default_factory=dict)
 

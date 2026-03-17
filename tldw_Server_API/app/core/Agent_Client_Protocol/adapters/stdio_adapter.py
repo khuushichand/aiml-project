@@ -100,7 +100,11 @@ class StdioAdapter(ProtocolAdapter):
             elif msg_type == "tool_result":
                 kind = AgentEventKind.TOOL_RESULT
                 payload = {
-                    k: v for k, v in params.items() if k != "type"
+                    "tool_id": params.get("tool_id", ""),
+                    "tool_name": params.get("tool_name", ""),
+                    "output": params.get("output", ""),
+                    "is_error": params.get("is_error", False),
+                    "duration_ms": params.get("duration_ms", 0),
                 }
         elif method == "update":
             if msg_type == "tool_use":
@@ -115,7 +119,11 @@ class StdioAdapter(ProtocolAdapter):
             elif msg_type == "tool_result":
                 kind = AgentEventKind.TOOL_RESULT
                 payload = {
-                    k: v for k, v in params.items() if k != "type"
+                    "tool_id": params.get("tool_id", ""),
+                    "tool_name": params.get("tool_name", ""),
+                    "output": params.get("output", ""),
+                    "is_error": params.get("is_error", False),
+                    "duration_ms": params.get("duration_ms", 0),
                 }
             elif msg_type == "thinking":
                 kind = AgentEventKind.THINKING
@@ -126,7 +134,11 @@ class StdioAdapter(ProtocolAdapter):
             elif msg_type == "permission_request":
                 kind = AgentEventKind.PERMISSION_REQUEST
                 payload = {
-                    k: v for k, v in params.items() if k != "type"
+                    "request_id": params.get("request_id", ""),
+                    "tool_name": params.get("tool_name", ""),
+                    "arguments": params.get("arguments", {}),
+                    "tier": params.get("tier", "batch"),
+                    "timeout_sec": params.get("timeout_sec", 300),
                 }
         elif method == "error":
             kind = AgentEventKind.ERROR
