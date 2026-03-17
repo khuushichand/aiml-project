@@ -4,7 +4,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.repos.managed_secret_refs_repo import (
+    ManagedSecretRefsRepo,
+)
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import (
+    parse_managed_secret_ref_id,
+)
+from tldw_Server_API.app.core.AuthNZ.secret_backends.registry import (
+    get_secret_backend,
+)
 from tldw_Server_API.app.services.mcp_hub_external_auth_service import (
     ManagedExternalAuthBridge,
 )
@@ -62,6 +71,7 @@ class McpHubExternalAccessResolver:
                         states=states,
                         server_id=server_id,
                         slot_name=binding.get("slot_name"),
+                        credential_ref=binding.get("credential_ref"),
                         binding_mode="grant",
                         granted_by="profile",
                     )
@@ -80,6 +90,7 @@ class McpHubExternalAccessResolver:
                     states=states,
                     server_id=server_id,
                     slot_name=binding.get("slot_name"),
+                    credential_ref=binding.get("credential_ref"),
                     binding_mode=str(binding.get("binding_mode") or "grant"),
                     granted_by="assignment",
                 )
@@ -92,14 +103,17 @@ class McpHubExternalAccessResolver:
         states: dict[str, dict[str, Any]],
         server_id: str,
         slot_name: Any,
+        credential_ref: Any,
         binding_mode: str,
         granted_by: str,
     ) -> None:
+        managed_secret_ref_id = parse_managed_secret_ref_id(credential_ref)
         server_state = states.setdefault(
             server_id,
             {
                 "granted_by": None,
                 "disabled_by_assignment": False,
+                "managed_ref_id": None,
                 "slots": {},
             },
         )
@@ -117,8 +131,12 @@ class McpHubExternalAccessResolver:
             slot_states = server_state.setdefault("slots", {})
             for target_slot_name in target_slot_names:
                 slot_state = slot_states.setdefault(
-                    target_slot_name,
-                    {"granted_by": None, "disabled_by_assignment": False},
+                target_slot_name,
+                    {
+                        "granted_by": None,
+                        "disabled_by_assignment": False,
+                        "managed_ref_id": None,
+                    },
                 )
                 if binding_mode == "disable":
                     slot_state["disabled_by_assignment"] = True
@@ -127,6 +145,7 @@ class McpHubExternalAccessResolver:
                 else:
                     slot_state["granted_by"] = granted_by
                     slot_state["disabled_by_assignment"] = False
+                    slot_state["managed_ref_id"] = managed_secret_ref_id
             return
 
         if binding_mode == "disable":
@@ -136,6 +155,7 @@ class McpHubExternalAccessResolver:
         else:
             server_state["granted_by"] = granted_by
             server_state["disabled_by_assignment"] = False
+            server_state["managed_ref_id"] = managed_secret_ref_id
 
     async def _build_server_rows(
         self,
@@ -169,7 +189,9 @@ class McpHubExternalAccessResolver:
                     slot_state = dict(active_slot_states.get(slot_name) or {})
                     granted_by = slot_state.get("granted_by")
                     disabled = bool(slot_state.get("disabled_by_assignment"))
-                    secret_available = bool(slot.get("secret_configured"))
+                    secret_available = bool(slot.get("secret_configured")) or await self._managed_secret_ref_ready(
+                        slot_state.get("managed_ref_id")
+                    )
                     runtime_usable = bool(
                         granted_by
                         and allows_external
@@ -284,7 +306,9 @@ class McpHubExternalAccessResolver:
                 continue
 
             disabled = bool(state.get("disabled_by_assignment"))
-            secret_available = bool(server.get("secret_configured"))
+            secret_available = bool(server.get("secret_configured")) or await self._managed_secret_ref_ready(
+                state.get("managed_ref_id")
+            )
             runtime_executable = bool(
                 allows_external
                 and not disabled
@@ -322,6 +346,25 @@ class McpHubExternalAccessResolver:
                 }
             )
         return rows
+
+    async def _managed_secret_ref_ready(self, managed_secret_ref_id: Any) -> bool:
+        if managed_secret_ref_id is None:
+            return False
+        managed_repo = ManagedSecretRefsRepo(self.repo.db_pool)
+        await managed_repo.ensure_tables()
+        ref = await managed_repo.get_ref(int(managed_secret_ref_id), include_revoked=True)
+        if not ref or ref.get("revoked_at"):
+            return False
+        backend_name = str(ref.get("backend_name") or "").strip()
+        if not backend_name:
+            return False
+        try:
+            backend = get_secret_backend(backend_name, db_pool=self.repo.db_pool)
+        except ValueError:
+            return False
+        status = await backend.describe_status(int(managed_secret_ref_id))
+        state = str(status.get("state") or "").strip().lower()
+        return state in {"active", "enabled", "ready"}
 
 
 async def get_mcp_hub_external_access_resolver() -> McpHubExternalAccessResolver:

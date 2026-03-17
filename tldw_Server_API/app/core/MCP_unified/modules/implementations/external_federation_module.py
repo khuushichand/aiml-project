@@ -19,6 +19,9 @@ from tldw_Server_API.app.core.MCP_unified.external_servers import ExternalServer
 from tldw_Server_API.app.services.mcp_hub_external_registry_service import (
     get_mcp_hub_external_registry_service,
 )
+from tldw_Server_API.app.services.mcp_credential_broker_service import (
+    get_mcp_credential_broker_service,
+)
 
 from ..base import BaseModule, create_tool_definition
 
@@ -46,6 +49,9 @@ class ExternalFederationModule(BaseModule):
             manager = manager.with_server_loader(registry_service.list_runtime_servers)
         if callable(custom_broker):
             manager = manager.with_credential_broker(custom_broker)
+        else:
+            broker_service = await get_mcp_credential_broker_service()
+            manager = manager.with_credential_broker(broker_service.broker_external_tool_call)
         self._manager = manager
         await self._manager.initialize()
         logger.info(f"External federation module initialized with managed registry; legacy inventory path: {config_path}")

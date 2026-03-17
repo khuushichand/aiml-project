@@ -176,7 +176,12 @@ class WebSocketExternalMCPAdapter(ExternalMCPTransportAdapter):
         runtime_auth: BrokeredExternalCredential | None = None,
     ) -> ExternalToolCallResult:
         del context  # context is reserved for future adapter-aware policy hooks
-        del runtime_auth  # runtime auth is resolved by the manager and must not persist on the adapter
+        if runtime_auth is not None and runtime_auth.headers:
+            return await self._call_tool_with_ephemeral_headers(
+                tool_name=tool_name,
+                arguments=arguments,
+                runtime_auth=runtime_auth,
+            )
         await self._ensure_connected()
         response = await self._jsonrpc_request(
             method="tools/call",
@@ -239,6 +244,40 @@ class WebSocketExternalMCPAdapter(ExternalMCPTransportAdapter):
                 kwargs["extra_headers"] = headers
 
         return await connect_fn(url, **kwargs)
+
+    async def _call_tool_with_ephemeral_headers(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        runtime_auth: BrokeredExternalCredential,
+    ) -> ExternalToolCallResult:
+        ephemeral_config = self._clone_server_config()
+        websocket_cfg = ephemeral_config.websocket
+        if websocket_cfg is None:
+            raise ValueError(f"Missing websocket config for server '{self.server_id}'")
+        merged_headers = dict(websocket_cfg.headers or {})
+        merged_headers.update(dict(runtime_auth.headers or {}))
+        websocket_cfg.headers = merged_headers
+
+        ephemeral_adapter = WebSocketExternalMCPAdapter(
+            ephemeral_config,
+            ws_connector=self._ws_connector,
+        )
+        try:
+            await ephemeral_adapter.connect()
+            return await ephemeral_adapter.call_tool(
+                tool_name,
+                arguments,
+                runtime_auth=None,
+            )
+        finally:
+            await ephemeral_adapter.close()
+
+    def _clone_server_config(self) -> ExternalMCPServerConfig:
+        if hasattr(self.server_config, "model_copy"):
+            return self.server_config.model_copy(deep=True)  # type: ignore[attr-defined]
+        return self.server_config.copy(deep=True)
 
     async def _ensure_connected(self) -> None:
         if not self._connected or not self._initialized or self._ws is None:

@@ -141,7 +141,12 @@ class StdioExternalMCPAdapter(ExternalMCPTransportAdapter):
         runtime_auth: BrokeredExternalCredential | None = None,
     ) -> ExternalToolCallResult:
         del context  # Reserved for future policy hooks
-        del runtime_auth  # runtime auth is resolved by the manager and must not persist on the adapter
+        if runtime_auth is not None and runtime_auth.env:
+            return await self._call_tool_with_ephemeral_env(
+                tool_name=tool_name,
+                arguments=arguments,
+                runtime_auth=runtime_auth,
+            )
         await self._ensure_connected()
         try:
             response = await self._request(
@@ -212,3 +217,37 @@ class StdioExternalMCPAdapter(ExternalMCPTransportAdapter):
             "result": getattr(message, "result", None),
             "error": getattr(message, "error", None),
         }
+
+    async def _call_tool_with_ephemeral_env(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        runtime_auth: BrokeredExternalCredential,
+    ) -> ExternalToolCallResult:
+        ephemeral_config = self._clone_server_config()
+        stdio_cfg = ephemeral_config.stdio
+        if stdio_cfg is None:
+            raise ValueError(f"Missing stdio config for server '{self.server_id}'")
+        merged_env = dict(stdio_cfg.env or {})
+        merged_env.update(dict(runtime_auth.env or {}))
+        stdio_cfg.env = merged_env
+
+        ephemeral_adapter = StdioExternalMCPAdapter(
+            ephemeral_config,
+            client_factory=self._client_factory,
+        )
+        try:
+            await ephemeral_adapter.connect()
+            return await ephemeral_adapter.call_tool(
+                tool_name,
+                arguments,
+                runtime_auth=None,
+            )
+        finally:
+            await ephemeral_adapter.close()
+
+    def _clone_server_config(self) -> ExternalMCPServerConfig:
+        if hasattr(self.server_config, "model_copy"):
+            return self.server_config.model_copy(deep=True)  # type: ignore[attr-defined]
+        return self.server_config.copy(deep=True)
