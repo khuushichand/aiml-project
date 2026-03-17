@@ -7,6 +7,7 @@ Tests cover:
 - SMTP error handling
 - Header injection prevention
 """
+import json
 import pytest
 import os
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -55,6 +56,14 @@ class TestEmailTemplates:
 
         """MFA enabled template should be defined."""
         assert "mfa_enabled" in EMAIL_TEMPLATES
+
+    def test_admin_reauth_template_exists(self):
+
+        """Admin reauthentication template should be defined."""
+        assert "admin_reauth" in EMAIL_TEMPLATES
+        assert "subject" in EMAIL_TEMPLATES["admin_reauth"]
+        assert "html" in EMAIL_TEMPLATES["admin_reauth"]
+        assert "text" in EMAIL_TEMPLATES["admin_reauth"]
 
 
 class TestEmailServiceInitialization:
@@ -205,3 +214,67 @@ class TestTemplateEmailSending:
             ip_address="192.168.1.1"
         )
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_send_admin_reauth_email(self, email_service, monkeypatch):
+        """Admin reauthentication email should use the dedicated template and path."""
+        captured: dict[str, str] = {}
+
+        async def _fake_send_email(
+            to_email: str,
+            subject: str,
+            html_body: str,
+            text_body: str,
+            **kwargs,
+        ) -> bool:
+            captured["to_email"] = to_email
+            captured["subject"] = subject
+            captured["html_body"] = html_body
+            captured["text_body"] = text_body
+            captured["redact_mock_tokens"] = str(kwargs.get("redact_mock_tokens"))
+            return True
+
+        monkeypatch.setattr(email_service, "send_email", _fake_send_email)
+
+        result = await email_service.send_admin_reauth_email(
+            to_email="admin@test.com",
+            reauth_token="reauth-token-123",
+            expires_in_minutes=7,
+            username="alice",
+            base_url="https://example.com",
+        )
+
+        assert result is True
+        assert captured["to_email"] == "admin@test.com"
+        assert "Confirm admin action" in captured["subject"]
+        assert "https://example.com/admin/reauth?token=reauth-token-123" in captured["html_body"]
+        assert "https://example.com/admin/reauth?token=reauth-token-123" in captured["text_body"]
+        assert captured["redact_mock_tokens"] == "True"
+
+    @pytest.mark.asyncio
+    async def test_mock_admin_reauth_email_redacts_token_in_saved_mock_output(self, email_service, tmp_path):
+        """Mock admin reauth emails should not persist raw step-up tokens."""
+        result = await email_service.send_admin_reauth_email(
+            to_email="admin@test.com",
+            reauth_token="reauth-token-123",
+            expires_in_minutes=7,
+            username="alice",
+            base_url="https://example.com",
+        )
+
+        assert result is True
+
+        json_files = list(tmp_path.glob("*.json"))
+        html_files = list(tmp_path.glob("*.html"))
+        assert json_files
+        assert html_files
+
+        email_data = json.loads(json_files[0].read_text())
+        html_body = html_files[0].read_text()
+
+        assert "reauth-token-123" not in email_data["text_body"]
+        assert "reauth-token-123" not in email_data["html_body"]
+        assert "reauth-token-123" not in html_body
+        assert "token=[REDACTED]" in email_data["text_body"]
+        assert "token=[REDACTED]" in email_data["html_body"]
+        assert "token=[REDACTED]" in html_body

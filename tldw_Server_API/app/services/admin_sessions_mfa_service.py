@@ -5,7 +5,10 @@ from typing import Any
 from fastapi import HTTPException
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.schemas.admin_schemas import AdminPrivilegedActionRequest
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    AdminPrivilegedActionRequest,
+    unwrap_optional_secret,
+)
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse, SessionResponse
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventCategory,
@@ -84,7 +87,8 @@ async def revoke_user_session(
             db,
             password_service,
             reason=getattr(request, "reason", None),
-            admin_password=getattr(request, "admin_password", None),
+            admin_password=unwrap_optional_secret(getattr(request, "admin_password", None)),
+            admin_reauth_token=unwrap_optional_secret(getattr(request, "admin_reauth_token", None)),
         )
         await session_manager.revoke_session(session_id=session_id, revoked_by=principal.user_id)
         await _emit_admin_account_audit_event(
@@ -128,7 +132,8 @@ async def revoke_all_user_sessions(
             db,
             password_service,
             reason=getattr(request, "reason", None),
-            admin_password=getattr(request, "admin_password", None),
+            admin_password=unwrap_optional_secret(getattr(request, "admin_password", None)),
+            admin_reauth_token=unwrap_optional_secret(getattr(request, "admin_reauth_token", None)),
         )
         await session_manager.revoke_all_user_sessions(user_id=user_id)
         await _emit_admin_account_audit_event(
@@ -191,7 +196,8 @@ async def disable_user_mfa(
             db,
             password_service,
             reason=getattr(request, "reason", None),
-            admin_password=getattr(request, "admin_password", None),
+            admin_password=unwrap_optional_secret(getattr(request, "admin_password", None)),
+            admin_reauth_token=unwrap_optional_secret(getattr(request, "admin_reauth_token", None)),
         )
         mfa_service = get_mfa_service()
         success = await mfa_service.disable_mfa(user_id)

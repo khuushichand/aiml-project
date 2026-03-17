@@ -3761,6 +3761,332 @@ def migration_045_add_users_created_by(conn: sqlite3.Connection) -> None:
         logger.warning(f"Migration 045 skipped or failed: {error}")
 
 
+def migration_072_create_identity_providers_table(conn: sqlite3.Connection) -> None:
+    """Create the identity_providers table for enterprise federation config."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS identity_providers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT NOT NULL,
+            provider_type TEXT NOT NULL DEFAULT 'oidc',
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            display_name TEXT,
+            issuer TEXT NOT NULL,
+            discovery_url TEXT,
+            authorization_url TEXT,
+            token_url TEXT,
+            jwks_url TEXT,
+            client_id TEXT,
+            client_secret_ref TEXT,
+            claim_mapping_json TEXT NOT NULL DEFAULT '{}',
+            provisioning_policy_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(identity_providers)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE identity_providers ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("provider_type", "provider_type TEXT NOT NULL DEFAULT 'oidc'")
+        add_col("owner_scope_type", "owner_scope_type TEXT NOT NULL DEFAULT 'global'")
+        add_col("owner_scope_id", "owner_scope_id INTEGER")
+        add_col("enabled", "enabled INTEGER NOT NULL DEFAULT 0")
+        add_col("display_name", "display_name TEXT")
+        add_col("issuer", "issuer TEXT")
+        add_col("discovery_url", "discovery_url TEXT")
+        add_col("authorization_url", "authorization_url TEXT")
+        add_col("token_url", "token_url TEXT")
+        add_col("jwks_url", "jwks_url TEXT")
+        add_col("client_id", "client_id TEXT")
+        add_col("client_secret_ref", "client_secret_ref TEXT")
+        add_col("claim_mapping_json", "claim_mapping_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("provisioning_policy_json", "provisioning_policy_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_scope "
+        "ON identity_providers(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_enabled "
+        "ON identity_providers(enabled)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_providers_scope_slug "
+        "ON identity_providers(slug, owner_scope_type, COALESCE(owner_scope_id, 0))"
+    )
+    conn.commit()
+    logger.info("Migration 072: Created identity_providers table")
+
+
+def rollback_072_drop_identity_providers_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 072 by dropping the identity_providers table."""
+    conn.execute("DROP TABLE IF EXISTS identity_providers")
+    conn.commit()
+    logger.info("Rollback 072: Dropped identity_providers table")
+
+
+def migration_073_create_federated_identities_table(conn: sqlite3.Connection) -> None:
+    """Create the federated_identities table for local user links."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS federated_identities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity_provider_id INTEGER NOT NULL,
+            external_subject TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            external_username TEXT,
+            external_email TEXT,
+            last_claims_hash TEXT,
+            last_seen_at TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (identity_provider_id) REFERENCES identity_providers(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(federated_identities)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE federated_identities ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("external_username", "external_username TEXT")
+        add_col("external_email", "external_email TEXT")
+        add_col("last_claims_hash", "last_claims_hash TEXT")
+        add_col("last_seen_at", "last_seen_at TIMESTAMP")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'active'")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_identities_provider_subject "
+        "ON federated_identities(identity_provider_id, external_subject)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_identities_user_id "
+        "ON federated_identities(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_identities_provider_id "
+        "ON federated_identities(identity_provider_id)"
+    )
+    conn.commit()
+    logger.info("Migration 073: Created federated_identities table")
+
+
+def rollback_073_drop_federated_identities_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 073 by dropping the federated_identities table."""
+    conn.execute("DROP TABLE IF EXISTS federated_identities")
+    conn.commit()
+    logger.info("Rollback 073: Dropped federated_identities table")
+
+
+def migration_074_create_federated_managed_grants_table(conn: sqlite3.Connection) -> None:
+    """Create the federated_managed_grants table for safe grant/revoke provenance."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS federated_managed_grants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity_provider_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            grant_kind TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (identity_provider_id) REFERENCES identity_providers(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(federated_managed_grants)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE federated_managed_grants ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("grant_kind", "grant_kind TEXT NOT NULL DEFAULT 'org'")
+        add_col("target_ref", "target_ref TEXT NOT NULL DEFAULT ''")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_managed_grants_target "
+        "ON federated_managed_grants(identity_provider_id, user_id, grant_kind, target_ref)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_user_id "
+        "ON federated_managed_grants(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_provider_id "
+        "ON federated_managed_grants(identity_provider_id)"
+    )
+    conn.commit()
+    logger.info("Migration 074: Created federated_managed_grants table")
+
+
+def rollback_074_drop_federated_managed_grants_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 074 by dropping the federated_managed_grants table."""
+    conn.execute("DROP TABLE IF EXISTS federated_managed_grants")
+    conn.commit()
+    logger.info("Rollback 074: Dropped federated_managed_grants table")
+
+
+def migration_075_create_secret_backends_table(conn: sqlite3.Connection) -> None:
+    """Create the secret_backends table for backend metadata and capabilities."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS secret_backends (
+            name TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'enabled',
+            capabilities_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(secret_backends)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE secret_backends ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("display_name", "display_name TEXT")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'enabled'")
+        add_col("capabilities_json", "capabilities_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_secret_backends_status "
+        "ON secret_backends(status)"
+    )
+    conn.commit()
+    logger.info("Migration 075: Created secret_backends table")
+
+
+def rollback_075_drop_secret_backends_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 075 by dropping the secret_backends table."""
+    conn.execute("DROP TABLE IF EXISTS secret_backends")
+    conn.commit()
+    logger.info("Rollback 075: Dropped secret_backends table")
+
+
+def migration_076_create_managed_secret_refs_table(conn: sqlite3.Connection) -> None:
+    """Create the managed_secret_refs table for logical secret references."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS managed_secret_refs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            backend_name TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL,
+            owner_scope_id INTEGER NOT NULL,
+            provider_key TEXT NOT NULL,
+            backend_ref TEXT NULL,
+            display_name TEXT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            last_resolved_at TIMESTAMP NULL,
+            expires_at TIMESTAMP NULL,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            revoked_by INTEGER NULL,
+            revoked_at TIMESTAMP NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (backend_name) REFERENCES secret_backends(name) ON DELETE RESTRICT
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(managed_secret_refs)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE managed_secret_refs ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("backend_ref", "backend_ref TEXT")
+        add_col("display_name", "display_name TEXT")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'active'")
+        add_col("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("last_resolved_at", "last_resolved_at TIMESTAMP")
+        add_col("expires_at", "expires_at TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_managed_secret_refs_scope_provider "
+        "ON managed_secret_refs(backend_name, owner_scope_type, owner_scope_id, provider_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_scope "
+        "ON managed_secret_refs(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_status "
+        "ON managed_secret_refs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 076: Created managed_secret_refs table")
+
+
+def rollback_076_drop_managed_secret_refs_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 076 by dropping the managed_secret_refs table."""
+    conn.execute("DROP TABLE IF EXISTS managed_secret_refs")
+    conn.commit()
+    logger.info("Rollback 076: Dropped managed_secret_refs table")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -4043,6 +4369,36 @@ def get_authnz_migrations() -> list[Migration]:
             71,
             "Add governance pack upgrade lineage schema",
             migration_071_add_governance_pack_upgrade_lineage,
+        ),
+        Migration(
+            72,
+            "Create identity_providers table",
+            migration_072_create_identity_providers_table,
+            rollback_072_drop_identity_providers_table,
+        ),
+        Migration(
+            73,
+            "Create federated_identities table",
+            migration_073_create_federated_identities_table,
+            rollback_073_drop_federated_identities_table,
+        ),
+        Migration(
+            74,
+            "Create federated_managed_grants table",
+            migration_074_create_federated_managed_grants_table,
+            rollback_074_drop_federated_managed_grants_table,
+        ),
+        Migration(
+            75,
+            "Create secret_backends table",
+            migration_075_create_secret_backends_table,
+            rollback_075_drop_secret_backends_table,
+        ),
+        Migration(
+            76,
+            "Create managed_secret_refs table",
+            migration_076_create_managed_secret_refs_table,
+            rollback_076_drop_managed_secret_refs_table,
         ),
     ]
 

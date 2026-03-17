@@ -1812,6 +1812,48 @@ class SessionManager:
             logger.debug("Failed to decrypt ephemeral value: {}", exc)
             return None
 
+    async def consume_ephemeral_value(self, key: str) -> Optional[str]:
+        """Atomically retrieve and delete an ephemeral value if present and unexpired."""
+        if not self._initialized:
+            await self.initialize()
+        if not key:
+            return None
+        if self.redis_client:
+            redis_key = self._ephemeral_redis_key(key)
+            try:
+                cached = await self.redis_client.eval(
+                    """
+                    local value = redis.call('GET', KEYS[1])
+                    if value then
+                        redis.call('DEL', KEYS[1])
+                    end
+                    return value
+                    """,
+                    1,
+                    redis_key,
+                )
+                if cached:
+                    return self.decrypt_token(cached)
+                return None
+            except RedisError as exc:
+                logger.warning("Failed to consume ephemeral value from Redis: {}", exc)
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Failed to decrypt consumed ephemeral value: {}", exc)
+                return None
+        now = time.monotonic()
+        with self._ephemeral_lock:
+            entry = self._ephemeral_cache.pop(key, None)
+            if not entry:
+                return None
+            encrypted, expires_at = entry
+            if expires_at <= now:
+                return None
+        try:
+            return self.decrypt_token(encrypted)
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Failed to decrypt consumed ephemeral value: {}", exc)
+            return None
+
     async def delete_ephemeral_value(self, key: str) -> None:
         """Delete an ephemeral value from Redis and in-memory cache."""
         if not self._initialized:

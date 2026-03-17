@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.repos.managed_secret_refs_repo import (
+    ManagedSecretRefsRepo,
+)
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import (
+    parse_managed_secret_ref_id,
+)
+from tldw_Server_API.app.core.AuthNZ.secret_backends.registry import (
+    get_secret_backend,
+)
 from tldw_Server_API.app.services.mcp_hub_external_auth_service import (
     ManagedExternalAuthBridge,
 )
@@ -62,6 +72,7 @@ class McpHubExternalAccessResolver:
                         states=states,
                         server_id=server_id,
                         slot_name=binding.get("slot_name"),
+                        credential_ref=binding.get("credential_ref"),
                         binding_mode="grant",
                         granted_by="profile",
                     )
@@ -80,6 +91,7 @@ class McpHubExternalAccessResolver:
                     states=states,
                     server_id=server_id,
                     slot_name=binding.get("slot_name"),
+                    credential_ref=binding.get("credential_ref"),
                     binding_mode=str(binding.get("binding_mode") or "grant"),
                     granted_by="assignment",
                 )
@@ -92,14 +104,17 @@ class McpHubExternalAccessResolver:
         states: dict[str, dict[str, Any]],
         server_id: str,
         slot_name: Any,
+        credential_ref: Any,
         binding_mode: str,
         granted_by: str,
     ) -> None:
+        managed_secret_ref_id = parse_managed_secret_ref_id(credential_ref)
         server_state = states.setdefault(
             server_id,
             {
                 "granted_by": None,
                 "disabled_by_assignment": False,
+                "managed_ref_id": None,
                 "slots": {},
             },
         )
@@ -117,8 +132,12 @@ class McpHubExternalAccessResolver:
             slot_states = server_state.setdefault("slots", {})
             for target_slot_name in target_slot_names:
                 slot_state = slot_states.setdefault(
-                    target_slot_name,
-                    {"granted_by": None, "disabled_by_assignment": False},
+                target_slot_name,
+                    {
+                        "granted_by": None,
+                        "disabled_by_assignment": False,
+                        "managed_ref_id": None,
+                    },
                 )
                 if binding_mode == "disable":
                     slot_state["disabled_by_assignment"] = True
@@ -127,6 +146,7 @@ class McpHubExternalAccessResolver:
                 else:
                     slot_state["granted_by"] = granted_by
                     slot_state["disabled_by_assignment"] = False
+                    slot_state["managed_ref_id"] = managed_secret_ref_id
             return
 
         if binding_mode == "disable":
@@ -136,6 +156,7 @@ class McpHubExternalAccessResolver:
         else:
             server_state["granted_by"] = granted_by
             server_state["disabled_by_assignment"] = False
+            server_state["managed_ref_id"] = managed_secret_ref_id
 
     async def _build_server_rows(
         self,
@@ -150,6 +171,7 @@ class McpHubExternalAccessResolver:
             or []
         )
         allows_external = "network.external" in capabilities
+        managed_secret_ref_ready_cache = await self._load_managed_secret_ref_ready_cache(states)
         rows: list[dict[str, Any]] = []
         for server_id in sorted(states.keys()):
             server = await self.repo.get_external_server(server_id)
@@ -169,7 +191,9 @@ class McpHubExternalAccessResolver:
                     slot_state = dict(active_slot_states.get(slot_name) or {})
                     granted_by = slot_state.get("granted_by")
                     disabled = bool(slot_state.get("disabled_by_assignment"))
-                    secret_available = bool(slot.get("secret_configured"))
+                    secret_available = bool(slot.get("secret_configured")) or bool(
+                        managed_secret_ref_ready_cache.get(int(slot_state.get("managed_ref_id") or 0), False)
+                    )
                     runtime_usable = bool(
                         granted_by
                         and allows_external
@@ -284,7 +308,9 @@ class McpHubExternalAccessResolver:
                 continue
 
             disabled = bool(state.get("disabled_by_assignment"))
-            secret_available = bool(server.get("secret_configured"))
+            secret_available = bool(server.get("secret_configured")) or bool(
+                managed_secret_ref_ready_cache.get(int(state.get("managed_ref_id") or 0), False)
+            )
             runtime_executable = bool(
                 allows_external
                 and not disabled
@@ -322,6 +348,77 @@ class McpHubExternalAccessResolver:
                 }
             )
         return rows
+
+    @staticmethod
+    def _collect_managed_secret_ref_ids(states: dict[str, dict[str, Any]]) -> list[int]:
+        ref_ids: set[int] = set()
+        for state in states.values():
+            managed_ref_id = state.get("managed_ref_id")
+            if managed_ref_id is not None:
+                ref_ids.add(int(managed_ref_id))
+            for slot_state in dict(state.get("slots") or {}).values():
+                if not isinstance(slot_state, dict):
+                    continue
+                managed_ref_id = slot_state.get("managed_ref_id")
+                if managed_ref_id is not None:
+                    ref_ids.add(int(managed_ref_id))
+        return sorted(ref_ids)
+
+    async def _load_managed_secret_ref_ready_cache(
+        self,
+        states: dict[str, dict[str, Any]],
+    ) -> dict[int, bool]:
+        managed_repo = ManagedSecretRefsRepo(self.repo.db_pool)
+        await managed_repo.ensure_tables()
+        ref_ids = self._collect_managed_secret_ref_ids(states)
+        refs_by_id = await managed_repo.list_refs_by_ids(ref_ids, include_revoked=True)
+        now = datetime.now(timezone.utc)
+        backend_cache: dict[str, Any] = {}
+        readiness: dict[int, bool] = {}
+
+        for ref_id in ref_ids:
+            ref = refs_by_id.get(int(ref_id))
+            if not ref or ref.get("revoked_at"):
+                readiness[int(ref_id)] = False
+                continue
+
+            raw_status = str(ref.get("status") or "").strip().lower()
+            expires_at = ref.get("expires_at")
+            expires_at_dt: datetime | None = None
+            if isinstance(expires_at, str) and expires_at.strip():
+                try:
+                    expires_at_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                except ValueError:
+                    expires_at_dt = None
+            elif isinstance(expires_at, datetime):
+                expires_at_dt = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
+
+            if raw_status not in {"active", "enabled", "ready"}:
+                readiness[int(ref_id)] = False
+                continue
+            if expires_at_dt is not None and expires_at_dt <= now:
+                readiness[int(ref_id)] = False
+                continue
+
+            backend_name = str(ref.get("backend_name") or "").strip()
+            if not backend_name:
+                readiness[int(ref_id)] = False
+                continue
+
+            backend = backend_cache.get(backend_name)
+            if backend is None:
+                try:
+                    backend = get_secret_backend(backend_name, db_pool=self.repo.db_pool)
+                except ValueError:
+                    readiness[int(ref_id)] = False
+                    continue
+                backend_cache[backend_name] = backend
+
+            status = await backend.describe_status(int(ref_id))
+            state = str(status.get("state") or "").strip().lower()
+            readiness[int(ref_id)] = state in {"active", "enabled", "ready"}
+
+        return readiness
 
 
 async def get_mcp_hub_external_access_resolver() -> McpHubExternalAccessResolver:

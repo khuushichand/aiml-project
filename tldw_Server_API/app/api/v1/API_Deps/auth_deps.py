@@ -521,7 +521,8 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                 entry_attempt += 1
                 await asyncio.sleep(sleep_seconds)
 
-        assert txn_cm is not None
+        if txn_cm is None:
+            raise RuntimeError("AuthNZ transaction context manager was not initialized")
 
         try:
             yield conn
@@ -676,6 +677,19 @@ async def get_session_manager_dep() -> SessionManager:
                         if expires_at <= now:
                             _TEST_EPHEMERAL_STATE["values"].pop(key, None)
                             return None
+                        return value
+
+                async def consume_ephemeral_value(self, key: str) -> Optional[str]:
+                    now = time.monotonic()
+                    with _TEST_EPHEMERAL_STATE_GUARD:
+                        entry = _TEST_EPHEMERAL_STATE["values"].get(key)
+                        if not entry:
+                            return None
+                        value, expires_at = entry
+                        if expires_at <= now:
+                            _TEST_EPHEMERAL_STATE["values"].pop(key, None)
+                            return None
+                        _TEST_EPHEMERAL_STATE["values"].pop(key, None)
                         return value
 
                 async def delete_ephemeral_value(self, key: str) -> None:

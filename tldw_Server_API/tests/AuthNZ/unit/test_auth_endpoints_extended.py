@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from fastapi import Response
 from starlette.requests import Request
 
@@ -263,6 +264,148 @@ async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_rg_reser
 
     assert allowed is True
     assert retry_after is None
+
+
+@pytest.mark.asyncio
+async def test_request_admin_reauth_uses_dedicated_token_and_email_helpers(monkeypatch):
+    reset_settings()
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    created: dict[str, object] = {}
+    sent: dict[str, object] = {}
+
+    class _StubJWT:
+        def create_admin_reauth_token(self, **kwargs):  # noqa: ANN003
+            created.update(kwargs)
+            return "admin-reauth-token"
+
+    class _StubEmailService:
+        async def send_admin_reauth_email(self, **kwargs):  # noqa: ANN003
+            sent.update(kwargs)
+            return True
+
+    monkeypatch.setattr(auth, "_get_email_service", lambda: _StubEmailService())
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/admin/reauth/request",
+        "headers": [],
+        "client": ("203.0.113.50", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    out = await auth.request_admin_reauth(
+        request=request,
+        current_user=auth.AuthPrincipal(
+            kind="user",
+            user_id=7,
+            subject="user:7",
+            username="alice",
+            email="alice@example.com",
+            roles=["admin"],
+            is_admin=True,
+        ),
+        db=object(),
+        jwt_service=_StubJWT(),
+    )
+
+    assert out.message == "Admin reauthentication link sent"
+    assert created["email"] == "alice@example.com"
+    assert created["user_id"] == 7
+    assert created["expires_in_minutes"] == 10
+    assert sent["to_email"] == "alice@example.com"
+    assert sent["username"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_request_admin_reauth_requires_admin_claims(monkeypatch):
+    reset_settings()
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/admin/reauth/request",
+        "headers": [],
+        "client": ("203.0.113.51", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await auth.request_admin_reauth(
+            request=request,
+            current_user=auth.AuthPrincipal(
+                kind="user",
+                user_id=7,
+                subject="user:7",
+                username="alice",
+                email="alice@example.com",
+                roles=["user"],
+                is_admin=False,
+            ),
+            db=object(),
+            jwt_service=object(),
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail == "Admin reauthentication is only available to administrators"
+
+
+@pytest.mark.asyncio
+async def test_verify_magic_link_rejects_admin_reauth_purpose(monkeypatch):
+    reset_settings()
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    class _StubJWT:
+        async def verify_token_async(self, token: str, token_type: str | None = None):
+            assert token == "admin-reauth-token"
+            assert token_type == "magic_link"
+            if token_type != "magic_link":
+                raise ValueError("unexpected token type")
+            return {
+                "email": "alice@example.com",
+                "user_id": 7,
+                "purpose": "admin_reauth",
+                "type": "admin_reauth",
+            }
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/magic-link/verify",
+        "headers": [],
+        "client": ("203.0.113.52", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await auth.verify_magic_link(
+            data=auth.MagicLinkVerifyRequest(token="admin-reauth-token"),
+            request=request,
+            db=object(),
+            jwt_service=_StubJWT(),
+            session_manager=object(),
+            registration_service=object(),
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "Admin reauthentication tokens cannot be used for sign-in"
 
 
 @pytest.mark.asyncio
