@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.Claims_Extraction import (
     claims_rebuild_service,
     claims_service,
     claims_utils,
+    review_assignment,
 )
 from tldw_Server_API.app.core.Evaluations import embeddings_abtest_jobs_worker
 from tldw_Server_API.app.core.Embeddings.services import (
@@ -39,6 +40,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Proce
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
 from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
+from tldw_Server_API.app.core.External_Sources import sync_coordinator
 from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline
 from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
@@ -53,6 +55,8 @@ from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import claims_alerts_scheduler
 from tldw_Server_API.app.services import claims_review_metrics_scheduler
 from tldw_Server_API.app.services import connectors_worker
+from tldw_Server_API.app.services import quiz_generator
+from tldw_Server_API.app.services import quiz_source_resolver
 from tldw_Server_API.app.services import audiobook_jobs_worker
 from tldw_Server_API.app.services import enhanced_web_scraping_service
 from tldw_Server_API.app.services import media_ingest_jobs_worker
@@ -206,6 +210,38 @@ def test_media_versions_imports_errors_and_state_helpers_outside_media_db_v2(mon
     assert module.DatabaseError is media_db_errors.DatabaseError
     assert module.InputError is media_db_errors.InputError
     assert module.check_media_exists is media_db_state.check_media_exists
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_claim_review_assignment_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(review_assignment)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_sync_coordinator_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(sync_coordinator)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_quiz_generator_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(quiz_generator)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_quiz_source_resolver_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(quiz_source_resolver)
+
     assert "MediaDatabase" not in module.__dict__
 
 

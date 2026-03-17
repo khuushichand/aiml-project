@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
 )
@@ -104,7 +103,7 @@ def _build_quiz_attempt_question_text(question: Mapping[str, Any], answer: Mappi
 def _resolve_media_source(
     source_id: str,
     *,
-    media_db: MediaDatabase,
+    media_db: Any,
     max_chars_per_item: int,
 ) -> list[dict[str, Any]]:
     media_id = _parse_positive_int(source_id, "media source_id")

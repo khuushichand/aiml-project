@@ -113,17 +113,10 @@ Assessment:
 
 ### 3. Leaf compatibility consumers
 
-Representative files:
+Status:
 
-- `app/core/Claims_Extraction/review_assignment.py`
-- `app/core/External_Sources/sync_coordinator.py`
-- `app/services/quiz_generator.py`
-- `app/services/quiz_source_resolver.py`
-
-Assessment:
-
-- These should be reduced after lifecycle helper policy is stable.
-- Moving them too early risks re-binding against temporary interfaces.
+- Completed for the previously identified representative leaves.
+- Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory
 
