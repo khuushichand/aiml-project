@@ -7,7 +7,9 @@ import pytest
 from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.core.DB_Management import Users_DB
 from tldw_Server_API.app.core.DB_Management import Media_DB_v2 as legacy_media_db
+from tldw_Server_API.app.api.v1.endpoints import rag_unified as rag_unified_endpoint
 from tldw_Server_API.app.api.v1.endpoints import research
+from tldw_Server_API.app.api.v1.endpoints import slides as slides_endpoint
 from tldw_Server_API.app.api.v1.endpoints import data_tables
 from tldw_Server_API.app.api.v1.endpoints import items
 from tldw_Server_API.app.api.v1.endpoints import sync
@@ -318,6 +320,30 @@ def test_enhanced_web_scraping_service_imports_managed_media_database_from_media
 def test_research_endpoint_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(research)
     assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_research_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(research)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_rag_unified_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(rag_unified_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_slides_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(slides_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_connectors_worker_imports_create_media_database_from_media_db_api():

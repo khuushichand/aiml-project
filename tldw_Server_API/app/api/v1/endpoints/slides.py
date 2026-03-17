@@ -56,7 +56,6 @@ from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_DELE
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
 )
@@ -1455,7 +1454,7 @@ async def generate_from_media(
     request: GenerateFromMediaRequest,
     response: Response,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ) -> PresentationResponse:
     try:
         media_id = int(request.media_id)
