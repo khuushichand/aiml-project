@@ -115,11 +115,7 @@ Assessment:
 
 Representative files:
 
-- `app/api/v1/endpoints/media/document_references.py`
-- `app/api/v1/endpoints/media/document_insights.py`
 - `app/api/v1/endpoints/media/document_outline.py`
-- `app/api/v1/endpoints/media/item.py`
-- `app/api/v1/endpoints/media/navigation.py`
 - `app/api/v1/endpoints/media/process_documents.py`
 - `app/api/v1/endpoints/media/process_pdfs.py`
 - `app/api/v1/endpoints/media/reading_progress.py`

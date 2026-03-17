@@ -8,6 +8,10 @@ from tldw_Server_API.app.core.DB_Management import Users_DB
 from tldw_Server_API.app.core.DB_Management import Media_DB_v2 as legacy_media_db
 from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.api.v1.API_Deps import DB_Deps as media_db_deps
+from tldw_Server_API.app.api.v1.endpoints.media import document_insights
+from tldw_Server_API.app.api.v1.endpoints.media import document_references
+from tldw_Server_API.app.api.v1.endpoints.media import item as media_item
+from tldw_Server_API.app.api.v1.endpoints.media import navigation as media_navigation
 from tldw_Server_API.app.api.v1.utils import http_errors
 from tldw_Server_API.app.core.Claims_Extraction import (
     claims_notifications,
@@ -109,6 +113,44 @@ def test_http_errors_imports_db_errors_from_media_db_errors(monkeypatch):
     assert module.DatabaseError is media_db_errors.DatabaseError
     assert module.InputError is media_db_errors.InputError
     assert module.SchemaError is media_db_errors.SchemaError
+
+
+def test_document_references_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(document_references)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_document_insights_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(document_insights)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_navigation_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_navigation)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_item_imports_db_errors_from_media_db_errors_and_not_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "ConflictError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_item)
+
+    assert module.ConflictError is media_db_errors.ConflictError
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.InputError is media_db_errors.InputError
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_document_processing_service_imports_managed_media_database_from_media_db_api():

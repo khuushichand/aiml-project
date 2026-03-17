@@ -25,7 +25,6 @@ from tldw_Server_API.app.api.v1.utils.cache import (
     get_cached_response,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
 )
@@ -86,7 +85,7 @@ URL_PATTERN = r"https?://[^\s\]\)>\"']+"
 YEAR_PATTERN = r"\b(18\d{2}|19\d{2}|20[0-3]\d)\b"
 
 
-def _get_db_scope(db: MediaDatabase) -> str:
+def _get_db_scope(db: Any) -> str:
     """Return a stable scope identifier for the active MediaDatabase."""
     return getattr(db, "db_path_str", None) or str(getattr(db, "db_path", ""))
 
@@ -204,7 +203,7 @@ def _hash_reference_content(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
 
 
-def _ensure_parsed_references_cache_table(db: MediaDatabase) -> None:
+def _ensure_parsed_references_cache_table(db: Any) -> None:
     """Ensure persistent parsed-reference cache table exists."""
     create_sql = f"""
     CREATE TABLE IF NOT EXISTS {PARSED_REFERENCES_CACHE_TABLE} (
@@ -249,7 +248,7 @@ def _normalize_cached_reference_list(raw: Any) -> list[str]:
 
 
 def _load_parsed_references_cache(
-    db: MediaDatabase,
+    db: Any,
     *,
     media_id: int,
     user_id: str,
@@ -289,7 +288,7 @@ def _load_parsed_references_cache(
 
 
 def _save_parsed_references_cache(
-    db: MediaDatabase,
+    db: Any,
     *,
     media_id: int,
     user_id: str,
@@ -1408,7 +1407,7 @@ async def get_document_references(
             "reference list before pagination."
         ),
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> DocumentReferencesResponse:
     """
