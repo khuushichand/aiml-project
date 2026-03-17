@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from ....DB_Management.media_db.api import managed_media_database
 from ....Slides.slides_db import ConflictError
 from ..base import BaseModule, create_tool_definition
 from ..disk_space import get_free_disk_space_gb
@@ -1331,15 +1332,15 @@ class SlidesModule(BaseModule):
             media_path = context.db_paths.get("media")
             if not media_path:
                 return None
-            from ....DB_Management.Media_DB_v2 import MediaDatabase
-            db = MediaDatabase(db_path=media_path, client_id="mcp_slides_gen")
-            try:
+            with managed_media_database(
+                "mcp_slides_gen",
+                db_path=media_path,
+                initialize=False,
+            ) as db:
                 media = db.get_media_by_id(media_id)
                 if not media:
                     return None
                 return media.get("content") or media.get("transcript") or media.get("summary")
-            finally:
-                db.close_all_connections()
         except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get media content: {e}")
             return None

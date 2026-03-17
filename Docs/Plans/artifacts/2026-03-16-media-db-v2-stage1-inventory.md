@@ -4,9 +4,9 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 28
+- Raw `MediaDatabase(...)` constructors in app code: 26
 - Operational `create_media_database(...)` call sites in app code: 28
-- Operational `managed_media_database(...)` call sites in app code: 9
+- Operational `managed_media_database(...)` call sites in app code: 11
 - `Media_DB_v2` references in app code: 157
 
 Notes:
@@ -33,6 +33,8 @@ Notes:
 | `app/services/media_files_cleanup_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local MediaFiles lookup now scoped through managed helper with `initialize=False` |
 | `app/services/storage_cleanup_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local TTS history update now scoped through managed helper with `initialize=False` |
 | `app/services/outputs_purge_scheduler.py` | 1 | `MOVE_MANAGED` already satisfied | Output-history purge path now scoped through managed helper with `initialize=False` |
+| `app/core/MCP_unified/modules/implementations/slides_module.py` | 1 | `MOVE_MANAGED` already satisfied | Local media lookup for slide generation now uses the managed helper with `initialize=False` |
+| `app/core/MCP_unified/modules/implementations/quizzes_module.py` | 1 | `MOVE_MANAGED` already satisfied | Local media lookup for quiz generation now uses the managed helper with `initialize=False` |
 
 ## Operational `create_media_database(...)` Inventory
 
@@ -65,8 +67,6 @@ Notes:
 | `app/services/tts_history_cleanup_service.py` | 2 | probe DB plus per-user loop DBs | `NEW_HELPER` | needs backend-aware cleanup helper, not a mechanical rewrite |
 | `app/services/connectors_worker.py` | 1 | per-sync DB reused across a large function | `NEW_HELPER` | better as a dedicated sync DB helper than an inlined raw constructor |
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle | `MOVE_FACTORY` | returned owner should use factory, not raw constructor |
-| `app/core/MCP_unified/modules/implementations/slides_module.py` | 1 | local read and close | `MOVE_MANAGED` | read-only local scope |
-| `app/core/MCP_unified/modules/implementations/quizzes_module.py` | 1 | local read and close | `MOVE_MANAGED` | read-only local scope |
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Workflows/adapters/media/ingest.py` | 1 | local workflow ingest DB | `MOVE_MANAGED` | local ingest scope |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |

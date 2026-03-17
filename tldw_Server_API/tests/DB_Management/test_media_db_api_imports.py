@@ -20,6 +20,8 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Proce
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
 from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
+from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
+from tldw_Server_API.app.core.MCP_unified.modules.implementations import slides_module
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
@@ -124,6 +126,16 @@ def test_storage_cleanup_service_imports_managed_media_database_from_media_db_ap
 
 def test_outputs_purge_scheduler_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(outputs_purge_scheduler)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_slides_module_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(slides_module)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_quizzes_module_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(quizzes_module)
     assert module.managed_media_database is media_db_api.managed_media_database
 
 
