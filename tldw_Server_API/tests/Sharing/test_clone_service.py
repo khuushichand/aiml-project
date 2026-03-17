@@ -168,6 +168,24 @@ def test_copy_media_returns_none_for_missing_media():
     assert result is None
 
 
+def test_clone_skips_source_when_media_copy_fails():
+    """Sources with failed media copies should be skipped to avoid dangling references."""
+    svc, _, _, tgt_chacha, _ = _make_service(
+        src_media_items=None,  # get_media_by_id returns None -> copy fails
+        src_sources=[{"id": "s1", "media_id": "7", "source_type": "media", "title": "T"}],
+    )
+
+    with patch(
+        "tldw_Server_API.app.core.Sharing.clone_service.get_media_transcripts",
+        return_value=[],
+    ):
+        result = svc.clone_workspace("ws-1")
+
+    assert result["sources_copied"] == 1
+    # add_workspace_source should NOT have been called since the media copy failed
+    tgt_chacha.add_workspace_source.assert_not_called()
+
+
 def test_clone_workspace_not_found():
     src_chacha = MagicMock()
     src_chacha.get_workspace.return_value = None

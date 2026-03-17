@@ -86,11 +86,19 @@ class CloneService:
                 new_media_id = self._copy_media_item(old_media_id)
                 if new_media_id:
                     media_id_map[old_media_id] = new_media_id
+                else:
+                    # Media copy failed — skip this source to avoid dangling references
+                    logger.warning(
+                        f"Skipping source {source.get('id')}: media {old_media_id} could not be copied"
+                    )
+                    if total_sources > 0:
+                        _progress("copying_sources", 0.1 + 0.5 * ((i + 1) / total_sources))
+                    continue
 
-            # Add source to new workspace
+            # Add source to new workspace (use mapped ID, or None for non-media sources)
             source_data = {
                 "id": str(uuid.uuid4()),
-                "media_id": media_id_map.get(old_media_id, old_media_id) if old_media_id else None,
+                "media_id": media_id_map.get(old_media_id) if old_media_id else None,
                 "source_type": source.get("source_type", "media"),
                 "title": source.get("title", ""),
                 "url": source.get("url"),

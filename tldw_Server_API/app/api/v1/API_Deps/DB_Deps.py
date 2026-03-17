@@ -244,6 +244,22 @@ async def get_media_db_for_user(
             pass
 
 
+def get_media_db_for_owner(owner_user_id: int) -> MediaDatabase:
+    """
+    Return a MediaDatabase for an arbitrary user (the workspace owner).
+
+    Used by the sharing module to read sources from the owner's DB.
+    Constructs a temporary User object for the internal resolver.
+    """
+    if not isinstance(owner_user_id, int):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid owner_user_id.",
+        )
+    fake_user = User(id=owner_user_id, username=f"owner-{owner_user_id}", email="", password_hash="")
+    return _resolve_media_db_for_user(fake_user)
+
+
 def reset_media_db_cache() -> None:
     """Clear cached MediaDatabase instances (useful for tests)."""
     with _user_db_lock:

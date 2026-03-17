@@ -106,8 +106,8 @@ const TeamShareTab: React.FC<{ workspaceId: string }> = ({ workspaceId }) => {
       })
       message.success("Workspace shared successfully")
       form.resetFields()
-    } catch (err: any) {
-      message.error(err?.message || "Failed to share workspace")
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to share workspace")
     }
   }
 
@@ -196,8 +196,8 @@ const LinkShareTab: React.FC<{ workspaceId: string }> = ({ workspaceId }) => {
         setGeneratedLink(link)
         message.success("Share link created")
       }
-    } catch (err: any) {
-      message.error(err?.message || "Failed to create share link")
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to create share link")
     }
   }
 

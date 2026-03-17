@@ -3761,6 +3761,102 @@ def migration_045_add_users_created_by(conn: sqlite3.Connection) -> None:
         logger.warning(f"Migration 045 skipped or failed: {error}")
 
 
+def migration_072_create_sharing_tables(conn: sqlite3.Connection) -> None:
+    """Create tables for shared workspaces and share tokens."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS shared_workspaces (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id     TEXT NOT NULL,
+            owner_user_id    INTEGER NOT NULL,
+            share_scope_type TEXT NOT NULL DEFAULT 'team'
+                CHECK (share_scope_type IN ('team', 'org')),
+            share_scope_id   INTEGER NOT NULL,
+            access_level     TEXT NOT NULL DEFAULT 'view_chat'
+                CHECK (access_level IN ('view_chat', 'view_chat_add', 'full_edit')),
+            allow_clone      INTEGER NOT NULL DEFAULT 1,
+            created_by       INTEGER NOT NULL,
+            created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked_at       TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id),
+            FOREIGN KEY (created_by) REFERENCES users(id),
+            UNIQUE(workspace_id, owner_user_id, share_scope_type, share_scope_id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shared_ws_owner ON shared_workspaces(owner_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shared_ws_scope ON shared_workspaces(share_scope_type, share_scope_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS share_tokens (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash      TEXT UNIQUE NOT NULL,
+            token_prefix    TEXT NOT NULL,
+            resource_type   TEXT NOT NULL
+                CHECK (resource_type IN ('chatbook', 'workspace')),
+            resource_id     TEXT NOT NULL,
+            owner_user_id   INTEGER NOT NULL,
+            access_level    TEXT NOT NULL DEFAULT 'view_chat',
+            allow_clone     INTEGER NOT NULL DEFAULT 1,
+            password_hash   TEXT,
+            max_uses        INTEGER,
+            use_count       INTEGER NOT NULL DEFAULT 0,
+            expires_at      TIMESTAMP,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked_at      TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_prefix ON share_tokens(token_prefix)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_owner ON share_tokens(owner_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_resource ON share_tokens(resource_type, resource_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS share_audit_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type      TEXT NOT NULL,
+            actor_user_id   INTEGER,
+            resource_type   TEXT NOT NULL,
+            resource_id     TEXT NOT NULL,
+            owner_user_id   INTEGER NOT NULL,
+            share_id        INTEGER,
+            token_id        INTEGER,
+            metadata_json   TEXT DEFAULT '{}',
+            ip_address      TEXT,
+            user_agent      TEXT,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_audit_created ON share_audit_log(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_audit_owner ON share_audit_log(owner_user_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sharing_config (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_type      TEXT NOT NULL DEFAULT 'global'
+                CHECK (scope_type IN ('global', 'org', 'team')),
+            scope_id        INTEGER,
+            config_key      TEXT NOT NULL,
+            config_value    TEXT NOT NULL,
+            updated_by      INTEGER,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(scope_type, scope_id, config_key)
+        )
+    """)
+
+    conn.commit()
+    logger.info("Migration 072: Created sharing tables (shared_workspaces, share_tokens, share_audit_log, sharing_config)")
+
+
+def rollback_072_drop_sharing_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 072 by dropping sharing tables."""
+    conn.execute("DROP TABLE IF EXISTS sharing_config")
+    conn.execute("DROP TABLE IF EXISTS share_audit_log")
+    conn.execute("DROP TABLE IF EXISTS share_tokens")
+    conn.execute("DROP TABLE IF EXISTS shared_workspaces")
+    conn.commit()
+    logger.info("Rollback 072: Dropped sharing tables")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -4043,6 +4139,12 @@ def get_authnz_migrations() -> list[Migration]:
             71,
             "Add governance pack upgrade lineage schema",
             migration_071_add_governance_pack_upgrade_lineage,
+        ),
+        Migration(
+            72,
+            "Create sharing tables",
+            migration_072_create_sharing_tables,
+            rollback_072_drop_sharing_tables,
         ),
     ]
 

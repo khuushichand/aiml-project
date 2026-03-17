@@ -27,8 +27,8 @@ export const SharedWithMe: React.FC = () => {
       message.success("Clone job started")
       setCloneTarget(null)
       setCloneName("")
-    } catch (err: any) {
-      message.error(err?.message || "Failed to clone workspace")
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Failed to clone workspace")
     }
   }
 

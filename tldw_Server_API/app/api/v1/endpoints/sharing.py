@@ -133,10 +133,17 @@ async def _verify_workspace_ownership(workspace_id: str, user: User) -> None:
             )
     except HTTPException:
         raise
-    except Exception:
-        # If DB access fails, allow the share creation to proceed
-        # (single-user mode may not have workspace validation)
-        pass
+    except Exception as exc:
+        # In single-user mode, workspace validation may not be available
+        from ....core.AuthNZ.settings import get_settings
+        if get_settings().auth_mode == "single_user":
+            logger.warning(f"Workspace ownership check skipped in single-user mode: {exc}")
+            return
+        logger.error(f"Workspace ownership check failed: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not verify workspace ownership due to a database error.",
+        ) from exc
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -177,7 +184,11 @@ async def share_workspace(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This workspace is already shared with the specified scope.",
             ) from exc
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error(f"Failed to create share for workspace {workspace_id}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="An internal error occurred while creating the share.",
+        ) from exc
 
     await audit.log(
         "share.created",
@@ -568,6 +579,7 @@ async def get_shared_workspace_media(
 
 @router.post(
     "/shared-with-me/{share_id}/chat",
+    response_model=dict[str, Any],
     dependencies=[Depends(rbac_rate_limit("sharing.read"))],
     summary="Chat with a shared workspace's sources via RAG",
 )
@@ -603,7 +615,7 @@ async def chat_with_shared_workspace(
             api_name=body.api_name,
             model=body.model,
             system_message=body.system_message,
-            index_namespace=str(share["owner_user_id"]),
+            index_namespace=f"user_{share['owner_user_id']}_media_embeddings",
         )
 
         await audit.log(
