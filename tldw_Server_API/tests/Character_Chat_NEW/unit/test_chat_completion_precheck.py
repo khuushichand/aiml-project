@@ -5,6 +5,8 @@ Unit test to ensure completion pre-check uses efficient count instead of bulk-lo
 import pytest
 from typing import List, Dict, Any
 
+from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingDecision
+
 
 @pytest.mark.unit
 def test_completion_precheck_uses_count_not_bulk_get(test_client, auth_headers, character_db):
@@ -121,3 +123,109 @@ def test_complete_v2_explicit_unavailable_model_returns_400(test_client, auth_he
     assert detail["error_code"] == "model_not_available"
     assert detail["provider"] == "openai"
     assert detail["model"] == "gpt-not-installed"
+
+
+@pytest.mark.unit
+def test_complete_v2_auto_model_routes_before_strict_availability_check(
+    test_client,
+    auth_headers,
+    monkeypatch,
+):
+    monkeypatch.setenv("CHAT_ENFORCE_STRICT_MODEL_SELECTION", "1")
+    monkeypatch.setenv("ENABLE_LOCAL_LLM_PROVIDER", "1")
+
+    char_resp = test_client.post(
+        "/api/v1/characters/",
+        json={
+            "name": "AutoRouteCharacter",
+            "description": "",
+            "personality": "",
+            "first_message": "Hello there",
+        },
+        headers=auth_headers,
+    )
+    assert char_resp.status_code == 201
+    char_id = char_resp.json()["id"]
+
+    chat_resp = test_client.post(
+        "/api/v1/chats/",
+        json={"character_id": char_id, "title": "Auto route strict check"},
+        headers=auth_headers,
+    )
+    assert chat_resp.status_code == 201
+    chat_id = chat_resp.json()["id"]
+
+    captured: Dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.get_configured_providers",
+        lambda: {
+            "default_provider": "openai",
+            "providers": [
+                {
+                    "name": "local-llm",
+                    "is_configured": True,
+                    "models_info": [{"name": "local-test-routed"}],
+                }
+            ],
+        },
+    )
+
+    def _stub_route_model(*, request, policy, candidates, provider_order):
+        captured["routing_request"] = request
+        captured["routing_policy"] = policy
+        captured["routing_candidates"] = candidates
+        captured["routing_provider_order"] = provider_order
+        return RoutingDecision(
+            provider="local-llm",
+            model="local-test-routed",
+            canonical=True,
+        )
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.route_model",
+        _stub_route_model,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.is_model_known_for_provider",
+        lambda provider, model: False,
+    )
+
+    def _stub_chat_api_call(api_endpoint, messages_payload, **kwargs):
+        captured["provider_call"] = {
+            "api_endpoint": api_endpoint,
+            "model": kwargs.get("model"),
+            "streaming": kwargs.get("streaming"),
+        }
+        return {"choices": [{"message": {"content": "auto routed response"}}]}
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.perform_chat_api_call",
+        _stub_chat_api_call,
+    )
+
+    resp = test_client.post(
+        f"/api/v1/chats/{chat_id}/complete-v2",
+        json={
+            "model": "auto",
+            "routing": {"mode": "sticky_session"},
+            "append_user_message": "Route this automatically",
+            "stream": False,
+            "include_character_context": False,
+            "save_to_db": False,
+        },
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["provider"] == "local-llm"
+    assert payload["model"] == "local-test-routed"
+    assert payload["assistant_content"] == "auto routed response"
+    assert captured["routing_request"].model == "auto"
+    assert captured["routing_policy"].mode == "sticky_session"
+    assert captured["provider_call"] == {
+        "api_endpoint": "local-llm",
+        "model": "local-test-routed",
+        "streaming": False,
+    }

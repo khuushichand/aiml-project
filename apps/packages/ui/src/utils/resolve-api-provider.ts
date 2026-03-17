@@ -82,7 +82,7 @@ const normalizeProvider = (value: unknown): string => {
 const normalizeModelId = (value: unknown): string =>
   String(value || "").trim().replace(/^tldw:/i, "")
 
-const AUTO_MODEL_ID = "auto"
+export const AUTO_MODEL_ID = "auto"
 
 const normalizeKnownProvider = (value: unknown): string => {
   const normalized = normalizeProvider(value)

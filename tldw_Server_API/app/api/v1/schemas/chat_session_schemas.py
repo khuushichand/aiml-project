@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingOverride
 
 ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
 ALLOWED_ASSISTANT_KINDS = ("character", "persona")
@@ -454,6 +455,13 @@ class CharacterChatCompletionV2Request(BaseModel):
     provider: Optional[str] = Field(
         None,
         description="LLM provider (e.g., openai, anthropic, local-llm). When omitted, server default provider settings are used.",
+    )
+    routing: Optional[RoutingOverride] = Field(
+        None,
+        description=(
+            "Optional server-side model-router overrides when model='auto', including routing "
+            "mode, objective, provider boundary, and failure handling."
+        ),
     )
     model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Sampling temperature")

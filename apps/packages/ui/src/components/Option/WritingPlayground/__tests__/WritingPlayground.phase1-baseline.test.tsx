@@ -1,47 +1,24 @@
 import React from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mockState = vi.hoisted(() => ({
+  storageValues: new Map<string, unknown>(),
+  queryData: new Map<string, unknown>(),
+  resolveApiProviderForModel: vi.fn(async () => null as string | null),
+  streamCalls: [] as Array<{ messages: unknown[]; options: Record<string, unknown> }>,
+  sendCalls: [] as Array<{ messages: unknown[]; options: Record<string, unknown> }>
+}))
 
 vi.mock("@tanstack/react-query", () => {
-  const writingCaps = {
-    server: {
-      sessions: true,
-      templates: true,
-      themes: true,
-      defaults_catalog: false,
-      snapshots: false
-    },
-    requested: {
-      features: {
-        logprobs: true
-      },
-      supported_fields: ["top_logprobs"],
-      extra_body_compat: {
-        effective: true,
-        source: "mock",
-        notes: "mock"
-      }
-    }
-  }
-
   const resolveQueryData = (queryKey: unknown): unknown => {
     const key = Array.isArray(queryKey) ? queryKey[0] : queryKey
-    switch (key) {
-      case "writing-capabilities":
-        return writingCaps
-      case "writing-defaults":
-        return { templates: [], themes: [] }
-      case "writing-sessions":
-        return { sessions: [], total: 0, limit: 200, offset: 0 }
-      case "writing-templates":
-        return { templates: [], total: 0, limit: 200, offset: 0 }
-      case "writing-themes":
-        return { themes: [], total: 0, limit: 200, offset: 0 }
-      case "writing-session":
-        return null
-      default:
-        return undefined
+    if (key === "writing-session" && Array.isArray(queryKey)) {
+      return mockState.queryData.get(
+        `writing-session:${String(queryKey[1] || "")}`
+      )
     }
+    return mockState.queryData.get(String(key))
   }
 
   return {
@@ -78,8 +55,12 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("@plasmohq/storage/hook", () => {
   return {
-    useStorage: <T,>(_key: string, initial?: T) =>
-      React.useState<T | undefined>(initial)
+    useStorage: <T,>(key: string, initial?: T) =>
+      React.useState<T | undefined>(() =>
+        mockState.storageValues.has(key)
+          ? (mockState.storageValues.get(key) as T)
+          : initial
+      )
   }
 })
 
@@ -96,7 +77,8 @@ vi.mock("@/hooks/useServerCapabilities", () => ({
 }))
 
 vi.mock("@/utils/resolve-api-provider", () => ({
-  resolveApiProviderForModel: async () => null
+  AUTO_MODEL_ID: "auto",
+  resolveApiProviderForModel: mockState.resolveApiProviderForModel
 }))
 
 vi.mock("@/components/Common/MarkdownPreview", () => ({
@@ -106,8 +88,16 @@ vi.mock("@/components/Common/MarkdownPreview", () => ({
 vi.mock("@/services/tldw/TldwChat", () => ({
   TldwChatService: class TldwChatServiceMock {
     cancelStream() {}
-    async *streamMessage() {
-      yield ""
+    async *streamMessage(
+      messages: unknown[],
+      options: Record<string, unknown>
+    ) {
+      mockState.streamCalls.push({ messages, options })
+      yield "mocked stream token"
+    }
+    async sendMessage(messages: unknown[], options: Record<string, unknown>) {
+      mockState.sendCalls.push({ messages, options })
+      return "mocked completion"
     }
   }
 }))
@@ -138,6 +128,110 @@ vi.mock("@/services/writing-playground", () => ({
 }))
 
 import { WritingPlayground } from "../index"
+import { useWritingPlaygroundStore } from "@/store/writing-playground"
+
+const DEFAULT_WRITING_CAPABILITIES = {
+  server: {
+    sessions: true,
+    templates: true,
+    themes: true,
+    defaults_catalog: false,
+    snapshots: false,
+    tokenize: true,
+    token_count: true
+  },
+  requested: {
+    provider: "openai",
+    tokenizer_available: true,
+    tokenizer: "mock-tokenizer",
+    tokenizer_kind: "mock",
+    tokenizer_source: "mock",
+    detokenize_available: true,
+    features: {
+      logprobs: true
+    },
+    supported_fields: ["top_logprobs"],
+    extra_body_compat: {
+      effective: true,
+      source: "mock",
+      notes: "mock"
+    }
+  }
+}
+
+const seedWritingSession = () => {
+  useWritingPlaygroundStore.setState({
+    activeSessionId: "session-auto",
+    activeSessionName: "Auto Session"
+  })
+  mockState.queryData.set("writing-sessions", {
+    sessions: [
+      {
+        id: "session-auto",
+        name: "Auto Session",
+        last_modified: "2026-03-16T12:00:00Z",
+        version: 1
+      }
+    ],
+    total: 1,
+    limit: 200,
+    offset: 0
+  })
+  mockState.queryData.set("writing-session:session-auto", {
+    id: "session-auto",
+    name: "Auto Session",
+    payload: {
+      prompt: "Seed prompt",
+      settings: {},
+      template_name: null,
+      theme_name: null,
+      chat_mode: false
+    },
+    schema_version: 1,
+    version_parent_id: null,
+    created_at: "2026-03-16T12:00:00Z",
+    last_modified: "2026-03-16T12:00:00Z",
+    deleted: false,
+    client_id: "test-client",
+    version: 1
+  })
+}
+
+beforeEach(() => {
+  mockState.storageValues.clear()
+  mockState.queryData.clear()
+  mockState.resolveApiProviderForModel.mockReset()
+  mockState.resolveApiProviderForModel.mockResolvedValue(null)
+  mockState.streamCalls.length = 0
+  mockState.sendCalls.length = 0
+
+  mockState.queryData.set("writing-capabilities", DEFAULT_WRITING_CAPABILITIES)
+  mockState.queryData.set("writing-defaults", { templates: [], themes: [] })
+  mockState.queryData.set("writing-sessions", {
+    sessions: [],
+    total: 0,
+    limit: 200,
+    offset: 0
+  })
+  mockState.queryData.set("writing-templates", {
+    templates: [],
+    total: 0,
+    limit: 200,
+    offset: 0
+  })
+  mockState.queryData.set("writing-themes", {
+    themes: [],
+    total: 0,
+    limit: 200,
+    offset: 0
+  })
+  mockState.queryData.set("writing-session:", null)
+
+  useWritingPlaygroundStore.setState({
+    activeSessionId: null,
+    activeSessionName: null
+  })
+})
 
 describe("WritingPlayground phase1 baseline", () => {
   it("renders key empty-state landmarks without crashing", () => {
@@ -182,5 +276,38 @@ describe("WritingPlayground phase1 baseline", () => {
         value: originalWidth
       })
     }
+  })
+
+  it("surfaces auto-routing limits for token inspection", () => {
+    mockState.storageValues.set("selectedModel", "auto")
+    seedWritingSession()
+
+    render(<WritingPlayground />)
+    fireEvent.click(screen.getByRole("button", { name: "Toggle settings" }))
+    fireEvent.click(screen.getByTestId("writing-inspector-tab-inspect"))
+
+    expect(
+      screen.getByRole("button", { name: "Count tokens" })
+    ).toBeDisabled()
+  })
+
+  it("passes auto model selections through generation requests", async () => {
+    mockState.storageValues.set("selectedModel", "auto")
+    seedWritingSession()
+
+    render(<WritingPlayground />)
+
+    fireEvent.change(
+      screen.getByPlaceholderText("Start writing your prompt..."),
+      {
+        target: { value: "Route this prompt on the server." }
+      }
+    )
+    fireEvent.click(screen.getByTestId("writing-topbar-generate"))
+
+    await waitFor(() => {
+      expect(mockState.streamCalls).toHaveLength(1)
+    })
+    expect(mockState.streamCalls[0]?.options.model).toBe("auto")
   })
 })
