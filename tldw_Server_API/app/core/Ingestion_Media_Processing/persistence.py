@@ -1022,7 +1022,10 @@ async def _fetch_unvectorized_chunk_count(
     def _count_worker() -> int | None:
         worker_db: MediaDatabase | None = None
         try:
-            worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
+            worker_db = create_media_database(
+                client_id,
+                db_path=db_path,
+            )
             return worker_db.get_unvectorized_chunk_count(media_id_int)
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             return None

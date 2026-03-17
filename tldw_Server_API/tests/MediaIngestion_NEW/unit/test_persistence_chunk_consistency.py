@@ -61,6 +61,19 @@ def _fake_create_media_database(*_args: Any, **_kwargs: Any) -> _RepoBackedWorke
     return _RepoBackedWorkerDB()
 
 
+class _ChunkCountDb:
+    def __init__(self, count: int) -> None:
+        self.count = count
+        self.closed = False
+
+    def get_unvectorized_chunk_count(self, media_id: int) -> int:
+        assert media_id > 0
+        return self.count
+
+    def close_connection(self) -> None:
+        self.closed = True
+
+
 @pytest.mark.asyncio
 async def test_chunk_consistency_warn_policy_adds_warning_and_metric(
     monkeypatch: pytest.MonkeyPatch,
@@ -108,6 +121,36 @@ async def test_chunk_consistency_warn_policy_adds_warning_and_metric(
         1,
         {"reason": "chunk_consistency", "path_kind": "upload"},
     ) in metrics.increment_calls
+
+
+@pytest.mark.asyncio
+async def test_fetch_unvectorized_chunk_count_uses_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub_db = _ChunkCountDb(4)
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("_fetch_unvectorized_chunk_count should not construct MediaDatabase directly")
+        ),
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        lambda client_id, *, db_path=None, **_kwargs: stub_db,
+    )
+
+    count = await ingestion_persistence._fetch_unvectorized_chunk_count(
+        db_path=":memory:",
+        client_id="test-client",
+        media_id=11,
+        loop=asyncio.get_running_loop(),
+    )
+
+    assert count == 4
+    assert stub_db.closed is True
 
 
 @pytest.mark.asyncio
