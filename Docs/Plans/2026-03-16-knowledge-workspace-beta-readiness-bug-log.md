@@ -308,6 +308,31 @@
     - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "preserves advanced source filters and temporary sort across sources pane remounts" --reporter=line --workers=1` => `1 passed (4.8s)`
     - `bunx playwright test e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `10 passed (17.4s)`
 
+### WP-006: Workspace studio cancel and interrupted-reload recovery only had component/store proof
+
+- Status: Resolved as test hardening
+- Route: `/workspace-playground`
+- Feature: canceling an in-flight summary and recovering an interrupted generation after reload
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Seed one ready source and select it
+  3. Start `Summary` generation while stalling source-content loading
+  4. Observe that the prior audit had component/store tests for cancel and rehydrate recovery, but no route-level proof that the real page wiring exposed the cancel control, failed the artifact, and surfaced the interrupted-generation recovery message after reload
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts:401`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx`
+  - `apps/packages/ui/src/store/__tests__/workspace.test.ts:467`
+- Suspected layer: route-level gap between the page-owned studio workflow and the lower-level component/store recovery logic
+- Why it matters: beta users can lose trust quickly if a long-running studio action cannot be canceled clearly or comes back from a refresh in an ambiguous stuck state
+- Resolution:
+  - Added deterministic route-level Playwright coverage for canceling an in-flight summary during source retrieval and asserting the failed-artifact recovery state.
+  - Added deterministic route-level Playwright coverage for reloading mid-summary and asserting that the interrupted artifact rehydrates as failed with the user-facing recovery message.
+  - Verified that no product code change was required for this slice; the gap was in route-level proof, not in the current implementation.
+  - Verification:
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "cancels in-flight summary generation|recovers interrupted summary generation" --reporter=line --workers=1` => `2 passed (5.1s)`
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `9 passed (13.7s)`
+    - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `34 passed (1.5m)`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
@@ -325,17 +350,20 @@
 - Current `/knowledge` shared-permalink verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` branch verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
 - Current `/knowledge` branch verification summary: `1 passed`, `0 failed`
-- Current `/workspace-playground` deterministic summary after repairs: `7 passed`, `0 failed`
+- Current `/workspace-playground` deterministic summary after repairs: `9 passed`, `0 failed`
 - Current `/workspace-playground` targeted add-source verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted add-source verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted filter/sort remount verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "preserves advanced source filters and temporary sort across sources pane remounts" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted filter/sort remount verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` targeted studio cancel/recovery verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "cancels in-flight summary generation|recovers interrupted summary generation" --reporter=line --workers=1`
+- Current `/workspace-playground` targeted studio cancel/recovery verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `3 passed`, `0 failed`
-- Current three-spec audit rerun: `32 passed`, `0 failed`
-- `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
+- Current three-spec audit rerun: `34 passed`, `0 failed`
 - `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
 - `/workspace-playground` route-level advanced filter and sort persistence is now covered deterministically across sources-pane remounts
+- `/workspace-playground` route-level studio cancel and interrupted-reload recovery is now covered deterministically
+- Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search, so those rows were reclassified to `Mock-only` until route proof is restored
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly

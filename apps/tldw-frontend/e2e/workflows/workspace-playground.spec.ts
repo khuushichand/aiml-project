@@ -8,6 +8,32 @@ import { seedAuth } from "../utils/helpers"
 import { WorkspacePlaygroundPage } from "../utils/page-objects"
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 }
+const SUMMARY_TEST_MODEL = "gpt-4o-mini"
+const SUMMARY_SOURCE_TEXT =
+  "Workspace studio source content that should keep generation busy until the test releases it."
+
+const createDeferred = () => {
+  let resolve!: () => void
+  const promise = new Promise<void>((resolver) => {
+    resolve = resolver
+  })
+  return { promise, resolve }
+}
+
+const setWorkspaceSelectedModel = async (page: Parameters<typeof seedAuth>[0]) => {
+  await page.evaluate((modelId) => {
+    const store = (window as { __tldw_useStoreMessageOption?: unknown })
+      .__tldw_useStoreMessageOption as
+        | {
+            setState?: (nextState: Record<string, unknown>) => void
+          }
+        | undefined
+    if (!store?.setState) {
+      throw new Error("Message option store is unavailable on window")
+    }
+    store.setState({ selectedModel: modelId })
+  }, SUMMARY_TEST_MODEL)
+}
 
 test.describe("Workspace Playground Workflow", () => {
   test.beforeEach(async ({ page }) => {
@@ -368,6 +394,159 @@ test.describe("Workspace Playground Workflow", () => {
       .poll(() => keywordUpdates[0]?.mode || null, { timeout: 10_000 })
       .toBe("add")
     expect(keywordUpdates[0]?.keywords?.[0]).toMatch(/^workspace:/)
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("cancels in-flight summary generation and marks the artifact failed", async ({
+    authedPage,
+    diagnostics
+  }) => {
+    const mediaDetailsRequested = createDeferred()
+    const releaseMediaDetails = createDeferred()
+
+    await authedPage.route(/\/api\/v1\/media\/\d+\?.*include_content=true/i, async (route) => {
+      mediaDetailsRequested.resolve()
+      await releaseMediaDetails.promise
+      try {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            source: { title: "Workspace Studio Summary Source" },
+            content: { text: SUMMARY_SOURCE_TEXT }
+          })
+        })
+      } catch {
+        await route.abort().catch(() => {})
+      }
+    })
+
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    await workspacePage.goto()
+    await workspacePage.waitForReady()
+    await setWorkspaceSelectedModel(authedPage)
+
+    await workspacePage.seedSources([
+      {
+        mediaId: 8_844_001,
+        title: "Workspace Studio Summary Source",
+        type: "document",
+        status: "ready"
+      }
+    ])
+
+    await expect
+      .poll(async () => (await workspacePage.getSourceIds()).length, {
+        timeout: 10_000
+      })
+      .toBe(1)
+
+    const [sourceId] = await workspacePage.getSourceIds()
+    await workspacePage.selectSourceById(sourceId)
+    await workspacePage.expectSourceSelected(sourceId)
+
+    await workspacePage.studioPanel
+      .getByRole("button", { name: /^Summary$/i })
+      .click()
+
+    await mediaDetailsRequested.promise
+    await expect(
+      workspacePage.studioPanel.getByRole("button", { name: /^Cancel$/i })
+    ).toBeVisible()
+    await expect(
+      workspacePage.studioPanel.locator('[data-testid^="studio-artifact-card-"]')
+    ).toHaveCount(1)
+
+    await workspacePage.studioPanel
+      .getByRole("button", { name: /^Cancel$/i })
+      .click()
+    releaseMediaDetails.resolve()
+
+    await expect(
+      workspacePage.studioPanel.getByText(
+        "Generation canceled before completion."
+      )
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      workspacePage.studioPanel.locator('[data-testid^="studio-artifact-card-"]')
+    ).toHaveCount(1)
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("recovers interrupted summary generation as a failed artifact after reload", async ({
+    authedPage,
+    diagnostics
+  }) => {
+    const mediaDetailsRequested = createDeferred()
+    const releaseMediaDetails = createDeferred()
+
+    await authedPage.route(/\/api\/v1\/media\/\d+\?.*include_content=true/i, async (route) => {
+      mediaDetailsRequested.resolve()
+      await releaseMediaDetails.promise
+      try {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            source: { title: "Workspace Studio Reload Source" },
+            content: { text: SUMMARY_SOURCE_TEXT }
+          })
+        })
+      } catch {
+        await route.abort().catch(() => {})
+      }
+    })
+
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    await workspacePage.goto()
+    await workspacePage.waitForReady()
+    await setWorkspaceSelectedModel(authedPage)
+
+    await workspacePage.seedSources([
+      {
+        mediaId: 8_844_002,
+        title: "Workspace Studio Reload Source",
+        type: "document",
+        status: "ready"
+      }
+    ])
+
+    await expect
+      .poll(async () => (await workspacePage.getSourceIds()).length, {
+        timeout: 10_000
+      })
+      .toBe(1)
+
+    const [sourceId] = await workspacePage.getSourceIds()
+    await workspacePage.selectSourceById(sourceId)
+    await workspacePage.expectSourceSelected(sourceId)
+
+    await workspacePage.studioPanel
+      .getByRole("button", { name: /^Summary$/i })
+      .click()
+
+    await mediaDetailsRequested.promise
+    await expect(
+      workspacePage.studioPanel.getByRole("button", { name: /^Cancel$/i })
+    ).toBeVisible()
+    await expect(
+      workspacePage.studioPanel.locator('[data-testid^="studio-artifact-card-"]')
+    ).toHaveCount(1)
+
+    await authedPage.reload({ waitUntil: "domcontentloaded" })
+    releaseMediaDetails.resolve()
+    await workspacePage.waitForReady()
+
+    await expect(
+      workspacePage.studioPanel.getByText(
+        "Generation was interrupted. Click regenerate to try again."
+      )
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      workspacePage.studioPanel.getByRole("button", { name: /^Cancel$/i })
+    ).toHaveCount(0)
 
     await assertNoCriticalErrors(diagnostics)
   })

@@ -51,14 +51,14 @@
 | `/workspace-playground` | Boot against live backend | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed boot/bootstrap health check | Candidate for beta gate |
 | `/workspace-playground` | Live core interaction shell (workspace search, pane toggles, add-source modal open/close) | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Real-backend interaction flow now passes and the formerly flaky sequence is stable across `--repeat-each 5` | Resolved `WP-001`; candidate for beta gate |
 | `/workspace-playground` | Source selection through Add Sources UI | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | The real-backend suite now ingests a pasted text source through the Add Sources modal, waits for the inserted row to reach `Ready`, selects it from the real sources pane, and asserts `1 selected`; deterministic `My Media` coverage remains as support proof for the ready-library path | Add separate live `My Media` coverage only if library-backed selection becomes beta-critical |
-| `/workspace-playground` | Chat grounding on selected source | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed grounding request assertions | Candidate for beta gate |
-| `/workspace-playground` | Studio compare-sources generation | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed compare-sources generation | Add cancel/recovery coverage |
-| `/workspace-playground` | Global search across live chat turns | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed live global-search flow | Candidate for broader live coverage |
+| `/workspace-playground` | Chat grounding on selected source | `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/ChatPane.stage2.test.tsx` | Mock-only | Component coverage still exercises grounded-answer rendering, but the current route suites do not submit or verify a grounded chat turn against selected sources | Add deterministic or live route proof before treating grounded chat as beta-gated |
+| `/workspace-playground` | Studio compare-sources generation | `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx` | Mock-only | Component coverage still exercises compare-sources generation and usage metrics, but no current route-level suite proves the full compare flow from selected sources | Add deterministic or live route proof before treating compare generation as beta-gated |
+| `/workspace-playground` | Global search across live chat turns | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/workspace-global-search.test.ts`, `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage3.test.tsx` | Mock-only | Route coverage currently proves only modal open/close, while component tests cover result selection; there is no current live route proof for searching across chat turns and opening the matched result | Add deterministic or live route proof for result-backed global search before beta |
 | `/workspace-playground` | Add-source ingestion via Paste tab | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts`, `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage1.ingestion.test.tsx`, `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage2.intake.test.tsx` | Live-covered | Real-backend Playwright now posts pasted text through the live Add Sources modal, proves `/api/v1/media/add` succeeds, asserts the inserted row is immediately usable, and cleans up the created media ID; component regressions now lock `media_type` on both paste and upload requests so the backend validation bug cannot silently return | Candidate for beta gate |
 | `/workspace-playground` | Add-source ingestion via URL tab | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, component tests | Mock-only | Deterministic route test now drives the real `URL` tab, intercepts `/api/v1/media/add`, verifies workspace keyword tagging, and asserts the inserted source renders in `Processing` state with selection disabled | Promote to live once the backend can reliably ingest and expose a stable test URL |
 | `/workspace-playground` | Filters/sort/list-state persistence | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, component tests | Mock-only | Deterministic Playwright now seeds mixed-status sources, applies `Status Ready` plus `Name (A-Z)`, hides and restores the sources pane, and proves both the rendered order and advanced-control values survive the remount | Promote only if a reliable live mixed-source fixture becomes available |
-| `/workspace-playground` | Studio cancellation and reload recovery | component tests only | Missing | No live route proof found yet | Add live Playwright |
-| `/workspace-playground` | Trust/status/telemetry surfaces | docs + component tests | Missing | No explicit route-level live proof found yet | Add targeted live checks |
+| `/workspace-playground` | Studio cancellation and reload recovery | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx`, `apps/packages/ui/src/store/__tests__/workspace.test.ts` | Mock-only | Deterministic Playwright now stalls summary source loading, proves the user can cancel an in-flight summary and see the failed artifact, then reloads mid-generation and verifies the interrupted artifact rehydrates as failed with the recovery message | Promote only if a stable live interrupt harness becomes available |
+| `/workspace-playground` | Trust/status/telemetry surfaces | `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspaceHeader.test.tsx`, docs | Mock-only | Component coverage exercises telemetry summaries and recovered-artifact counters, but no current route-level suite proves those trust/status surfaces end to end | Add targeted route checks when telemetry surfaces become release-gating |
 
 ## Baseline Run Notes
 
@@ -110,13 +110,16 @@
   - outcome: `1 passed`, runtime about `6.6s`
   - classification note: this is deterministic route coverage, not live-backend coverage
 - `/workspace-playground` deterministic command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1`
-- `/workspace-playground` deterministic outcome: `7 passed`, `0 failed`, runtime about `13.0s`
+- `/workspace-playground` deterministic outcome: `9 passed`, `0 failed`, runtime about `13.7s`
 - `/workspace-playground` targeted add-source command:
   - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1`
   - outcome: `2 passed`, `0 failed`, runtime about `9.2s`
 - `/workspace-playground` targeted filter/sort remount command:
   - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "preserves advanced source filters and temporary sort across sources pane remounts" --reporter=line --workers=1`
   - outcome: `1 passed`, `0 failed`, runtime about `4.8s`
+- `/workspace-playground` targeted studio cancel/recovery command:
+  - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "cancels in-flight summary generation|recovers interrupted summary generation" --reporter=line --workers=1`
+  - outcome: `2 passed`, `0 failed`, runtime about `5.1s`
 - `/workspace-playground` targeted live paste-intake command:
   - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
   - outcome: `1 passed`, `0 failed`, runtime about `7.8s`
@@ -127,6 +130,8 @@
   - outcome: `5 passed`, `0 failed`, runtime about `22.3s`
 - Current three-spec audit rerun:
   - command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1`
-  - outcome: `32 passed`, `0 failed`, runtime about `1.5m`
+  - outcome: `34 passed`, `0 failed`, runtime about `1.5m`
 - Current live-backend note:
   - the local API listener dropped earlier in the session, but later verification recovered to a healthy live-backed state and the full three-spec audit passed without skips
+- Current classification correction:
+  - the present real-backend workspace suite covers boot health, shell interactions, and live pasted-source intake only; earlier audit notes that implied live grounding, compare generation, or result-backed global search coverage were overstated and have been reclassified above
