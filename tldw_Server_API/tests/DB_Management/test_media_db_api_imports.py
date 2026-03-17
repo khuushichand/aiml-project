@@ -144,19 +144,76 @@ def test_watchlists_pipeline_imports_create_media_database_from_media_db_api():
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_claims_alerts_scheduler_imports_create_media_database_from_media_db_api():
+def test_claims_alerts_scheduler_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(claims_alerts_scheduler)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
-def test_claims_review_metrics_scheduler_imports_create_media_database_from_media_db_api():
+def test_claims_review_metrics_scheduler_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(claims_review_metrics_scheduler)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_embeddings_abtest_jobs_worker_imports_create_media_database_from_media_db_api():
     module = importlib.reload(embeddings_abtest_jobs_worker)
     assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_media_db_api_managed_media_database_initializes_and_closes(monkeypatch):
+    events = []
+
+    class _FakeDb:
+        def initialize_db(self):
+            events.append("initialize")
+
+        def close_connection(self):
+            events.append("close")
+
+    fake_db = _FakeDb()
+
+    def _fake_create_media_database(client_id, **kwargs):
+        events.append(("create", client_id, kwargs.get("db_path")))
+        return fake_db
+
+    monkeypatch.setattr(media_db_api, "create_media_database", _fake_create_media_database)
+
+    with media_db_api.managed_media_database("managed-client", db_path="/tmp/managed.db") as db:
+        assert db is fake_db
+        events.append("body")
+
+    assert events == [
+        ("create", "managed-client", "/tmp/managed.db"),
+        "initialize",
+        "body",
+        "close",
+    ]
+
+
+def test_media_db_api_managed_media_database_suppresses_selected_lifecycle_errors(monkeypatch):
+    events = []
+
+    class _FakeDb:
+        def initialize_db(self):
+            events.append("initialize")
+            raise RuntimeError("init failed")
+
+        def close_connection(self):
+            events.append("close")
+            raise ValueError("close failed")
+
+    fake_db = _FakeDb()
+
+    monkeypatch.setattr(media_db_api, "create_media_database", lambda *_args, **_kwargs: fake_db)
+
+    with media_db_api.managed_media_database(
+        "managed-client",
+        suppress_init_exceptions=(RuntimeError,),
+        suppress_close_exceptions=(ValueError,),
+    ) as db:
+        assert db is fake_db
+        events.append("body")
+
+    assert events == ["initialize", "body", "close"]
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,6 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 from typing import Callable
 
@@ -25,7 +24,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import content_db_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.testing import is_truthy
 
 _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS = (
@@ -94,59 +93,50 @@ async def run_claims_review_metrics_once(
     processed = 0
     if content_db_settings.backend_type == BackendType.POSTGRESQL:
         try:
-            media_db = create_media_database(client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
+            with managed_media_database(
+                client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+                suppress_init_exceptions=_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS,
+                suppress_close_exceptions=_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS,
+            ) as media_db:
+                user_ids = media_db.list_claims_review_user_ids()
+                if not user_ids:
+                    try:
+                        user_ids = [str(DatabasePaths.get_single_user_id())]
+                    except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS:
+                        user_ids = []
+                for user_id in user_ids:
+                    try:
+                        processed += await asyncio.to_thread(
+                            agg_fn,
+                            db=media_db,
+                            target_user_id=str(user_id),
+                            report_date=report_date,
+                            lookback_days=lookback_val,
+                        )
+                    except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
+                        logger.warning(f"claims_review_metrics: aggregation failed for user {user_id}: {exc}")
         except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"claims_review_metrics: failed to create media db: {exc}")
             return 0
-        try:
-            with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
-                media_db.initialize_db()
-            user_ids = media_db.list_claims_review_user_ids()
-            if not user_ids:
-                try:
-                    user_ids = [str(DatabasePaths.get_single_user_id())]
-                except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS:
-                    user_ids = []
-            for user_id in user_ids:
-                try:
-                    processed += await asyncio.to_thread(
-                        agg_fn,
-                        db=media_db,
-                        target_user_id=str(user_id),
-                        report_date=report_date,
-                        lookback_days=lookback_val,
-                    )
-                except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.warning(f"claims_review_metrics: aggregation failed for user {user_id}: {exc}")
-        finally:
-            with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
-                media_db.close_connection()
     else:
         user_ids = _enumerate_sqlite_user_ids()
         for user_id in user_ids:
             try:
-                user_db = create_media_database(
+                with managed_media_database(
                     client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
                     db_path=str(DatabasePaths.get_media_db_path(int(user_id))),
-                )
-            except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"claims_review_metrics: failed to open user db {user_id}: {exc}")
-                continue
-            try:
-                with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
-                    user_db.initialize_db()
-                processed += await asyncio.to_thread(
-                    agg_fn,
-                    db=user_db,
-                    target_user_id=str(user_id),
-                    report_date=report_date,
-                    lookback_days=lookback_val,
-                )
+                    suppress_init_exceptions=_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS,
+                    suppress_close_exceptions=_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS,
+                ) as user_db:
+                    processed += await asyncio.to_thread(
+                        agg_fn,
+                        db=user_db,
+                        target_user_id=str(user_id),
+                        report_date=report_date,
+                        lookback_days=lookback_val,
+                    )
             except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"claims_review_metrics: aggregation failed for user {user_id}: {exc}")
-            finally:
-                with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
-                    user_db.close_connection()
     return processed
 
 
