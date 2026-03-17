@@ -173,15 +173,13 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (  # noqa: F40
 from tldw_Server_API.app.core.LLM_Calls.routing import (
     RouterRequest,
     RoutingUsageContext,
-    build_router_messages,
-    build_router_prompt,
-    extract_router_choice,
-    extract_router_usage,
+    build_provider_order_for_routing,
+    flatten_provider_listing_for_routing,
     get_process_routing_decision_store,
     log_model_router_usage,
     resolve_routing_policy,
-    resolve_router_model_config,
     route_model,
+    select_llm_router_choice,
 )
 from tldw_Server_API.app.core.LLM_Calls.routing.candidate_pool import (
     build_candidate_pool,
@@ -707,43 +705,6 @@ def _extract_routing_requested_capabilities(
     }
 
 
-def _flatten_provider_listing_for_routing(provider_listing: dict[str, Any]) -> list[dict[str, Any]]:
-    """Flatten the providers endpoint payload into routing candidate records."""
-    catalog: list[dict[str, Any]] = []
-    for provider in provider_listing.get("providers", []) or []:
-        provider_name = str(provider.get("name") or "").strip().lower()
-        if not provider_name:
-            continue
-        if provider.get("is_configured") is False:
-            continue
-        for model_info in provider.get("models_info", []) or []:
-            model_name = str(model_info.get("name") or model_info.get("id") or "").strip()
-            if not model_name:
-                continue
-            candidate_record = dict(model_info)
-            candidate_record["provider"] = provider_name
-            candidate_record["model"] = model_name
-            catalog.append(candidate_record)
-    return catalog
-
-
-def _build_provider_order_for_routing(
-    provider_listing: dict[str, Any],
-    *,
-    objective: str,
-) -> dict[str, list[str]]:
-    """Collect admin-curated model ordering hints for deterministic fallback."""
-    provider_order: dict[str, list[str]] = {}
-    for provider in provider_listing.get("providers", []) or []:
-        provider_name = str(provider.get("name") or "").strip().lower()
-        if not provider_name:
-            continue
-        preferred_models = get_override_model_priority(provider_name, objective=objective)
-        if preferred_models:
-            provider_order[provider_name] = preferred_models
-    return provider_order
-
-
 async def _select_auto_chat_llm_router_choice(
     *,
     router_request: RouterRequest,
@@ -754,18 +715,6 @@ async def _select_auto_chat_llm_router_choice(
     current_user: User | None,
     request_id: str | None,
 ) -> tuple[dict[str, str] | None, dict[str, Any]]:
-    if policy.strategy != "llm_router":
-        return None, {"skipped": "strategy_rules_router"}
-    if len(candidates) <= 1:
-        return None, {"skipped": "single_candidate"}
-
-    router_model = resolve_router_model_config(
-        provider_listing=provider_listing,
-        server_default_provider=policy.server_default_provider,
-    )
-    if router_model is None:
-        return None, {"skipped": "router_model_unavailable"}
-
     def _fallback_resolver(name: str) -> str | None:
         key_val, _ = resolve_provider_api_key(
             name,
@@ -780,44 +729,6 @@ async def _select_auto_chat_llm_router_choice(
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             user_id_int = None
 
-    router_start = time.time()
-    try:
-        byok_resolution = await resolve_byok_credentials(
-            router_model.provider,
-            user_id=user_id_int,
-            request=request,
-            fallback_resolver=_fallback_resolver,
-        )
-        router_response = await perform_chat_api_call_async(
-            api_endpoint=router_model.provider,
-            messages_payload=build_router_messages(
-                build_router_prompt(
-                    request=router_request,
-                    policy=policy,
-                    candidates=candidates,
-                )
-            ),
-            api_key=byok_resolution.api_key,
-            model=router_model.model,
-            max_tokens=64,
-            streaming=False,
-            user_identifier=str(getattr(current_user, "id", "auto-router")),
-            app_config=byok_resolution.app_config,
-        )
-        await byok_resolution.touch_last_used()
-    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("Auto chat LLM router call failed: {}", exc)
-        return None, {
-            "router_model": {
-                "provider": router_model.provider,
-                "model": router_model.model,
-            },
-            "error": type(exc).__name__,
-        }
-
-    usage = extract_router_usage(router_response)
-    llm_router_choice = extract_router_choice(router_response)
-
     try:
         request_state = getattr(request, "state", None)
         user_id = getattr(request_state, "user_id", None)
@@ -826,34 +737,61 @@ async def _select_auto_chat_llm_router_choice(
         user_id = None
         api_key_id = None
 
+    async def _execute_router_call(router_model, router_messages):
+        byok_resolution = await resolve_byok_credentials(
+            router_model.provider,
+            user_id=user_id_int,
+            request=request,
+            fallback_resolver=_fallback_resolver,
+        )
+        try:
+            return await perform_chat_api_call_async(
+                api_endpoint=router_model.provider,
+                messages_payload=router_messages,
+                api_key=byok_resolution.api_key,
+                model=router_model.model,
+                max_tokens=64,
+                streaming=False,
+                user_identifier=str(getattr(current_user, "id", "auto-router")),
+                app_config=byok_resolution.app_config,
+            )
+        finally:
+            await byok_resolution.touch_last_used()
+
+    async def _log_router_usage(router_model, usage, latency_ms):
+        try:
+            await log_model_router_usage(
+                context=RoutingUsageContext(
+                    surface="chat",
+                    endpoint="POST:/api/v1/chat/completions",
+                    user_id=user_id,
+                    key_id=api_key_id,
+                    request_id=request_id,
+                    conversation_id=router_request.scope,
+                ),
+                provider=router_model.provider,
+                model=router_model.model,
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                total_tokens=usage["total_tokens"],
+                latency_ms=latency_ms,
+                estimated=usage["total_tokens"] == 0,
+            )
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Auto chat router usage logging skipped: {}", exc)
+
     try:
-        await log_model_router_usage(
-            context=RoutingUsageContext(
-                surface="chat",
-                endpoint="POST:/api/v1/chat/completions",
-                user_id=user_id,
-                key_id=api_key_id,
-                request_id=request_id,
-                conversation_id=router_request.scope,
-            ),
-            provider=router_model.provider,
-            model=router_model.model,
-            prompt_tokens=usage["prompt_tokens"],
-            completion_tokens=usage["completion_tokens"],
-            total_tokens=usage["total_tokens"],
-            latency_ms=int((time.time() - router_start) * 1000),
-            estimated=usage["total_tokens"] == 0,
+        return await select_llm_router_choice(
+            router_request=router_request,
+            policy=policy,
+            candidates=candidates,
+            provider_listing=provider_listing,
+            execute_router_call=_execute_router_call,
+            log_router_usage=_log_router_usage,
         )
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("Auto chat router usage logging skipped: {}", exc)
-
-    return llm_router_choice, {
-        "router_model": {
-            "provider": router_model.provider,
-            "model": router_model.model,
-        },
-        "choice_received": llm_router_choice is not None,
-    }
+        logger.debug("Auto chat LLM router call failed: {}", exc)
+        return None, {"error": type(exc).__name__}
 
 
 async def _resolve_auto_chat_routing_decision(
@@ -880,7 +818,7 @@ async def _resolve_auto_chat_routing_decision(
         pinned_provider=policy.pinned_provider,
         server_default_provider=policy.server_default_provider,
         requested_capabilities=requested_capabilities,
-        catalog=_flatten_provider_listing_for_routing(provider_listing),
+        catalog=flatten_provider_listing_for_routing(provider_listing),
     )
     router_request = RouterRequest(
         model="auto",
@@ -908,9 +846,10 @@ async def _resolve_auto_chat_routing_decision(
         candidates=candidates,
         sticky_store=get_process_routing_decision_store(),
         llm_router_choice=llm_router_choice,
-        provider_order=_build_provider_order_for_routing(
+        provider_order=build_provider_order_for_routing(
             provider_listing,
             objective=policy.objective,
+            priority_resolver=get_override_model_priority,
         ),
     )
     return decision, {
