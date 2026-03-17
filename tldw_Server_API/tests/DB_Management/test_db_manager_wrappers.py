@@ -1,10 +1,8 @@
-from contextlib import contextmanager
-
 import pytest
 
 from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, QueryResult
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 
 def test_add_media_with_keywords_requires_db_instance():
@@ -115,6 +113,51 @@ def test_add_media_with_keywords_uses_media_repository_for_media_db_sessions(mon
     ]
 
 
+def test_create_media_database_delegates_to_runtime_factory(monkeypatch):
+    captured = {}
+
+    def _fake_runtime_create_media_database(client_id, **kwargs):
+        captured["client_id"] = client_id
+        captured.update(kwargs)
+        return "db-instance"
+
+    monkeypatch.setattr(
+        DB_Manager,
+        "runtime_create_media_database",
+        _fake_runtime_create_media_database,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "_POSTGRES_CONTENT_MODE",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "_ensure_content_backend_loaded",
+        lambda: "backend-sentinel",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "single_user_db_path",
+        "/tmp/default-media.db",
+        raising=False,
+    )
+
+    result = DB_Manager.create_media_database(
+        "client-9",
+        config=DB_Manager.single_user_config,
+    )
+
+    assert result == "db-instance"
+    assert captured["client_id"] == "client-9"
+    assert captured["runtime"].default_db_path == "/tmp/default-media.db"
+    assert captured["runtime"].postgres_content_mode is True
+    assert captured["config"] is DB_Manager.single_user_config
+
+
 def test_update_keywords_for_media_success():
 
     db = _make_memory_db()
@@ -222,74 +265,33 @@ def test_document_version_wrappers_postgres_mode(force_postgres):
     assert latest.get("content") == "v2 content"
 
 
-def test_validate_postgres_content_backend_uses_queryresult_first(monkeypatch):
-
-    expected_version = MediaDatabase._CURRENT_SCHEMA_VERSION
+def test_validate_postgres_content_backend_delegates_to_runtime_factory(monkeypatch):
+    captured = {}
 
     class StubBackend:
         backend_type = BackendType.POSTGRESQL
 
-        def __init__(self):
-
-            self.queries = []
-
-        @contextmanager
-        def transaction(self):
-            yield object()
-
-        def execute(self, query, params=None, connection=None):
-
-            self.queries.append(query)
-            if "schema_version" in query:
-                return QueryResult(rows=[{"version": expected_version}], rowcount=1)
-            return QueryResult(rows=[{"ok": 1}], rowcount=1)
-
-    class StubMediaDatabase:
-        _CURRENT_SCHEMA_VERSION = expected_version
-        instances = []
-
-        def __init__(self, *args, **kwargs):
-
-            self.backend = kwargs.get("backend")
-            self.checked_policies = []
-            self.__class__.instances.append(self)
-
-        def _postgres_policy_exists(self, conn, table, policy):
-
-            self.checked_policies.append((table, policy))
-            return True
-
-        def close_connection(self):
-
-            pass
+    def _fake_runtime_validate_postgres_content_backend(
+        *,
+        get_content_backend_instance,
+        runtime,
+    ):
+        captured["backend"] = get_content_backend_instance()
+        captured["runtime"] = runtime
 
     stub_backend = StubBackend()
     monkeypatch.setattr(DB_Manager, "_CONTENT_DB_BACKEND", stub_backend, raising=False)
     monkeypatch.setattr(DB_Manager, "_POSTGRES_CONTENT_MODE", True, raising=False)
     monkeypatch.setattr(
         DB_Manager,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError(
-                "validate_postgres_content_backend should not construct MediaDatabase directly"
-            )
-        ),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        DB_Manager,
-        "create_media_database",
-        lambda client_id, *, db_path=None, backend=None, config=None: StubMediaDatabase(
-            client_id=client_id,
-            db_path=db_path,
-            backend=backend,
-            config=config,
-        ),
+        "runtime_validate_postgres_content_backend",
+        _fake_runtime_validate_postgres_content_backend,
         raising=False,
     )
 
     DB_Manager.validate_postgres_content_backend()
 
-    assert any("schema_version" in q for q in stub_backend.queries)
-    assert StubMediaDatabase.instances
-    assert StubMediaDatabase.instances[-1].checked_policies
+    assert captured["backend"] is stub_backend
+    assert captured["runtime"].default_db_path == str(DB_Manager.single_user_db_path)
+    assert captured["runtime"].default_config is DB_Manager.single_user_config
+    assert captured["runtime"].postgres_content_mode is True

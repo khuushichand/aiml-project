@@ -4,6 +4,11 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.session import (
     MediaDbFactory,
     MediaDbSession,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
+    MediaDbRuntimeConfig,
+    create_media_database,
+    validate_postgres_content_backend,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.rows import (
     BackendCursorAdapter,
     RowAdapter,
@@ -15,7 +20,10 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.execution import (
 __all__ = [
     "BackendCursorAdapter",
     "MediaDbFactory",
+    "MediaDbRuntimeConfig",
     "MediaDbSession",
     "RowAdapter",
     "close_sqlite_ephemeral",
+    "create_media_database",
+    "validate_postgres_content_backend",
 ]

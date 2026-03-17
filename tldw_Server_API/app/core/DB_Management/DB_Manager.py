@@ -5,7 +5,6 @@
 #
 # Imports
 import configparser
-import contextlib
 import os
 from pathlib import Path
 from typing import Optional, Union
@@ -42,6 +41,15 @@ from tldw_Server_API.app.core.DB_Management.content_backend import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
+    MediaDbRuntimeConfig,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
+    create_media_database as runtime_create_media_database,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
+    validate_postgres_content_backend as runtime_validate_postgres_content_backend,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription as sqlite_get_latest_transcription,
 )
@@ -312,31 +320,18 @@ def create_media_database(
 ) -> MediaDatabase:
     """Factory for MediaDatabase instances using the shared backend wiring."""
 
-    target_path = Path(db_path) if db_path else Path(single_user_db_path)
-    backend_to_use = backend or _ensure_content_backend_loaded()
-    cfg = config or single_user_config
-
-    if _POSTGRES_CONTENT_MODE:
-        if backend_to_use is None or backend_to_use.backend_type != BackendType.POSTGRESQL:
-            raise RuntimeError(
-                "PostgreSQL content backend configured but backend could not be created. "
-                "Ensure psycopg is installed and TLDW_CONTENT_PG_* settings are set."
-            )
-        target_path = Path(db_path) if db_path else Path(single_user_db_path)
-        return MediaDatabase(
-            db_path=str(target_path),
-            client_id=client_id,
-            backend=backend_to_use,
-            config=cfg,
-        )
-
-    # For SQLite/per-user mode, do not pass the shared backend; let the instance
-    # bind to the specific per-user file path to avoid root-level DBs.
-    return MediaDatabase(
-        db_path=str(target_path),
-        client_id=client_id,
-        backend=None,
-        config=cfg,
+    runtime = MediaDbRuntimeConfig(
+        default_db_path=str(single_user_db_path),
+        default_config=single_user_config,
+        postgres_content_mode=_POSTGRES_CONTENT_MODE,
+        backend_loader=_ensure_content_backend_loaded,
+    )
+    return runtime_create_media_database(
+        client_id,
+        db_path=db_path,
+        backend=backend,
+        config=config,
+        runtime=runtime,
     )
 
 
@@ -347,85 +342,16 @@ def validate_postgres_content_backend() -> None:
     row-level security policies are missing. Acts as a no-op for SQLite.
     """
 
-    backend: Optional[DatabaseBackend]
-    try:
-        backend = get_content_backend_instance()
-    except RuntimeError:
-        # Propagate configuration errors directly
-        raise
-
-    if backend is None:
-        if _POSTGRES_CONTENT_MODE:
-            raise RuntimeError(
-                "PostgreSQL content backend configured but not initialized. "
-                "Ensure psycopg is installed and TLDW_CONTENT_PG_* (or DATABASE_URL) is set."
-            )
-        return
-
-    if backend.backend_type != BackendType.POSTGRESQL:
-        if _POSTGRES_CONTENT_MODE:
-            raise RuntimeError(
-                "PostgreSQL content backend required but a different backend was provided."
-            )
-        return
-
-    validator = create_media_database(
-        "content_backend_validator",
-        db_path=":memory:",
-        backend=backend,
-        config=single_user_config,
+    runtime = MediaDbRuntimeConfig(
+        default_db_path=str(single_user_db_path),
+        default_config=single_user_config,
+        postgres_content_mode=_POSTGRES_CONTENT_MODE,
+        backend_loader=_ensure_content_backend_loaded,
     )
-    try:
-        with backend.transaction() as conn:  # type: ignore[arg-type]
-            version_result = backend.execute(
-                "SELECT version FROM schema_version LIMIT 1",
-                connection=conn,
-            )
-            current_version_row = version_result.first if version_result else None
-            if isinstance(current_version_row, dict):
-                current_version_raw = current_version_row.get("version")
-            else:
-                current_version_raw = current_version_row
-            try:
-                current_version = int(current_version_raw or 0)
-            except (TypeError, ValueError):
-                current_version = 0
-
-            expected_version = validator._CURRENT_SCHEMA_VERSION
-            if current_version != expected_version:
-                raise RuntimeError(
-                    "PostgreSQL content schema is outdated. "
-                    f"Current version={current_version}, expected={expected_version}. "
-                    "Run migrations: python -m tldw_Server_API.app.core.DB_Management.migration_tools "
-                    "or apply the SQL under app/core/DB_Management/migrations/."
-                )
-
-            required_policies = {
-                "media": [
-                    "media_scope_admin",
-                    "media_scope_personal",
-                    "media_scope_org",
-                    "media_scope_team",
-                ],
-                "sync_log": [
-                    "sync_scope_admin",
-                    "sync_scope_personal",
-                    "sync_scope_org",
-                    "sync_scope_team",
-                ],
-            }
-
-            for table, policies in required_policies.items():
-                for policy in policies:
-                    if not validator._postgres_policy_exists(conn, table, policy):
-                        raise RuntimeError(
-                            f"Missing Postgres RLS policy '{policy}' on table '{table}'. "
-                            "Apply policies via pg_rls_policies.ensure_* helpers or run: "
-                            "python -m tldw_Server_API.app.core.DB_Management.migration_tools --apply-rls"
-                        )
-    finally:
-        with contextlib.suppress(DB_MANAGER_RUNTIME_EXCEPTIONS):
-            validator.close_connection()
+    runtime_validate_postgres_content_backend(
+        get_content_backend_instance=get_content_backend_instance,
+        runtime=runtime,
+    )
 
 
 def create_chacha_database(
