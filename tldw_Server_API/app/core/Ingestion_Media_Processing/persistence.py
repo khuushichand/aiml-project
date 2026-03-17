@@ -3459,7 +3459,10 @@ async def process_batch_media(
                     column="m.url",
                 )
                 if source_hash and not is_url:
-                    temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
+                    temp_db_for_check = create_media_database(
+                        client_id,
+                        db_path=db_path,
+                    )
                     try:
                         if source_hash_column_available is None:
                             source_hash_column_available = _media_has_source_hash_column(
@@ -3545,7 +3548,10 @@ async def process_batch_media(
                         "Local file pre-check skipped (no source hash available)."
                     )
                 else:
-                    temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
+                    temp_db_for_check = create_media_database(
+                        client_id,
+                        db_path=db_path,
+                    )
                     try:
                         pre_check_query_template = """
                                           SELECT id
