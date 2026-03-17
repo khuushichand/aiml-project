@@ -188,58 +188,56 @@
     <div class="container">
       <div class="reveal">
         <h2 id="cta-title" style="margin:0 0 6px 0;font-size:28px">Quick Start</h2>
-        <p class="muted" style="max-width:60ch;margin-bottom:24px">Get tldw running locally in under a minute. Docker quickstart is recommended; PyPI publishing is still in progress.</p>
+        <p class="muted" style="max-width:60ch;margin-bottom:24px">Get tldw running with the WebUI in under a minute. The default path is the Docker single-user + WebUI setup; local/manual flows are for contributors and debugging.</p>
       </div>
       <div class="reveal">
         <div class="code-block">
           <div class="code-header">
-            <span>Install with pip (coming soon)</span>
-            <button class="copy-btn" data-code="pip install tldw_server&#10;python -m uvicorn tldw_Server_API.app.main:app --reload" aria-label="Copy pip install command">Copy</button>
-          </div>
-          <pre><code>pip install tldw_server
-python -m uvicorn tldw_Server_API.app.main:app --reload</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">Note: <code>pip install tldw_server</code> is currently in progress and not generally available yet. Use the Docker Compose setup below for now.</p>
-        </div>
-        <div class="code-block">
-          <div class="code-header">
-            <span>Manual Setup (No Docker)</span>
-            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart-install" aria-label="Copy manual setup command">Copy</button>
+            <span>Recommended: Docker + WebUI</span>
+            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart" aria-label="Copy default Docker and WebUI quickstart command">Copy</button>
           </div>
           <pre><code>git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
-make quickstart-install</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">This installs dependencies, initializes auth, and starts the API server. If you already have dependencies installed, run <code>make quickstart</code>.</p>
+make quickstart</code></pre>
+          <p class="muted" style="font-size:13px;margin-top:10px">This launches the Docker single-user setup with the API on <code>http://localhost:8000</code> and WebUI on <code>http://localhost:8080</code>.</p>
         </div>
         <div class="code-block">
           <div class="code-header">
-            <span>Recommended: Docker Quickstart</span>
-            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart-docker" aria-label="Copy Docker quickstart command">Copy</button>
+            <span>API-Only Docker</span>
+            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart-docker" aria-label="Copy API-only Docker quickstart command">Copy</button>
           </div>
           <pre><code>git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
 make quickstart-docker</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">This first-use flow auto-generates a secure <code>SINGLE_USER_API_KEY</code> (if missing/placeholder) and runs auth initialization once. View your key with <code>grep '^SINGLE_USER_API_KEY=' tldw_Server_API/Config_Files/.env</code>.</p>
+          <p class="muted" style="font-size:13px;margin-top:10px">Use this when you want the production-style API setup without the WebUI.</p>
         </div>
         <div class="code-block">
           <div class="code-header">
-            <span>Run API + WebUI (Docker)</span>
+            <span>Public/Team Deployment</span>
+            <button class="copy-btn" data-code="Open Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md" aria-label="Copy multi-user deployment doc path">Copy</button>
+          </div>
+          <pre><code>Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md</code></pre>
+          <p class="muted" style="font-size:13px;margin-top:10px">For teams or public deployments, use the multi-user + Postgres guide rather than the single-user quickstart.</p>
+        </div>
+        <div class="code-block">
+          <div class="code-header">
+            <span>Explicit Docker + WebUI Command</span>
             <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart-docker-webui" aria-label="Copy Docker API plus WebUI command">Copy</button>
           </div>
           <pre><code>git clone https://github.com/rmusser01/tldw_server.git
 cd tldw_server
 make quickstart-docker-webui</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">Starts API at <code>http://localhost:8000</code> and WebUI at <code>http://localhost:8080</code>.</p>
+          <p class="muted" style="font-size:13px;margin-top:10px">This is the full-stack target that <code>make quickstart</code> now uses by default.</p>
         </div>
         <div class="code-block">
           <div class="code-header">
-            <span>Run WebUI Locally (No Docker)</span>
-            <button class="copy-btn" data-code="cd apps/tldw-frontend&#10;cp .env.local.example .env.local&#10;npm install&#10;npm run dev -- -p 8080" aria-label="Copy local WebUI run command">Copy</button>
+            <span>Manual Setup (Development)</span>
+            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart-install" aria-label="Copy local development setup command">Copy</button>
           </div>
-          <pre><code>cd apps/tldw-frontend
-cp .env.local.example .env.local
-npm install
-npm run dev -- -p 8080</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">Use this with the API running separately (for example via <code>make quickstart</code>).</p>
+          <pre><code>git clone https://github.com/rmusser01/tldw_server.git
+cd tldw_server
+make quickstart-install</code></pre>
+          <p class="muted" style="font-size:13px;margin-top:10px">Keep this path for local API development and contributor workflows. Pair it with local WebUI development only when you need a dev server.</p>
         </div>
         <p class="muted" style="font-size:14px">API docs at <a href="http://127.0.0.1:8000/docs" style="color:var(--brand-2)">localhost:8000/docs</a> · Quickstart wizard at <a href="http://127.0.0.1:8000/api/v1/config/quickstart" style="color:var(--brand-2)">localhost:8000/api/v1/config/quickstart</a></p>
       </div>

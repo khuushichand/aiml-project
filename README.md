@@ -83,7 +83,12 @@ Good fit for:
 
 ## Start Here (Self-Hosting Profiles)
 
-Choose one base onboarding path:
+Choose one base onboarding path.
+
+Recommended default:
+- Run `make quickstart` for the Docker single-user + WebUI setup most users want.
+- Use [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) if you are deploying for a team or exposing the app publicly.
+- Keep local setup in [apps/DEVELOPMENT.md](apps/DEVELOPMENT.md) and the local profile docs.
 
 1. [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md)
 2. [Docker single-user](Docs/Getting_Started/Profile_Docker_Single_User.md)
@@ -220,14 +225,20 @@ Choose one install path:
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 
-# API only (local Python): installs deps, initializes auth, starts API
-make quickstart-install
+# Recommended default: Docker single-user + WebUI
+make quickstart
+
+# API-only Docker path:
+# make quickstart-docker
+
+# Explicit full-stack Docker path:
+# make quickstart-docker-webui
+
+# Local development path (API only):
+# make quickstart-install
 # If `python3` is older than 3.10 on your machine:
 # make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 
-# Docker paths:
-# make quickstart-docker
-# make quickstart-docker-webui
 # Force a full image rebuild when needed:
 # make quickstart-docker DOCKER_BUILD=true
 # make quickstart-docker-webui DOCKER_BUILD=true
@@ -235,7 +246,23 @@ make quickstart-install
 
 If `make` is unavailable, use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
 
-### No-Docker Path (Makefile)
+### Default Docker Path (Makefile)
+
+```bash
+# from repo root
+make quickstart
+```
+
+This target:
+- Starts the Docker single-user + WebUI setup.
+- Uses the existing `quickstart-docker-webui` flow under the hood.
+- Brings up the API at `http://localhost:8000` and WebUI at `http://localhost:8080`.
+
+Want a more advanced deployment?
+- Team/public deployment: [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
+- API-only Docker deployment: `make quickstart-docker`
+
+### No-Docker Path (Makefile, Development)
 
 ```bash
 # from repo root
@@ -248,14 +275,14 @@ This target:
 - Creates `.venv` if missing and installs dependencies.
 - Creates `tldw_Server_API/Config_Files/.env` from `.env.example` if missing.
 - Initializes AuthNZ (non-interactive).
-- Starts the API server at `http://127.0.0.1:8000`.
+- Starts the local API server at `http://127.0.0.1:8000`.
 
 Verify with:
 ```bash
 curl http://localhost:8000/health  # No auth needed!
 ```
 
-Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart-local` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
 ### No-Make Path (Windows-Friendly)
 
@@ -395,6 +422,7 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 | I want to... | Guide |
 |--------------|-------|
 | Choose the right onboarding path | [Getting Started Index](Docs/Getting_Started/README.md) |
+| Start the default Docker + WebUI setup | `make quickstart` |
 | Start from local single-user, then launch the WebUI | [Local Profile: Add the WebUI](#local-profile-add-the-webui) |
 | Build apps against the API locally | [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) |
 | Run on my home server with Docker | [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) |
