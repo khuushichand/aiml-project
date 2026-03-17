@@ -42,7 +42,7 @@ def _make_config(event_callback, protocol_config=None):
     return AdapterConfig(
         event_callback=event_callback,
         session_id=SESSION_ID,
-        protocol_config=protocol_config or {"protocol": "stdio", "command": "echo"},
+        protocol_config=protocol_config or {"mcp_transport": "stdio", "command": "echo"},
     )
 
 
@@ -146,7 +146,7 @@ async def test_mcp_adapter_send_prompt_agent_driven(mock_transport, event_callba
 
     adapter = MCPAdapter()
     config = _make_config(event_callback, protocol_config={
-        "protocol": "stdio",
+        "mcp_transport": "stdio",
         "command": "echo",
         "mcp_orchestration": "agent_driven",
     })
@@ -192,7 +192,7 @@ async def test_mcp_adapter_send_prompt_llm_driven(mock_transport, event_callback
     mock_tool_gate = AsyncMock()
 
     config = _make_config(event_callback, protocol_config={
-        "protocol": "stdio",
+        "mcp_transport": "stdio",
         "command": "echo",
         "mcp_orchestration": "llm_driven",
         "llm_caller": mock_llm_caller,
@@ -293,7 +293,7 @@ async def test_mcp_adapter_tool_refresh(mock_transport, event_callback, collecte
 
     adapter = MCPAdapter()
     config = _make_config(event_callback, protocol_config={
-        "protocol": "stdio",
+        "mcp_transport": "stdio",
         "command": "echo",
         "mcp_refresh_tools": True,
     })

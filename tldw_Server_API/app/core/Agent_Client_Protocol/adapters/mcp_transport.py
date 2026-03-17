@@ -46,7 +46,7 @@ def create_transport(protocol_config: dict[str, Any]) -> MCPTransport:
     Parameters
     ----------
     protocol_config:
-        Must contain ``"protocol"`` key with one of ``"stdio"``,
+        Must contain ``"mcp_transport"`` key with one of ``"stdio"``,
         ``"sse"``, or ``"streamable_http"``.  Remaining keys are
         forwarded to the concrete transport constructor.
 
@@ -70,7 +70,7 @@ def create_transport(protocol_config: dict[str, Any]) -> MCPTransport:
         MCPStreamableHTTPTransport,
     )
 
-    protocol = protocol_config.get("protocol", "")
+    protocol = protocol_config.get("mcp_transport", "")
 
     if protocol == "stdio":
         return MCPStdioTransport(

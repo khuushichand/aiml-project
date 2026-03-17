@@ -29,13 +29,13 @@ def test_mcp_transport_is_abstract():
 def test_create_transport_unknown_raises():
     """create_transport should raise ValueError for unknown protocol."""
     with pytest.raises(ValueError, match="Unknown.*protocol"):
-        create_transport({"protocol": "grpc"})
+        create_transport({"mcp_transport": "grpc"})
 
 
 def test_create_transport_stdio():
     """create_transport('stdio') should return MCPStdioTransport."""
     transport = create_transport({
-        "protocol": "stdio",
+        "mcp_transport": "stdio",
         "command": "python",
         "args": ["-m", "my_server"],
         "env": {"FOO": "bar"},
@@ -50,7 +50,7 @@ def test_create_transport_stdio():
 def test_create_transport_sse():
     """create_transport('sse') should return MCPSSETransport."""
     transport = create_transport({
-        "protocol": "sse",
+        "mcp_transport": "sse",
         "sse_url": "http://localhost:8080/sse",
         "post_url": "http://localhost:8080/messages",
         "headers": {"Authorization": "Bearer tok"},
@@ -67,7 +67,7 @@ def test_create_transport_sse():
 def test_create_transport_streamable_http():
     """create_transport('streamable_http') should return MCPStreamableHTTPTransport."""
     transport = create_transport({
-        "protocol": "streamable_http",
+        "mcp_transport": "streamable_http",
         "endpoint": "http://localhost:9090/mcp",
         "headers": {"X-Key": "val"},
         "timeout_sec": 45,
@@ -82,7 +82,7 @@ def test_create_transport_streamable_http():
 def test_create_transport_stdio_defaults():
     """Stdio transport defaults: args=None, env=None."""
     transport = create_transport({
-        "protocol": "stdio",
+        "mcp_transport": "stdio",
         "command": "node",
     })
     assert isinstance(transport, MCPStdioTransport)
@@ -93,7 +93,7 @@ def test_create_transport_stdio_defaults():
 def test_create_transport_sse_defaults():
     """SSE transport defaults: post_url=None, headers=None, timeout_sec=30."""
     transport = create_transport({
-        "protocol": "sse",
+        "mcp_transport": "sse",
         "sse_url": "http://localhost/sse",
     })
     assert isinstance(transport, MCPSSETransport)

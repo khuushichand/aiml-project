@@ -99,7 +99,8 @@ class MCPStreamableHTTPTransport(MCPTransport):
             "method": method,
             "params": params,
         }
-        assert self._http_client is not None
+        if self._http_client is None:
+            raise RuntimeError("Not connected")
         resp = await self._http_client.post(self._endpoint, json=payload)
         resp.raise_for_status()
 
@@ -119,7 +120,8 @@ class MCPStreamableHTTPTransport(MCPTransport):
             "method": method,
             "params": params,
         }
-        assert self._http_client is not None
+        if self._http_client is None:
+            raise RuntimeError("Not connected")
         resp = await self._http_client.post(self._endpoint, json=payload)
         resp.raise_for_status()
 

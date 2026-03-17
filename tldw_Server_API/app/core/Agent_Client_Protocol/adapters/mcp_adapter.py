@@ -158,11 +158,12 @@ class MCPAdapter(ProtocolAdapter):
 
     async def _heartbeat_loop(self) -> None:
         """Emit periodic heartbeat events every 15 seconds."""
-        elapsed = 0
+        import time
+        start = time.monotonic()
         try:
             while True:
                 await asyncio.sleep(15)
-                elapsed += 15
+                elapsed = int(time.monotonic() - start)
                 await self._emit(
                     AgentEventKind.HEARTBEAT,
                     {"elapsed_sec": elapsed, "state": "executing"},

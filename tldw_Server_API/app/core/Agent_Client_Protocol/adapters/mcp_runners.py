@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -19,11 +18,11 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_llm_caller impo
     LLMToolCall,
     mcp_tools_to_openai_format,
 )
+from loguru import logger
+
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transport import MCPTransport
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
 from tldw_Server_API.app.core.Agent_Client_Protocol.tool_gate import ToolGate
-
-logger = logging.getLogger(__name__)
 
 
 def _extract_text_content(result: dict[str, Any]) -> str:
@@ -206,10 +205,26 @@ class LLMDrivenRunner:
             response = await self._llm.call(history, openai_tools)
 
             if response.tool_calls:
-                # Build assistant message for history
-                assistant_tool_calls = []
+                # Per OpenAI convention: assistant message with tool_calls
+                # must come BEFORE the corresponding tool result messages.
+                assistant_tool_calls = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+                    }
+                    for tc in response.tool_calls
+                ]
+                assistant_msg: dict[str, Any] = {
+                    "role": "assistant",
+                    "tool_calls": assistant_tool_calls,
+                }
+                if response.text:
+                    assistant_msg["content"] = response.text
+                history.append(assistant_msg)
+
+                # Now process each tool call
                 for tc in response.tool_calls:
-                    # Ask governance
                     gate_result = await self._gate.request_approval(
                         self._session_id, tc.name, tc.arguments
                     )
@@ -229,20 +244,13 @@ class LLMDrivenRunner:
                             "tool_call_id": tc.id,
                             "content": f"Error: {denied_msg}",
                         })
-                        assistant_tool_calls.append({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
-                        })
                         continue
 
-                    # Emit TOOL_CALL event
                     await self._emit_event(
                         AgentEventKind.TOOL_CALL,
                         {"tool_name": tc.name, "arguments": tc.arguments},
                     )
 
-                    # Execute via transport
                     try:
                         result = await self._transport.call_tool(tc.name, tc.arguments)
                         output = _extract_text_content(result)
@@ -260,20 +268,6 @@ class LLMDrivenRunner:
                         "tool_call_id": tc.id,
                         "content": output,
                     })
-                    assistant_tool_calls.append({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
-                    })
-
-                # Add assistant message with tool calls to history
-                assistant_msg: dict[str, Any] = {
-                    "role": "assistant",
-                    "tool_calls": assistant_tool_calls,
-                }
-                if response.text:
-                    assistant_msg["content"] = response.text
-                history.append(assistant_msg)
 
             if response.text and not response.tool_calls:
                 await self._emit_event(
