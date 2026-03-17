@@ -95,17 +95,17 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
     empty_trash as sqlite_empty_trash,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_backup import (
     create_automated_backup as sqlite_create_automated_backup,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_media_details import (
     get_full_media_details as sqlite_get_full_media_details,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_media_details import (
     get_full_media_details_rich as sqlite_get_full_media_details_rich,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    MediaDatabase,
 )
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase

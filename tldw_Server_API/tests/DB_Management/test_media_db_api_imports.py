@@ -48,7 +48,9 @@ from tldw_Server_API.app.core.MCP_unified.modules.implementations import slides_
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_backup as media_db_legacy_backup
 from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_media_details
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_state as media_db_state
 from tldw_Server_API.app.services import media_files_cleanup_service
 from tldw_Server_API.app.services import document_processing_service
@@ -211,6 +213,22 @@ def test_media_versions_imports_errors_and_state_helpers_outside_media_db_v2(mon
     assert module.InputError is media_db_errors.InputError
     assert module.check_media_exists is media_db_state.check_media_exists
     assert "MediaDatabase" not in module.__dict__
+
+
+def test_db_manager_does_not_bind_detail_helpers_from_media_db_v2(monkeypatch):
+    sentinel_details = object()
+    sentinel_rich = object()
+    sentinel_backup = object()
+
+    monkeypatch.setattr(legacy_media_db, "get_full_media_details", sentinel_details, raising=False)
+    monkeypatch.setattr(legacy_media_db, "get_full_media_details_rich", sentinel_rich, raising=False)
+    monkeypatch.setattr(legacy_media_db, "create_automated_backup", sentinel_backup, raising=False)
+
+    module = importlib.reload(DB_Manager)
+
+    assert module.sqlite_get_full_media_details is legacy_media_details.get_full_media_details
+    assert module.sqlite_get_full_media_details_rich is legacy_media_details.get_full_media_details_rich
+    assert module.sqlite_create_automated_backup is media_db_legacy_backup.create_automated_backup
 
 
 def test_claim_review_assignment_does_not_bind_media_database_from_media_db_v2(monkeypatch):

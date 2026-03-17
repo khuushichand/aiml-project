@@ -137,6 +137,13 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries impo
     fetch_keywords_for_media as _fetch_keywords_for_media,
     get_all_content_from_database,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_media_details import (
+    get_full_media_details,
+    get_full_media_details_rich,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_backup import (
+    create_automated_backup,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item as _permanently_delete_item,
 )
@@ -15340,188 +15347,6 @@ class MediaDatabase:
 # ----------------------------------------------------------------------------
 # Composite helper: Full media details (active-only)
 # ----------------------------------------------------------------------------
-def get_full_media_details(db_instance: MediaDatabase, media_id: int, *, include_content: bool = True) -> dict[str, Any] | None:
-    """
-    Return a consolidated view of an active media item:
-      - media: full Media row
-      - latest_version: latest active DocumentVersion (content optionally included)
-      - keywords: list[str] of active keywords
-
-    Args:
-      db_instance: MediaDatabase instance
-      media_id: target media id
-      include_content: include latest version content
-
-    Returns: dict or None when media not found/active.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-    # Media row (active-only)
-    media = db_instance.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-    if not media:
-        return None
-    # Latest doc version
-    latest = get_document_version(db_instance, media_id=media_id, version_number=None, include_content=include_content)
-    # Keywords
-    try:
-        keywords = _fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
-    except _MEDIA_NONCRITICAL_EXCEPTIONS:
-        keywords = []
-
-    return {
-        "media": media,
-        "latest_version": latest,
-        "keywords": keywords,
-    }
-
-
-def get_full_media_details_rich(
-    db_instance: MediaDatabase,
-    media_id: int,
-    *,
-    include_content: bool = True,
-    include_versions: bool = True,
-    include_version_content: bool = False,
-) -> dict[str, Any] | None:
-    """
-    Build a response-shaped dictionary aligned with MediaDetailResponse for an active media item.
-
-    Returns None when media is not active or not found.
-    """
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError("db_instance required.")  # noqa: TRY003
-
-    media = db_instance.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-    if not media:
-        return None
-
-    # Latest doc version (for prompt/analysis/safe_metadata)
-    latest = get_document_version(db_instance, media_id=media_id, version_number=None, include_content=False)
-    prompt = (latest or {}).get("prompt")
-    analysis = (latest or {}).get("analysis_content")
-    safe_metadata_raw = (latest or {}).get("safe_metadata")
-    safe_metadata = None
-    if isinstance(safe_metadata_raw, str):
-        try:
-            import json as _json
-            safe_metadata = _json.loads(safe_metadata_raw)
-        except _MEDIA_NONCRITICAL_EXCEPTIONS:
-            safe_metadata = None
-    elif isinstance(safe_metadata_raw, dict):
-        safe_metadata = safe_metadata_raw
-
-    # Keywords
-    try:
-        keywords = _fetch_keywords_for_media(media_id=media_id, db_instance=db_instance)
-    except _MEDIA_NONCRITICAL_EXCEPTIONS:
-        keywords = []
-
-    # Content and metadata parsing
-    content_text = media.get("content") or ""
-    content_meta: dict[str, Any] = {}
-    mtype = media.get("type")
-    if mtype in ("video", "audio") and content_text:
-        try:
-            parts = content_text.split("\n\n", 1)
-            if len(parts) == 2:
-                import json as _json
-                possible_json_str, remaining_text = parts[0], parts[1]
-                try:
-                    parsed = _json.loads(possible_json_str)
-                    if isinstance(parsed, dict):
-                        content_meta = parsed
-                        content_text = remaining_text
-                except _MEDIA_NONCRITICAL_EXCEPTIONS:
-                    pass
-        except _MEDIA_NONCRITICAL_EXCEPTIONS:
-            pass
-    word_count = len(content_text.split()) if content_text else 0
-
-    # Versions list (lightweight by default - no content)
-    versions_list: list[dict[str, Any]] = []
-    if include_versions:
-        try:
-            rows = db_instance.get_all_document_versions(
-                media_id=media_id,
-                include_content=include_version_content,
-                include_deleted=False,
-            )
-            for rv in rows or []:
-                safe_md = rv.get("safe_metadata")
-                if isinstance(safe_md, str):
-                    try:
-                        import json as _json
-                        safe_md = _json.loads(safe_md)
-                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
-                        safe_md = None
-                # Ensure created_at is a datetime for response model
-                created_at_val = rv.get("created_at")
-                if isinstance(created_at_val, str):
-                    try:
-                        from datetime import datetime as _dt
-                        created_at_val = _dt.fromisoformat(created_at_val.replace('Z', '+00:00'))
-                    except _MEDIA_NONCRITICAL_EXCEPTIONS:
-                        # Leave as-is; Pydantic may still coerce common formats
-                        pass
-                        pass
-                versions_list.append({
-                    "uuid": rv.get("uuid"),
-                    "media_id": rv.get("media_id"),
-                    "version_number": rv.get("version_number"),
-                    "created_at": created_at_val,
-                    "prompt": rv.get("prompt"),
-                    "analysis_content": rv.get("analysis_content"),
-                    "safe_metadata": safe_md,
-                    "content": rv.get("content") if include_version_content else None,
-                })
-        except _MEDIA_NONCRITICAL_EXCEPTIONS:
-            versions_list = []
-
-    # Build response dict matching MediaDetailResponse structure
-    # Ensure timestamps is a list[str] if present (handle JSON-encoded strings gracefully)
-    raw_timestamps = media.get("timestamps", []) or []
-    if isinstance(raw_timestamps, str):
-        try:
-            import json as _json
-            parsed_ts = _json.loads(raw_timestamps)
-            raw_timestamps = [str(x) for x in parsed_ts] if isinstance(parsed_ts, list) else []
-        except _MEDIA_NONCRITICAL_EXCEPTIONS:
-            raw_timestamps = []
-    elif isinstance(raw_timestamps, list):
-        raw_timestamps = [str(x) for x in raw_timestamps]
-    else:
-        raw_timestamps = []
-    # Check if original file is available
-    has_original = db_instance.has_original_file(media_id)
-    original_file_url = f"/api/v1/media/{media_id}/file" if has_original else None
-
-    return {
-        "media_id": media_id,
-        "source": {
-            "url": media.get("url"),
-            "title": media.get("title"),
-            "duration": media.get("duration"),
-            "type": mtype,
-        },
-        "processing": {
-            "prompt": prompt,
-            "analysis": analysis,
-            "safe_metadata": safe_metadata,
-            "model": media.get("transcription_model"),
-            "timestamp_option": media.get("timestamp_option"),
-        },
-        "content": {
-            "metadata": content_meta,
-            "text": content_text if include_content else "",
-            "word_count": word_count,
-        },
-        "keywords": keywords,
-        "timestamps": raw_timestamps,
-        "versions": versions_list,
-        "has_original_file": has_original,
-        "original_file_url": original_file_url,
-    }
-
 # Add similar get_media_by_uuid, get_media_by_url, get_media_by_hash, get_media_by_title
 # Ensure they include the include_deleted and include_trash filters correctly.
 def get_media_by_uuid(self, media_uuid: str, include_deleted=False, include_trash=False) -> dict | None:
@@ -16244,19 +16069,6 @@ def create_incremental_backup(db_path, backup_dir):
     except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("create_incremental_backup failed")
         return f"Failed to create incremental backup: {e}"
-
-
-def create_automated_backup(db_path, backup_dir):
-    """Create a full backup using the DB_Backups helper.
-
-    Returns a status message string.
-    """
-    try:
-        from tldw_Server_API.app.core.DB_Management.DB_Backups import create_backup as _full
-        return _full(db_path, backup_dir, "media")
-    except _MEDIA_NONCRITICAL_EXCEPTIONS as e:
-        logger.exception("create_automated_backup failed")
-        return f"Failed to create backup: {e}"
 
 
 def rotate_backups(backup_dir, max_backups=10):

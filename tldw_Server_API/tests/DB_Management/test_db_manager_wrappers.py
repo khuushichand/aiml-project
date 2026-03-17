@@ -265,6 +265,44 @@ def test_document_version_wrappers_postgres_mode(force_postgres):
     assert latest.get("content") == "v2 content"
 
 
+def test_full_media_detail_wrappers_return_expected_shapes():
+
+    db = _make_memory_db()
+    mid, _, _ = DB_Manager.add_media_with_keywords(
+        db_instance=db,
+        title="Doc Detail",
+        media_type="text",
+        content="detail content",
+        keywords=["alpha", "beta"],
+        prompt="detail-prompt",
+        analysis_content="detail-analysis",
+    )
+
+    details = DB_Manager.get_full_media_details(
+        db_instance=db,
+        media_id=mid,
+        include_content=True,
+    )
+    assert details is not None
+    assert details["media"]["id"] == mid
+    assert details["latest_version"]["content"] == "detail content"
+    assert set(details["keywords"]) == {"alpha", "beta"}
+
+    rich = DB_Manager.get_full_media_details_rich(
+        db_instance=db,
+        media_id=mid,
+        include_content=True,
+        include_versions=True,
+    )
+    assert rich is not None
+    assert rich["media_id"] == mid
+    assert rich["content"]["text"] == "detail content"
+    assert set(rich["keywords"]) == {"alpha", "beta"}
+    assert rich["processing"]["prompt"] == "detail-prompt"
+    assert rich["processing"]["analysis"] == "detail-analysis"
+    assert rich["versions"]
+
+
 def test_validate_postgres_content_backend_delegates_to_runtime_factory(monkeypatch):
     captured = {}
 
