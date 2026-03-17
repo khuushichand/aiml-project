@@ -5,8 +5,8 @@
 ## Normalized Counts
 
 - Raw `MediaDatabase(...)` constructors in app code: 13
-- Operational `create_media_database(...)` call sites in app code: 31
-- Operational `managed_media_database(...)` call sites in app code: 22
+- Operational `create_media_database(...)` call sites in app code: 30
+- Operational `managed_media_database(...)` call sites in app code: 23
 - `Media_DB_v2` references in app code: 137
 
 Notes:
@@ -28,6 +28,7 @@ Notes:
 | --- | ---: | --- | --- |
 | `app/services/claims_alerts_scheduler.py` | 2 | `MOVE_MANAGED` already satisfied | Correct backend-aware scheduler pattern with suppressed init/close failures |
 | `app/services/claims_review_metrics_scheduler.py` | 2 | `MOVE_MANAGED` already satisfied | Same pattern as alerts scheduler |
+| `app/api/v1/endpoints/research.py` | 1 | `MOVE_MANAGED` already satisfied | Deprecated arXiv ingest helper now scopes its DB write through the managed helper with `initialize=False` |
 | `app/services/document_processing_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local document persistence now scopes its DB write through the managed helper with `initialize=False` |
 | `app/services/web_scraping_service.py` | 1 | `MOVE_MANAGED` already satisfied | Correct `initialize=False` local scope |
 | `app/services/enhanced_web_scraping_service.py` | 1 | `MOVE_MANAGED` already satisfied | Correct `initialize=False` local scope |
@@ -51,7 +52,6 @@ Notes:
 | `app/services/connectors_worker.py` | 1 | connector-owned per-sync DB helper through shared factory | `MOVE_FACTORY` already satisfied | `_process_import_job(...)` now opens via `_create_connector_media_db(...)` and closes on every exit path |
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | caller still owns sink DB lifetime |
 | `app/services/tts_history_cleanup_service.py` | 1 | local cleanup DB helper wraps probe and per-user loops | `NEW_HELPER` already satisfied | preserves explicit close behavior while removing raw constructors |
-| `app/api/v1/endpoints/research.py` | 1 | deprecated helper creates local DB | `MOVE_MANAGED` | local ingest path, no reason to stay raw |
 | `app/core/Web_Scraping/Article_Extractor_Lib.py` | 1 | local create and ingest | `MOVE_MANAGED` | local scope; currently no obvious close in the helper |
 | `app/core/Workflows/adapters/knowledge/crud.py` | 2 | per-user lazy import path | `NEW_HELPER` | currently calls `create_media_database(user_id=...)`; signature mismatch hazard |
 | `app/core/Watchlists/pipeline.py` | 1 | per-job DB used through ingest flow | `MOVE_MANAGED` | likely function-scope context-manager conversion |
