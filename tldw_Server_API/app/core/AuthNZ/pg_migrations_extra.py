@@ -1582,6 +1582,84 @@ _CREATE_FEDERATED_IDENTITIES = [
     ),
 ]
 
+_CREATE_SECRET_BACKENDS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS secret_backends (
+            name TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'enabled',
+            capabilities_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS display_name TEXT", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'enabled'", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS capabilities_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_secret_backends_status ON secret_backends(status)", ()),
+]
+
+_CREATE_MANAGED_SECRET_REFS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS managed_secret_refs (
+            id SERIAL PRIMARY KEY,
+            backend_name TEXT NOT NULL REFERENCES secret_backends(name) ON DELETE RESTRICT,
+            owner_scope_type TEXT NOT NULL,
+            owner_scope_id INTEGER NOT NULL,
+            provider_key TEXT NOT NULL,
+            backend_ref TEXT NULL,
+            display_name TEXT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            last_resolved_at TIMESTAMPTZ NULL,
+            expires_at TIMESTAMPTZ NULL,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            revoked_by INTEGER NULL,
+            revoked_at TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS backend_ref TEXT", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS display_name TEXT", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS last_resolved_at TIMESTAMPTZ", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS created_by INTEGER", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS updated_by INTEGER", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS revoked_by INTEGER", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_managed_secret_refs_scope_provider "
+        "ON managed_secret_refs(backend_name, owner_scope_type, owner_scope_id, provider_key)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_scope "
+        "ON managed_secret_refs(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_status "
+        "ON managed_secret_refs(status)",
+        (),
+    ),
+]
+
 _CREATE_FEDERATED_MANAGED_GRANTS = [
     (
         """
@@ -2994,6 +3072,35 @@ async def ensure_identity_federation_tables_pg(pool: DatabasePool | None = None)
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL identity federation tables: {exc}")
+        return False
+
+
+async def ensure_secret_backend_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure secret backend registry/reference tables exist for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"ensure_secret_backend_tables_pg: core table ensure skipped/failed: {exc}")
+
+        for ddl_group in (
+            _CREATE_SECRET_BACKENDS,
+            _CREATE_MANAGED_SECRET_REFS,
+        ):
+            for sql, params in ddl_group:
+                try:
+                    await db_pool.execute(sql, *params)
+                except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                    logger.debug(f"PG ensure secret backend DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL secret backend tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL secret backend tables: {exc}")
         return False
 
 

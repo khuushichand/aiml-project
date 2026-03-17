@@ -14,6 +14,22 @@ def normalize_provider_name(provider: str) -> str:
     return (provider or "").strip().lower()
 
 
+def normalize_secret_owner_scope_type(scope_type: str) -> str:
+    normalized = (scope_type or "").strip().lower()
+    if normalized in {"user", "users"}:
+        return "user"
+    if normalized in {"org", "organization", "organizations", "orgs"}:
+        return "org"
+    if normalized in {"team", "teams"}:
+        return "team"
+    raise ValueError(f"Invalid secret owner scope type: {scope_type}")
+
+
+def build_managed_secret_backend_ref(scope_type: str, scope_id: int, provider: str) -> str:
+    scope_norm = normalize_secret_owner_scope_type(scope_type)
+    return f"{scope_norm}:{int(scope_id)}:{normalize_provider_name(provider)}"
+
+
 def key_hint_for_api_key(api_key: str) -> str:
     api_key = api_key or ""
     if len(api_key) <= 4:

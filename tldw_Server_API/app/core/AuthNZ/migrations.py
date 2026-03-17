@@ -3964,6 +3964,129 @@ def rollback_074_drop_federated_managed_grants_table(conn: sqlite3.Connection) -
     logger.info("Rollback 074: Dropped federated_managed_grants table")
 
 
+def migration_075_create_secret_backends_table(conn: sqlite3.Connection) -> None:
+    """Create the secret_backends table for backend metadata and capabilities."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS secret_backends (
+            name TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'enabled',
+            capabilities_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(secret_backends)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE secret_backends ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("display_name", "display_name TEXT")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'enabled'")
+        add_col("capabilities_json", "capabilities_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_secret_backends_status "
+        "ON secret_backends(status)"
+    )
+    conn.commit()
+    logger.info("Migration 075: Created secret_backends table")
+
+
+def rollback_075_drop_secret_backends_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 075 by dropping the secret_backends table."""
+    conn.execute("DROP TABLE IF EXISTS secret_backends")
+    conn.commit()
+    logger.info("Rollback 075: Dropped secret_backends table")
+
+
+def migration_076_create_managed_secret_refs_table(conn: sqlite3.Connection) -> None:
+    """Create the managed_secret_refs table for logical secret references."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS managed_secret_refs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            backend_name TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL,
+            owner_scope_id INTEGER NOT NULL,
+            provider_key TEXT NOT NULL,
+            backend_ref TEXT NULL,
+            display_name TEXT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            last_resolved_at TIMESTAMP NULL,
+            expires_at TIMESTAMP NULL,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            revoked_by INTEGER NULL,
+            revoked_at TIMESTAMP NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (backend_name) REFERENCES secret_backends(name) ON DELETE RESTRICT
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(managed_secret_refs)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE managed_secret_refs ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("backend_ref", "backend_ref TEXT")
+        add_col("display_name", "display_name TEXT")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'active'")
+        add_col("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("last_resolved_at", "last_resolved_at TIMESTAMP")
+        add_col("expires_at", "expires_at TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_managed_secret_refs_scope_provider "
+        "ON managed_secret_refs(backend_name, owner_scope_type, owner_scope_id, provider_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_scope "
+        "ON managed_secret_refs(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_status "
+        "ON managed_secret_refs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 076: Created managed_secret_refs table")
+
+
+def rollback_076_drop_managed_secret_refs_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 076 by dropping the managed_secret_refs table."""
+    conn.execute("DROP TABLE IF EXISTS managed_secret_refs")
+    conn.commit()
+    logger.info("Rollback 076: Dropped managed_secret_refs table")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -4264,6 +4387,18 @@ def get_authnz_migrations() -> list[Migration]:
             "Create federated_managed_grants table",
             migration_074_create_federated_managed_grants_table,
             rollback_074_drop_federated_managed_grants_table,
+        ),
+        Migration(
+            75,
+            "Create secret_backends table",
+            migration_075_create_secret_backends_table,
+            rollback_075_drop_secret_backends_table,
+        ),
+        Migration(
+            76,
+            "Create managed_secret_refs table",
+            migration_076_create_managed_secret_refs_table,
+            rollback_076_drop_managed_secret_refs_table,
         ),
     ]
 
