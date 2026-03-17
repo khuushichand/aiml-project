@@ -86,8 +86,8 @@ def test_create_transport_stdio_defaults():
         "command": "node",
     })
     assert isinstance(transport, MCPStdioTransport)
-    assert transport._args is None
-    assert transport._env is None
+    assert transport._args == []
+    assert transport._env == {}
 
 
 def test_create_transport_sse_defaults():
