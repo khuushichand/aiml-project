@@ -17,7 +17,10 @@ from tldw_Server_API.app.api.v1.schemas.items_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, InputError
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
+    DatabaseError,
+    InputError,
+)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
