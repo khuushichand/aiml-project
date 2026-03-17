@@ -4,10 +4,10 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 9
+- Raw `MediaDatabase(...)` constructors in app code: 8
 - Operational `create_media_database(...)` call sites in app code: 18
-- Operational `managed_media_database(...)` call sites in app code: 36
-- `Media_DB_v2` references in app code: 137
+- Operational `managed_media_database(...)` call sites in app code: 37
+- `Media_DB_v2` references in app code: 136
 
 Notes:
 
@@ -51,6 +51,7 @@ Notes:
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | `MOVE_MANAGED` already satisfied | Ingestion-claims SQL fallback now uses the managed helper with `initialize=False` and suppressed close failures |
 | `app/core/Embeddings/services/jobs_worker.py` | 1 | `MOVE_MANAGED` already satisfied | Local media-content reads now scope their DB session through the managed helper with `initialize=False` |
 | `app/core/Embeddings/services/vector_compactor.py` | 1 | `MOVE_MANAGED` already satisfied | Soft-delete lookup now scopes its Media DB read through the managed helper with `initialize=False` and suppressed close failures |
+| `app/core/RAG/rag_service/unified_pipeline.py` | 1 | `MOVE_MANAGED` already satisfied | Pre-extracted claims verification now scopes its local Media DB read through the managed helper with `initialize=False` and suppressed close failures |
 | `app/core/Watchlists/pipeline.py` | 1 | `MOVE_MANAGED` already satisfied | The optional per-run media DB now scopes through the managed helper with `initialize=False` and suppressed close failures |
 
 ## Operational `create_media_database(...)` Inventory
@@ -76,7 +77,6 @@ Notes:
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Sync/Sync_Client.py` | 1 | long-lived client sync owner | `KEEP_RAW` | explicit owner lifecycle is part of the design |
-| `app/core/RAG/rag_service/unified_pipeline.py` | 1 | local fallback lookup | `MOVE_MANAGED` | local read scope |
 | `app/core/RAG/rag_service/database_retrievers.py` | 2 | retriever-owned DB instances | `KEEP_RAW` | lifetime is owned by retriever instances with explicit `close()` |
 
 ## App-Side `Media_DB_v2` Compatibility Buckets
@@ -155,7 +155,6 @@ Representative files:
 - `app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py`
 - `app/core/Ingestion_Media_Processing/Books/Book_Processing_Lib.py`
 - `app/services/audiobook_jobs_worker.py`
-- `app/core/RAG/rag_service/unified_pipeline.py`
 - `app/core/Workflows/adapters/media/ingest.py`
 
 Recommendation:
@@ -165,7 +164,6 @@ Recommendation:
 
 ## Recommended Next Execution Order
 
-1. Finish the remaining simple local raw constructor site in `app/core/RAG/rag_service/unified_pipeline.py`.
-2. Revisit long-lived owners and explicitly mark which raw constructors remain acceptable.
-3. Collapse the remaining `persistence.py` factory hotspot behind a dedicated helper.
-4. Narrow the `Media_DB_v2` boundary imports once lifecycle helper policy is stable.
+1. Revisit long-lived owners and explicitly mark which raw constructors remain acceptable.
+2. Collapse the remaining `persistence.py` factory hotspot behind a dedicated helper.
+3. Narrow the `Media_DB_v2` boundary imports once lifecycle helper policy is stable.

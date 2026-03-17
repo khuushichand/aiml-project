@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Proce
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
 from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
+from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline
 from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import slides_module
@@ -211,6 +212,11 @@ def test_template_initialization_imports_create_media_database_from_media_db_api
 
 def test_watchlists_pipeline_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(watchlists_pipeline)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_unified_pipeline_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(unified_pipeline)
     assert module.managed_media_database is media_db_api.managed_media_database
 
 
