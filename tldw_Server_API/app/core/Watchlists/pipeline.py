@@ -45,8 +45,8 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
@@ -922,7 +922,7 @@ async def run_watchlist_job(
                             import random as _rnd
                             j = int(secs * jitter_pct)
                             if j > 0:
-                                secs = max(0, secs + _rnd.randint(-j, j))
+                                secs = max(0, secs + _rnd.randint(-j, j))  # nosec B311
                             from datetime import timedelta as _td
                             defer_until_val = (datetime.utcnow().replace(tzinfo=timezone.utc) + _td(seconds=secs)).isoformat()
                         with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):

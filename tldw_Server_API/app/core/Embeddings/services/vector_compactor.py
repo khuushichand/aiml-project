@@ -31,8 +31,8 @@ except (ImportError, ModuleNotFoundError):  # pragma: no cover
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 
 _DB_CLOSE_EXCEPTIONS = (BackendDatabaseError, sqlite3.Error, OSError, RuntimeError)
 _CHROMA_CLOSE_EXCEPTIONS = (RuntimeError, OSError)

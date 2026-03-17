@@ -8,11 +8,16 @@ from tldw_Server_API.app.core.Claims_Extraction import (
     claims_rebuild_service,
     claims_service,
 )
+from tldw_Server_API.app.core.Embeddings.services import (
+    jobs_worker as embeddings_jobs_worker,
+    vector_compactor,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Processing_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
 from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
+from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import enhanced_web_scraping_service
@@ -115,4 +120,19 @@ def test_claims_service_imports_create_media_database_from_media_db_api():
 
 def test_claims_rebuild_service_imports_create_media_database_from_media_db_api():
     module = importlib.reload(claims_rebuild_service)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_embeddings_jobs_worker_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(embeddings_jobs_worker)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_vector_compactor_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(vector_compactor)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_watchlists_pipeline_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(watchlists_pipeline)
     assert module.create_media_database is media_db_api.create_media_database

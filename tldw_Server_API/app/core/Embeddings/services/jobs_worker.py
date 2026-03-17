@@ -46,12 +46,12 @@ from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (
     generate_embeddings_for_media,
 )
 from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
 )
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
