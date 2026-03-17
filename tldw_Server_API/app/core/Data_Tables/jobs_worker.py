@@ -43,7 +43,6 @@ from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_chacha_db_path,
@@ -54,6 +53,9 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    create_media_database,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version,

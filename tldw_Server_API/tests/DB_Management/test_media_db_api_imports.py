@@ -6,11 +6,13 @@ from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Processing_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
+from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import enhanced_web_scraping_service
 from tldw_Server_API.app.services import media_ingest_jobs_worker
+from tldw_Server_API.app.services import web_scraping_service
 
 
 def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch):
@@ -83,4 +85,14 @@ def test_article_extractor_imports_create_media_database_from_media_db_api():
 
 def test_book_processing_imports_create_media_database_from_media_db_api():
     module = importlib.reload(Book_Processing_Lib)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_web_scraping_service_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(web_scraping_service)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_data_tables_jobs_worker_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(data_tables_jobs_worker)
     assert module.create_media_database is media_db_api.create_media_database
