@@ -18,6 +18,19 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
   - `docker compose -f Dockerfiles/docker-compose.yml ps`
   - `docker compose -f Dockerfiles/docker-compose.yml logs -f app`
 
+## Persistence and Backups
+
+- Default quickstart persistence uses Docker named volumes, not repo-local folders.
+- `app-data` backs `/app/Databases`, which includes the default SQLite AuthNZ DB, first-run marker files, and filesystem-backed uploads such as `Databases/user_files`.
+- `chroma-data` backs `/app/Databases/user_databases`, which is the full per-user data tree used by `USER_DB_BASE_DIR`, not just Chroma embeddings.
+- `postgres_data` and `redis_data` back the bundled Postgres and Redis services.
+- Startup configuration is also persisted in `tldw_Server_API/Config_Files/.env`; keep that file with your volume backups.
+- `docker compose down` keeps named volumes. `docker compose down -v` deletes them and will remove the persisted databases, user files, and vector stores.
+- If you want host-visible storage for easier inspection or external backups, use `Dockerfiles/docker-compose.host-storage.yml` instead of the default compose file:
+  - `docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.host-storage.yml up -d --build`
+  - Optional WebUI: `docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.host-storage.yml -f Dockerfiles/docker-compose.webui.yml up -d --build`
+- The host-storage variant writes under `docker-data/` in the repo root and is optional; the default named-volume quickstart remains unchanged for backwards compatibility.
+
 ## Overlays & Profiles
 
 - Production overrides: `Dockerfiles/docker-compose.override.yml`
@@ -44,6 +57,10 @@ This folder contains the base Compose stack for tldw_server, optional overlays, 
 - Dev overlay (unified streaming pilot): `Dockerfiles/docker-compose.dev.yml`
   - `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build`
   - Sets `STREAMS_UNIFIED=1` (keep off in production until validated).
+
+- Host-visible storage variant: `Dockerfiles/docker-compose.host-storage.yml`
+  - `docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.host-storage.yml up -d --build`
+  - Use this instead of the default base compose file when you want bind mounts under `docker-data/`.
 
 - WebUI overlay: `Dockerfiles/docker-compose.webui.yml`
   - `docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build`
