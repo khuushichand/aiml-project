@@ -58,7 +58,7 @@ from tldw_Server_API.app.core.Chunking import ChunkingError, InvalidChunkingMeth
 #
 # Import Local
 from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
-from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
@@ -1587,20 +1587,23 @@ def ingest_text_file(file_path, title=None, author=None, keywords=None, base_dir
             keywords_list = ['text_file', 'epub_converted'] + provided
 
         # Add the text file to the database
-        db_instance = create_media_database(client_id="book_ingest")
-        add_media_with_keywords(
-            db_instance=db_instance,
-            url="its_a_book",
-            title=title,
-            media_type='book',
-            content=content,
-            keywords=keywords_list,
-            prompt='No prompt for text files',
-            summary='No summary for text files',
-            transcription_model='None',
-            author=author,
-            ingestion_date=datetime.now().strftime('%Y-%m-%d')
-        )
+        with managed_media_database(
+            client_id="book_ingest",
+            initialize=False,
+        ) as db_instance:
+            add_media_with_keywords(
+                db_instance=db_instance,
+                url="its_a_book",
+                title=title,
+                media_type='book',
+                content=content,
+                keywords=keywords_list,
+                prompt='No prompt for text files',
+                summary='No summary for text files',
+                transcription_model='None',
+                author=author,
+                ingestion_date=datetime.now().strftime('%Y-%m-%d')
+            )
 
         logging.info(f"Text file '{title}' by {author} ingested successfully.")
         return f"Text file '{title}' by {author} ingested successfully."
