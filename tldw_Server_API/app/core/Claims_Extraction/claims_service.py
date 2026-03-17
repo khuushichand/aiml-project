@@ -1763,6 +1763,17 @@ def _compute_unsupported_ratios(window_sec: int, baseline_sec: int) -> dict[str,
 
     return {"window_ratio": window_ratio, "baseline_ratio": baseline_ratio}
 
+@contextmanager
+def _claims_user_override_db(user_id: int):
+    db_path = get_user_media_db_path(int(user_id))
+    with managed_media_database(
+        client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+        db_path=db_path,
+        initialize=False,
+        suppress_close_exceptions=_CLAIMS_NONCRITICAL_EXCEPTIONS,
+    ) as override_db:
+        yield override_db, db_path
+
 
 @contextmanager
 def _resolve_media_db(
@@ -1773,29 +1784,17 @@ def _resolve_media_db(
     admin_required: bool,
     owner_filter: bool = False,
 ) -> tuple[MediaDatabase, int | None]:
-    override_db: MediaDatabase | None = None
     owner_user_id: int | None = None
-    try:
-        if user_id is not None:
-            if not _legacy_user_has_platform_admin_claims(current_user) and admin_required:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
-            if db.backend_type == BackendType.POSTGRESQL:
-                owner_user_id = int(user_id) if owner_filter else None
-                target_db = db
-            else:
-                db_path = get_user_media_db_path(int(user_id))
-                override_db = MediaDatabase(
-                    db_path=db_path,
-                    client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-                )
-                target_db = override_db
+    if user_id is not None:
+        if not _legacy_user_has_platform_admin_claims(current_user) and admin_required:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+        if db.backend_type == BackendType.POSTGRESQL:
+            owner_user_id = int(user_id) if owner_filter else None
         else:
-            target_db = db
-        yield target_db, owner_user_id
-    finally:
-        if override_db is not None:
-            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                override_db.close_connection()
+            with _claims_user_override_db(int(user_id)) as (override_db, _db_path):
+                yield override_db, owner_user_id
+            return
+    yield db, owner_user_id
 
 
 def list_all_claims(
@@ -3504,12 +3503,7 @@ def rebuild_claim_clusters(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid clustering method")
 
     if user_id is not None and db.backend_type != BackendType.POSTGRESQL:
-        db_path = get_user_media_db_path(int(user_id))
-        override_db = MediaDatabase(
-            db_path=db_path,
-            client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-        )
-        try:
+        with _claims_user_override_db(int(user_id)) as (override_db, _db_path):
             if cluster_method == "exact":
                 return override_db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)
             return rebuild_claim_clusters_embeddings(
@@ -3518,9 +3512,6 @@ def rebuild_claim_clusters(
                 min_size=min_size,
                 similarity_threshold=similarity_threshold,
             )
-        finally:
-            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                override_db.close_connection()
 
     if cluster_method == "exact":
         result = db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)
@@ -3952,60 +3943,84 @@ def rebuild_all_media(
     db: MediaDatabase,
     rebuild_service: Any = None,
 ) -> dict[str, Any]:
-    override_db: MediaDatabase | None = None
     svc = rebuild_service or get_claims_rebuild_service()
-    try:
-        if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
-            db_path = get_user_media_db_path(int(user_id))
-            override_db = MediaDatabase(
-                db_path=db_path,
-                client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-            )
-            query_db = override_db
-        else:
-            db_path = db.db_path_str
-            query_db = db
-
-        policy = str(policy or "missing").lower()
-        if policy == "all":
-            sql = "SELECT id FROM Media WHERE deleted=0 AND is_trash=0"
-            rows = query_db.execute_query(sql).fetchall()
-        elif policy == "stale":
-            sql = (
-                "SELECT m.id FROM Media m "
-                "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
-                "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR c.lastc < m.last_modified)"
-            )
-            rows = query_db.execute_query(sql).fetchall()
-        else:
-            sql = (
-                "SELECT m.id FROM Media m "
-                "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
-                "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
-                ")"
-            )
-            rows = query_db.execute_query(sql).fetchall()
-        mids: list[int] = []
-        for r in rows:
-            try:
-                mids.append(int(r["id"]))
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+    if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
+        with _claims_user_override_db(int(user_id)) as (query_db, db_path):
+            policy = str(policy or "missing").lower()
+            if policy == "all":
+                sql = "SELECT id FROM Media WHERE deleted=0 AND is_trash=0"
+                rows = query_db.execute_query(sql).fetchall()
+            elif policy == "stale":
+                sql = (
+                    "SELECT m.id FROM Media m "
+                    "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
+                    "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR c.lastc < m.last_modified)"
+                )
+                rows = query_db.execute_query(sql).fetchall()
+            else:
+                sql = (
+                    "SELECT m.id FROM Media m "
+                    "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
+                    "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
+                    ")"
+                )
+                rows = query_db.execute_query(sql).fetchall()
+            mids: list[int] = []
+            for r in rows:
                 try:
-                    mids.append(int(r[0]))
+                    mids.append(int(r["id"]))
                 except _CLAIMS_NONCRITICAL_EXCEPTIONS:
                     try:
-                        if isinstance(r, dict):
-                            first_val = next(iter(r.values()))
-                            mids.append(int(first_val))
+                        mids.append(int(r[0]))
                     except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                        continue
-        for mid in mids:
-            svc.submit(media_id=mid, db_path=db_path)
-        return {"status": "accepted", "enqueued": len(mids), "policy": policy}
-    finally:
-        if override_db is not None:
-            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                override_db.close_connection()
+                        try:
+                            if isinstance(r, dict):
+                                first_val = next(iter(r.values()))
+                                mids.append(int(first_val))
+                        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+                            continue
+            for mid in mids:
+                svc.submit(media_id=mid, db_path=db_path)
+            return {"status": "accepted", "enqueued": len(mids), "policy": policy}
+
+    db_path = db.db_path_str
+    query_db = db
+    policy = str(policy or "missing").lower()
+    if policy == "all":
+        sql = "SELECT id FROM Media WHERE deleted=0 AND is_trash=0"
+        rows = query_db.execute_query(sql).fetchall()
+    elif policy == "stale":
+        sql = (
+            "SELECT m.id FROM Media m "
+            "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
+            "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR c.lastc < m.last_modified)"
+        )
+        rows = query_db.execute_query(sql).fetchall()
+    else:
+        sql = (
+            "SELECT m.id FROM Media m "
+            "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
+            "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
+            ")"
+        )
+        rows = query_db.execute_query(sql).fetchall()
+    mids: list[int] = []
+    for r in rows:
+        try:
+            mids.append(int(r["id"]))
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+            try:
+                mids.append(int(r[0]))
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+                try:
+                    if isinstance(r, dict):
+                        first_val = next(iter(r.values()))
+                        mids.append(int(first_val))
+                except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+                    continue
+    for mid in mids:
+        svc.submit(media_id=mid, db_path=db_path)
+    return {"status": "accepted", "enqueued": len(mids), "policy": policy}
 
 
 def rebuild_claims_fts(
@@ -4014,21 +4029,11 @@ def rebuild_claims_fts(
     current_user: User,
     db: MediaDatabase,
 ) -> dict[str, Any]:
-    override_db: MediaDatabase | None = None
-    try:
-        if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
-            db_path = get_user_media_db_path(int(user_id))
-            override_db = MediaDatabase(
-                db_path=db_path,
-                client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
-            )
+    if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
+        with _claims_user_override_db(int(user_id)) as (override_db, _db_path):
             count = override_db.rebuild_claims_fts()
-        else:
-            count = db.rebuild_claims_fts()
-    finally:
-        if override_db is not None:
-            with suppress(_CLAIMS_NONCRITICAL_EXCEPTIONS):
-                override_db.close_connection()
+    else:
+        count = db.rebuild_claims_fts()
     return {"status": "ok", "indexed": count}
 
 

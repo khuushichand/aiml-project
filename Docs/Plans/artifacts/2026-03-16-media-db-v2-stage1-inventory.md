@@ -4,9 +4,9 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 13
+- Raw `MediaDatabase(...)` constructors in app code: 9
 - Operational `create_media_database(...)` call sites in app code: 18
-- Operational `managed_media_database(...)` call sites in app code: 35
+- Operational `managed_media_database(...)` call sites in app code: 36
 - `Media_DB_v2` references in app code: 137
 
 Notes:
@@ -47,7 +47,7 @@ Notes:
 | `app/core/Claims_Extraction/claims_utils.py` | 1 | `MOVE_MANAGED` already satisfied | Claims persistence worker now scopes its DB writes through the managed helper with `initialize=False` and close-error suppression |
 | `app/core/Claims_Extraction/claims_notifications.py` | 1 | `MOVE_MANAGED` already satisfied | Review notification delivery now scopes its DB session through the managed helper with suppressed init/close failures |
 | `app/core/Claims_Extraction/claims_rebuild_service.py` | 2 | `MOVE_MANAGED` already satisfied | Health persistence and task processing now scope their DB sessions through the managed helper while preserving first-run health DB initialization semantics |
-| `app/core/Claims_Extraction/claims_service.py` | 2 | `MOVE_MANAGED` already satisfied | Webhook event persistence and persisted rebuild-health reads now scope their DB sessions through the managed helper with suppressed init/close failures |
+| `app/core/Claims_Extraction/claims_service.py` | 3 | `MOVE_MANAGED` already satisfied | Webhook event persistence, persisted rebuild-health reads, and the cross-user SQLite override helper now scope their DB sessions through the managed helper with suppressed close failures |
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | `MOVE_MANAGED` already satisfied | Ingestion-claims SQL fallback now uses the managed helper with `initialize=False` and suppressed close failures |
 | `app/core/Embeddings/services/jobs_worker.py` | 1 | `MOVE_MANAGED` already satisfied | Local media-content reads now scope their DB session through the managed helper with `initialize=False` |
 | `app/core/Embeddings/services/vector_compactor.py` | 1 | `MOVE_MANAGED` already satisfied | Soft-delete lookup now scopes its Media DB read through the managed helper with `initialize=False` and suppressed close failures |
@@ -75,7 +75,6 @@ Notes:
 | --- | ---: | --- | --- | --- |
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
-| `app/core/Claims_Extraction/claims_service.py` | 4 | cross-user SQLite override DBs | `NEW_HELPER` | needs one dedicated override helper, not four duplicated constructors |
 | `app/core/Sync/Sync_Client.py` | 1 | long-lived client sync owner | `KEEP_RAW` | explicit owner lifecycle is part of the design |
 | `app/core/RAG/rag_service/unified_pipeline.py` | 1 | local fallback lookup | `MOVE_MANAGED` | local read scope |
 | `app/core/RAG/rag_service/database_retrievers.py` | 2 | retriever-owned DB instances | `KEEP_RAW` | lifetime is owned by retriever instances with explicit `close()` |
@@ -166,7 +165,7 @@ Recommendation:
 
 ## Recommended Next Execution Order
 
-1. Centralize the claims cross-user SQLite override pattern into one helper.
-2. Convert the remaining simple local raw constructor sites to `managed_media_database(...)` or `create_media_database(...)` based on ownership.
-3. Revisit long-lived owners and explicitly mark which raw constructors remain acceptable.
+1. Finish the remaining simple local raw constructor site in `app/core/RAG/rag_service/unified_pipeline.py`.
+2. Revisit long-lived owners and explicitly mark which raw constructors remain acceptable.
+3. Collapse the remaining `persistence.py` factory hotspot behind a dedicated helper.
 4. Narrow the `Media_DB_v2` boundary imports once lifecycle helper policy is stable.
