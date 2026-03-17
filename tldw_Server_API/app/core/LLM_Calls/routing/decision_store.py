@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Any, Mapping, Optional
 
 from .models import RoutingDecision
@@ -22,10 +22,41 @@ class StoredRoutingDecision:
 
 
 class InMemoryRoutingDecisionStore:
-    """Simple in-memory sticky decision store for early routing integration."""
+    """Simple bounded in-memory sticky decision store."""
 
-    def __init__(self) -> None:
-        self._decisions: dict[str, StoredRoutingDecision] = {}
+    def __init__(
+        self,
+        *,
+        max_entries: int = 1024,
+        ttl_seconds: int = 3600,
+    ) -> None:
+        self._max_entries = max(1, int(max_entries))
+        self._ttl_seconds = max(1, int(ttl_seconds))
+        self._decisions: OrderedDict[str, StoredRoutingDecision] = OrderedDict()
+
+    def _is_expired(
+        self,
+        decision: StoredRoutingDecision,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        reference_time = now or datetime.now(timezone.utc)
+        age_seconds = (reference_time - decision.updated_at).total_seconds()
+        return age_seconds > self._ttl_seconds
+
+    def _prune_expired(self, *, now: datetime | None = None) -> None:
+        reference_time = now or datetime.now(timezone.utc)
+        expired_scopes = [
+            scope
+            for scope, decision in self._decisions.items()
+            if self._is_expired(decision, now=reference_time)
+        ]
+        for scope in expired_scopes:
+            self._decisions.pop(scope, None)
+
+    def _evict_if_needed(self) -> None:
+        while len(self._decisions) > self._max_entries:
+            self._decisions.popitem(last=False)
 
     def save(
         self,
@@ -37,6 +68,8 @@ class InMemoryRoutingDecisionStore:
         policy_fingerprint: str | None = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> StoredRoutingDecision:
+        now = datetime.now(timezone.utc)
+        self._prune_expired(now=now)
         decision = StoredRoutingDecision(
             scope=scope,
             fingerprint=fingerprint,
@@ -44,22 +77,24 @@ class InMemoryRoutingDecisionStore:
             model=model,
             policy_fingerprint=policy_fingerprint,
             metadata=dict(metadata or {}),
+            updated_at=now,
         )
+        self._decisions.pop(scope, None)
         self._decisions[scope] = decision
+        self._evict_if_needed()
         return decision
 
     def load(self, scope: str) -> StoredRoutingDecision | None:
-        return self._decisions.get(scope)
+        now = datetime.now(timezone.utc)
+        self._prune_expired(now=now)
+        decision = self._decisions.get(scope)
+        if decision is None:
+            return None
+        self._decisions.move_to_end(scope)
+        return decision
 
     def delete(self, scope: str) -> None:
         self._decisions.pop(scope, None)
-
-
-@lru_cache(maxsize=1)
-def get_process_routing_decision_store() -> InMemoryRoutingDecisionStore:
-    """Return the process-local sticky routing store shared by endpoint integrations."""
-
-    return InMemoryRoutingDecisionStore()
 
 
 def compute_routing_fingerprint(

@@ -9,7 +9,6 @@ from .accounting import (
 from .decision_store import (
     InMemoryRoutingDecisionStore,
     compute_routing_fingerprint,
-    get_process_routing_decision_store,
     maybe_reuse_sticky_decision,
 )
 from .llm_router import build_router_prompt, validate_llm_router_choice
@@ -43,7 +42,6 @@ __all__ = [
     "extract_router_choice",
     "extract_router_usage",
     "flatten_provider_listing_for_routing",
-    "get_process_routing_decision_store",
     "get_router_operation_name",
     "log_model_router_usage",
     "maybe_reuse_sticky_decision",

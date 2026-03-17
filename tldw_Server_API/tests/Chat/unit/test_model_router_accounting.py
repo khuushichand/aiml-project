@@ -57,3 +57,67 @@ async def test_log_model_router_usage_records_router_operation():
     assert calls[0]["provider"] == "openai"
     assert calls[0]["model"] == "gpt-4.1-mini"
     assert calls[0]["conversation_id"] == "conv-1"
+
+
+@pytest.mark.asyncio
+async def test_log_model_router_usage_matches_log_llm_usage_signature():
+    calls: list[dict[str, object]] = []
+
+    async def strict_usage_logger(
+        *,
+        user_id,
+        key_id,
+        endpoint,
+        operation,
+        provider,
+        model,
+        status,
+        latency_ms,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens=None,
+        currency="USD",
+        request_id=None,
+        estimated=None,
+        request=None,
+        remote_ip=None,
+        user_agent=None,
+        token_name=None,
+        conversation_id=None,
+    ):
+        calls.append(
+            {
+                "user_id": user_id,
+                "key_id": key_id,
+                "endpoint": endpoint,
+                "operation": operation,
+                "provider": provider,
+                "model": model,
+                "status": status,
+                "latency_ms": latency_ms,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "currency": currency,
+                "request_id": request_id,
+                "estimated": estimated,
+                "request": request,
+                "remote_ip": remote_ip,
+                "user_agent": user_agent,
+                "token_name": token_name,
+                "conversation_id": conversation_id,
+            }
+        )
+
+    await log_model_router_usage(
+        context=RoutingUsageContext(
+            surface="chat",
+            endpoint="POST:/api/v1/chat/completions",
+        ),
+        provider="openai",
+        model="gpt-4.1-mini",
+        total_cost_usd=0.001,
+        usage_logger=strict_usage_logger,
+    )
+
+    assert len(calls) == 1

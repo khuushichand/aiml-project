@@ -6,6 +6,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
     ChatCompletionUserMessageParam,
 )
+from tldw_Server_API.app.core.LLM_Calls.routing.decision_store import InMemoryRoutingDecisionStore
 from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingDecision
 
 
@@ -86,6 +87,8 @@ def test_chat_endpoint_auto_routing_runs_llm_router_logs_usage_and_wires_sticky_
     mock_chacha_db,
     setup_dependencies,
 ):
+    injected_store = InMemoryRoutingDecisionStore()
+    authenticated_client.app.state.routing_decision_store = injected_store
     request_data = ChatCompletionRequest(
         model="auto",
         api_provider="openrouter",
@@ -201,7 +204,7 @@ def test_chat_endpoint_auto_routing_runs_llm_router_logs_usage_and_wires_sticky_
     assert response.status_code == status.HTTP_200_OK
     assert captured["selected_provider"] == "openrouter"
     assert captured["model"] == "anthropic/claude-4.5-sonnet"
-    assert captured["route_model_kwargs"]["sticky_store"] is not None
+    assert captured["route_model_kwargs"]["sticky_store"] is injected_store
     assert captured["route_model_kwargs"]["llm_router_choice"] == {
         "provider": "openrouter",
         "model": "anthropic/claude-4.5-sonnet",

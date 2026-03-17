@@ -171,11 +171,11 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (  # noqa: F40
     load_template,
 )
 from tldw_Server_API.app.core.LLM_Calls.routing import (
+    InMemoryRoutingDecisionStore,
     RouterRequest,
     RoutingUsageContext,
     build_provider_order_for_routing,
     flatten_provider_listing_for_routing,
-    get_process_routing_decision_store,
     log_model_router_usage,
     resolve_routing_policy,
     route_model,
@@ -212,6 +212,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_permissions,
     require_token_scope,
+)
+from tldw_Server_API.app.api.v1.API_Deps.llm_routing_deps import (
+    get_request_routing_decision_store,
 )
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
@@ -798,6 +801,7 @@ async def _resolve_auto_chat_routing_decision(
     request_data: ChatCompletionRequest,
     *,
     request: Request,
+    sticky_store: InMemoryRoutingDecisionStore,
     current_user: User | None,
     request_id: str | None,
 ) -> tuple[Any | None, dict[str, Any]]:
@@ -844,7 +848,7 @@ async def _resolve_auto_chat_routing_decision(
         request=router_request,
         policy=policy,
         candidates=candidates,
-        sticky_store=get_process_routing_decision_store(),
+        sticky_store=sticky_store,
         llm_router_choice=llm_router_choice,
         provider_order=build_provider_order_for_routing(
             provider_listing,
@@ -2099,6 +2103,7 @@ async def create_chat_completion(
     request: Request,  # Request object for audit logging, rate limiting, and provider state access
     request_data: ChatCompletionRequest = Body(...),
     chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    routing_decision_store: InMemoryRoutingDecisionStore = Depends(get_request_routing_decision_store),
     current_user: User = Depends(get_request_user),
     Authorization: str = Header(None, alias="Authorization", description="Bearer token for authentication."),
     Token: str = Header(None, alias="Token", description="Alternate bearer token header for backward compatibility."),
@@ -2149,6 +2154,7 @@ async def create_chat_completion(
         routing_decision, routing_debug = await _resolve_auto_chat_routing_decision(
             request_data,
             request=request,
+            sticky_store=routing_decision_store,
             current_user=current_user,
             request_id=request_id,
         )

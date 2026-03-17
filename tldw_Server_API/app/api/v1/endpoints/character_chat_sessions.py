@@ -34,6 +34,9 @@ from loguru import logger
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.llm_routing_deps import (
+    get_request_routing_decision_store,
+)
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
@@ -131,11 +134,11 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
 )
 from tldw_Server_API.app.core.LLM_Calls.routing import (
+    InMemoryRoutingDecisionStore,
     RouterRequest,
     RoutingUsageContext,
     build_provider_order_for_routing,
     flatten_provider_listing_for_routing,
-    get_process_routing_decision_store,
     log_model_router_usage,
     resolve_routing_policy,
     route_model,
@@ -401,6 +404,7 @@ async def _resolve_auto_character_chat_routing_decision(
     body: CharacterChatCompletionV2Request,
     raw_provider: str | None,
     formatted_messages: list[dict[str, Any]],
+    sticky_store: InMemoryRoutingDecisionStore,
     current_user: User | None,
 ) -> tuple[Any | None, dict[str, Any]]:
     """Resolve `model='auto'` into a canonical provider/model pair for character chat."""
@@ -451,7 +455,7 @@ async def _resolve_auto_character_chat_routing_decision(
         request=router_request,
         policy=policy,
         candidates=candidates,
-        sticky_store=get_process_routing_decision_store(),
+        sticky_store=sticky_store,
         llm_router_choice=llm_router_choice,
         provider_order=build_provider_order_for_routing(
             provider_listing,
@@ -3501,6 +3505,7 @@ async def character_chat_completion(
     chat_id: str = Path(..., description="Chat session ID"),
     body: CharacterChatCompletionV2Request = None,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    routing_decision_store: InMemoryRoutingDecisionStore = Depends(get_request_routing_decision_store),
     current_user: User = Depends(get_request_user)
 ):
     """Perform a character chat completion using configured providers and persist results optionally.
@@ -3731,12 +3736,13 @@ async def character_chat_completion(
         routing_decision = None
         if auto_model_requested:
             routing_decision, routing_debug = await _resolve_auto_character_chat_routing_decision(
-                chat_id=chat_id,
-                body=body,
-                raw_provider=raw_provider,
-                formatted_messages=formatted,
-                current_user=current_user,
-            )
+            chat_id=chat_id,
+            body=body,
+            raw_provider=raw_provider,
+            formatted_messages=formatted,
+            sticky_store=routing_decision_store,
+            current_user=current_user,
+        )
             if routing_decision is None:
                 candidate_count = int((routing_debug or {}).get("candidate_count") or 0)
                 if candidate_count > 0:

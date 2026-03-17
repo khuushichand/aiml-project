@@ -5,6 +5,7 @@ Unit test to ensure completion pre-check uses efficient count instead of bulk-lo
 import pytest
 from typing import List, Dict, Any
 
+from tldw_Server_API.app.core.LLM_Calls.routing.decision_store import InMemoryRoutingDecisionStore
 from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingDecision
 
 
@@ -154,6 +155,8 @@ def test_complete_v2_auto_model_routes_before_strict_availability_check(
     )
     assert chat_resp.status_code == 201
     chat_id = chat_resp.json()["id"]
+    injected_store = InMemoryRoutingDecisionStore()
+    test_client.app.state.routing_decision_store = injected_store
 
     captured: Dict[str, Any] = {}
 
@@ -260,7 +263,7 @@ def test_complete_v2_auto_model_routes_before_strict_availability_check(
     assert payload["assistant_content"] == "auto routed response"
     assert captured["routing_request"].model == "auto"
     assert captured["routing_policy"].mode == "sticky_session"
-    assert captured["routing_sticky_store"] is not None
+    assert captured["routing_sticky_store"] is injected_store
     assert captured["routing_llm_choice"] == {
         "provider": "local-llm",
         "model": "local-test-routed",

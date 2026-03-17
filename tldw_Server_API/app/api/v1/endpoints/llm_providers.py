@@ -901,6 +901,8 @@ def _default_model_metadata(provider: str, model: str) -> dict[str, Any]:
 
 
 def _augment_routing_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Normalize derived routing flags and ensure ranking keys are always present."""
+
     capabilities = metadata.get("capabilities")
     if not isinstance(capabilities, dict):
         capabilities = {}
