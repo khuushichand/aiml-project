@@ -209,9 +209,9 @@ def test_template_initialization_imports_create_media_database_from_media_db_api
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_watchlists_pipeline_imports_create_media_database_from_media_db_api():
+def test_watchlists_pipeline_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(watchlists_pipeline)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_workflow_media_ingest_imports_managed_media_database_from_media_db_api():

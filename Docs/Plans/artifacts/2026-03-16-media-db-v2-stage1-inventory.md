@@ -5,8 +5,8 @@
 ## Normalized Counts
 
 - Raw `MediaDatabase(...)` constructors in app code: 13
-- Operational `create_media_database(...)` call sites in app code: 24
-- Operational `managed_media_database(...)` call sites in app code: 29
+- Operational `create_media_database(...)` call sites in app code: 23
+- Operational `managed_media_database(...)` call sites in app code: 30
 - `Media_DB_v2` references in app code: 137
 
 Notes:
@@ -48,6 +48,7 @@ Notes:
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | `MOVE_MANAGED` already satisfied | Ingestion-claims SQL fallback now uses the managed helper with `initialize=False` and suppressed close failures |
 | `app/core/Embeddings/services/jobs_worker.py` | 1 | `MOVE_MANAGED` already satisfied | Local media-content reads now scope their DB session through the managed helper with `initialize=False` |
 | `app/core/Embeddings/services/vector_compactor.py` | 1 | `MOVE_MANAGED` already satisfied | Soft-delete lookup now scopes its Media DB read through the managed helper with `initialize=False` and suppressed close failures |
+| `app/core/Watchlists/pipeline.py` | 1 | `MOVE_MANAGED` already satisfied | The optional per-run media DB now scopes through the managed helper with `initialize=False` and suppressed close failures |
 
 ## Operational `create_media_database(...)` Inventory
 
@@ -59,7 +60,6 @@ Notes:
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | caller still owns sink DB lifetime |
 | `app/services/tts_history_cleanup_service.py` | 1 | local cleanup DB helper wraps probe and per-user loops | `NEW_HELPER` already satisfied | preserves explicit close behavior while removing raw constructors |
 | `app/core/Workflows/adapters/knowledge/crud.py` | 2 | per-user lazy import path | `NEW_HELPER` | currently calls `create_media_database(user_id=...)`; signature mismatch hazard |
-| `app/core/Watchlists/pipeline.py` | 1 | per-job DB used through ingest flow | `MOVE_MANAGED` | likely function-scope context-manager conversion |
 | `app/core/Data_Tables/jobs_worker.py` | 1 | cached per-user DB owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Claims_Extraction/claims_notifications.py` | 1 | local delivery helper init/close | `MOVE_MANAGED` | could also be folded into a notification DB helper |
 | `app/core/Claims_Extraction/claims_rebuild_service.py` | 2 | local health/task DB open-close | `NEW_HELPER` | repeated pattern with health-init semantics |
