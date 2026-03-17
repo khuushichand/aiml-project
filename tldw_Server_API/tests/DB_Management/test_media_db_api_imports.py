@@ -194,9 +194,9 @@ def test_embeddings_jobs_worker_imports_create_media_database_from_media_db_api(
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_vector_compactor_imports_create_media_database_from_media_db_api():
+def test_vector_compactor_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(vector_compactor)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_chromadb_library_imports_managed_media_database_from_media_db_api():
