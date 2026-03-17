@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 from fastapi import HTTPException
 
@@ -196,6 +198,13 @@ async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch, tmp
     fake_db = _FakeDB()
     fake_repo = _FakeDB()
 
+    @contextmanager
+    def _fake_managed_media_database(*args, **kwargs):  # noqa: ARG001
+        try:
+            yield fake_db
+        finally:
+            fake_db.close_connection()
+
     async def fake_scrape_and_summarize_multiple(**kwargs):
         return [
             {
@@ -216,9 +225,15 @@ async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch, tmp
     )
     monkeypatch.setattr(
         ws_service,
+        "managed_media_database",
+        _fake_managed_media_database,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ws_service,
         "create_media_database",
-        lambda **kwargs: fake_db,
-        raising=True,
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
     )
     monkeypatch.setattr(
         ws_service,
@@ -276,6 +291,13 @@ async def test_fallback_persist_uses_media_repository_api(monkeypatch, tmp_path)
     fake_db = _FakeDbNoLegacyInsert()
     fake_repo = _FakeRepo()
 
+    @contextmanager
+    def _fake_managed_media_database(*args, **kwargs):  # noqa: ARG001
+        try:
+            yield fake_db
+        finally:
+            fake_db.close_connection()
+
     async def fake_scrape_and_summarize_multiple(**kwargs):
         return [
             {
@@ -296,9 +318,15 @@ async def test_fallback_persist_uses_media_repository_api(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(
         ws_service,
+        "managed_media_database",
+        _fake_managed_media_database,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ws_service,
         "create_media_database",
-        lambda **kwargs: fake_db,
-        raising=True,
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
     )
     monkeypatch.setattr(
         ws_service,

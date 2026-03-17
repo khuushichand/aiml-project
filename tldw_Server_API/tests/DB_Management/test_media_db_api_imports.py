@@ -74,9 +74,9 @@ def test_media_ingest_jobs_worker_imports_create_media_database_from_media_db_ap
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_enhanced_web_scraping_service_imports_create_media_database_from_media_db_api():
+def test_enhanced_web_scraping_service_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(enhanced_web_scraping_service)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_research_endpoint_imports_create_media_database_from_media_db_api():
@@ -104,9 +104,9 @@ def test_book_processing_imports_create_media_database_from_media_db_api():
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_web_scraping_service_imports_create_media_database_from_media_db_api():
+def test_web_scraping_service_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(web_scraping_service)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_data_tables_jobs_worker_imports_create_media_database_from_media_db_api():

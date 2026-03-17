@@ -18,8 +18,8 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import ScrapeMethod
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
-    create_media_database,
     get_media_repository,
+    managed_media_database,
 )
 from tldw_Server_API.app.core.deprecations import log_runtime_deprecation
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
@@ -426,14 +426,14 @@ async def process_web_scraping_task(
                     )
                 effective_user_id = user_id
                 db_path = get_user_media_db_path(effective_user_id)
-                db = create_media_database(
+                with managed_media_database(
                     client_id="webscraping_legacy_service",
                     db_path=db_path,
-                )
+                    initialize=False,
+                ) as db:
 
-                # Persist each article in the DB
-                media_ids = []
-                try:
+                    # Persist each article in the DB
+                    media_ids = []
                     for article in result_list:
                         # Construct info_dict
                         {
@@ -511,9 +511,6 @@ async def process_web_scraping_task(
                         )
                         if media_id:
                             media_ids.append(media_id)
-                finally:
-                    # Close database connection
-                    db.close_connection()
 
                 return {
                     "status": "persist-ok",

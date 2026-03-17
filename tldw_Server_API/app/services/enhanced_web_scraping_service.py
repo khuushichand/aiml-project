@@ -18,7 +18,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
-from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.testing import is_truthy
@@ -590,12 +590,12 @@ class WebScrapingService:
         # Default to user_id 1 if not provided (single-user mode)
         effective_user_id = user_id if user_id is not None else 1
         db_path = get_user_media_db_path(effective_user_id)
-        db = create_media_database(
+        with managed_media_database(
             client_id=f"webscraping_service_{effective_user_id}",
             db_path=db_path,
-        )
+            initialize=False,
+        ) as db:
 
-        try:
             # Metrics
             try:
                 reg = get_metrics_registry()
@@ -789,9 +789,6 @@ class WebScrapingService:
                     reg.observe("webscraping.persist.batch_duration_seconds", _batch_dt, {"method": str(result.get("method", "unknown"))})
             except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                 logger.debug(f"webscraping.persist: batch metric observe failed: {me}")
-        finally:
-            # Close database connection
-            db.close_connection()
 
         return {
             "status": "persist-ok",

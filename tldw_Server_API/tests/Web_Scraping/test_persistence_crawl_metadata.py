@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 
 import pytest
 
@@ -37,6 +38,13 @@ async def test_store_persistent_persists_crawl_metadata_when_available(monkeypat
     service = WebScrapingService()
     fake_db = _FakeDB()
 
+    @contextmanager
+    def _fake_managed_media_database(*args, **kwargs):  # noqa: ARG001
+        try:
+            yield fake_db
+        finally:
+            fake_db.close_connection()
+
     monkeypatch.setattr(
         enhanced_svc_mod,
         "get_user_media_db_path",
@@ -44,8 +52,14 @@ async def test_store_persistent_persists_crawl_metadata_when_available(monkeypat
     )
     monkeypatch.setattr(
         enhanced_svc_mod,
+        "managed_media_database",
+        _fake_managed_media_database,
+    )
+    monkeypatch.setattr(
+        enhanced_svc_mod,
         "create_media_database",
-        lambda **kwargs: fake_db,
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
     )
     monkeypatch.setattr(
         enhanced_svc_mod,
