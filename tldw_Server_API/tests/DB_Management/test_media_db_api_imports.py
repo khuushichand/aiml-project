@@ -12,6 +12,7 @@ from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.api.v1.endpoints import slides as slides_endpoint
 from tldw_Server_API.app.api.v1.endpoints import data_tables
 from tldw_Server_API.app.api.v1.endpoints import items
+from tldw_Server_API.app.api.v1.endpoints import quizzes as quizzes_endpoint
 from tldw_Server_API.app.api.v1.endpoints import sync
 from tldw_Server_API.app.api.v1.API_Deps import DB_Deps as media_db_deps
 from tldw_Server_API.app.api.v1.endpoints.media import document_outline
@@ -342,6 +343,14 @@ def test_slides_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypat
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(slides_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_quizzes_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(quizzes_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 
