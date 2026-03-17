@@ -21,8 +21,8 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_rebuild_metrics,
 )
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 
 _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AssertionError,

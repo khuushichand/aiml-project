@@ -50,10 +50,10 @@ from tldw_Server_API.app.core.Claims_Extraction.runtime_config import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 from tldw_Server_API.app.core.Setup import setup_manager
 
@@ -668,7 +668,7 @@ def _deliver_claims_alert_webhook(
     for attempt in range(1, max_attempts + 1):
         if attempt > 1:
             base_delay = backoff_schedule[min(attempt - 2, len(backoff_schedule) - 1)]
-            jitter = random.uniform(0.8, 1.2)
+            jitter = random.uniform(0.8, 1.2)  # nosec B311
             time.sleep(max(0.0, base_delay * jitter))
         start_ts = time.time()
         try:

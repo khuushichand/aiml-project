@@ -3,6 +3,11 @@ import importlib
 
 from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.api.v1.endpoints import research
+from tldw_Server_API.app.core.Claims_Extraction import (
+    claims_notifications,
+    claims_rebuild_service,
+    claims_service,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Processing_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
@@ -95,4 +100,19 @@ def test_web_scraping_service_imports_create_media_database_from_media_db_api():
 
 def test_data_tables_jobs_worker_imports_create_media_database_from_media_db_api():
     module = importlib.reload(data_tables_jobs_worker)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_claims_notifications_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(claims_notifications)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_claims_service_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(claims_service)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_claims_rebuild_service_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(claims_rebuild_service)
     assert module.create_media_database is media_db_api.create_media_database
