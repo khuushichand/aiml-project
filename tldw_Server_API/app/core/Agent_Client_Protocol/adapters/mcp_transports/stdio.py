@@ -1,4 +1,4 @@
-"""MCPStdioTransport — stdio-based MCP transport (stub)."""
+"""MCPStdioTransport — stdio-based MCP transport using ACPStdioClient."""
 from __future__ import annotations
 
 from typing import Any
@@ -6,12 +6,16 @@ from typing import Any
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transport import (
     MCPTransport,
 )
+from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import (
+    ACPStdioClient,
+)
 
 
 class MCPStdioTransport(MCPTransport):
     """MCP transport over stdio (JSON-RPC over stdin/stdout).
 
-    This is currently a stub; all I/O methods raise ``NotImplementedError``.
+    Wraps :class:`ACPStdioClient` and performs the MCP initialize
+    handshake on :meth:`connect`.
     """
 
     def __init__(
@@ -21,27 +25,61 @@ class MCPStdioTransport(MCPTransport):
         env: dict[str, str] | None = None,
     ) -> None:
         self._command = command
-        self._args = args
-        self._env = env
+        self._args = args or []
+        self._env = env or {}
+        self._client: ACPStdioClient | None = None
         self._connected = False
+
+    def _create_client(self) -> ACPStdioClient:
+        """Create a new :class:`ACPStdioClient` instance.
+
+        Extracted as a method so tests can patch it to inject a mock.
+        """
+        return ACPStdioClient(self._command, self._args, self._env)
 
     @property
     def is_connected(self) -> bool:
-        return self._connected
+        if not self._connected or self._client is None:
+            return False
+        return getattr(self._client, "is_running", False)
 
     async def connect(self) -> None:
-        raise NotImplementedError("MCPStdioTransport.connect not yet implemented")
+        """Start the subprocess and perform the MCP initialize handshake."""
+        if self._client is None:
+            self._client = self._create_client()
+        await self._client.start()
+        await self._client.call("initialize", {
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {"name": "tldw_acp_harness", "version": "0.1.0"},
+            "capabilities": {},
+        })
+        await self._client.notify("initialized", {})
+        self._connected = True
 
     async def close(self) -> None:
-        raise NotImplementedError("MCPStdioTransport.close not yet implemented")
+        """Shut down the subprocess and mark as disconnected."""
+        if self._client is not None:
+            await self._client.close()
+        self._connected = False
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        raise NotImplementedError("MCPStdioTransport.list_tools not yet implemented")
+        """Request the tool list from the MCP server."""
+        if self._client is None:
+            raise RuntimeError("Not connected")
+        resp = await self._client.call("tools/list", {})
+        return resp.result.get("tools", []) if resp.result else []
 
     async def call_tool(
         self, tool_name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        raise NotImplementedError("MCPStdioTransport.call_tool not yet implemented")
+        """Invoke a tool on the MCP server."""
+        if self._client is None:
+            raise RuntimeError("Not connected")
+        resp = await self._client.call(
+            "tools/call", {"name": tool_name, "arguments": arguments}
+        )
+        return resp.result if resp.result else {}
 
     async def health_check(self) -> bool:
-        raise NotImplementedError("MCPStdioTransport.health_check not yet implemented")
+        """Return True if the underlying client process is running."""
+        return self._client is not None and getattr(self._client, "is_running", False)
