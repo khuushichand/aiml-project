@@ -11,7 +11,12 @@ import {
   skipIfServerUnavailable,
   assertNoCriticalErrors
 } from "../utils/fixtures"
-import { seedAuth, fetchWithApiKey, TEST_CONFIG } from "../utils/helpers"
+import {
+  seedAuth,
+  fetchWithApiKey,
+  TEST_CONFIG,
+  generateTestId
+} from "../utils/helpers"
 import { WorkspacePlaygroundPage } from "../utils/page-objects"
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 }
@@ -110,6 +115,36 @@ const ensureNoServerReachabilityDialog = async (page: Page): Promise<void> => {
   await expect(serverDialog).toBeHidden({ timeout: 5_000 })
 }
 
+const cleanupMediaItem = async (mediaId: number | null): Promise<void> => {
+  if (!Number.isFinite(mediaId) || (mediaId as number) <= 0) {
+    return
+  }
+
+  const targetId = Math.trunc(mediaId as number)
+  const trashResponse = await fetchWithApiKey(`${TEST_CONFIG.serverUrl}/api/v1/media/${targetId}`, TEST_CONFIG.apiKey, {
+    method: "DELETE"
+  }).catch(() => null)
+
+  if (trashResponse && !trashResponse.ok && trashResponse.status !== 204 && trashResponse.status !== 404) {
+    throw new Error(`Soft delete for media ${targetId} returned HTTP ${trashResponse.status}`)
+  }
+
+  const permanentResponse = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/media/${targetId}/permanent`,
+    TEST_CONFIG.apiKey,
+    { method: "DELETE" }
+  ).catch(() => null)
+
+  if (
+    permanentResponse &&
+    !permanentResponse.ok &&
+    permanentResponse.status !== 204 &&
+    permanentResponse.status !== 404
+  ) {
+    throw new Error(`Permanent delete for media ${targetId} returned HTTP ${permanentResponse.status}`)
+  }
+}
+
 const buildSeedSources = () => {
   const base = Date.now() % 1_000_000
   return [
@@ -205,6 +240,91 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
       await ensureNoServerReachabilityDialog(authedPage)
     } finally {
       tracker.dispose()
+    }
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("ingests pasted text through the live add-source flow", async ({
+    authedPage,
+    serverInfo,
+    diagnostics
+  }) => {
+    skipIfServerUnavailable(serverInfo)
+    const chatBootstrapPreflight = await canReachChatBootstrapEndpoint()
+    test.skip(
+      !chatBootstrapPreflight.reachable,
+      chatBootstrapPreflight.reason ||
+        "Skipping real-backend workspace test: chat bootstrap endpoint unavailable"
+    )
+
+    const tracker = trackChatBootstrapResponses(authedPage)
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    const uniqueSlug = generateTestId("workspace-live-paste")
+    const sourceTitle = `Workspace Live Paste ${uniqueSlug}`
+    const sourceBody = `Live workspace ingestion body ${uniqueSlug}`
+    let createdMediaId: number | null = null
+
+    try {
+      await workspacePage.goto()
+      await workspacePage.waitForReady()
+      await assertChatBootstrapHealthy(tracker.responses, tracker.failures)
+
+      await workspacePage.openAddSourcesModal()
+      await workspacePage.addSourceModal.getByRole("tab", { name: /paste/i }).click()
+      await workspacePage.addSourceModal
+        .getByPlaceholder("Give your content a title")
+        .fill(sourceTitle)
+      await workspacePage.addSourceModal
+        .getByPlaceholder("Paste your text content here...")
+        .fill(sourceBody)
+
+      const uploadResponsePromise = authedPage.waitForResponse((response) => {
+        const request = response.request()
+        return (
+          request.method().toUpperCase() === "POST" &&
+          response.url().includes("/api/v1/media/add")
+        )
+      })
+
+      await workspacePage.addSourceModal
+        .getByRole("button", { name: /^add text$/i })
+        .click()
+
+      const uploadResponse = await uploadResponsePromise
+      expect(uploadResponse.ok()).toBeTruthy()
+      const uploadPayload = await uploadResponse.json().catch(() => null)
+      const createdCandidate =
+        uploadPayload?.results?.[0]?.media_id ??
+        uploadPayload?.results?.[0]?.db_id ??
+        uploadPayload?.result?.media_id ??
+        uploadPayload?.result?.db_id ??
+        uploadPayload?.media_id ??
+        uploadPayload?.db_id ??
+        uploadPayload?.id
+      createdMediaId = Number(createdCandidate)
+      expect(Number.isFinite(createdMediaId)).toBeTruthy()
+
+      await expect(workspacePage.addSourceModal).toBeHidden({ timeout: 15_000 })
+
+      const sourceRow = workspacePage.sourcesPanel
+        .locator("[data-source-id]", { hasText: sourceTitle })
+        .first()
+      await expect(sourceRow).toBeVisible({ timeout: 15_000 })
+      await expect(
+        sourceRow.locator("span").filter({ hasText: /^ready$/i }).first()
+      ).toBeVisible({ timeout: 15_000 })
+      await expect(sourceRow.locator('input[type="checkbox"]')).toBeEnabled()
+
+      const sourceId = await sourceRow.getAttribute("data-source-id")
+      expect(sourceId).toBeTruthy()
+      await workspacePage.selectSourceById(sourceId!)
+      await workspacePage.expectSourceSelected(sourceId!)
+      await expect(workspacePage.sourcesPanel.getByText(/^1 selected$/i)).toBeVisible()
+      await ensureNoServerReachabilityDialog(authedPage)
+    } finally {
+      tracker.dispose()
+      await cleanupMediaItem(createdMediaId)
     }
 
     await assertNoCriticalErrors(diagnostics)

@@ -27,6 +27,7 @@ import {
 import { useWorkspaceStore } from "@/store/workspace"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { inferUploadMediaTypeFromFile } from "@/services/tldw/media-routing"
 import type {
   AddSourceTab,
   WorkspaceSourceStatus,
@@ -349,7 +350,9 @@ const UploadTab: React.FC<{
       }))
 
       try {
+        const uploadMediaType = inferUploadMediaTypeFromFile(file.name, file.type)
         const response = await tldwClient.uploadMedia(file, {
+          media_type: uploadMediaType,
           overwrite: "false",
           perform_chunking: "true"
         })
@@ -865,7 +868,9 @@ const PasteTab: React.FC<{
         type: "text/plain"
       })
 
+      const uploadMediaType = inferUploadMediaTypeFromFile(file.name, file.type)
       const response = await tldwClient.uploadMedia(file, {
+        media_type: uploadMediaType,
         title: title || "Pasted Text",
         overwrite: "false",
         perform_chunking: "true"

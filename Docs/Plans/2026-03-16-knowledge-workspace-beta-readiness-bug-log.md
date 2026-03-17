@@ -93,6 +93,32 @@
   - Added deterministic Playwright coverage that resolves a shared token into hydrated query, answer, and evidence state from the direct `/knowledge/shared/:token` URL.
   - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "hydrates shared conversations from tokenized knowledge routes" --reporter=line --workers=1` => `1 passed (8.8s)`
 
+### WP-004: Workspace Add Sources live paste and upload flows omitted required `media_type`
+
+- Status: Resolved in audit worktree
+- Route: `/workspace-playground`
+- Feature: adding pasted text or uploaded files through the Add Sources modal
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Open `Add Sources`
+  3. Use the `Paste` tab and click `Add Text` after filling title and content
+  4. Observe that the live backend rejects the request with `Field required (body.media_type)`
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts:248`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/AddSourceModal.tsx:353`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/AddSourceModal.tsx:871`
+  - `apps/tldw-frontend/test-results/workflows-workspace-playgr-60644-gh-the-live-add-source-flow-chromium/error-context.md`
+- Suspected layer: workspace Add Sources modal building upload requests without the backend-required `media_type` field
+- Why it matters: this is a primary workspace intake path, and beta users would hit a hard backend validation error when trying to add pasted notes; the same request builder also affected file uploads from the same modal
+- Resolution:
+  - Added explicit `media_type` inference to both the workspace upload and paste flows before calling `tldwClient.uploadMedia(...)`.
+  - Kept the new live Playwright case and extended component regressions so paste and upload requests now both prove the required upload fields.
+  - Updated the live test to assert the actual backend behavior after fix: the inserted source becomes `Ready`, is selectable from the sources pane, and is deleted via the verified cleanup path.
+  - Verification:
+    - `bunx vitest run src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage1.ingestion.test.tsx src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage2.intake.test.tsx` => `11 passed`
+    - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1` => `1 passed (7.8s)`
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `9 passed (19.9s)`
+
 ## P2
 
 ### KQ-001: Mocked delayed-loading test asserts on brittle answer text rather than stable route behavior
@@ -277,8 +303,11 @@
 - Current `/workspace-playground` deterministic summary after repairs: `6 passed`, `0 failed`
 - Current `/workspace-playground` targeted add-source verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted add-source verification summary: `2 passed`, `0 failed`
-- Current `/workspace-playground` real-backend summary after repairs: `2 passed`, `0 failed`
-- Current three-spec audit rerun: `30 passed`, `0 failed`
+- Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
+- Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` real-backend summary after repairs: `3 passed`, `0 failed`
+- Current three-spec audit rerun: `31 passed`, `0 failed`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
+- `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly

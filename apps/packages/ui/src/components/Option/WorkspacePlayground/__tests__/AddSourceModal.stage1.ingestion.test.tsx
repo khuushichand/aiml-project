@@ -113,6 +113,14 @@ describe("AddSourceModal Stage 1 ingestion safety", () => {
 
     expect(await screen.findByTestId("upload-progress-list")).toBeInTheDocument()
     expect(screen.getByText("Uploading")).toBeInTheDocument()
+    expect(mockUploadMedia).toHaveBeenCalledWith(
+      file,
+      expect.objectContaining({
+        media_type: "pdf",
+        overwrite: "false",
+        perform_chunking: "true"
+      })
+    )
 
     resolveUpload?.({
       results: [
