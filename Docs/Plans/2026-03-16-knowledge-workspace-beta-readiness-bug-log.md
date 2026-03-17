@@ -283,6 +283,31 @@
     - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1` => `2 passed (9.2s)`
     - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `6 passed (12.8s)`
 
+### WP-005: Workspace advanced filter and sort persistence only had component proof
+
+- Status: Resolved as test hardening
+- Route: `/workspace-playground`
+- Feature: advanced source filters and temporary sort state surviving a sources-pane remount
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Seed the workspace with mixed-status source rows
+  3. Apply `Status Ready` and switch `Sort by` to `Name (A-Z)`
+  4. Hide and restore the sources pane
+  5. Observe that the prior audit had no route-level proof that the page preserved the filtered order and control state across the pane remount
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts:132`
+  - `apps/tldw-frontend/e2e/utils/page-objects/WorkspacePlaygroundPage.ts:9`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/SourcesPane.stage4.filters-and-sort.test.tsx`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/WorkspacePlayground.stage12.source-list-view-state.test.tsx`
+- Suspected layer: audit gap between component-level state tests and the real route wiring that owns `sourceListViewState`
+- Why it matters: a route regression in the sources pane controls or in the page-owned view state could have shipped even while the underlying component tests stayed green
+- Resolution:
+  - Extended the Playwright seeding helper to inject non-ready sources honestly.
+  - Added a deterministic route-level Playwright case that proves advanced filters and temporary sort survive a hide/show pane remount and preserve the visible source order.
+  - Verification:
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "preserves advanced source filters and temporary sort across sources pane remounts" --reporter=line --workers=1` => `1 passed (4.8s)`
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `10 passed (17.4s)`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
@@ -300,14 +325,17 @@
 - Current `/knowledge` shared-permalink verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` branch verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
 - Current `/knowledge` branch verification summary: `1 passed`, `0 failed`
-- Current `/workspace-playground` deterministic summary after repairs: `6 passed`, `0 failed`
+- Current `/workspace-playground` deterministic summary after repairs: `7 passed`, `0 failed`
 - Current `/workspace-playground` targeted add-source verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted add-source verification summary: `2 passed`, `0 failed`
+- Current `/workspace-playground` targeted filter/sort remount verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "preserves advanced source filters and temporary sort across sources pane remounts" --reporter=line --workers=1`
+- Current `/workspace-playground` targeted filter/sort remount verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `3 passed`, `0 failed`
-- Current three-spec audit rerun: `31 passed`, `0 failed`
+- Current three-spec audit rerun: `32 passed`, `0 failed`
 - `/workspace-playground` live boot, grounding, compare-sources generation, and global search all passed in the same run
 - `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
+- `/workspace-playground` route-level advanced filter and sort persistence is now covered deterministically across sources-pane remounts
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly

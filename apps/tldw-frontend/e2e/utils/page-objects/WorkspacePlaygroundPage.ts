@@ -8,6 +8,7 @@ type WorkspaceSeedSource = {
   mediaId: number
   title: string
   type?: "pdf" | "video" | "audio" | "website" | "document" | "text"
+  status?: "processing" | "ready" | "error"
   url?: string
 }
 
@@ -202,7 +203,7 @@ export class WorkspacePlaygroundPage {
                     | "document"
                     | "text"
                   url: string
-                  status: "ready"
+                  status: "processing" | "ready" | "error"
                 }>
               ) => void
             }
@@ -221,7 +222,7 @@ export class WorkspacePlaygroundPage {
           title: source.title,
           type: source.type || "document",
           url: source.url || `https://example.com/source-${source.mediaId}`,
-          status: "ready"
+          status: source.status || "ready"
         }))
       )
     }, sources)

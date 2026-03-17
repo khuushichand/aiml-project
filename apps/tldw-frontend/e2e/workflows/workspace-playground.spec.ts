@@ -129,6 +129,92 @@ test.describe("Workspace Playground Workflow", () => {
     await assertNoCriticalErrors(diagnostics)
   })
 
+  test("preserves advanced source filters and temporary sort across sources pane remounts", async ({
+    authedPage,
+    diagnostics
+  }) => {
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    await workspacePage.goto()
+    await workspacePage.waitForReady()
+
+    await workspacePage.seedSources([
+      {
+        mediaId: 8_833_001,
+        title: "Zulu Ready",
+        type: "pdf",
+        status: "ready"
+      },
+      {
+        mediaId: 8_833_002,
+        title: "Alpha Error",
+        type: "website",
+        status: "error"
+      },
+      {
+        mediaId: 8_833_003,
+        title: "Bravo Ready",
+        type: "document",
+        status: "ready"
+      }
+    ])
+
+    await expect
+      .poll(async () => (await workspacePage.getSourceIds()).length, {
+        timeout: 10_000
+      })
+      .toBe(3)
+
+    const getRenderedSourceTitles = async (): Promise<string[]> =>
+      workspacePage.sourcesPanel
+        .locator("[data-source-id]")
+        .evaluateAll((rows) =>
+          rows
+            .map((row) => row.querySelector("p")?.textContent?.trim() || "")
+            .filter(Boolean)
+        )
+
+    await workspacePage.sourcesPanel
+      .getByRole("button", { name: "Advanced" })
+      .click()
+    await workspacePage.sourcesPanel
+      .getByRole("checkbox", { name: "Status Ready" })
+      .click()
+    await workspacePage.sourcesPanel
+      .getByRole("combobox", { name: "Sort by" })
+      .selectOption("name_asc")
+
+    await expect
+      .poll(async () => await getRenderedSourceTitles(), { timeout: 10_000 })
+      .toEqual(["Bravo Ready", "Zulu Ready"])
+    await workspacePage.sourcesPanel
+      .getByRole("button", { name: "Advanced" })
+      .click()
+    await expect(
+      workspacePage.sourcesPanel.getByText("Status=Ready · Sort: Name (A-Z)")
+    ).toBeVisible()
+
+    await workspacePage.hideSourcesPane()
+    await workspacePage.showSourcesPane()
+
+    await expect(
+      workspacePage.sourcesPanel.getByText("Status=Ready · Sort: Name (A-Z)")
+    ).toBeVisible()
+    await workspacePage.sourcesPanel
+      .getByRole("button", { name: "Advanced" })
+      .click()
+    await expect(
+      workspacePage.sourcesPanel.getByRole("checkbox", { name: "Status Ready" })
+    ).toBeChecked()
+    await expect(
+      workspacePage.sourcesPanel.getByRole("combobox", { name: "Sort by" })
+    ).toHaveValue("name_asc")
+    await expect
+      .poll(async () => await getRenderedSourceTitles(), { timeout: 10_000 })
+      .toEqual(["Bravo Ready", "Zulu Ready"])
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
   test("adds a source through the URL tab and shows processing state in the sources pane", async ({
     authedPage,
     diagnostics

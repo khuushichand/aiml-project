@@ -56,7 +56,7 @@
 | `/workspace-playground` | Global search across live chat turns | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts` | Live-covered | Baseline run passed live global-search flow | Candidate for broader live coverage |
 | `/workspace-playground` | Add-source ingestion via Paste tab | `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts`, `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage1.ingestion.test.tsx`, `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/AddSourceModal.stage2.intake.test.tsx` | Live-covered | Real-backend Playwright now posts pasted text through the live Add Sources modal, proves `/api/v1/media/add` succeeds, asserts the inserted row is immediately usable, and cleans up the created media ID; component regressions now lock `media_type` on both paste and upload requests so the backend validation bug cannot silently return | Candidate for beta gate |
 | `/workspace-playground` | Add-source ingestion via URL tab | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, component tests | Mock-only | Deterministic route test now drives the real `URL` tab, intercepts `/api/v1/media/add`, verifies workspace keyword tagging, and asserts the inserted source renders in `Processing` state with selection disabled | Promote to live once the backend can reliably ingest and expose a stable test URL |
-| `/workspace-playground` | Filters/sort/list-state persistence | component tests only | Missing | No route-level live proof found yet | Add live Playwright |
+| `/workspace-playground` | Filters/sort/list-state persistence | `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts`, component tests | Mock-only | Deterministic Playwright now seeds mixed-status sources, applies `Status Ready` plus `Name (A-Z)`, hides and restores the sources pane, and proves both the rendered order and advanced-control values survive the remount | Promote only if a reliable live mixed-source fixture becomes available |
 | `/workspace-playground` | Studio cancellation and reload recovery | component tests only | Missing | No live route proof found yet | Add live Playwright |
 | `/workspace-playground` | Trust/status/telemetry surfaces | docs + component tests | Missing | No explicit route-level live proof found yet | Add targeted live checks |
 
@@ -110,10 +110,13 @@
   - outcome: `1 passed`, runtime about `6.6s`
   - classification note: this is deterministic route coverage, not live-backend coverage
 - `/workspace-playground` deterministic command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1`
-- `/workspace-playground` deterministic outcome: `6 passed`, `0 failed`, runtime about `12.8s`
+- `/workspace-playground` deterministic outcome: `7 passed`, `0 failed`, runtime about `13.0s`
 - `/workspace-playground` targeted add-source command:
   - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1`
   - outcome: `2 passed`, `0 failed`, runtime about `9.2s`
+- `/workspace-playground` targeted filter/sort remount command:
+  - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "preserves advanced source filters and temporary sort across sources pane remounts" --reporter=line --workers=1`
+  - outcome: `1 passed`, `0 failed`, runtime about `4.8s`
 - `/workspace-playground` targeted live paste-intake command:
   - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
   - outcome: `1 passed`, `0 failed`, runtime about `7.8s`
@@ -124,6 +127,6 @@
   - outcome: `5 passed`, `0 failed`, runtime about `22.3s`
 - Current three-spec audit rerun:
   - command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1`
-  - outcome: `31 passed`, `0 failed`, runtime about `1.4m`
+  - outcome: `32 passed`, `0 failed`, runtime about `1.5m`
 - Current live-backend note:
   - the local API listener dropped earlier in the session, but later verification recovered to a healthy live-backed state and the full three-spec audit passed without skips
