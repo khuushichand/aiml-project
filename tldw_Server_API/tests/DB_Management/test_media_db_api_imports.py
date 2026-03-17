@@ -11,6 +11,7 @@ from tldw_Server_API.app.core.Claims_Extraction import (
     claims_rebuild_service,
     claims_service,
 )
+from tldw_Server_API.app.core.Evaluations import embeddings_abtest_jobs_worker
 from tldw_Server_API.app.core.Embeddings.services import (
     jobs_worker as embeddings_jobs_worker,
     vector_compactor,
@@ -23,6 +24,8 @@ from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.services import document_processing_service
+from tldw_Server_API.app.services import claims_alerts_scheduler
+from tldw_Server_API.app.services import claims_review_metrics_scheduler
 from tldw_Server_API.app.services import enhanced_web_scraping_service
 from tldw_Server_API.app.services import media_ingest_jobs_worker
 from tldw_Server_API.app.services import web_scraping_service
@@ -138,6 +141,21 @@ def test_vector_compactor_imports_create_media_database_from_media_db_api():
 
 def test_watchlists_pipeline_imports_create_media_database_from_media_db_api():
     module = importlib.reload(watchlists_pipeline)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_claims_alerts_scheduler_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(claims_alerts_scheduler)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_claims_review_metrics_scheduler_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(claims_review_metrics_scheduler)
+    assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_embeddings_abtest_jobs_worker_imports_create_media_database_from_media_db_api():
+    module = importlib.reload(embeddings_abtest_jobs_worker)
     assert module.create_media_database is media_db_api.create_media_database
 
 

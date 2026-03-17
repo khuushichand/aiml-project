@@ -85,7 +85,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
   - Content backend quick switch: set `TLDW_CONTENT_DB_BACKEND=sqlite` (default) or `postgresql`, then run feature flows.
   - Create a Media DB for the single-user path:
     ```python
-    from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+    from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
     db = create_media_database(client_id="dev-client")
     ```
   - Validate Postgres content backend state:
@@ -108,7 +108,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
 Example Quick Start (optional)
 
 ```python
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 mdb = create_media_database(client_id="example-client")
 # Use mdb methods to insert media, update keywords, and search via FTS
 ```

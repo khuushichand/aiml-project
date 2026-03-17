@@ -24,11 +24,9 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    content_db_settings,
-    create_media_database,
-)
+from tldw_Server_API.app.core.DB_Management.DB_Manager import content_db_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.testing import is_truthy
 
 _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS = (

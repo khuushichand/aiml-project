@@ -34,14 +34,12 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
     ABTestChunking,
     EmbeddingsABTestConfig,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_media_database,
-    get_content_backend_instance,
-)
+from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     ABTEST_JOBS_CLEANUP_TYPE,
     ABTEST_JOBS_DOMAIN,
