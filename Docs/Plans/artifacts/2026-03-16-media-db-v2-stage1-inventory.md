@@ -5,8 +5,8 @@
 ## Normalized Counts
 
 - Raw `MediaDatabase(...)` constructors in app code: 13
-- Operational `create_media_database(...)` call sites in app code: 32
-- Operational `managed_media_database(...)` call sites in app code: 21
+- Operational `create_media_database(...)` call sites in app code: 31
+- Operational `managed_media_database(...)` call sites in app code: 22
 - `Media_DB_v2` references in app code: 137
 
 Notes:
@@ -28,6 +28,7 @@ Notes:
 | --- | ---: | --- | --- |
 | `app/services/claims_alerts_scheduler.py` | 2 | `MOVE_MANAGED` already satisfied | Correct backend-aware scheduler pattern with suppressed init/close failures |
 | `app/services/claims_review_metrics_scheduler.py` | 2 | `MOVE_MANAGED` already satisfied | Same pattern as alerts scheduler |
+| `app/services/document_processing_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local document persistence now scopes its DB write through the managed helper with `initialize=False` |
 | `app/services/web_scraping_service.py` | 1 | `MOVE_MANAGED` already satisfied | Correct `initialize=False` local scope |
 | `app/services/enhanced_web_scraping_service.py` | 1 | `MOVE_MANAGED` already satisfied | Correct `initialize=False` local scope |
 | `app/services/media_files_cleanup_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local MediaFiles lookup now scoped through managed helper with `initialize=False` |
@@ -46,7 +47,6 @@ Notes:
 | File | Count | Current Pattern | Classification | Notes |
 | --- | ---: | --- | --- | --- |
 | `app/core/Ingestion_Media_Processing/persistence.py` | 8 | repeated local worker/pre-check DB creation | `NEW_HELPER` | highest-priority lifecycle cleanup hotspot |
-| `app/services/document_processing_service.py` | 1 | local create/use/close in one function | `MOVE_MANAGED` | straightforward conversion candidate |
 | `app/services/media_ingest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | owner is the caller, not the helper |
 | `app/services/connectors_worker.py` | 1 | connector-owned per-sync DB helper through shared factory | `MOVE_FACTORY` already satisfied | `_process_import_job(...)` now opens via `_create_connector_media_db(...)` and closes on every exit path |
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | caller still owns sink DB lifetime |

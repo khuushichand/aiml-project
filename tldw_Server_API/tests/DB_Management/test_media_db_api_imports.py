@@ -79,9 +79,9 @@ def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch):
     assert captured["runtime"].postgres_content_mode is True
 
 
-def test_document_processing_service_imports_create_media_database_from_media_db_api():
+def test_document_processing_service_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(document_processing_service)
-    assert module.create_media_database is media_db_api.create_media_database
+    assert module.managed_media_database is media_db_api.managed_media_database
 
 
 def test_media_ingest_jobs_worker_imports_create_media_database_from_media_db_api():

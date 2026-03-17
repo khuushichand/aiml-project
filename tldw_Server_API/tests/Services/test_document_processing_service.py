@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 from tldw_Server_API.app.services import document_processing_service as dps
@@ -34,7 +36,24 @@ async def test_process_documents_store_in_db_uses_media_repository_api(
     fake_chunks = [{"text": "Alpha document body", "chunk_type": "text"}]
 
     monkeypatch.setattr(dps, "_ensure_placeholder_enabled", lambda: None)
-    monkeypatch.setattr(dps, "create_media_database", lambda **kwargs: fake_db)
+    managed_calls = []
+
+    @contextlib.contextmanager
+    def _fake_managed_media_database(client_id, *, db_path=None, initialize=True, **kwargs):
+        managed_calls.append(
+            {
+                "client_id": client_id,
+                "db_path": db_path,
+                "initialize": initialize,
+                "kwargs": kwargs,
+            }
+        )
+        try:
+            yield fake_db
+        finally:
+            fake_db.close_connection()
+
+    monkeypatch.setattr(dps, "managed_media_database", _fake_managed_media_database, raising=False)
     monkeypatch.setattr(dps, "get_user_media_db_path", lambda _user_id: str(tmp_path / "media.db"))
     monkeypatch.setattr(dps, "build_plaintext_chunks", lambda *args, **kwargs: fake_chunks)
     monkeypatch.setattr(dps, "get_media_repository", lambda db: fake_repo, raising=False)
@@ -64,6 +83,14 @@ async def test_process_documents_store_in_db_uses_media_repository_api(
     assert result["status"] == "success"
     assert result["results"][0]["db_id"] == 42
     assert fake_db.closed is True
+    assert managed_calls == [
+        {
+            "client_id": "document_processing_service",
+            "db_path": str(tmp_path / "media.db"),
+            "initialize": False,
+            "kwargs": {},
+        }
+    ]
     assert fake_repo.calls == [
         {
             "url": str(document_path),
