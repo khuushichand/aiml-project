@@ -250,6 +250,7 @@ export const Playground = () => {
       if (timelineActionRetryTimeoutRef.current) {
         clearTimeout(timelineActionRetryTimeoutRef.current)
       }
+      pendingTimelineActionRef.current = null
     }
   }, [])
 

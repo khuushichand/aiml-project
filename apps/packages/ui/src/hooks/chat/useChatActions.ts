@@ -935,7 +935,6 @@ export const useChatActions = ({
       imageGenerationSource,
       imageEventSyncPolicy,
     }).catch((error) => {
-      sendInFlightRef.current = false;
       throw error;
     });
     const baseMessages = chatHistory || messages;
