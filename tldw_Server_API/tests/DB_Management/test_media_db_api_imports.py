@@ -23,11 +23,14 @@ from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.app.services import media_files_cleanup_service
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import claims_alerts_scheduler
 from tldw_Server_API.app.services import claims_review_metrics_scheduler
 from tldw_Server_API.app.services import enhanced_web_scraping_service
 from tldw_Server_API.app.services import media_ingest_jobs_worker
+from tldw_Server_API.app.services import outputs_purge_scheduler
+from tldw_Server_API.app.services import storage_cleanup_service
 from tldw_Server_API.app.services import web_scraping_service
 
 
@@ -106,6 +109,21 @@ def test_book_processing_imports_create_media_database_from_media_db_api():
 
 def test_web_scraping_service_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(web_scraping_service)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_media_files_cleanup_service_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(media_files_cleanup_service)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_storage_cleanup_service_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(storage_cleanup_service)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_outputs_purge_scheduler_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(outputs_purge_scheduler)
     assert module.managed_media_database is media_db_api.managed_media_database
 
 

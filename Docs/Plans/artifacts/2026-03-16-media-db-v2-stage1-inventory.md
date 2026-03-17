@@ -4,9 +4,9 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 31
+- Raw `MediaDatabase(...)` constructors in app code: 28
 - Operational `create_media_database(...)` call sites in app code: 28
-- Operational `managed_media_database(...)` call sites in app code: 6
+- Operational `managed_media_database(...)` call sites in app code: 9
 - `Media_DB_v2` references in app code: 157
 
 Notes:
@@ -30,6 +30,9 @@ Notes:
 | `app/services/claims_review_metrics_scheduler.py` | 2 | `MOVE_MANAGED` already satisfied | Same pattern as alerts scheduler |
 | `app/services/web_scraping_service.py` | 1 | `MOVE_MANAGED` already satisfied | Correct `initialize=False` local scope |
 | `app/services/enhanced_web_scraping_service.py` | 1 | `MOVE_MANAGED` already satisfied | Correct `initialize=False` local scope |
+| `app/services/media_files_cleanup_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local MediaFiles lookup now scoped through managed helper with `initialize=False` |
+| `app/services/storage_cleanup_service.py` | 1 | `MOVE_MANAGED` already satisfied | Local TTS history update now scoped through managed helper with `initialize=False` |
+| `app/services/outputs_purge_scheduler.py` | 1 | `MOVE_MANAGED` already satisfied | Output-history purge path now scoped through managed helper with `initialize=False` |
 
 ## Operational `create_media_database(...)` Inventory
 
@@ -59,10 +62,7 @@ Notes:
 | File | Count | Current Pattern | Classification | Notes |
 | --- | ---: | --- | --- | --- |
 | `app/services/audiobook_jobs_worker.py` | 1 | local content lookup by media id | `MOVE_MANAGED` | local read scope; no obvious close in the helper |
-| `app/services/media_files_cleanup_service.py` | 1 | local query and close | `MOVE_MANAGED` | good early cleanup slice |
-| `app/services/storage_cleanup_service.py` | 1 | local update and close | `MOVE_MANAGED` | simple conversion candidate |
 | `app/services/tts_history_cleanup_service.py` | 2 | probe DB plus per-user loop DBs | `NEW_HELPER` | needs backend-aware cleanup helper, not a mechanical rewrite |
-| `app/services/outputs_purge_scheduler.py` | 1 | local update and close | `MOVE_MANAGED` | straightforward conversion candidate |
 | `app/services/connectors_worker.py` | 1 | per-sync DB reused across a large function | `NEW_HELPER` | better as a dedicated sync DB helper than an inlined raw constructor |
 | `app/services/ingestion_sources_worker.py` | 1 | helper returns DB handle | `MOVE_FACTORY` | returned owner should use factory, not raw constructor |
 | `app/core/MCP_unified/modules/implementations/slides_module.py` | 1 | local read and close | `MOVE_MANAGED` | read-only local scope |
