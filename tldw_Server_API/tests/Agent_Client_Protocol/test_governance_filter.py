@@ -124,3 +124,29 @@ async def test_governance_deny_emits_error_tool_result(bus, gov):
     assert "too dangerous" in error_result.payload["output"]
     assert error_result.payload["tool_name"] == "bash"
     assert gov.pending_count == 0
+
+
+@pytest.mark.asyncio
+async def test_governance_timeout_auto_denies(bus):
+    """Unanswered permission requests are auto-denied after timeout_sec."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.governance_filter import GovernanceFilter
+
+    gov = GovernanceFilter(bus=bus, default_timeout_sec=0.1)  # 100ms timeout
+    q = bus.subscribe("test")
+
+    ev = _make_event(
+        kind=AgentEventKind.TOOL_CALL,
+        payload={"tool_id": "t1", "tool_name": "bash", "arguments": {}},
+    )
+    await gov.process(ev)
+
+    # Consume the permission_request
+    perm_req = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert perm_req.kind == AgentEventKind.PERMISSION_REQUEST
+
+    # Wait for the timeout to fire (100ms + margin)
+    error_result = await asyncio.wait_for(q.get(), timeout=2.0)
+    assert error_result.kind == AgentEventKind.TOOL_RESULT
+    assert error_result.payload["is_error"] is True
+    assert "timeout" in error_result.payload["output"].lower()
+    assert gov.pending_count == 0

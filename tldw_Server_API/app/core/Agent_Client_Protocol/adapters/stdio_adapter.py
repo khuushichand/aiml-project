@@ -71,7 +71,9 @@ class StdioAdapter(ProtocolAdapter):
 
     @property
     def is_connected(self) -> bool:
-        return self._connected
+        if not self._connected or self._client is None:
+            return False
+        return getattr(self._client, "is_running", False)
 
     @property
     def supports_streaming(self) -> bool:

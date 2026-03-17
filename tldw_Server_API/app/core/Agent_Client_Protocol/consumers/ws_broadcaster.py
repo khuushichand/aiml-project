@@ -112,6 +112,7 @@ class WSBroadcaster(EventConsumer):
                 logger.warning(
                     "WSBroadcaster: send failed for conn {}, removing",
                     info.conn_id,
+                    exc_info=True,
                 )
                 self.remove_connection(info.conn_id)
 

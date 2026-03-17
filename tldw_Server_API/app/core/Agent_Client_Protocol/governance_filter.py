@@ -3,9 +3,14 @@
 Intercepts TOOL_CALL events and applies permission tier logic:
 - ``auto`` tier tools pass through immediately.
 - ``batch`` / ``individual`` tier tools are held pending human approval.
+
+Unanswered permission requests are automatically denied after
+``default_timeout_sec`` seconds.
 """
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 
 from loguru import logger
@@ -15,6 +20,17 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, Ag
 from tldw_Server_API.app.core.Agent_Client_Protocol.permission_tiers import determine_permission_tier
 
 
+class _PendingEntry:
+    """A held tool_call with its creation time for timeout enforcement."""
+
+    __slots__ = ("event", "created_at", "timeout_task")
+
+    def __init__(self, event: AgentEvent, timeout_task: asyncio.Task[None] | None = None) -> None:
+        self.event = event
+        self.created_at = time.monotonic()
+        self.timeout_task = timeout_task
+
+
 class GovernanceFilter:
     """Pipeline stage that gates tool calls based on permission tiers.
 
@@ -22,6 +38,9 @@ class GovernanceFilter:
     events are forwarded to the bus immediately.  Tool calls are classified via
     :func:`determine_permission_tier` and either forwarded (``auto``) or held
     until a human decision arrives via :meth:`on_permission_response`.
+
+    If no response arrives within ``default_timeout_sec``, the held tool call
+    is automatically denied.
     """
 
     def __init__(
@@ -31,8 +50,7 @@ class GovernanceFilter:
     ) -> None:
         self._bus = bus
         self._default_timeout_sec = default_timeout_sec
-        # request_id -> held AgentEvent
-        self._pending: dict[str, AgentEvent] = {}
+        self._pending: dict[str, _PendingEntry] = {}
 
     # ------------------------------------------------------------------
     # Properties
@@ -67,7 +85,8 @@ class GovernanceFilter:
 
         # Hold the event and publish a permission request
         request_id = str(uuid.uuid4())
-        self._pending[request_id] = event
+        timeout_task = asyncio.create_task(self._timeout_pending(request_id, self._default_timeout_sec))
+        self._pending[request_id] = _PendingEntry(event=event, timeout_task=timeout_task)
 
         perm_request = AgentEvent(
             session_id=event.session_id,
@@ -109,13 +128,19 @@ class GovernanceFilter:
         reason:
             Optional human-supplied reason (used in deny error message).
         """
-        held_event = self._pending.pop(request_id, None)
-        if held_event is None:
+        entry = self._pending.pop(request_id, None)
+        if entry is None:
             logger.warning(
                 "Governance: permission response for unknown request_id={}",
                 request_id,
             )
             return
+
+        # Cancel the timeout task since a decision arrived
+        if entry.timeout_task is not None:
+            entry.timeout_task.cancel()
+
+        held_event = entry.event
 
         if decision == "approve":
             await self._bus.publish(held_event)
@@ -144,6 +169,24 @@ class GovernanceFilter:
                 request_id,
                 reason,
             )
+
+    # ------------------------------------------------------------------
+    # Timeout enforcement
+    # ------------------------------------------------------------------
+
+    async def _timeout_pending(self, request_id: str, timeout_sec: int) -> None:
+        """Auto-deny a held tool call after *timeout_sec* seconds."""
+        try:
+            await asyncio.sleep(timeout_sec)
+        except asyncio.CancelledError:
+            return  # decision arrived before timeout
+        if request_id in self._pending:
+            logger.info(
+                "Governance: permission timeout for request_id={} after {}s",
+                request_id,
+                timeout_sec,
+            )
+            await self.on_permission_response(request_id, "deny", reason="timeout")
 
     # ------------------------------------------------------------------
     # Cleanup
