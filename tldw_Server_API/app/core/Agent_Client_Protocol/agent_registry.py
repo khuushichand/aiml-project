@@ -12,7 +12,7 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 
@@ -35,6 +35,16 @@ class AgentRegistryEntry:
     default: bool = False
     install_instructions: list[str] = field(default_factory=list)
     docs_url: str | None = None
+
+    # Protocol adapter fields (new for agent workspace harness)
+    protocol: Literal["stdio", "mcp", "openai_tool_use"] = "stdio"
+    tool_execution_mode: Literal["agent_side", "server_side", "hybrid"] = "agent_side"
+    mcp_transport: Literal["stdio", "sse", "streamable_http"] = "stdio"
+    api_base_url: str | None = None
+    model: str | None = None
+    tools_from: Literal["auto", "static", "none"] = "auto"
+    sandbox: Literal["required", "optional", "none"] = "none"
+    trust_level: Literal["untrusted", "standard", "trusted"] = "standard"
 
     def check_availability(self) -> dict[str, Any]:
         """Check runtime availability of this agent."""
