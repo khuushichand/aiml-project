@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.LLM_Calls.extra_body_compat_catalog import (
     get_provider_extra_body_compat,
 )
 from tldw_Server_API.app.core.LLM_Calls.llamacpp_request_extensions import resolve_llamacpp_runtime_caps
+from tldw_Server_API.app.core.LLM_Calls.routing.metadata import merge_routing_metadata
 from tldw_Server_API.app.core.LLM_Calls.tokenizer_resolver import (
     resolve_tokenizer_metadata,
     strict_token_counting_enabled as _strict_token_counting_enabled_shared,
@@ -845,23 +846,6 @@ MODEL_METADATA: dict[str, dict[str, dict[str, Any]]] = {
     },
 }
 
-ROUTING_MODEL_RANKS: dict[str, dict[str, dict[str, int]]] = {
-    "openai": {
-        "gpt-4o": {"quality_rank": 20, "latency_rank": 40, "cost_rank": 60},
-        "gpt-4o-mini": {"quality_rank": 60, "latency_rank": 10, "cost_rank": 10},
-    },
-    "anthropic": {
-        "claude-opus-4.1": {"quality_rank": 10, "latency_rank": 70, "cost_rank": 90},
-        "claude-sonnet-4.5": {"quality_rank": 20, "latency_rank": 30, "cost_rank": 50},
-        "claude-haiku-4.5": {"quality_rank": 55, "latency_rank": 10, "cost_rank": 20},
-    },
-    "google": {
-        "gemini-3-pro-preview": {"quality_rank": 25, "latency_rank": 35, "cost_rank": 45},
-        "gemini-3-flash-preview": {"quality_rank": 50, "latency_rank": 15, "cost_rank": 15},
-    },
-}
-
-
 def _default_model_metadata(provider: str, model: str) -> dict[str, Any]:
     """Return a conservative default metadata object for unknown models."""
     return {
@@ -895,30 +879,8 @@ def _default_model_metadata(provider: str, model: str) -> dict[str, Any]:
         "reasoning_support": False,
         "quality_rank": None,
         "latency_rank": None,
-        "cost_rank": None,
         "notes": None,
     }
-
-
-def _augment_routing_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Normalize derived routing flags and ensure ranking keys are always present."""
-
-    capabilities = metadata.get("capabilities")
-    if not isinstance(capabilities, dict):
-        capabilities = {}
-
-    metadata["tool_support"] = bool(
-        metadata.get("tool_support")
-        or capabilities.get("tool_use")
-        or capabilities.get("function_calling")
-    )
-    metadata["vision_support"] = bool(metadata.get("vision_support") or capabilities.get("vision"))
-    metadata["json_mode_support"] = bool(metadata.get("json_mode_support") or capabilities.get("json_mode"))
-    metadata["reasoning_support"] = bool(metadata.get("reasoning_support") or capabilities.get("thinking"))
-    metadata.setdefault("quality_rank", None)
-    metadata.setdefault("latency_rank", None)
-    metadata.setdefault("cost_rank", None)
-    return metadata
 
 
 def get_model_metadata(provider: str, model: str) -> dict[str, Any]:
@@ -928,14 +890,11 @@ def get_model_metadata(provider: str, model: str) -> dict[str, Any]:
     md = MODEL_METADATA.get(provider, {}).get(model)
     base = _default_model_metadata(provider, model)
     if md is None:
-        # Still include name field in final payload
-        ranks = ROUTING_MODEL_RANKS.get(provider, {}).get(model, {})
-        return _augment_routing_metadata({**base, **ranks})
+        return merge_routing_metadata(base, provider=provider, model=model)
     # Merge on top of defaults to ensure stable schema
-    ranks = ROUTING_MODEL_RANKS.get(provider, {}).get(model, {})
-    merged = {**base, **{k: v for k, v in md.items() if k != "name"}, **ranks}
+    merged = {**base, **{k: v for k, v in md.items() if k != "name"}}
     merged["name"] = model
-    return _augment_routing_metadata(merged)
+    return merge_routing_metadata(merged, provider=provider, model=model)
 
 @router.get("/llm/health", summary="LLM inference health", response_model=dict[str, Any])
 async def llm_health():

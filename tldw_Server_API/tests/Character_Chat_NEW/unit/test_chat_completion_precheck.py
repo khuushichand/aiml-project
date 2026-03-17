@@ -316,3 +316,55 @@ def test_complete_v2_rejects_routing_overrides_for_non_auto_models(
     )
 
     assert resp.status_code == 422
+
+
+@pytest.mark.unit
+def test_complete_v2_surfaces_provider_model_resolution_failures(
+    test_client,
+    auth_headers,
+    monkeypatch,
+):
+    char_resp = test_client.post(
+        "/api/v1/characters/",
+        json={
+            "name": "ResolutionFailureCharacter",
+            "description": "",
+            "personality": "",
+            "first_message": "Hello there",
+        },
+        headers=auth_headers,
+    )
+    assert char_resp.status_code == 201
+    char_id = char_resp.json()["id"]
+
+    chat_resp = test_client.post(
+        "/api/v1/chats/",
+        json={"character_id": char_id, "title": "Resolution failure"},
+        headers=auth_headers,
+    )
+    assert chat_resp.status_code == 201
+    chat_id = chat_resp.json()["id"]
+
+    def _raise_resolution_failure(*args, **kwargs):
+        raise RuntimeError("resolution exploded")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.character_chat_sessions.resolve_provider_and_model",
+        _raise_resolution_failure,
+    )
+
+    resp = test_client.post(
+        f"/api/v1/chats/{chat_id}/complete-v2",
+        json={
+            "provider": "local-llm",
+            "model": "local-test",
+            "append_user_message": "Hello",
+            "stream": False,
+            "include_character_context": False,
+        },
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail["error_code"] == "provider_model_resolution_failed"

@@ -3786,7 +3786,14 @@ async def character_chat_completion(
             model = (selected_model or model).strip()
             logger.debug("Character provider/model resolution: {}", provider_debug)
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Character provider/model normalization fallback: {}", exc)
+            logger.exception("Character provider/model resolution failed")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error_code": "provider_model_resolution_failed",
+                    "message": "Failed to resolve provider and model for character chat completion.",
+                },
+            ) from exc
 
         if strict_model_selection and explicit_model_requested:
             availability = is_model_known_for_provider(provider, model)

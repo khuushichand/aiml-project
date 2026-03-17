@@ -12,6 +12,7 @@ from .decision_store import (
     maybe_reuse_sticky_decision,
 )
 from .llm_router import build_router_prompt, validate_llm_router_choice
+from .metadata import ROUTING_MODEL_RANKS, merge_routing_metadata
 from .models import RouterRequest, RoutingDecision, RoutingOverride, RoutingPolicy
 from .rules_router import route_with_rules
 from .policy import resolve_routing_policy
@@ -44,11 +45,13 @@ __all__ = [
     "flatten_provider_listing_for_routing",
     "get_router_operation_name",
     "log_model_router_usage",
+    "merge_routing_metadata",
     "maybe_reuse_sticky_decision",
     "route_with_rules",
     "resolve_routing_policy",
     "resolve_router_model_config",
     "route_model",
+    "ROUTING_MODEL_RANKS",
     "RouterModelConfig",
     "select_llm_router_choice",
     "validate_llm_router_choice",
