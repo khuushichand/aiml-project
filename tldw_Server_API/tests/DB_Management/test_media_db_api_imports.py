@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.Embeddings.services import (
     jobs_worker as embeddings_jobs_worker,
     vector_compactor,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing import visual_ingestion
 from tldw_Server_API.app.core.Workflows.adapters.media import ingest as workflow_media_ingest
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Processing_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
@@ -183,6 +184,11 @@ def test_watchlists_pipeline_imports_create_media_database_from_media_db_api():
 
 def test_workflow_media_ingest_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(workflow_media_ingest)
+    assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_visual_ingestion_imports_managed_media_database_from_media_db_api():
+    module = importlib.reload(visual_ingestion)
     assert module.managed_media_database is media_db_api.managed_media_database
 
 

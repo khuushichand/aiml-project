@@ -16,7 +16,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.Utils.common import parse_boolean
 
 
@@ -102,8 +102,11 @@ def persist_visual_documents_from_analysis(
     max_images = int(settings.get("max_images_per_media") or 32)
     created = 0
 
-    db = MediaDatabase(db_path=db_path, client_id=client_id)
-    try:
+    with managed_media_database(
+        client_id,
+        db_path=db_path,
+        initialize=False,
+    ) as db:
         for entry in by_page:
             if created >= max_images:
                 break
@@ -146,12 +149,5 @@ def persist_visual_documents_from_analysis(
                         exc_info=det_err,
                     )
                     raise
-    finally:
-        try:
-            db.close_connection()
-        except Exception as exc:  # noqa: BLE001
-            logger.opt(exception=exc).warning(
-                "visual_ingestion: failed to close MediaDatabase connection"
-            )
 
     return created
