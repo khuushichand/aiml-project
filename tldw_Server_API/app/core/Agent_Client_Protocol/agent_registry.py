@@ -46,6 +46,15 @@ class AgentRegistryEntry:
     sandbox: Literal["required", "optional", "none"] = "none"
     trust_level: Literal["untrusted", "standard", "trusted"] = "standard"
 
+    # MCP orchestration fields (Phase B)
+    mcp_orchestration: Literal["agent_driven", "llm_driven"] = "agent_driven"
+    mcp_entry_tool: str = "execute"
+    mcp_structured_response: bool = False
+    mcp_llm_provider: str | None = None
+    mcp_llm_model: str | None = None
+    mcp_max_iterations: int = 20
+    mcp_refresh_tools: bool = False
+
     def check_availability(self) -> dict[str, Any]:
         """Check runtime availability of this agent."""
         result: dict[str, Any] = {
