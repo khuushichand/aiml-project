@@ -369,9 +369,9 @@ def validate_postgres_content_backend() -> None:
             )
         return
 
-    validator = MediaDatabase(
+    validator = create_media_database(
+        "content_backend_validator",
         db_path=":memory:",
-        client_id="content_backend_validator",
         backend=backend,
         config=single_user_config,
     )
@@ -391,7 +391,7 @@ def validate_postgres_content_backend() -> None:
             except (TypeError, ValueError):
                 current_version = 0
 
-            expected_version = MediaDatabase._CURRENT_SCHEMA_VERSION
+            expected_version = validator._CURRENT_SCHEMA_VERSION
             if current_version != expected_version:
                 raise RuntimeError(
                     "PostgreSQL content schema is outdated. "

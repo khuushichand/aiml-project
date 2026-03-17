@@ -266,7 +266,27 @@ def test_validate_postgres_content_backend_uses_queryresult_first(monkeypatch):
     stub_backend = StubBackend()
     monkeypatch.setattr(DB_Manager, "_CONTENT_DB_BACKEND", stub_backend, raising=False)
     monkeypatch.setattr(DB_Manager, "_POSTGRES_CONTENT_MODE", True, raising=False)
-    monkeypatch.setattr(DB_Manager, "MediaDatabase", StubMediaDatabase, raising=False)
+    monkeypatch.setattr(
+        DB_Manager,
+        "MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "validate_postgres_content_backend should not construct MediaDatabase directly"
+            )
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "create_media_database",
+        lambda client_id, *, db_path=None, backend=None, config=None: StubMediaDatabase(
+            client_id=client_id,
+            db_path=db_path,
+            backend=backend,
+            config=config,
+        ),
+        raising=False,
+    )
 
     DB_Manager.validate_postgres_content_backend()
 
