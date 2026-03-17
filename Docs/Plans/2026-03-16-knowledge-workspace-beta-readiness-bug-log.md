@@ -119,6 +119,30 @@
     - `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1` => `1 passed (7.8s)`
     - `bunx playwright test e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `9 passed (19.9s)`
 
+### WP-005: Workspace global search cannot refocus the matching chat turn
+
+- Status: Resolved in audit worktree
+- Route: `/workspace-playground`
+- Feature: grounded chat submission plus reopening the matching assistant turn from workspace search
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Select a source and submit a grounded chat question
+  3. Open workspace search, search for a token from the assistant answer, and click the matching `Assistant message` result
+  4. Observe that the prior route did not highlight or scroll the matching chat row even though the result existed and the modal closed
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.spec.ts:401`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/ChatPane/index.tsx:1681`
+  - `apps/tldw-frontend/test-results/workflows-workspace-playgr-ba1b0--turn-from-workspace-search-chromium/error-context.md`
+- Suspected layer: `ChatPane` focus effect clearing `chatFocusTarget` synchronously and cancelling its own reveal/highlight timers before they can run
+- Why it matters: workspace search is supposed to be the recovery path for long research chats; if users can find a result but cannot jump back to the matching turn, the page breaks one of its core navigation affordances
+- Resolution:
+  - Added deterministic route-level Playwright coverage that proves the full selected-source grounded-chat flow, including the scoped RAG request, streamed assistant answer, citations affordance, search result selection, and focused-row highlight.
+  - Fixed the real route bug by moving `clearChatFocusTarget()` into the reveal timer so the target is cleared only after the chat row is scrolled into view and highlighted.
+  - Verification:
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "submits grounded chat for selected sources and reopens the matching assistant turn from workspace search" --reporter=line --workers=1` => `1 passed (7.4s)`
+    - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `10 passed (18.4s)`
+    - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `35 passed (1.7m)`
+
 ## P2
 
 ### KQ-001: Mocked delayed-loading test asserts on brittle answer text rather than stable route behavior
@@ -350,20 +374,23 @@
 - Current `/knowledge` shared-permalink verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` branch verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
 - Current `/knowledge` branch verification summary: `1 passed`, `0 failed`
-- Current `/workspace-playground` deterministic summary after repairs: `9 passed`, `0 failed`
+- Current `/workspace-playground` deterministic summary after repairs: `10 passed`, `0 failed`
 - Current `/workspace-playground` targeted add-source verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "URL tab|My Media" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted add-source verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted filter/sort remount verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "preserves advanced source filters and temporary sort across sources pane remounts" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted filter/sort remount verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` targeted grounded-chat search verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "submits grounded chat for selected sources and reopens the matching assistant turn from workspace search" --reporter=line --workers=1`
+- Current `/workspace-playground` targeted grounded-chat search verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted studio cancel/recovery verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "cancels in-flight summary generation|recovers interrupted summary generation" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted studio cancel/recovery verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `3 passed`, `0 failed`
-- Current three-spec audit rerun: `34 passed`, `0 failed`
+- Current three-spec audit rerun: `35 passed`, `0 failed`
 - `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
 - `/workspace-playground` route-level advanced filter and sort persistence is now covered deterministically across sources-pane remounts
+- `/workspace-playground` route-level grounded chat plus result-backed global search is now covered deterministically, and the broken chat-focus handoff has been fixed
 - `/workspace-playground` route-level studio cancel and interrupted-reload recovery is now covered deterministically
-- Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search, so those rows were reclassified to `Mock-only` until route proof is restored
+- Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search; grounded chat and global search now have deterministic route proof, but remain `Mock-only` overall until live proof exists
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly

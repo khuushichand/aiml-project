@@ -1690,14 +1690,13 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     const revealTimer = window.setTimeout(() => {
       targetElement.scrollIntoView({ behavior: "smooth", block: "nearest" })
       setHighlightedChatMessageId(targetMessageId)
+      clearChatFocusTarget()
     }, 0)
     const highlightTimer = window.setTimeout(() => {
       setHighlightedChatMessageId((current) =>
         current === targetMessageId ? null : current
       )
     }, 1800)
-
-    clearChatFocusTarget()
 
     return () => {
       window.clearTimeout(revealTimer)

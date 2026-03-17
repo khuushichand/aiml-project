@@ -398,6 +398,155 @@ test.describe("Workspace Playground Workflow", () => {
     await assertNoCriticalErrors(diagnostics)
   })
 
+  test("submits grounded chat for selected sources and reopens the matching assistant turn from workspace search", async ({
+    authedPage,
+    diagnostics
+  }) => {
+    const sourceMediaId = 8_844_003
+    const userQuestion = "What does the grounded workspace source say about evidence handling?"
+    const answerSearchToken = "workspace-chat-search-token"
+    const groundedAnswer = `Grounded answer for ${answerSearchToken}`
+    const ragRequests: Array<Record<string, unknown>> = []
+    const chatCompletionRequests: Array<Record<string, unknown>> = []
+    const streamChunk = (text: string) =>
+      `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`
+
+    await authedPage.route("**/api/v1/rag/search/stream", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/plain",
+        body: ""
+      })
+    })
+
+    await authedPage.route("**/api/v1/rag/search", async (route) => {
+      ragRequests.push((route.request().postDataJSON() as Record<string, unknown>) || {})
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          results: [
+            {
+              id: "workspace-grounded-source-1",
+              content: "A source excerpt about handling evidence carefully and citing your sources.",
+              metadata: {
+                title: "Workspace Grounded Source",
+                source: "Workspace Grounded Source",
+                source_type: "media_db",
+                media_id: sourceMediaId,
+                url: "https://example.com/workspace-grounded-source"
+              },
+              score: 0.93
+            }
+          ],
+          generated_answer: groundedAnswer,
+          answer: groundedAnswer,
+          citations: [
+            {
+              source: "Workspace Grounded Source",
+              media_id: sourceMediaId
+            }
+          ]
+        })
+      })
+    })
+
+    await authedPage.route("**/api/v1/chat/completions", async (route) => {
+      chatCompletionRequests.push(
+        (route.request().postDataJSON() as Record<string, unknown>) || {}
+      )
+      const midpoint = Math.max(1, Math.floor(groundedAnswer.length / 2))
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        headers: {
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive"
+        },
+        body:
+          streamChunk(groundedAnswer.slice(0, midpoint)) +
+          streamChunk(groundedAnswer.slice(midpoint)) +
+          "data: [DONE]\n\n"
+      })
+    })
+
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    await workspacePage.goto()
+    await workspacePage.waitForReady()
+    await setWorkspaceSelectedModel(authedPage)
+
+    await workspacePage.seedSources([
+      {
+        mediaId: sourceMediaId,
+        title: "Workspace Grounded Source",
+        type: "document",
+        status: "ready"
+      }
+    ])
+
+    await expect
+      .poll(async () => (await workspacePage.getSourceIds()).length, {
+        timeout: 10_000
+      })
+      .toBe(1)
+
+    const [sourceId] = await workspacePage.getSourceIds()
+    await workspacePage.selectSourceById(sourceId)
+    await workspacePage.expectSourceSelected(sourceId)
+    await expect(
+      workspacePage.chatPanel.getByText("Answers will be grounded in your selected sources")
+    ).toBeVisible()
+
+    const chatInput = workspacePage.chatPanel.getByPlaceholder(/ask about your sources/i)
+    await chatInput.fill(userQuestion)
+    await chatInput.press("Enter")
+
+    await expect
+      .poll(() => ragRequests.length, { timeout: 10_000 })
+      .toBe(1)
+    expect(ragRequests[0]?.query).toBe(userQuestion)
+    expect(ragRequests[0]?.include_media_ids).toEqual([sourceMediaId])
+    await expect
+      .poll(() => chatCompletionRequests.length, { timeout: 10_000 })
+      .toBe(1)
+    expect(chatCompletionRequests[0]?.model).toBe(SUMMARY_TEST_MODEL)
+
+    await expect(workspacePage.chatPanel.getByText(groundedAnswer)).toBeVisible({
+      timeout: 10_000
+    })
+    const citationsToggle = workspacePage.chatPanel
+      .getByRole("button", { name: /citations/i })
+      .first()
+    await expect(citationsToggle).toBeVisible()
+    await citationsToggle.click()
+    await expect(citationsToggle).toHaveAttribute("aria-expanded", "true")
+
+    const assistantMessage = workspacePage.chatPanel
+      .locator("[data-chat-message-id]", { hasText: groundedAnswer })
+      .first()
+    await expect
+      .poll(async () => (await assistantMessage.getAttribute("class")) || "")
+      .not.toContain("ring-2")
+
+    await workspacePage.openGlobalSearchWithShortcut()
+    await workspacePage.globalSearchInput.fill(answerSearchToken)
+
+    const assistantResult = workspacePage.globalSearchModal
+      .getByRole("button", { name: /assistant message/i })
+      .first()
+    await expect(assistantResult).toBeVisible()
+    await assistantResult.click()
+
+    await expect(workspacePage.globalSearchModal).toBeHidden({ timeout: 10_000 })
+    await expect
+      .poll(async () => (await assistantMessage.getAttribute("class")) || "", {
+        timeout: 10_000
+      })
+      .toContain("ring-2")
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
   test("cancels in-flight summary generation and marks the artifact failed", async ({
     authedPage,
     diagnostics
