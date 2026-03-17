@@ -94,6 +94,15 @@ describe("resolveApiProviderForModel", () => {
       })
     ).resolves.toBeUndefined()
   })
+
+  it("does not apply provider hints to auto model selections", async () => {
+    await expect(
+      resolveApiProviderForModel({
+        modelId: "auto",
+        providerHint: "openai"
+      })
+    ).resolves.toBeUndefined()
+  })
 })
 
 describe("resolveExplicitProviderForSelectedModel", () => {

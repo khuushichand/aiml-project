@@ -32,4 +32,15 @@ describe("chat model availability utilities", () => {
     )
     expect(unavailable).toBe("missing-model")
   })
+
+  it("treats auto as a valid sentinel during availability checks", () => {
+    expect(normalizeChatModelId(" auto ")).toBe("auto")
+
+    const unavailable = findUnavailableChatModel(
+      ["auto"],
+      new Set(["gpt-4o-mini"])
+    )
+
+    expect(unavailable).toBeNull()
+  })
 })

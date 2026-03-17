@@ -3,6 +3,8 @@ type ModelDescriptor = {
   name?: unknown
 }
 
+export const AUTO_CHAT_MODEL_ID = "auto"
+
 export function normalizeChatModelId(value: string | null | undefined): string {
   const trimmed = String(value ?? "").trim()
   return trimmed.replace(/^tldw:/i, "")
@@ -33,6 +35,9 @@ export function findUnavailableChatModel(
 
   for (const selectedModelId of selectedModelIds) {
     const normalized = normalizeChatModelId(selectedModelId)
+    if (normalized === AUTO_CHAT_MODEL_ID) {
+      continue
+    }
     if (normalized && !availableModelIds.has(normalized)) {
       return normalized
     }

@@ -152,7 +152,15 @@ export const ModelsBody = () => {
   }, [availableModels])
 
   const modelOptions = useMemo(() => {
-    return availableModels
+    return [
+      {
+        value: "auto",
+        label: t(
+          "settings:onboarding.defaults.modelAuto",
+          "Auto (route on server)"
+        )
+      },
+      ...availableModels
       .filter((model) => {
         if (!normalizedDefaultProvider) return true
         const rawProvider = model.details?.provider ?? model.provider
@@ -170,6 +178,7 @@ export const ModelsBody = () => {
           label: `${providerLabel} - ${modelLabel}`
         }
       })
+    ]
   }, [availableModels, normalizedDefaultProvider, t])
 
   const handleProviderChange = useCallback(
@@ -195,6 +204,7 @@ export const ModelsBody = () => {
 
   useEffect(() => {
     if (!normalizedDefaultProvider || !selectedModel) return
+    if (selectedModel === "auto") return
     if (availableModels.length === 0) return
     const selectedEntry = availableModels.find(
       (model) => model.model === selectedModel
@@ -509,7 +519,7 @@ export const ModelsBody = () => {
                   <p className="mt-1 text-[11px] text-text-subtle">
                     {t(
                       "settings:onboarding.defaults.modelHelp",
-                      "This becomes the starting model when you open a new chat."
+                      "Choose Auto to let the server route each request, or pick a concrete model as the default."
                     )}
                   </p>
                 </div>

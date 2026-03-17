@@ -82,6 +82,8 @@ const normalizeProvider = (value: unknown): string => {
 const normalizeModelId = (value: unknown): string =>
   String(value || "").trim().replace(/^tldw:/i, "")
 
+const AUTO_MODEL_ID = "auto"
+
 const normalizeKnownProvider = (value: unknown): string => {
   const normalized = normalizeProvider(value)
   if (!normalized) return ""
@@ -160,6 +162,9 @@ export const resolveApiProviderForModel = async ({
   const rawModelId = String(modelId || "").trim()
   const normalizedModelId = normalizeModelId(rawModelId)
   const isTldwScopedModel = /^tldw:/i.test(rawModelId)
+  if (normalizedModelId.toLowerCase() === AUTO_MODEL_ID) {
+    return undefined
+  }
 
   // For models selected from the server catalog (`tldw:`), trust the
   // catalog provider first. This avoids misrouting OpenRouter namespaced
