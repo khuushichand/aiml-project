@@ -857,14 +857,18 @@ def test_chatbook_service_imports_media_factory_and_legacy_reads(monkeypatch):
     assert "MediaDatabase" not in module.__dict__
 
 
-def test_sync_client_imports_db_errors_from_media_db_errors(monkeypatch):
+def test_sync_client_imports_factory_and_db_errors_outside_shim(monkeypatch):
     monkeypatch.setattr(legacy_media_db, "ConflictError", object(), raising=False)
     monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
     monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
     module = importlib.reload(sync_client_module)
+    assert module.create_media_database is media_db_api.create_media_database
     assert module.ConflictError is media_db_errors.ConflictError
     assert module.DatabaseError is media_db_errors.DatabaseError
     assert module.InputError is media_db_errors.InputError
+    assert "MediaDatabase" not in module.__dict__
+    assert "Media_DB_v2" not in inspect.getsource(module)
 
 
 def test_claims_service_does_not_bind_media_database_from_shim(monkeypatch):
