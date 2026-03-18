@@ -4056,42 +4056,68 @@ async function generateMindMap(
     throw buildMissingContentError("mind map")
   }
 
-  const response = await tldwClient.createChatCompletion({
-    model,
-    api_provider: options.apiProvider,
-    messages: [
+  const requestMindMap = async (messages: Array<{ role: "system" | "user"; content: string }>) =>
+    tldwClient.createChatCompletion({
+      model,
+      api_provider: options.apiProvider,
+      messages,
+      temperature: options.temperature,
+      top_p: options.topP,
+      max_tokens: options.maxTokens
+    })
+
+  const baseSourceContext = formatStudioSourceContexts(sourceContexts)
+  const initialResponse = await requestMindMap([
+    {
+      role: "system",
+      content:
+        "You are a mind map generator. Return ONLY Mermaid mindmap syntax. You may wrap the result in a ```mermaid code fence, but do not include commentary, explanations, or prose outside the diagram."
+    },
+    {
+      role: "user",
+      content: `Analyze the provided sources and create a Mermaid mindmap that captures the central theme, 3-5 major branches, and the most important subtopics.
+
+Sources:
+${baseSourceContext}`
+    }
+  ])
+
+  let content = (await readChatCompletionResponseText(initialResponse)).trim()
+  if (!content) {
+    throw buildMissingContentError("mind map")
+  }
+
+  let mermaid = extractMermaidCode(content)
+  if (!isLikelyMermaidDiagram(mermaid)) {
+    const repairResponse = await requestMindMap([
       {
         role: "system",
         content:
-          "You are a mind map generator. Return ONLY Mermaid mindmap syntax. You may wrap the result in a ```mermaid code fence, but do not include commentary, explanations, or prose outside the diagram."
+          "You convert notes and outlines into Mermaid mindmap syntax. Return ONLY Mermaid mindmap syntax. You may wrap the result in a ```mermaid code fence, but do not include commentary, explanations, or prose outside the diagram."
       },
       {
         role: "user",
-        content: `Analyze the provided sources and create a Mermaid mindmap that captures the central theme, 3-5 major branches, and the most important subtopics.
+        content: `The previous answer was not valid Mermaid mindmap syntax. Rewrite it as Mermaid mindmap syntax only.
+
+Previous answer:
+${content}
 
 Sources:
-${sourceContexts
-  .map(
-    (source, index) =>
-      `Source ${index + 1}: ${source.title}\n${source.text}`
-  )
-  .join("\n\n")}`
+${baseSourceContext}`
       }
-    ],
-    temperature: options.temperature,
-    top_p: options.topP,
-    max_tokens: options.maxTokens
-  })
-
-  const content = (await readChatCompletionResponseText(response)).trim()
-  if (!content) {
-    throw buildMissingContentError("mind map")
+    ])
+    const repairedContent = (await readChatCompletionResponseText(repairResponse)).trim()
+    const repairedMermaid = extractMermaidCode(repairedContent)
+    if (repairedContent && isLikelyMermaidDiagram(repairedMermaid)) {
+      content = repairedContent
+      mermaid = repairedMermaid
+    }
   }
 
   return {
     content,
     data: {
-      mermaid: extractMermaidCode(content)
+      mermaid
     }
   }
 }

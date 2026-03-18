@@ -117,7 +117,11 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
           title: "Pasted Note",
           media_type: "document",
           overwrite: "false",
-          perform_chunking: "true"
+          perform_chunking: "true",
+          generate_embeddings: "true",
+          embedding_dispatch_mode: "background",
+          embedding_provider: "huggingface",
+          embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
         })
       )
     })
@@ -203,6 +207,28 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
         })
       )
     })
+    expect(mockAddMedia).toHaveBeenNthCalledWith(
+      1,
+      "https://example.com/one",
+      expect.objectContaining({
+        perform_chunking: "true",
+        generate_embeddings: "true",
+        embedding_dispatch_mode: "background",
+        embedding_provider: "huggingface",
+        embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+      })
+    )
+    expect(mockAddMedia).toHaveBeenNthCalledWith(
+      2,
+      "https://example.com/two",
+      expect.objectContaining({
+        perform_chunking: "true",
+        generate_embeddings: "true",
+        embedding_dispatch_mode: "background",
+        embedding_provider: "huggingface",
+        embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+      })
+    )
 
     expect(screen.getByText("https://example.com/one")).toBeInTheDocument()
     expect(screen.getByText("https://example.com/two")).toBeInTheDocument()
@@ -247,6 +273,16 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
         })
       )
     })
+    expect(mockAddMedia).toHaveBeenCalledWith(
+      "https://example.com/doc",
+      expect.objectContaining({
+        perform_chunking: "true",
+        generate_embeddings: "true",
+        embedding_dispatch_mode: "background",
+        embedding_provider: "huggingface",
+        embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+      })
+    )
   })
 
   it("renders search snippets and favicon hints in web results", async () => {

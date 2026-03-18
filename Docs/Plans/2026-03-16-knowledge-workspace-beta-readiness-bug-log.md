@@ -383,37 +383,52 @@
     - `bunx playwright test e2e/workflows/workspace-playground.spec.ts --reporter=line --workers=1` => `11 passed (17.1s)`
     - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `36 passed (1.7m)`
 
-### WP-008: Workspace live studio outputs were canceling under frontend timeouts, and the probe masked canceled artifacts as pending
+### WP-008: Workspace live studio-output coverage was overstated relative to what the audit backend can actually prove
 
-- Status: Resolved as product fix plus test hardening
+- Status: Resolved as audit correction plus probe hardening
 - Route: `/workspace-playground`
-- Feature: generating non-audio studio outputs against the live backend
+- Feature: live studio-output generation coverage
 - Reproduction:
   1. Open `/workspace-playground`
   2. Select two real sources
-  3. Run the live studio-output matrix across report, compare, timeline, data table, mind map, slides, quiz, and flashcards
-  4. Observe that the first live probe stalled on `Slides` with the artifact text `Generation canceled before completion.`
-  5. After fixing slides timeouts, rerun the same live probe and observe that `Flashcards` then failed with the same cancellation text
-  6. Observe that the original probe classified canceled/interrupted artifacts as still pending, so it could time out without surfacing the real failed state promptly
+  3. Run the live studio-output probe across report, compare, timeline, slides, mind map, data table, quiz, and flashcards
+  4. Observe that direct `/api/v1/chat/completions` calls in the audit backend return `Mock response from test mode`
+  5. Observe that `/api/v1/quizzes/generate` fails with `Provider 'openai' requires an API key.`
+  6. Observe that the workspace route can still live-prove report, compare-sources, and timeline end to end, but not the chat-completion-only or provider-key-gated outputs
 - Evidence:
-  - `apps/tldw-frontend/e2e/workflows/workspace-playground.output-matrix.probe.spec.ts:42`
-  - `apps/tldw-frontend/e2e/workflows/workspace-playground.output-matrix.probe.spec.ts:121`
-  - `apps/packages/ui/src/services/tldw/request-core.ts:40`
-  - `apps/packages/ui/src/services/flashcards.ts:16`
-  - `apps/packages/ui/src/services/__tests__/request-core.path-normalization.test.ts:56`
-  - `apps/packages/ui/src/services/__tests__/flashcards.test.ts:21`
-- Suspected layer: frontend request-timeout policy for long-running studio generation endpoints, plus incomplete failure-state detection in the live probe
-- Why it matters: beta users can trigger expensive studio generations that appear to have been canceled by the user when the frontend actually timed them out, and the audit suite can underreport that failure mode if canceled artifacts are treated like pending work
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.output-matrix.probe.spec.ts`
+  - direct live `/api/v1/chat/completions` inspection against `127.0.0.1:18001` returning `Mock response from test mode`
+  - `apps/tldw-frontend/test-results/workflows-workspace-playgr-62878-s-for-a-single-ready-source-chromium/error-context.md`
+- Suspected layer: audit-environment constraints rather than a single workspace-route defect
+- Why it matters: the previous matrix and bug log overstated live coverage and would have implied beta confidence for studio outputs the current backend cannot actually prove
 - Resolution:
-  - Added a `120000ms` timeout floor for `/api/v1/slides/...` requests in shared request-core timeout derivation.
-  - Added an explicit `120000ms` timeout for `/api/v1/flashcards/generate`, mirroring the existing long-running quiz-generation contract.
-  - Added focused Vitest coverage for both timeout contracts.
-  - Hardened the live output-matrix probe so canceled/interrupted artifact states fail fast instead of looking pending.
-  - Reran the live output matrix and verified all non-audio outputs completed and downloaded successfully against the real backend.
+  - Trimmed the live workspace output probe to the backend-supported RAG outputs it can honestly prove today: report, compare-sources, and timeline.
+  - Kept the probe’s failure detection strict and made cleanup best-effort so the route proof does not hang on slow deletion paths.
+  - Reclassified slides as missing for the workspace route, and reclassified mind map, data table, quiz, and flashcards away from live-covered status in the audit matrix.
   - Verification:
-    - `bunx vitest run src/services/__tests__/flashcards.test.ts src/services/__tests__/quizzes.test.ts src/services/__tests__/request-core.path-normalization.test.ts` => `11 passed`
-    - `bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `1 passed (1.5m)`
-    - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `37 passed (2.8m)`
+    - `bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `1 passed (2.8s)`
+    - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `38 passed (1.3m)`
+
+### WP-009: Workspace mind map generation rejected non-Mermaid completions outright
+
+- Status: Resolved as product hardening
+- Route: `/workspace-playground`
+- Feature: studio mind-map generation
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Select a source and trigger `Mind Map`
+  3. Return a first chat-completion payload that contains useful structure but not valid Mermaid syntax
+  4. Observe that the prior route code threw `No usable mind map content was returned.` immediately instead of attempting a format repair
+- Evidence:
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx:4046`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx`
+- Suspected layer: `StudioPane.generateMindMap(...)` only accepted already-valid Mermaid output and had no recovery path for non-Mermaid completions
+- Why it matters: even in a real provider environment, a model can return a valid outline or summary in the wrong format; failing hard on the first non-Mermaid response makes the feature unnecessarily brittle
+- Resolution:
+  - Added a second-pass repair prompt in `StudioPane.generateMindMap(...)` that rewrites a non-Mermaid first completion into Mermaid mindmap syntax before final validation.
+  - Added a regression test proving the second-pass repair path completes the artifact instead of failing.
+  - Verification:
+    - `bunx vitest run src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx` => `22 passed`
 
 ## Notes
 
@@ -447,8 +462,8 @@
 - Current `/workspace-playground` targeted studio cancel/recovery verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
-- Current `/workspace-playground` real-backend summary after repairs: `3 passed`, `0 failed`
-- Current four-spec audit rerun: `37 passed`, `0 failed`
+- Current `/workspace-playground` real-backend summary after repairs: `4 passed`, `0 failed`
+- Current four-spec audit rerun: `38 passed`, `0 failed`
 - `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
 - `/workspace-playground` route-level advanced filter and sort persistence is now covered deterministically across sources-pane remounts
 - `/workspace-playground` route-level grounded chat plus result-backed global search is now covered deterministically, and the broken chat-focus handoff has been fixed

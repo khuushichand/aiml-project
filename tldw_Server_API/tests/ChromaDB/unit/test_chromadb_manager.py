@@ -158,6 +158,52 @@ class TestChromaDBManagerInit:
         with cdl._TEST_STUB_CLIENTS_LOCK:
             assert expected_key in cdl._TEST_STUB_CLIENTS
 
+    def test_init_reuses_cached_persistent_client_after_close(self):
+
+        """Re-open should reuse a known-good persistent client instead of falling back to a stub."""
+        import tempfile
+        from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+
+        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+        persistent_client = MagicMock()
+        persistent_client.close = MagicMock()
+
+        with patch(
+            "tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient",
+            side_effect=[
+                persistent_client,
+                RuntimeError("Could not connect to tenant default_tenant"),
+            ],
+        ) as mock_persistent:
+            manager1 = cdl.ChromaDBManager(
+                user_id="cached_user",
+                user_embedding_config={
+                    "USER_DB_BASE_DIR": base_dir,
+                    "embedding_config": {},
+                    "chroma_client_settings": {
+                        "backend": "persistent",
+                        "allow_stub_fallback": True,
+                    },
+                },
+            )
+            manager1.close()
+
+            manager2 = cdl.ChromaDBManager(
+                user_id="cached_user",
+                user_embedding_config={
+                    "USER_DB_BASE_DIR": base_dir,
+                    "embedding_config": {},
+                    "chroma_client_settings": {
+                        "backend": "persistent",
+                        "allow_stub_fallback": True,
+                    },
+                },
+            )
+
+        assert manager2.client is persistent_client
+        assert mock_persistent.call_count == 1
+        persistent_client.close.assert_not_called()
+
 
 @pytest.mark.unit
 class TestCollectionManagement:

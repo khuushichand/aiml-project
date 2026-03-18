@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from tldw_Server_API.app.api.v1.endpoints import embeddings_v5_production_enhanced
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Embeddings.services import jobs_worker
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -36,6 +37,19 @@ async def test_embeddings_worker_retryable_backoff_from_result(monkeypatch):
 
     assert excinfo.value.retryable is True
     assert getattr(excinfo.value, "backoff_seconds", None) == 12
+
+
+def test_embedding_config_for_user_prefers_resolved_test_db_base(monkeypatch, tmp_path):
+    monkeypatch.setattr(jobs_worker, "settings", {"EMBEDDING_CONFIG": {}, "USER_DB_BASE_DIR": "Databases/user_databases"})
+    monkeypatch.setattr(
+        DatabasePaths,
+        "get_user_db_base_dir",
+        staticmethod(lambda: tmp_path / "isolated-user-dbs"),
+    )
+
+    config = jobs_worker._embedding_config_for_user()
+
+    assert config["USER_DB_BASE_DIR"] == str(tmp_path / "isolated-user-dbs")
 
 
 @pytest.mark.asyncio
@@ -106,6 +120,38 @@ async def test_embeddings_worker_smoke_queue_to_retrieval(monkeypatch, tmp_path)
     data = collection.get(where={"media_id": "321"}, include=["embeddings"])
     assert data.get("ids")
     assert len(data.get("embeddings") or []) == 1
+
+
+@pytest.mark.asyncio
+async def test_embeddings_worker_content_job_marks_media_processed(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_generate_embeddings_for_media(*, media_id, **_kwargs):
+        return {"status": "success", "embedding_count": 1, "chunks_processed": 1, "media_id": media_id}
+
+    monkeypatch.setattr(jobs_worker, "generate_embeddings_for_media", fake_generate_embeddings_for_media)
+    monkeypatch.setattr(jobs_worker, "_resolve_model_provider", lambda *_: ("test-model", "test-provider"))
+    monkeypatch.setattr(jobs_worker, "invalidate_rag_caches", lambda *_, **__: None)
+    monkeypatch.setattr(
+        jobs_worker,
+        "_mark_media_embeddings_complete",
+        lambda *, user_id, media_id: captured.setdefault("processed", (user_id, media_id)),
+    )
+
+    job = {
+        "job_type": "content_embeddings",
+        "payload": {
+            "item_id": 654,
+            "content": "hello workspace",
+            "title": "Workspace",
+        },
+        "owner_user_id": "user-654",
+    }
+
+    result = await jobs_worker._handle_job(job)
+
+    assert result["embedding_count"] == 1
+    assert captured["processed"] == ("user-654", 654)
 
 
 @pytest.mark.asyncio
@@ -207,6 +253,12 @@ async def test_embeddings_worker_storage_uses_user_scoped_chroma_manager(monkeyp
 
     captured: dict[str, object] = {}
 
+    monkeypatch.setattr(
+        jobs_worker,
+        "_mark_media_embeddings_complete",
+        lambda *, user_id, media_id: captured.setdefault("processed", (user_id, media_id)),
+    )
+
     class FakeChromaDBManager:
         def __init__(self, *, user_id, user_embedding_config):
             captured["user_id"] = user_id
@@ -245,6 +297,41 @@ async def test_embeddings_worker_storage_uses_user_scoped_chroma_manager(monkeyp
     assert captured["collection_name"] == "user_user-42_media_embeddings"
     assert captured["ids"] == ["media_42_chunk_0"]
     assert captured["embedding_model_id_for_dim_check"] == "test-model"
+    assert captured["metadatas"][0]["chunk_type"] == "text"
+    assert captured["processed"] == ("user-42", 42)
+
+
+@pytest.mark.asyncio
+async def test_embeddings_worker_marks_non_retryable_media_error(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_generate_embeddings_for_media(**_kwargs):
+        return {"status": "error", "error": "embedding backend unavailable", "retryable": False}
+
+    monkeypatch.setattr(jobs_worker, "generate_embeddings_for_media", fake_generate_embeddings_for_media)
+    monkeypatch.setattr(jobs_worker, "_resolve_model_provider", lambda *_: ("test-model", "test-provider"))
+    monkeypatch.setattr(
+        jobs_worker,
+        "_mark_media_embeddings_error",
+        lambda *, user_id, media_id, error_message: captured.setdefault(
+            "error",
+            (user_id, media_id, error_message),
+        ),
+    )
+
+    job = {
+        "job_type": "content_embeddings",
+        "payload": {
+            "item_id": 777,
+            "content": "hello error",
+        },
+        "owner_user_id": "user-777",
+    }
+
+    with pytest.raises(jobs_worker.EmbeddingsJobError):
+        await jobs_worker._handle_job(job)
+
+    assert captured["error"] == ("user-777", 777, "embedding backend unavailable")
 
 
 @pytest.mark.asyncio

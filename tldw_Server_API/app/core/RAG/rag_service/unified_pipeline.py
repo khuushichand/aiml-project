@@ -16,12 +16,14 @@ Design Philosophy:
 import asyncio
 import calendar
 import hashlib
+import inspect
 import re
 import sqlite3
 import time
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
@@ -3508,33 +3510,94 @@ async def unified_rag_pipeline(
             try:
                 if SecurityFilter and SensitivityLevel:
                     security_filter = SecurityFilter()
-
-                    # Detect PII if requested
-                    if detect_pii:
-                        pii_report = await security_filter.detect_pii_batch(
-                            [doc.content for doc in result.documents]
-                        )
-                        result.security_report = {"pii_detected": pii_report}
-
-                    # Filter by sensitivity
                     sensitivity_map = {
                         "public": SensitivityLevel.PUBLIC,
                         "internal": SensitivityLevel.INTERNAL,
                         "confidential": SensitivityLevel.CONFIDENTIAL,
-                        "restricted": SensitivityLevel.RESTRICTED
+                        "restricted": SensitivityLevel.RESTRICTED,
                     }
+                    sensitivity_value = sensitivity_map[sensitivity_level]
 
-                    filtered_docs = await security_filter.filter_by_sensitivity(
-                        result.documents,
-                        max_level=sensitivity_map[sensitivity_level]
-                    )
+                    # Detect PII if requested
+                    if detect_pii:
+                        detect_pii_batch = getattr(security_filter, "detect_pii_batch", None)
+                        if callable(detect_pii_batch):
+                            pii_report = detect_pii_batch([doc.content for doc in result.documents])
+                            if inspect.isawaitable(pii_report):
+                                pii_report = await pii_report
+                        else:
+                            detector = getattr(security_filter, "pii_detector", None)
+                            detect_single = getattr(detector, "detect_pii", None) if detector is not None else None
+                            if callable(detect_single):
+                                pii_report = []
+                                for doc in result.documents:
+                                    matches = detect_single(doc.content)
+                                    pii_report.append(
+                                        [
+                                            match.to_dict() if hasattr(match, "to_dict") else match
+                                            for match in (matches or [])
+                                        ]
+                                    )
+                            else:
+                                pii_report = []
+                        result.security_report = {"pii_detected": pii_report}
 
-                    # Redact PII if requested
-                    if redact_pii:
-                        for doc in filtered_docs:
-                            doc.content = await security_filter.redact_pii(doc.content)
+                    filtered_docs = None
+                    filter_by_sensitivity = getattr(security_filter, "filter_by_sensitivity", None)
+                    if callable(filter_by_sensitivity):
+                        filtered_docs = filter_by_sensitivity(
+                            result.documents,
+                            max_level=sensitivity_value,
+                        )
+                        if inspect.isawaitable(filtered_docs):
+                            filtered_docs = await filtered_docs
 
-                    result.documents = filtered_docs
+                        if redact_pii:
+                            redact_pii_fn = getattr(security_filter, "redact_pii", None)
+                            if callable(redact_pii_fn):
+                                for doc in filtered_docs:
+                                    redacted = redact_pii_fn(doc.content)
+                                    doc.content = await redacted if inspect.isawaitable(redacted) else redacted
+                    else:
+                        filter_documents = getattr(security_filter, "filter_documents", None)
+                        if callable(filter_documents):
+                            serialized_docs = [
+                                {
+                                    "id": doc.id,
+                                    "content": doc.content,
+                                    "metadata": dict(doc.metadata or {}),
+                                    "_document_ref": doc,
+                                }
+                                for doc in result.documents
+                            ]
+                            filtered_payloads = filter_documents(
+                                serialized_docs,
+                                user_id="anonymous",
+                                max_sensitivity=sensitivity_value,
+                                mask_pii=bool(redact_pii),
+                            )
+                            if inspect.isawaitable(filtered_payloads):
+                                filtered_payloads = await filtered_payloads
+
+                            filtered_docs = []
+                            for payload in filtered_payloads or []:
+                                doc_ref = payload.get("_document_ref")
+                                if doc_ref is None:
+                                    continue
+                                doc_ref.content = payload.get("content", doc_ref.content)
+                                merged_metadata = dict(doc_ref.metadata or {})
+                                payload_metadata = payload.get("metadata")
+                                if isinstance(payload_metadata, dict):
+                                    merged_metadata.update(payload_metadata)
+                                if "pii_masked" in payload:
+                                    merged_metadata["pii_masked"] = payload["pii_masked"]
+                                if "pii_types" in payload:
+                                    merged_metadata["pii_types"] = payload["pii_types"]
+                                doc_ref.metadata = merged_metadata
+                                filtered_docs.append(doc_ref)
+
+                    if filtered_docs is not None:
+                        result.documents = filtered_docs
                     result.timings["security_filter"] = time.time() - security_start
 
             except ImportError:
@@ -3561,11 +3624,25 @@ async def unified_rag_pipeline(
                     processed_docs = []
 
                     for doc in result.documents:
-                        processed = await processor.process_document(
-                            doc.content,
-                            method=table_method
-                        )
-                        doc.content = processed
+                        process_document = getattr(processor, "process_document", None)
+                        process_document_tables = getattr(processor, "process_document_tables", None)
+
+                        if callable(process_document):
+                            processed = process_document(doc.content, method=table_method)
+                            processed = await processed if inspect.isawaitable(processed) else processed
+                            doc.content = processed
+                        elif callable(process_document_tables):
+                            processed = process_document_tables(doc.content, serialize_method=table_method)
+                            processed = await processed if inspect.isawaitable(processed) else processed
+                            if isinstance(processed, tuple):
+                                processed_text, table_metadata = processed
+                                doc.content = processed_text
+                                if table_metadata:
+                                    merged_metadata = dict(doc.metadata or {})
+                                    merged_metadata["table_metadata"] = table_metadata
+                                    doc.metadata = merged_metadata
+                            else:
+                                doc.content = processed
                         processed_docs.append(doc)
 
                     result.documents = processed_docs
@@ -5913,11 +5990,15 @@ async def unified_rag_pipeline(
             highlight_start = time.time()
             try:
                 if highlight_func:
-                    for doc in result.documents:
-                        doc.content = await highlight_func(
-                            doc.content,
-                            query if highlight_query_terms else None
-                        )
+                    highlight_context = SimpleNamespace(
+                        config={"highlighting": {"enabled": True}},
+                        query=query if highlight_query_terms else "",
+                        documents=result.documents,
+                    )
+                    highlighted = highlight_func(highlight_context)
+                    highlighted_context = await highlighted if inspect.isawaitable(highlighted) else highlighted
+                    if getattr(highlighted_context, "documents", None) is not None:
+                        result.documents = highlighted_context.documents
 
                     result.timings["highlighting"] = time.time() - highlight_start
 

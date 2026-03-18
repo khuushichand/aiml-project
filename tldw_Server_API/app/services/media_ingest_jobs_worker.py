@@ -14,6 +14,7 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
 from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.DB_Manager import mark_media_as_processed
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
@@ -142,6 +143,7 @@ def _create_db(user_id: str):
 async def _schedule_embeddings(
     *,
     media_id: int,
+    user_id: str,
     db,
     form_data: AddMediaForm,
 ) -> None:
@@ -164,15 +166,26 @@ async def _schedule_embeddings(
             or "huggingface"
         )
 
-        await generate_embeddings_for_media(
+        result = await generate_embeddings_for_media(
             media_id=media_id,
             media_content=media_content,
             embedding_model=embedding_model,
             embedding_provider=embedding_provider,
             chunk_size=form_data.chunk_size or 1000,
             chunk_overlap=getattr(form_data, "overlap", None) or 200,
+            user_id=user_id,
         )
+        allow_zero = bool(result.get("allow_zero_embeddings"))
+        if result.get("status") == "success" or allow_zero:
+            mark_media_as_processed(db_instance=db, media_id=media_id)
+        else:
+            db.mark_embeddings_error(
+                media_id,
+                str(result.get("error") or result.get("message") or "Embedding generation failed"),
+            )
     except Exception as exc:
+        with contextlib.suppress(Exception):
+            db.mark_embeddings_error(media_id, str(exc) or "Embedding generation failed")
         logger.warning("Embedding generation failed for media {}: {}", media_id, exc)
 
 
@@ -288,7 +301,12 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
 
         if media_id and getattr(form_data, "generate_embeddings", False):
             asyncio.create_task(
-                _schedule_embeddings(media_id=int(media_id), db=db, form_data=form_data)
+                _schedule_embeddings(
+                    media_id=int(media_id),
+                    user_id=user_id,
+                    db=db,
+                    form_data=form_data,
+                )
             )
 
         progress.percent = 100.0

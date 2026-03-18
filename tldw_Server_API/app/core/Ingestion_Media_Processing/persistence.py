@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     persist_claims_if_applicable,
 )
 from tldw_Server_API.app.core.config import loaded_config_data, settings
+from tldw_Server_API.app.core.DB_Management.DB_Manager import mark_media_as_processed
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     ConflictError,
     DatabaseError,
@@ -1602,6 +1603,32 @@ def _resolve_media_add_embeddings_mode(form_data: Any) -> str:
     return "auto"
 
 
+def _mark_media_embeddings_complete(db: Any, media_id: int) -> None:
+    try:
+        mark_media_as_processed(db_instance=db, media_id=media_id)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to mark embeddings complete for media {}: {}",
+            media_id,
+            exc,
+        )
+
+
+def _mark_media_embeddings_error(db: Any, media_id: int, error_detail: Any) -> None:
+    detail = str(error_detail or "Embedding generation failed").strip() or "Embedding generation failed"
+    try:
+        mark_error = getattr(db, "mark_embeddings_error", None)
+        if not callable(mark_error):
+            raise AttributeError("Database instance does not expose mark_embeddings_error")
+        mark_error(media_id, detail)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to mark embeddings error for media {}: {}",
+            media_id,
+            exc,
+        )
+
+
 def _coerce_positive_int(value: Any, default: int) -> int:
     try:
         parsed = int(value)
@@ -1820,13 +1847,26 @@ async def schedule_media_add_embeddings(
                         embedding_provider=embedding_provider,
                         chunk_size=chunk_size,
                         chunk_overlap=chunk_overlap,
+                        user_id=user_id,
                     )
+                    allow_zero = bool(result_emb.get("allow_zero_embeddings"))
+                    if result_emb.get("status") == "success" or allow_zero:
+                        _mark_media_embeddings_complete(db, media_id)
+                    else:
+                        _mark_media_embeddings_error(
+                            db,
+                            media_id,
+                            result_emb.get("error")
+                            or result_emb.get("message")
+                            or "Embedding generation failed",
+                        )
                     logger.info(
                         "Embedding generation result for media {}: {}",
                         media_id,
                         result_emb,
                     )
                 except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as embed_err:
+                    _mark_media_embeddings_error(db, media_id, embed_err)
                     logger.error(
                         "Failed to generate embeddings for media {}: {}",
                         media_id,

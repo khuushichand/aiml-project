@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     InputError,
     MediaDatabase,
 )
+from tldw_Server_API.app.core.DB_Management.DB_Manager import mark_media_as_processed
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -136,7 +137,7 @@ async def _generate_embeddings(
             "embedding_provider",
             embeddings_endpoint.DEFAULT_EMBEDDING_PROVIDER,
         )
-        await embeddings_endpoint.generate_embeddings_for_media(
+        result = await embeddings_endpoint.generate_embeddings_for_media(
             media_id=media_id,
             media_content=media_payload,
             embedding_model=embedding_model,
@@ -145,6 +146,14 @@ async def _generate_embeddings(
             chunk_overlap=request.chunk_overlap,
             user_id=user_id,
         )
+        allow_zero = bool(result.get("allow_zero_embeddings"))
+        if result.get("status") == "success" or allow_zero:
+            mark_media_as_processed(db_instance=db, media_id=media_id)
+        else:
+            error_detail = str(
+                result.get("error") or result.get("message") or "Embedding generation failed"
+            )
+            raise RuntimeError(error_detail)
         invalidate_rag_caches(None, namespaces=cache_namespaces, media_id=media_id)
     except Exception as exc:
         error_detail = f"{type(exc).__name__}: {exc}"

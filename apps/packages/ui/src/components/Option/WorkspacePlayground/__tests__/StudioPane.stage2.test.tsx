@@ -1164,6 +1164,92 @@ describe("StudioPane Stage 2 workflows", () => {
     )
   })
 
+  it("retries mind map generation when the first completion is not Mermaid syntax", async () => {
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "DSPy helps optimize prompting workflows and compound AI pipelines."
+      }
+    })
+    mockCreateChatCompletion
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content:
+                    "Central topic: Workspace Research\n- Prompting workflows\n- Compound AI pipelines"
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content:
+                    "```mermaid\nmindmap\n  root((Workspace Research))\n    Prompting workflows\n    Compound AI pipelines\n```"
+                }
+              }
+            ]
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Mind Map" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalledTimes(2)
+    })
+
+    expect(mockCreateChatCompletion).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        model: "gpt-4o-mini",
+        messages: [
+          expect.objectContaining({
+            role: "system",
+            content: expect.stringContaining("convert notes and outlines")
+          }),
+          expect.objectContaining({
+            role: "user",
+            content: expect.stringContaining(
+              "The previous answer was not valid Mermaid mindmap syntax"
+            )
+          })
+        ]
+      })
+    )
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        expect.stringMatching(/^artifact-/),
+        "completed",
+        expect.objectContaining({
+          content: expect.stringContaining("mindmap"),
+          data: expect.objectContaining({
+            mermaid: expect.stringContaining("mindmap")
+          })
+        })
+      )
+    })
+  })
+
   it("generates data table output from selected source content via chat completion", async () => {
     workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
     workspaceStoreState.getSelectedMediaIds = () => [101, 202]

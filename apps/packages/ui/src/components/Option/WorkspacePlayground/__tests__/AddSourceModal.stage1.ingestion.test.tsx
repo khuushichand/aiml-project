@@ -118,7 +118,11 @@ describe("AddSourceModal Stage 1 ingestion safety", () => {
       expect.objectContaining({
         media_type: "pdf",
         overwrite: "false",
-        perform_chunking: "true"
+        perform_chunking: "true",
+        generate_embeddings: "true",
+        embedding_dispatch_mode: "background",
+        embedding_provider: "huggingface",
+        embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
       })
     )
 

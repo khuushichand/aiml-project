@@ -135,3 +135,112 @@ async def test_media_ingest_heavy_worker_uses_configured_queue(monkeypatch):
     await worker.run_media_ingest_heavy_jobs_worker(None)
     assert called["queue"] == "media-heavy-q"
     assert called["worker_id"] == "media-ingest-worker-media-heavy-q"
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_schedule_embeddings_marks_media_processed(monkeypatch):
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    class _DummyDB:
+        def __init__(self) -> None:
+            self.errors: list[tuple[int, str]] = []
+
+        def mark_embeddings_error(self, media_id: int, detail: str) -> None:
+            self.errors.append((media_id, detail))
+
+    captured: dict[str, object] = {}
+
+    async def _fake_get_media_content(media_id: int, db):  # noqa: ARG001
+        return {"media_item": {"title": f"Doc {media_id}"}, "content": {"content": "hello world"}}
+
+    async def _fake_generate_embeddings_for_media(**kwargs):
+        captured["kwargs"] = dict(kwargs)
+        return {"status": "success", "embedding_count": 1, "chunks_processed": 1}
+
+    def _fake_mark_media_as_processed(*, db_instance, media_id):  # noqa: ANN001
+        captured["processed"] = (db_instance, media_id)
+
+    monkeypatch.setattr(worker, "mark_media_as_processed", _fake_mark_media_as_processed, raising=True)
+
+    import tldw_Server_API.app.api.v1.endpoints.media_embeddings as media_embeddings
+
+    monkeypatch.setattr(media_embeddings, "get_media_content", _fake_get_media_content, raising=True)
+    monkeypatch.setattr(
+        media_embeddings,
+        "generate_embeddings_for_media",
+        _fake_generate_embeddings_for_media,
+        raising=True,
+    )
+
+    db = _DummyDB()
+    await worker._schedule_embeddings(
+        media_id=55,
+        user_id="77",
+        db=db,
+        form_data=type(
+            "FormData",
+            (),
+            {
+                "embedding_model": None,
+                "embedding_provider": None,
+                "chunk_size": 64,
+                "overlap": 16,
+            },
+        )(),
+    )
+
+    assert captured["processed"] == (db, 55)
+    assert captured["kwargs"]["user_id"] == "77"
+    assert db.errors == []
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_schedule_embeddings_marks_error_on_failure(monkeypatch):
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    class _DummyDB:
+        def __init__(self) -> None:
+            self.errors: list[tuple[int, str]] = []
+
+        def mark_embeddings_error(self, media_id: int, detail: str) -> None:
+            self.errors.append((media_id, detail))
+
+    async def _fake_get_media_content(media_id: int, db):  # noqa: ARG001
+        return {"media_item": {"title": f"Doc {media_id}"}, "content": {"content": "hello world"}}
+
+    async def _fake_generate_embeddings_for_media(**_kwargs):
+        return {"status": "error", "error": "embedding backend unavailable"}
+
+    def _fail_if_processed(**_kwargs):  # noqa: ANN001
+        raise AssertionError("mark_media_as_processed should not run for failed embeddings")
+
+    monkeypatch.setattr(worker, "mark_media_as_processed", _fail_if_processed, raising=True)
+
+    import tldw_Server_API.app.api.v1.endpoints.media_embeddings as media_embeddings
+
+    monkeypatch.setattr(media_embeddings, "get_media_content", _fake_get_media_content, raising=True)
+    monkeypatch.setattr(
+        media_embeddings,
+        "generate_embeddings_for_media",
+        _fake_generate_embeddings_for_media,
+        raising=True,
+    )
+
+    db = _DummyDB()
+    await worker._schedule_embeddings(
+        media_id=91,
+        user_id="12",
+        db=db,
+        form_data=type(
+            "FormData",
+            (),
+            {
+                "embedding_model": None,
+                "embedding_provider": None,
+                "chunk_size": 64,
+                "overlap": 16,
+            },
+        )(),
+    )
+
+    assert db.errors == [(91, "embedding backend unavailable")]

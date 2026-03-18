@@ -72,6 +72,22 @@ def _disable_chromadb_force_stub_for_chromadb_unit_tests(monkeypatch):
     monkeypatch.delenv("CHROMADB_FORCE_STUB", raising=False)
     yield
 
+
+@pytest.fixture(autouse=True)
+def _clear_chromadb_persistent_client_cache():
+    """Isolate process-level persistent client reuse across ChromaDB tests."""
+    from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+
+    cache_lock = getattr(cdl, "_PERSISTENT_CLIENTS_LOCK", None)
+    cache = getattr(cdl, "_PERSISTENT_CLIENTS", None)
+    if cache_lock is not None and cache is not None:
+        with cache_lock:
+            cache.clear()
+    yield
+    if cache_lock is not None and cache is not None:
+        with cache_lock:
+            cache.clear()
+
 # =====================================================================
 # Test Markers
 # =====================================================================

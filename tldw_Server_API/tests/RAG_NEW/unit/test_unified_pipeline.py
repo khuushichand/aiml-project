@@ -461,6 +461,71 @@ class TestUnifiedPipeline:
                         assert first_id == "1"
 
     @pytest.mark.asyncio
+    async def test_unified_pipeline_security_filter_uses_filter_documents_fallback(self):
+        """Security filtering should adapt to the current synchronous filter_documents API."""
+        from types import SimpleNamespace
+
+        class _FakePIIMatch:
+            def to_dict(self):
+                return {"type": "person_name"}
+
+        class _FakePIIDetector:
+            def detect_pii(self, _text):
+                return [_FakePIIMatch()]
+
+        class _FakeSecurityFilter:
+            def __init__(self):
+                self.pii_detector = _FakePIIDetector()
+
+            def filter_documents(self, documents, user_id="anonymous", max_sensitivity=None, mask_pii=False):
+                assert user_id == "anonymous"
+                assert max_sensitivity == 1
+                filtered = []
+                for doc in documents:
+                    if doc.get("metadata", {}).get("sensitive"):
+                        continue
+                    updated = dict(doc)
+                    if mask_pii:
+                        updated["content"] = updated["content"].replace("Alice", "[REDACTED]")
+                        updated["pii_masked"] = True
+                    filtered.append(updated)
+                return filtered
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SecurityFilter', _FakeSecurityFilter):
+            with patch(
+                'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SensitivityLevel',
+                SimpleNamespace(PUBLIC=1, INTERNAL=2, CONFIDENTIAL=3, RESTRICTED=4),
+            ):
+                with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                    mock_retriever_instance = MagicMock()
+                    mock_retriever_instance.retrieve = AsyncMock(return_value=[
+                        Document(id="1", content="Alice can view this", metadata={"sensitive": False}, source=DataSource.MEDIA_DB, score=0.9),
+                        Document(id="2", content="Sensitive", metadata={"sensitive": True}, source=DataSource.MEDIA_DB, score=0.7),
+                    ])
+                    mock_retriever.return_value = mock_retriever_instance
+
+                    result = await unified_rag_pipeline(
+                        query="security test",
+                        enable_security_filter=True,
+                        detect_pii=True,
+                        redact_pii=True,
+                        sensitivity_level="public",
+                        enable_generation=False,
+                        enable_cache=False,
+                        enable_reranking=False,
+                    )
+
+                    docs = getattr(result, 'documents', None) if not isinstance(result, dict) else result.get('documents', [])
+                    errors = getattr(result, 'errors', None) if not isinstance(result, dict) else result.get('errors', [])
+                    security_report = getattr(result, 'security_report', None) if not isinstance(result, dict) else result.get('security_report', {})
+
+                    assert len(docs) == 1
+                    content = docs[0].get("content") if isinstance(docs[0], dict) else getattr(docs[0], "content", "")
+                    assert "[REDACTED]" in content
+                    assert not any("Security filter failed" in err for err in (errors or []))
+                    assert security_report == {"pii_detected": [[{"type": "person_name"}], [{"type": "person_name"}]]}
+
+    @pytest.mark.asyncio
     async def test_unified_pipeline_with_citations(self, sample_documents):
         """Test unified pipeline with citation generation."""
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
@@ -552,6 +617,75 @@ class TestUnifiedPipeline:
             location = chunk_citations[0].get("location", "")
             assert "Section: Code Section" in location
             assert "Page 2" in location
+
+    @pytest.mark.asyncio
+    async def test_unified_pipeline_table_processing_uses_process_document_tables_fallback(self):
+        """Table processing should adapt to the current process_document_tables API."""
+        class _FakeTableProcessor:
+            def process_document_tables(self, text, serialize_method=None):
+                assert serialize_method == "hybrid"
+                return (f"{text}\n[Table serialized]", [{"rows": 1, "method": serialize_method}])
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.TableProcessor', _FakeTableProcessor):
+            with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                mock_retriever_instance = MagicMock()
+                mock_retriever_instance.retrieve = AsyncMock(return_value=[
+                    Document(id="1", content="| h |\n| - |\n| v |", metadata={}, source=DataSource.MEDIA_DB, score=0.9)
+                ])
+                mock_retriever.return_value = mock_retriever_instance
+
+                result = await unified_rag_pipeline(
+                    query="table test",
+                    enable_table_processing=True,
+                    table_method="hybrid",
+                    enable_generation=False,
+                    enable_cache=False,
+                    enable_reranking=False,
+                )
+
+                docs = getattr(result, 'documents', None) if not isinstance(result, dict) else result.get('documents', [])
+                errors = getattr(result, 'errors', None) if not isinstance(result, dict) else result.get('errors', [])
+                first_doc = docs[0]
+                content = first_doc.get("content") if isinstance(first_doc, dict) else getattr(first_doc, "content", "")
+                metadata = first_doc.get("metadata") if isinstance(first_doc, dict) else getattr(first_doc, "metadata", {})
+
+                assert "[Table serialized]" in content
+                assert metadata.get("table_metadata") == [{"rows": 1, "method": "hybrid"}]
+                assert not any("Table processing" in err for err in (errors or []))
+
+    @pytest.mark.asyncio
+    async def test_unified_pipeline_highlighting_uses_context_helper(self):
+        """Result highlighting should use the quick-wins context helper without pipeline errors."""
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+            mock_retriever_instance = MagicMock()
+            mock_retriever_instance.retrieve = AsyncMock(return_value=[
+                Document(
+                    id="highlight-doc",
+                    content="Evidence handling should stay grounded in the selected source.",
+                    metadata={},
+                    source=DataSource.MEDIA_DB,
+                    score=0.91,
+                )
+            ])
+            mock_retriever.return_value = mock_retriever_instance
+
+            result = await unified_rag_pipeline(
+                query="evidence handling selected source",
+                highlight_results=True,
+                highlight_query_terms=True,
+                enable_generation=False,
+                enable_cache=False,
+                enable_reranking=False,
+            )
+
+            docs = getattr(result, 'documents', None) if not isinstance(result, dict) else result.get('documents', [])
+            errors = getattr(result, 'errors', None) if not isinstance(result, dict) else result.get('errors', [])
+            first_doc = docs[0]
+            metadata = first_doc.get("metadata") if isinstance(first_doc, dict) else getattr(first_doc, "metadata", {})
+
+            assert metadata.get("highlighted")
+            assert metadata.get("match_count", 0) > 0
+            assert not any("highlight_results() takes 1 positional argument" in err for err in (errors or []))
 
     @pytest.mark.asyncio
     async def test_unified_pipeline_all_features(self):

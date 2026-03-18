@@ -514,7 +514,7 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     vi.useRealTimers()
   })
 
-  it("promotes processing sources to ready when polling detects completed content", async () => {
+  it("keeps processing sources in processing while vector indexing is still pending", async () => {
     testState.sources = [
       {
         id: "source-processing",
@@ -528,7 +528,43 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     mockGetMediaDetails.mockResolvedValue({
       content: {
         text: "Processed transcript text"
+      },
+      vector_processing_status: "pending"
+    })
+
+    render(<WorkspacePlayground />)
+
+    await waitFor(() => {
+      expect(mockGetMediaDetails).toHaveBeenCalledWith(
+        808,
+        expect.objectContaining({
+          include_content: true
+        })
+      )
+    })
+
+    expect(testState.setSourceStatusByMediaId).not.toHaveBeenCalledWith(
+      808,
+      "ready"
+    )
+  })
+
+  it("promotes processing sources to ready when polling detects completed vector-ready content", async () => {
+    testState.sources = [
+      {
+        id: "source-processing",
+        mediaId: 808,
+        title: "Queued Source",
+        type: "pdf",
+        status: "processing",
+        addedAt: new Date("2026-02-18T12:00:00.000Z")
       }
+    ]
+    mockGetMediaDetails.mockResolvedValue({
+      content: {
+        text: "Processed transcript text"
+      },
+      vector_processing_status: "completed"
     })
 
     render(<WorkspacePlayground />)
