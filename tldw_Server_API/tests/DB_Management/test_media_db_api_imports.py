@@ -81,6 +81,7 @@ from tldw_Server_API.app.core.RAG.rag_service import agentic_chunker
 from tldw_Server_API.app.core.RAG.rag_service import database_retrievers
 from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline
 from tldw_Server_API.app.core.Chatbooks import chatbook_service
+from tldw_Server_API.app.core.MCP_unified.modules.implementations import media_module as media_module_impl
 from tldw_Server_API.app.core.Sync import Sync_Client as sync_client_module
 from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
@@ -871,6 +872,14 @@ def test_claims_service_does_not_bind_media_database_from_shim(monkeypatch):
     module = importlib.reload(claims_service)
     assert module.managed_media_database is media_db_api.managed_media_database
     assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_module_imports_create_media_database_from_media_db_api(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    module = importlib.reload(media_module_impl)
+    assert module.create_media_database is media_db_api.create_media_database
+    assert "MediaDatabase" not in module.__dict__
+    assert "Media_DB_v2" not in inspect.getsource(module)
 
 
 def test_persistence_imports_factory_and_db_errors_outside_shim(monkeypatch):

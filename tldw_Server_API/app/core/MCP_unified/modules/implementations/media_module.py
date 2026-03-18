@@ -4,6 +4,8 @@ Media Module for Unified MCP
 Production-ready media management module with full MCP compliance.
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import hashlib
@@ -23,7 +25,7 @@ from urllib.parse import urlsplit
 from loguru import logger
 
 from ....DB_Management.db_path_utils import DatabasePaths
-from ....DB_Management.Media_DB_v2 import MediaDatabase
+from ....DB_Management.media_db.api import create_media_database
 from ....DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
     get_media_transcripts,
@@ -35,6 +37,8 @@ from ....DB_Management.media_db.legacy_maintenance import (
 from ...persona_scope import get_explicit_scope_ids, merge_requested_ids_with_scope
 from ..base import BaseModule, create_resource_definition, create_tool_definition
 from ..disk_space import get_free_disk_space_gb
+
+MediaDbLike = Any
 
 _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -81,10 +85,11 @@ class MediaModule(BaseModule):
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
             # Initialize database with async support
-            self.db = MediaDatabase(
+            self.db = create_media_database(
+                client_id=f"mcp_media_{self.config.name}",
                 db_path=db_path,
-                client_id=f"mcp_media_{self.config.name}"
             )
+            self._module_db_owner = self.db
 
             # Initialize connection pool if supported
             if hasattr(self.db, 'initialize_pool'):
@@ -98,7 +103,7 @@ class MediaModule(BaseModule):
             self._semantic_retrievers: dict[tuple[Optional[str], Optional[str]], Any] = {}
             self._ingestion_jobs: dict[str, dict[str, Any]] = {}
             self._ingestion_jobs_lock = asyncio.Lock()
-            self._user_db_cache: OrderedDict[str, tuple[MediaDatabase, float]] = OrderedDict()
+            self._user_db_cache: OrderedDict[str, tuple[MediaDbLike, float]] = OrderedDict()
             self._user_db_cache_lock = threading.Lock()
             # Per-user DB cache bounds (TTL + LRU)
             self._user_db_cache_ttl_seconds = int(self.config.settings.get("user_db_cache_ttl_seconds", 900))
@@ -450,7 +455,13 @@ class MediaModule(BaseModule):
         except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
-    def _close_media_db_instance(self, db: MediaDatabase) -> None:
+    def _is_module_media_db_owner(self, db: Any) -> bool:
+        owner = getattr(self, "_module_db_owner", None)
+        if owner is not None:
+            return db is owner
+        return hasattr(db, "db_path_str") and hasattr(db, "close_connection")
+
+    def _close_media_db_instance(self, db: MediaDbLike) -> None:
         with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
             db.close_connection()
         try:
@@ -482,11 +493,14 @@ class MediaModule(BaseModule):
             except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 break
 
-    def _get_or_create_user_db(self, db_path: str) -> MediaDatabase:
+    def _get_or_create_user_db(self, db_path: str) -> MediaDbLike:
         lock = getattr(self, "_user_db_cache_lock", None)
         if lock is None:
             logger.warning("User DB cache lock not initialized; bypassing cache for {}", db_path)
-            return MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
+            return create_media_database(
+                client_id=f"mcp_media_{self.config.name}",
+                db_path=db_path,
+            )
         with lock:
             cache = getattr(self, "_user_db_cache", None)
             if cache is None:
@@ -507,18 +521,21 @@ class MediaModule(BaseModule):
                     self._close_media_db_instance(db)
                 except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                     pass
-            db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
+            db = create_media_database(
+                client_id=f"mcp_media_{self.config.name}",
+                db_path=db_path,
+            )
             cache[db_path] = (db, now_ts)
             cache.move_to_end(db_path)
             self._evict_user_db_cache_locked(now_ts)
             return db
 
-    def _open_media_db(self, context: Any | None) -> MediaDatabase:
+    def _open_media_db(self, context: Any | None) -> MediaDbLike:
         """Open per-user media DB when context provides one; fallback to module DB."""
         db = getattr(self, "db", None)
         if db is None:
             raise ValueError("Media database not initialized")
-        if not isinstance(db, MediaDatabase):
+        if not self._is_module_media_db_owner(db):
             return db
         if context is None or getattr(context, "user_id", None) is None:
             if self._allow_anonymous_access():
@@ -568,7 +585,7 @@ class MediaModule(BaseModule):
         except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return t[:length]
 
-    def _get_latest_description(self, dbi: MediaDatabase, media_id: int) -> Optional[str]:
+    def _get_latest_description(self, dbi: MediaDbLike, media_id: int) -> Optional[str]:
         try:
             latest = get_document_version(
                 db_instance=dbi,
@@ -1172,7 +1189,7 @@ class MediaModule(BaseModule):
 
     def _keyword_search(
         self,
-        dbi: MediaDatabase,
+        dbi: MediaDbLike,
         query: str,
         limit: int,
         offset: int,
@@ -1228,7 +1245,7 @@ class MediaModule(BaseModule):
 
     def _keyword_search_head(
         self,
-        dbi: MediaDatabase,
+        dbi: MediaDbLike,
         query: str,
         size: int,
         *,
@@ -1260,7 +1277,7 @@ class MediaModule(BaseModule):
         )
         return rows[:fetch_size], total
 
-    def _get_semantic_retriever(self, dbi: MediaDatabase, context: Any | None):
+    def _get_semantic_retriever(self, dbi: MediaDbLike, context: Any | None):
         db_path = getattr(dbi, "db_path_str", None)
         user_key = str(getattr(context, "user_id", None) or "0")
         retriever_key = (db_path, user_key)
@@ -1293,7 +1310,7 @@ class MediaModule(BaseModule):
         query: str,
         limit: int,
         offset: int,
-        dbi: MediaDatabase,
+        dbi: MediaDbLike,
         media_types: Optional[list[str]],
         metadata_filter: Optional[dict[str, Any]],
         index_namespace: Any,
@@ -1368,7 +1385,7 @@ class MediaModule(BaseModule):
         query: str,
         limit: int,
         offset: int,
-        dbi: MediaDatabase,
+        dbi: MediaDbLike,
         media_types: Optional[list[str]],
         date_range: Optional[dict[str, Any]],
         must_have_keywords: Optional[list[str]],
@@ -1963,7 +1980,7 @@ class MediaModule(BaseModule):
         except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
-    def _assert_media_access(self, media_id: int, context: Any | None, dbi: Optional[MediaDatabase] = None) -> None:
+    def _assert_media_access(self, media_id: int, context: Any | None, dbi: Optional[MediaDbLike] = None) -> None:
         """Enforce that non-admin users can only access their own media when ownership is present."""
         try:
             from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode
