@@ -35,7 +35,6 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     DatabaseError,
     InputError,
-    MediaDatabase,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
     fetch_keywords_for_media_batch,
@@ -163,7 +162,7 @@ async def list_media_endpoint(
         False,
         description="Include associated keywords for each media item.",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
     """
@@ -344,7 +343,7 @@ async def list_media_trash_endpoint(
         False,
         description="Include associated keywords for each media item.",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
     """
@@ -501,7 +500,7 @@ async def list_media_trash_endpoint(
 )
 async def empty_media_trash_endpoint(
     response: Response,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> dict[str, Any]:
     """
@@ -619,7 +618,7 @@ async def search_by_metadata(
         None,
         description="Optional sort override: date_desc|date_asc|title_asc|title_desc",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
     """
@@ -825,7 +824,7 @@ async def get_by_identifier(
     arxiv_id: Optional[str] = Query(None),
     s2_paper_id: Optional[str] = Query(None),
     group_by_media: bool = Query(True),
-    db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
+    db: Optional[Any] = Depends(try_get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> dict[str, Any]:
     """
@@ -929,7 +928,7 @@ async def search_media_items(
         le=100,
         description="Results per page",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> Response:
     """
