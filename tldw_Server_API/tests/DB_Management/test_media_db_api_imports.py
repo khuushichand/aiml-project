@@ -537,6 +537,18 @@ def test_media_reprocess_endpoint_does_not_bind_media_database_from_media_db_v2(
     assert "MediaDatabase" not in module.__dict__
 
 
+def test_media_reprocess_endpoint_imports_db_errors_from_media_db_errors(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "ConflictError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+
+    module = importlib.reload(media_reprocess_endpoint)
+
+    assert module.ConflictError is media_db_errors.ConflictError
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.InputError is media_db_errors.InputError
+
+
 def test_media_document_figures_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
@@ -561,12 +573,32 @@ def test_email_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatc
     assert "MediaDatabase" not in module.__dict__
 
 
+def test_email_endpoint_imports_db_errors_from_media_db_errors(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+
+    module = importlib.reload(email_endpoint)
+
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.InputError is media_db_errors.InputError
+
+
 def test_media_listing_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(media_listing_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_listing_endpoint_imports_db_errors_from_media_db_errors(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+
+    module = importlib.reload(media_listing_endpoint)
+
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.InputError is media_db_errors.InputError
 
 
 def test_chunking_templates_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):

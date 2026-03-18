@@ -32,7 +32,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_paginated_files,
     get_paginated_trash_files,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError,
     InputError,
 )
