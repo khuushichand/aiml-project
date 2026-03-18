@@ -7,7 +7,7 @@
 - Raw `MediaDatabase(...)` constructors in app code: 0
 - Operational `create_media_database(...)` call sites in app code: 17
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 32
+- `Media_DB_v2` references in app code: 31
 
 Notes:
 
@@ -129,6 +129,7 @@ Status:
 - `app/core/DB_Management/media_db/legacy_backup.py` no longer mentions `Media_DB_v2` in source; it remains a thin compatibility wrapper over `DB_Backups.create_backup(...)`.
 - `app/core/DB_Management/media_db/api.py` and `app/core/DB_Management/media_db/runtime/session.py` no longer mention `Media_DB_v2` in source; they now rely on `MediaDbLike` and the runtime factory loader instead of naming the shim directly.
 - `app/core/DB_Management/media_db/repositories/chunks_repository.py`, `document_versions_repository.py`, `keywords_repository.py`, and `media_files_repository.py` now use `MediaDbLike` from `runtime.validation` instead of type-only shim imports.
+- `app/core/DB_Management/media_db/repositories/media_repository.py` now uses `MediaDbLike`, `runtime/collections.py`, and `runtime/noncritical.py` instead of reaching back into `Media_DB_v2` for optional collections support and noncritical exception policy.
 - `app/core/DB_Management/media_db/runtime/factory.py` now resolves the canonical runtime class through `runtime/media_class.py`, so the factory itself no longer names `Media_DB_v2` directly.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 

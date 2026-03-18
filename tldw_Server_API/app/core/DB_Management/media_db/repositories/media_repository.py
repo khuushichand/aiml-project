@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
@@ -15,9 +15,13 @@ from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError,
     InputError,
 )
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.collections import (
+    load_collections_database_cls,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.noncritical import (
+    MEDIA_NONCRITICAL_EXCEPTIONS,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 
 try:
     from loguru import logger
@@ -31,14 +35,9 @@ except ImportError:  # pragma: no cover - defensive fallback
 
 
 def _load_legacy_media_support():
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-        _CollectionsDB,
-        _MEDIA_NONCRITICAL_EXCEPTIONS,
-    )
-
     return (
-        _CollectionsDB,
-        _MEDIA_NONCRITICAL_EXCEPTIONS,
+        load_collections_database_cls(),
+        MEDIA_NONCRITICAL_EXCEPTIONS,
         media_dedupe_url_candidates,
         normalize_media_dedupe_url,
     )
@@ -47,11 +46,11 @@ def _load_legacy_media_support():
 class MediaRepository:
     """Caller-facing seam for media persistence while internals migrate out of the shim."""
 
-    def __init__(self, session: MediaDatabase):
+    def __init__(self, session: MediaDbLike):
         self.session = session
 
     @classmethod
-    def from_legacy_db(cls, db: MediaDatabase) -> "MediaRepository":
+    def from_legacy_db(cls, db: MediaDbLike) -> "MediaRepository":
         return cls(session=db)
 
     def add_media_with_keywords(

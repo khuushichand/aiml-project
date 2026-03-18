@@ -104,6 +104,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.repositories import chunks_
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import document_versions_repository
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import keywords_repository
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import media_files_repository
+from tldw_Server_API.app.core.DB_Management.media_db.repositories import media_repository
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as media_db_runtime_factory
 from tldw_Server_API.app.services import admin_bundle_service
 from tldw_Server_API.app.services import media_files_cleanup_service
@@ -157,6 +158,10 @@ def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch):
 
 def test_media_db_api_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(media_db_api)
+
+
+def test_media_repository_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_repository)
 
 
 def test_db_deps_imports_errors_from_media_db_errors_and_not_media_db_v2(monkeypatch):

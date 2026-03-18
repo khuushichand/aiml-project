@@ -82,11 +82,6 @@ from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
 )
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 
-try:
-    # Optional integration for Collections (highlights re-anchoring)
-    from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase as _CollectionsDB
-except ImportError:
-    _CollectionsDB = None  # Safe fallback when module unavailable
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
@@ -169,12 +164,18 @@ from tldw_Server_API.app.core.DB_Management.media_db.schema.migrations import (
     get_postgres_migrations,
     run_postgres_migrations,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.collections import (
+    load_collections_database_cls,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import (
     ChunksRepository,
     DocumentVersionsRepository,
     KeywordsRepository,
     MediaRepository,
     MediaFilesRepository,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.noncritical import (
+    MEDIA_NONCRITICAL_EXCEPTIONS,
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
@@ -189,24 +190,8 @@ from tldw_Server_API.app.core.testing import is_test_mode
 
 # Use application-wide logging configuration; avoid configuring here.
 
-_MEDIA_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
-    AttributeError,
-    BackendDatabaseError,
-    ConflictError,
-    DatabaseError,
-    InputError,
-    MigrationError,
-    KeyError,
-    OSError,
-    RuntimeError,
-    TimeoutError,
-    TypeError,
-    UnicodeDecodeError,
-    ValueError,
-    json.JSONDecodeError,
-    sqlite3.Error,
-    yaml.YAMLError,
-)
+_CollectionsDB = load_collections_database_cls()
+_MEDIA_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = MEDIA_NONCRITICAL_EXCEPTIONS
 
 
 def _coerce_email_metric_label(value: Any, *, default: str = "unknown") -> str:
