@@ -15,6 +15,7 @@ from tldw_Server_API.app.api.v1.endpoints.audio import audiobooks as audiobooks_
 from tldw_Server_API.app.api.v1.endpoints import slides as slides_endpoint
 from tldw_Server_API.app.api.v1.endpoints import text2sql as text2sql_endpoint
 from tldw_Server_API.app.api.v1.endpoints import media_embeddings as media_embeddings_endpoint
+from tldw_Server_API.app.api.v1.endpoints import email as email_endpoint
 from tldw_Server_API.app.api.v1.endpoints import data_tables
 from tldw_Server_API.app.api.v1.endpoints import items
 from tldw_Server_API.app.api.v1.endpoints import quizzes as quizzes_endpoint
@@ -531,6 +532,14 @@ def test_audiobooks_endpoint_does_not_bind_media_database_from_media_db_v2(monke
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(audiobooks_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_email_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(email_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 
