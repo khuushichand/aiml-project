@@ -173,3 +173,41 @@ source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && py
 git add tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_adapter.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_runners_llm.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_streamable_http_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_tool_gate.py
 git commit -m "test(acp): clean up remaining PR 907 review warnings"
 ```
+
+### Task 5: Close remaining governance and runner review gaps
+**Status:** Complete
+
+**Files:**
+- Modify: `tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_runners.py`
+- Modify: `tldw_Server_API/app/core/Agent_Client_Protocol/governance_filter.py`
+- Modify: `tldw_Server_API/app/core/Agent_Client_Protocol/tool_gate.py`
+- Modify: `tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_runners_llm.py`
+- Modify: `tldw_Server_API/tests/Agent_Client_Protocol/test_governance_tool_gate.py`
+- Modify: `tldw_Server_API/tests/Agent_Client_Protocol/test_tool_gate.py`
+
+**Step 1: Add failing tests**
+
+- Add runner tests proving LLM caller failures and approval-gate failures emit terminal `ERROR` events instead of bubbling out of the adapter.
+- Add governance-tool-gate coverage proving a pending approval returns promptly when the session cancel event is set.
+
+**Step 2: Re-run the focused failing tests**
+
+Run:
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_runners_llm.py tldw_Server_API/tests/Agent_Client_Protocol/test_governance_tool_gate.py -q
+```
+
+**Step 3: Write the minimal production changes**
+
+- Catch `LLMDrivenRunner` failures from `llm_caller.call()` and `tool_gate.request_approval()` and emit `AgentEventKind.ERROR`.
+- Pass the runner cancel event through the `ToolGate` interface.
+- Make `GovernanceToolGate.request_approval()` race approval futures against cancellation and cancel pending requests for the same session when cancellation wins.
+
+**Step 4: Re-run the ACP verification gates**
+
+Run:
+```bash
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_adapter.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_runners_agent.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_runners_llm.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_stdio_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_sse_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_streamable_http_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_acp_agent_registry.py tldw_Server_API/tests/Agent_Client_Protocol/test_registry_mcp_fields.py tldw_Server_API/tests/Agent_Client_Protocol/test_governance_filter.py tldw_Server_API/tests/Agent_Client_Protocol/test_governance_tool_gate.py tldw_Server_API/tests/Agent_Client_Protocol/test_tool_gate.py -q
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && pre-commit run --files tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_adapter.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_runners.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_transport.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_transports/stdio.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_transports/sse.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_transports/streamable_http.py tldw_Server_API/app/core/Agent_Client_Protocol/agent_registry.py tldw_Server_API/app/core/Agent_Client_Protocol/governance_filter.py tldw_Server_API/app/core/Agent_Client_Protocol/tool_gate.py tldw_Server_API/app/core/DB_Management/ACP_Sessions_DB.py tldw_Server_API/app/api/v1/schemas/agent_client_protocol.py tldw_Server_API/app/api/v1/endpoints/agent_client_protocol.py tldw_Server_API/tests/Agent_Client_Protocol/test_acp_agent_registry.py tldw_Server_API/tests/Agent_Client_Protocol/test_governance_filter.py tldw_Server_API/tests/Agent_Client_Protocol/test_governance_tool_gate.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_adapter.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_runners_agent.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_runners_llm.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_sse_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_stdio_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_streamable_http_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_mcp_transport.py tldw_Server_API/tests/Agent_Client_Protocol/test_registry_mcp_fields.py tldw_Server_API/tests/Agent_Client_Protocol/test_tool_gate.py
+source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_adapter.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_runners.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_transport.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_transports/stdio.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_transports/sse.py tldw_Server_API/app/core/Agent_Client_Protocol/adapters/mcp_transports/streamable_http.py tldw_Server_API/app/core/Agent_Client_Protocol/agent_registry.py tldw_Server_API/app/core/Agent_Client_Protocol/governance_filter.py tldw_Server_API/app/core/Agent_Client_Protocol/tool_gate.py tldw_Server_API/app/core/DB_Management/ACP_Sessions_DB.py tldw_Server_API/app/api/v1/schemas/agent_client_protocol.py tldw_Server_API/app/api/v1/endpoints/agent_client_protocol.py -f json -o /tmp/bandit_pr907_coderabbit_followups_round2.json
+```

@@ -261,7 +261,11 @@ class LLMDrivenRunner:
             if self._cancel.is_set():
                 break
 
-            response = await self._llm.call(history, openai_tools)
+            try:
+                response = await self._llm.call(history, openai_tools)
+            except Exception as exc:
+                await self._emit_event(AgentEventKind.ERROR, {"error": str(exc)})
+                return
 
             if response.tool_calls:
                 # Per OpenAI convention: assistant message with tool_calls
@@ -287,9 +291,22 @@ class LLMDrivenRunner:
                     if self._cancel.is_set():
                         break
 
-                    gate_result = await self._gate.request_approval(
-                        self._session_id, tc.name, tc.arguments
-                    )
+                    try:
+                        gate_result = await self._gate.request_approval(
+                            self._session_id,
+                            tc.name,
+                            tc.arguments,
+                            cancel_event=self._cancel,
+                        )
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as exc:
+                        await self._emit_event(AgentEventKind.ERROR, {"error": str(exc)})
+                        return
+
+                    if self._cancel.is_set():
+                        break
+
                     if not gate_result.approved:
                         reason = gate_result.reason or "denied"
                         denied_msg = f"Permission denied: {reason}"

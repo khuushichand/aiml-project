@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from contextlib import suppress
 
 from loguru import logger
 
@@ -229,9 +230,11 @@ class GovernanceFilter:
     # Cleanup
     # ------------------------------------------------------------------
 
-    async def cancel_all_pending(self) -> None:
-        """Cancel all pending permission requests (e.g. on session teardown)."""
-        for request_id in list(self._pending):
+    async def cancel_all_pending(self, session_id: str | None = None) -> None:
+        """Cancel pending permission requests, optionally scoped to one session."""
+        for request_id, entry in list(self._pending.items()):
+            if session_id is not None and entry.event.session_id != session_id:
+                continue
             await self.on_permission_response(
                 request_id,
                 decision="deny",
@@ -254,6 +257,8 @@ class GovernanceToolGate(ToolGate):
         session_id: str,
         tool_name: str,
         arguments: dict,
+        *,
+        cancel_event: asyncio.Event | None = None,
     ) -> ToolGateResult:
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         event = AgentEvent(
@@ -268,5 +273,22 @@ class GovernanceToolGate(ToolGate):
             metadata={"_approval_future": future},
         )
         await self._filter.process(event)
-        decision, reason = await future
+        if cancel_event is None:
+            decision, reason = await future
+            return ToolGateResult(approved=(decision == "approve"), reason=reason)
+
+        cancel_task = asyncio.create_task(cancel_event.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                {future, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel_task in done and cancel_event.is_set():
+                await self._filter.cancel_all_pending(session_id=session_id)
+            decision, reason = await future
+        finally:
+            cancel_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cancel_task
+
         return ToolGateResult(approved=(decision == "approve"), reason=reason)

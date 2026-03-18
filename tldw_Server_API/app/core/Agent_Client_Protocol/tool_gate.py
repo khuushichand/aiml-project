@@ -1,6 +1,7 @@
 """ToolGate — approval interface between adapter and governance layer."""
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -28,5 +29,7 @@ class ToolGate(ABC):
         session_id: str,
         tool_name: str,
         arguments: dict[str, Any],
+        *,
+        cancel_event: asyncio.Event | None = None,
     ) -> ToolGateResult:
         """Block until governance decision. Returns approved/denied."""

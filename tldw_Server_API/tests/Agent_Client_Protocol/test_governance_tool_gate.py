@@ -87,3 +87,32 @@ async def test_governance_tool_gate_held_then_denied(bus, gov, gate):
 
     assert result.approved is False
     assert result.reason == "too dangerous"
+
+
+@pytest.mark.asyncio
+async def test_governance_tool_gate_cancels_pending_approval_on_session_cancel(bus, gov, gate):
+    """Session cancellation should unblock pending approvals without waiting for timeout."""
+    q = bus.subscribe("test")
+    cancel_event = asyncio.Event()
+
+    request_task = asyncio.create_task(
+        gate.request_approval(
+            session_id="s1",
+            tool_name="bash",
+            arguments={"cmd": "ls"},
+            cancel_event=cancel_event,
+        )
+    )
+
+    perm_req = await asyncio.wait_for(q.get(), timeout=2.0)
+    assert perm_req.kind == AgentEventKind.PERMISSION_REQUEST
+    assert gov.pending_count == 1
+
+    cancel_event.set()
+    result = await asyncio.wait_for(request_task, timeout=1.0)
+
+    assert result.approved is False
+    assert result.reason == "session cancelled"
+    assert gov.pending_count == 0
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(q.get(), timeout=0.05)

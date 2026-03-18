@@ -36,7 +36,7 @@ async def test_tool_gate_concrete_implementation():
     """A concrete subclass of ToolGate should work as expected."""
 
     class AlwaysApprove(ToolGate):
-        async def request_approval(self, session_id, tool_name, arguments):
+        async def request_approval(self, session_id, tool_name, arguments, *, cancel_event=None):
             return ToolGateResult(approved=True, reason="auto-approved")
 
     gate = AlwaysApprove()

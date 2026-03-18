@@ -272,6 +272,37 @@ async def test_llm_driven_transport_error():
 
 
 @pytest.mark.asyncio
+async def test_llm_driven_llm_error_emits_error_event():
+    """LLM call failures should be surfaced as terminal ERROR events."""
+    runner, _transport, llm_caller, _tool_gate, callback, _cancel_event = _make_runner()
+    llm_caller.call.side_effect = RuntimeError("llm failed")
+
+    await runner.run([{"role": "user", "content": "boom"}])
+
+    assert callback.await_count == 1
+    event: AgentEvent = callback.call_args_list[0][0][0]
+    assert event.kind == AgentEventKind.ERROR
+    assert "llm failed" in event.payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_llm_driven_gate_error_emits_error_event():
+    """Approval-gate failures should be surfaced as terminal ERROR events."""
+    tc = LLMToolCall(id="tc1", name="search", arguments={"query": "boom"})
+    runner, _transport, _llm_caller, tool_gate, callback, _cancel_event = _make_runner(
+        llm_responses=[LLMResponse(tool_calls=[tc])]
+    )
+    tool_gate.request_approval.side_effect = RuntimeError("gate failed")
+
+    await runner.run([{"role": "user", "content": "boom"}])
+
+    assert callback.await_count == 1
+    event: AgentEvent = callback.call_args_list[0][0][0]
+    assert event.kind == AgentEventKind.ERROR
+    assert "gate failed" in event.payload["error"]
+
+
+@pytest.mark.asyncio
 async def test_llm_driven_with_governance_filter_emits_single_permission_request():
     """Governance-backed runs should not re-enter approval for already-approved tool calls."""
     from tldw_Server_API.app.core.Agent_Client_Protocol.event_bus import SessionEventBus
