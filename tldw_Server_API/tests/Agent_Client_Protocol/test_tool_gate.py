@@ -40,6 +40,10 @@ async def test_tool_gate_concrete_implementation():
             return ToolGateResult(approved=True, reason="auto-approved")
 
     gate = AlwaysApprove()
-    result = await gate.request_approval("sess-1", "read_file", {"path": "/tmp"})
+    result = await gate.request_approval(
+        "sess-1",
+        "read_file",
+        {"path": "/placeholder/path"},
+    )
     assert result.approved is True
     assert result.reason == "auto-approved"

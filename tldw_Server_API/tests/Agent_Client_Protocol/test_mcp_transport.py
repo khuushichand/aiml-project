@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transports.sse 
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transports.streamable_http import (
     MCPStreamableHTTPTransport,
 )
+from tldw_Server_API.app.core.exceptions import ValidationError
 
 pytestmark = pytest.mark.unit
 
@@ -27,9 +28,23 @@ def test_mcp_transport_is_abstract():
 
 
 def test_create_transport_unknown_raises():
-    """create_transport should raise ValueError for unknown protocol."""
-    with pytest.raises(ValueError, match="Unknown.*protocol"):
+    """create_transport should raise ValidationError for unknown protocol."""
+    with pytest.raises(ValidationError, match=r"Unknown.*protocol"):
         create_transport({"mcp_transport": "grpc"})
+
+
+@pytest.mark.parametrize(
+    ("protocol_config", "expected_message"),
+    [
+        ({"mcp_transport": "stdio"}, "command"),
+        ({"mcp_transport": "sse"}, "sse_url"),
+        ({"mcp_transport": "streamable_http"}, "endpoint"),
+    ],
+)
+def test_create_transport_missing_required_config_raises(protocol_config, expected_message):
+    """create_transport should fail with a deterministic config error for missing required keys."""
+    with pytest.raises(ValidationError, match=expected_message):
+        create_transport(protocol_config)
 
 
 def test_create_transport_stdio():

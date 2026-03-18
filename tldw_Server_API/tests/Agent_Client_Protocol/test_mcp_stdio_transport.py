@@ -58,6 +58,20 @@ async def test_stdio_transport_connect_performs_handshake(transport, mock_client
 
 
 @pytest.mark.asyncio
+async def test_stdio_transport_connect_cleans_up_client_on_handshake_failure(transport, mock_client):
+    """A failed handshake should close the client and clear the cached reference."""
+    mock_client.call.side_effect = RuntimeError("handshake failed")
+
+    with patch.object(transport, "_create_client", return_value=mock_client):
+        with pytest.raises(RuntimeError, match="handshake failed"):
+            await transport.connect()
+
+    mock_client.close.assert_awaited_once()
+    assert transport.is_connected is False
+    assert transport._client is None
+
+
+@pytest.mark.asyncio
 async def test_stdio_transport_list_tools(transport, mock_client):
     """list_tools() should parse the tools from the call response."""
     tools = [
@@ -105,6 +119,7 @@ async def test_stdio_transport_close(transport, mock_client):
 
     mock_client.close.assert_awaited_once()
     assert transport.is_connected is False
+    assert transport._client is None
 
 
 @pytest.mark.asyncio
@@ -127,7 +142,27 @@ async def test_stdio_transport_list_tools_not_connected(transport):
 
 
 @pytest.mark.asyncio
+async def test_stdio_transport_list_tools_rejects_stale_client_when_disconnected(transport, mock_client):
+    """Disconnected transports should not reuse a cached stdio client."""
+    transport._client = mock_client
+    transport._connected = False
+
+    with pytest.raises(RuntimeError, match="Not connected"):
+        await transport.list_tools()
+
+
+@pytest.mark.asyncio
 async def test_stdio_transport_call_tool_not_connected(transport):
     """call_tool() raises RuntimeError when not connected."""
+    with pytest.raises(RuntimeError, match="Not connected"):
+        await transport.call_tool("echo", {})
+
+
+@pytest.mark.asyncio
+async def test_stdio_transport_call_tool_rejects_stale_client_when_disconnected(transport, mock_client):
+    """Disconnected transports should not execute tools through a stale client."""
+    transport._client = mock_client
+    transport._connected = False
+
     with pytest.raises(RuntimeError, match="Not connected"):
         await transport.call_tool("echo", {})

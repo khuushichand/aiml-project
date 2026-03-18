@@ -1,6 +1,7 @@
 """MCPStdioTransport — stdio-based MCP transport using ACPStdioClient."""
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Any
 
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transport import (
@@ -47,24 +48,33 @@ class MCPStdioTransport(MCPTransport):
         """Start the subprocess and perform the MCP initialize handshake."""
         if self._client is None:
             self._client = self._create_client()
-        await self._client.start()
-        await self._client.call("initialize", {
-            "protocolVersion": "2024-11-05",
-            "clientInfo": {"name": "tldw_acp_harness", "version": "0.1.0"},
-            "capabilities": {},
-        })
-        await self._client.notify("initialized", {})
-        self._connected = True
+        try:
+            await self._client.start()
+            await self._client.call("initialize", {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "tldw_acp_harness", "version": "0.1.0"},
+                "capabilities": {},
+            })
+            await self._client.notify("initialized", {})
+            self._connected = True
+        except Exception:
+            if self._client is not None:
+                with suppress(Exception):
+                    await self._client.close()
+            self._client = None
+            self._connected = False
+            raise
 
     async def close(self) -> None:
         """Shut down the subprocess and mark as disconnected."""
         if self._client is not None:
             await self._client.close()
+            self._client = None
         self._connected = False
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Request the tool list from the MCP server."""
-        if self._client is None:
+        if not self._connected or self._client is None:
             raise RuntimeError("Not connected")
         resp = await self._client.call("tools/list", {})
         return resp.result.get("tools", []) if resp.result else []
@@ -73,7 +83,7 @@ class MCPStdioTransport(MCPTransport):
         self, tool_name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         """Invoke a tool on the MCP server."""
-        if self._client is None:
+        if not self._connected or self._client is None:
             raise RuntimeError("Not connected")
         resp = await self._client.call(
             "tools/call", {"name": tool_name, "arguments": arguments}

@@ -127,6 +127,42 @@ async def test_agent_driven_structured_no_completion_step():
 
 
 @pytest.mark.asyncio
+async def test_agent_driven_structured_malformed_steps_emit_error_and_fallback_completion():
+    """Malformed structured steps should not crash the runner."""
+    steps = {
+        "steps": [
+            {"type": "tool_call", "arguments": {"q": "test"}},
+            {"type": "completion"},
+        ]
+    }
+    raw_text = json.dumps(steps)
+    runner, transport, callback = _make_runner(
+        transport_return={"content": [{"type": "text", "text": raw_text}]},
+        structured_response=True,
+    )
+
+    await runner.run([{"role": "user", "content": "go"}])
+
+    events = [call[0][0] for call in callback.call_args_list]
+    assert [event.kind for event in events] == [
+        AgentEventKind.ERROR,
+        AgentEventKind.ERROR,
+        AgentEventKind.COMPLETION,
+    ]
+    assert events[0].payload == {
+        "message": "Malformed structured response step",
+        "step_type": "tool_call",
+        "missing": "tool_name",
+    }
+    assert events[1].payload == {
+        "message": "Malformed structured response step",
+        "step_type": "completion",
+        "missing": "text",
+    }
+    assert events[-1].payload["text"] == raw_text
+
+
+@pytest.mark.asyncio
 async def test_agent_driven_tool_error():
     """Transport.call_tool raises; verify ERROR event is emitted."""
     runner, transport, callback = _make_runner(

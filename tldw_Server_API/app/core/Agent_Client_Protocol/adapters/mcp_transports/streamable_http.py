@@ -48,22 +48,30 @@ class MCPStreamableHTTPTransport(MCPTransport):
     async def connect(self) -> None:
         """Establish a connection: create HTTP client, run MCP handshake."""
         self._http_client = self._create_http_client()
-        await self._json_rpc_call(
-            "initialize",
-            {
-                "protocolVersion": "2024-11-05",
-                "clientInfo": {"name": "tldw_acp_harness", "version": "0.1.0"},
-                "capabilities": {},
-            },
-        )
-        # Send the ``initialized`` notification (no response expected).
-        await self._json_rpc_notify("initialized", {})
-        self._connected = True
+        try:
+            await self._json_rpc_call(
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "clientInfo": {"name": "tldw_acp_harness", "version": "0.1.0"},
+                    "capabilities": {},
+                },
+            )
+            # Send the ``initialized`` notification (no response expected).
+            await self._json_rpc_notify("initialized", {})
+            self._connected = True
+        except Exception:
+            if self._http_client is not None:
+                await self._http_client.aclose()
+                self._http_client = None
+            self._connected = False
+            raise
 
     async def close(self) -> None:
         """Close the underlying HTTP client and mark disconnected."""
         if self._http_client is not None:
             await self._http_client.aclose()
+            self._http_client = None
         self._connected = False
 
     async def list_tools(self) -> list[dict[str, Any]]:

@@ -95,7 +95,7 @@ def _make_runner(
 @pytest.mark.asyncio
 async def test_llm_driven_single_turn():
     """LLM returns text immediately; verify single COMPLETION event."""
-    runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
+    runner, transport, _llm_caller, _tool_gate, callback, _cancel_event = _make_runner(
         llm_responses=[LLMResponse(text="The answer is 42")]
     )
 
@@ -113,7 +113,7 @@ async def test_llm_driven_single_turn():
 async def test_llm_driven_multi_turn():
     """LLM returns tool_call first, then text. Verify TOOL_CALL -> TOOL_RESULT -> COMPLETION."""
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "hello"})
-    runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
+    runner, _transport, _llm_caller, _tool_gate, callback, _cancel_event = _make_runner(
         llm_responses=[
             LLMResponse(tool_calls=[tc]),
             LLMResponse(text="Found the answer"),
@@ -147,7 +147,7 @@ async def test_llm_driven_max_iterations():
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "loop"})
     # Return tool_calls every time (more than max_iterations)
     responses = [LLMResponse(tool_calls=[tc]) for _ in range(5)]
-    runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
+    runner, _transport, _llm_caller, _tool_gate, callback, _cancel_event = _make_runner(
         llm_responses=responses,
         max_iterations=3,
     )
@@ -171,7 +171,7 @@ async def test_llm_driven_cancel():
         LLMResponse(text="done"),
     ]
     # Cancel after 2 events (TOOL_CALL + TOOL_RESULT from first iteration)
-    runner, transport, llm_caller, tool_gate, callback, cancel_event = _make_runner(
+    runner, _transport, llm_caller, _tool_gate, _callback, cancel_event = _make_runner(
         llm_responses=responses,
         max_iterations=10,
         cancel_after=2,
@@ -184,10 +184,43 @@ async def test_llm_driven_cancel():
 
 
 @pytest.mark.asyncio
+async def test_llm_driven_cancel_stops_remaining_tool_calls_in_same_turn():
+    """Cancellation after one tool result should prevent later tool approvals/executions."""
+    tool_calls = [
+        LLMToolCall(id="tc1", name="search", arguments={"query": "first"}),
+        LLMToolCall(id="tc2", name="search", arguments={"query": "second"}),
+    ]
+    runner, transport, llm_caller, tool_gate, callback, cancel_event = _make_runner(
+        llm_responses=[
+            LLMResponse(tool_calls=tool_calls),
+            LLMResponse(text="done"),
+        ],
+        transport_returns=[
+            {"content": [{"type": "text", "text": "first result"}]},
+            {"content": [{"type": "text", "text": "second result"}]},
+        ],
+        cancel_after=2,
+    )
+
+    await runner.run([{"role": "user", "content": "test"}])
+
+    assert cancel_event.is_set() is True
+    assert llm_caller.call.await_count == 1
+    assert tool_gate.request_approval.await_count == 1
+    assert transport.call_tool.await_count == 1
+
+    events = [call[0][0] for call in callback.call_args_list]
+    assert [event.kind for event in events] == [
+        AgentEventKind.TOOL_CALL,
+        AgentEventKind.TOOL_RESULT,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_llm_driven_governance_denial():
     """ToolGate returns denied; verify TOOL_RESULT with is_error."""
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "forbidden"})
-    runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
+    runner, transport, _llm_caller, _tool_gate, callback, _cancel_event = _make_runner(
         llm_responses=[
             LLMResponse(tool_calls=[tc]),
             LLMResponse(text="Okay, denied"),
@@ -215,7 +248,7 @@ async def test_llm_driven_governance_denial():
 async def test_llm_driven_transport_error():
     """Transport raises during tool execution; verify ERROR event."""
     tc = LLMToolCall(id="tc1", name="search", arguments={"query": "boom"})
-    runner, transport, llm_caller, tool_gate, callback, _ = _make_runner(
+    runner, transport, _llm_caller, _tool_gate, callback, _cancel_event = _make_runner(
         llm_responses=[
             LLMResponse(tool_calls=[tc]),
             LLMResponse(text="recovered"),

@@ -1569,6 +1569,13 @@ async def acp_register_agent(
         requires_api_key=request.requires_api_key,
         install_instructions=request.install_instructions,
         docs_url=request.docs_url,
+        mcp_orchestration=request.mcp_orchestration,
+        mcp_entry_tool=request.mcp_entry_tool,
+        mcp_structured_response=request.mcp_structured_response,
+        mcp_llm_provider=request.mcp_llm_provider,
+        mcp_llm_model=request.mcp_llm_model,
+        mcp_max_iterations=request.mcp_max_iterations,
+        mcp_refresh_tools=request.mcp_refresh_tools,
     )
     return ACPAgentRegistrationResponse(status="registered", agent_type=entry.type, name=entry.name)
 

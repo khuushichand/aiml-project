@@ -37,6 +37,23 @@ def _extract_text_content(result: dict[str, Any]) -> str:
         return str(result)
 
 
+async def _emit_malformed_step_error(
+    emit: Callable[[AgentEventKind, dict[str, Any]], Awaitable[None]],
+    *,
+    step_type: str,
+    missing: str,
+) -> None:
+    """Emit a consistent error for malformed structured response steps."""
+    await emit(
+        AgentEventKind.ERROR,
+        {
+            "message": "Malformed structured response step",
+            "step_type": step_type,
+            "missing": missing,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # AgentDrivenRunner
 # ---------------------------------------------------------------------------
@@ -114,10 +131,32 @@ class AgentDrivenRunner:
 
         has_completion = False
         for step in steps:
+            if not isinstance(step, dict):
+                await _emit_malformed_step_error(
+                    self._emit_event,
+                    step_type="",
+                    missing="step mapping",
+                )
+                continue
+
             step_type = step.get("type", "")
             if step_type == "thinking":
+                if "text" not in step:
+                    await _emit_malformed_step_error(
+                        self._emit_event,
+                        step_type=step_type,
+                        missing="text",
+                    )
+                    continue
                 await self._emit_event(AgentEventKind.THINKING, {"text": step["text"]})
             elif step_type == "tool_call":
+                if "tool_name" not in step:
+                    await _emit_malformed_step_error(
+                        self._emit_event,
+                        step_type=step_type,
+                        missing="tool_name",
+                    )
+                    continue
                 await self._emit_event(
                     AgentEventKind.TOOL_CALL,
                     {
@@ -126,6 +165,13 @@ class AgentDrivenRunner:
                     },
                 )
             elif step_type == "tool_result":
+                if "tool_name" not in step:
+                    await _emit_malformed_step_error(
+                        self._emit_event,
+                        step_type=step_type,
+                        missing="tool_name",
+                    )
+                    continue
                 await self._emit_event(
                     AgentEventKind.TOOL_RESULT,
                     {
@@ -134,10 +180,17 @@ class AgentDrivenRunner:
                     },
                 )
             elif step_type == "completion":
+                if "text" not in step:
+                    await _emit_malformed_step_error(
+                        self._emit_event,
+                        step_type=step_type,
+                        missing="text",
+                    )
+                    continue
                 has_completion = True
                 await self._emit_event(AgentEventKind.COMPLETION, {"text": step["text"]})
             else:
-                logger.warning("Unknown step type %r in structured response", step_type)
+                logger.warning("Unknown step type {!r} in structured response", step_type)
 
         if not has_completion:
             await self._emit_event(AgentEventKind.COMPLETION, {"text": raw_text})
@@ -231,6 +284,9 @@ class LLMDrivenRunner:
 
                 # Now process each tool call
                 for tc in response.tool_calls:
+                    if self._cancel.is_set():
+                        break
+
                     gate_result = await self._gate.request_approval(
                         self._session_id, tc.name, tc.arguments
                     )

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from typing import Any
 
 from loguru import logger
@@ -20,6 +21,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transport impor
     create_transport,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
+from tldw_Server_API.app.core.exceptions import ValidationError
 
 
 class MCPAdapter(ProtocolAdapter):
@@ -42,17 +44,26 @@ class MCPAdapter(ProtocolAdapter):
         pc = config.protocol_config
         self._transport = create_transport(pc)
         self._config = config
+        try:
+            await self._transport.connect()
+            logger.info("MCPAdapter: transport connected (session={})", config.session_id)
 
-        await self._transport.connect()
-        logger.info("MCPAdapter: transport connected (session={})", config.session_id)
+            await self._emit(AgentEventKind.LIFECYCLE, {"event": "agent_started", "exit_code": None})
 
-        await self._emit(AgentEventKind.LIFECYCLE, {"event": "agent_started", "exit_code": None})
+            self._tools = await self._transport.list_tools()
+            logger.debug("MCPAdapter: discovered {} tools", len(self._tools))
 
-        self._tools = await self._transport.list_tools()
-        logger.debug("MCPAdapter: discovered {} tools", len(self._tools))
-
-        await self._emit(AgentEventKind.LIFECYCLE, {"event": "agent_ready", "exit_code": None})
-        self._connected = True
+            await self._emit(AgentEventKind.LIFECYCLE, {"event": "agent_ready", "exit_code": None})
+            self._connected = True
+        except Exception:
+            if self._transport is not None:
+                with suppress(Exception):
+                    await self._transport.close()
+            self._transport = None
+            self._config = None
+            self._tools = []
+            self._connected = False
+            raise
 
     async def disconnect(self) -> None:
         """Disconnect from the MCP server and clean up resources."""
@@ -106,7 +117,7 @@ class MCPAdapter(ProtocolAdapter):
                     tools=self._tools,
                     max_iterations=pc.get("mcp_max_iterations", 20),
                 )
-            else:
+            elif orchestration == "agent_driven":
                 runner = AgentDrivenRunner(
                     transport=self._transport,
                     event_callback=self._config.event_callback,
@@ -114,6 +125,11 @@ class MCPAdapter(ProtocolAdapter):
                     cancel_event=self._cancel_event,
                     entry_tool=pc.get("mcp_entry_tool", "execute"),
                     structured_response=pc.get("mcp_structured_response", False),
+                )
+            else:
+                raise ValidationError(
+                    f"Invalid mcp_orchestration value: {orchestration!r}. "
+                    "Supported values are 'agent_driven' and 'llm_driven'."
                 )
             await runner.run(messages)
         finally:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import suppress
 from typing import Any
 from urllib.parse import urljoin
 
@@ -59,38 +60,30 @@ class MCPSSETransport(MCPTransport):
     async def connect(self) -> None:
         """Open the SSE stream, discover post_url if needed, and perform MCP handshake."""
         self._http_client = self._create_http_client()
+        try:
+            if not self._post_url:
+                self._post_url = await self._discover_post_url()
+                logger.info("SSE transport discovered post_url: {}", self._post_url)
 
-        if not self._post_url:
-            self._post_url = await self._discover_post_url()
-            logger.info("SSE transport discovered post_url: {}", self._post_url)
+            self._reader_task = asyncio.create_task(self._sse_reader_loop())
 
-        self._reader_task = asyncio.create_task(self._sse_reader_loop())
+            init_result = await self._json_rpc_call("initialize", {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "tldw_acp_harness", "version": "0.1.0"},
+                "capabilities": {},
+            })
+            logger.debug("MCP initialize response: {}", init_result)
 
-        init_result = await self._json_rpc_call("initialize", {
-            "protocolVersion": "2024-11-05",
-            "clientInfo": {"name": "tldw_acp_harness", "version": "0.1.0"},
-            "capabilities": {},
-        })
-        logger.debug("MCP initialize response: {}", init_result)
-
-        await self._json_rpc_notify("initialized", {})
-        self._connected = True
-        logger.info("SSE transport connected to {}", self._sse_url)
+            await self._json_rpc_notify("initialized", {})
+            self._connected = True
+            logger.info("SSE transport connected to {}", self._sse_url)
+        except Exception as exc:
+            await self._teardown(reason=exc)
+            raise
 
     async def close(self) -> None:
         """Cancel reader task, close HTTP client, mark disconnected."""
-        if self._reader_task is not None:
-            self._reader_task.cancel()
-            self._reader_task = None
-        if self._http_client is not None:
-            await self._http_client.aclose()
-            self._http_client = None
-        # Cancel any pending futures
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
-        self._pending.clear()
-        self._connected = False
+        await self._teardown()
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Request the tool list from the MCP server."""
@@ -169,11 +162,13 @@ class MCPSSETransport(MCPTransport):
                     event_type, data = event
                     if event_type == "message":
                         self._route_sse_message(data)
+            logger.warning("SSE reader loop ended because the stream closed")
+            await self._teardown(reason=RuntimeError("SSE stream closed"))
         except asyncio.CancelledError:
             logger.debug("SSE reader loop cancelled")
         except Exception:
             logger.exception("SSE reader loop error")
-            self._connected = False
+            await self._teardown(reason=RuntimeError("SSE reader loop error"))
 
     def _route_sse_message(self, data: str) -> None:
         """Parse a JSON-RPC message from SSE data and resolve the pending future."""
@@ -218,12 +213,16 @@ class MCPSSETransport(MCPTransport):
             self._sse_event_type = line[len("event:"):].strip()
             return None
         elif line.startswith("data:"):
-            self._sse_data = line[len("data:"):].strip()
+            chunk = line[len("data:"):].strip()
+            if self._sse_data is None:
+                self._sse_data = chunk
+            else:
+                self._sse_data = f"{self._sse_data}\n{chunk}"
             return None
         elif line == "":
             # Blank line = event boundary
-            if self._sse_event_type is not None and self._sse_data is not None:
-                event = (self._sse_event_type, self._sse_data)
+            if self._sse_data is not None:
+                event = (self._sse_event_type or "message", self._sse_data)
                 self._sse_event_type = None
                 self._sse_data = None
                 return event
@@ -269,6 +268,9 @@ class MCPSSETransport(MCPTransport):
             )
             response.raise_for_status()
             return await asyncio.wait_for(future, timeout=self._timeout_sec)
+        except Exception as exc:
+            await self._teardown(reason=exc)
+            raise
         finally:
             pending = self._pending.pop(req_id, None)
             if pending is not None and not pending.done():
@@ -289,4 +291,37 @@ class MCPSSETransport(MCPTransport):
                 "params": params,
             },
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except Exception as exc:
+            await self._teardown(reason=exc)
+            raise
+
+    async def _teardown(self, reason: Exception | None = None) -> None:
+        """Return the transport to a disconnected state and unblock pending RPCs."""
+        self._connected = False
+
+        current_task = asyncio.current_task()
+        reader_task = self._reader_task
+        self._reader_task = None
+        if reader_task is not None and reader_task is not current_task:
+            reader_task.cancel()
+            if isinstance(reader_task, asyncio.Task):
+                with suppress(asyncio.CancelledError):
+                    await reader_task
+
+        client = self._http_client
+        self._http_client = None
+        if client is not None:
+            await client.aclose()
+
+        error_message = str(reason) if reason is not None else "SSE transport disconnected"
+        pending_futures = list(self._pending.values())
+        self._pending.clear()
+        for future in pending_futures:
+            if future.done():
+                continue
+            if reason is None:
+                future.cancel()
+            else:
+                future.set_exception(RuntimeError(error_message))

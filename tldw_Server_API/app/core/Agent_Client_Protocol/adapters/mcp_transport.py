@@ -4,6 +4,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from tldw_Server_API.app.core.exceptions import ValidationError
+
 
 class MCPTransport(ABC):
     """Abstract transport layer for communicating with an MCP server.
@@ -72,27 +74,34 @@ def create_transport(protocol_config: dict[str, Any]) -> MCPTransport:
 
     protocol = protocol_config.get("mcp_transport", "")
 
+    def _require_key(key: str) -> Any:
+        if key not in protocol_config:
+            raise ValidationError(
+                f"MCP transport {protocol!r} requires protocol_config key: {key}"
+            )
+        return protocol_config[key]
+
     if protocol == "stdio":
         return MCPStdioTransport(
-            command=protocol_config["command"],
+            command=_require_key("command"),
             args=protocol_config.get("args"),
             env=protocol_config.get("env"),
         )
     elif protocol == "sse":
         return MCPSSETransport(
-            sse_url=protocol_config["sse_url"],
+            sse_url=_require_key("sse_url"),
             post_url=protocol_config.get("post_url"),
             headers=protocol_config.get("headers"),
             timeout_sec=protocol_config.get("timeout_sec", 30),
         )
     elif protocol == "streamable_http":
         return MCPStreamableHTTPTransport(
-            endpoint=protocol_config["endpoint"],
+            endpoint=_require_key("endpoint"),
             headers=protocol_config.get("headers"),
             timeout_sec=protocol_config.get("timeout_sec", 30),
         )
     else:
-        raise ValueError(
+        raise ValidationError(
             f"Unknown MCP transport protocol: {protocol!r}. "
             f"Supported: 'stdio', 'sse', 'streamable_http'."
         )

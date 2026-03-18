@@ -16,34 +16,39 @@ pytestmark = pytest.mark.unit
 # ---- Helpers ----
 
 
-def make_json_response(result: dict, id: str = "1") -> MagicMock:
+def make_json_response(result: dict, request_id: str = "1") -> MagicMock:
     """Create a fake JSON response object."""
     resp = MagicMock()
     resp.status_code = 200
     resp.headers = {"content-type": "application/json"}
-    resp.json.return_value = {"jsonrpc": "2.0", "id": id, "result": result}
+    resp.json.return_value = {"jsonrpc": "2.0", "id": request_id, "result": result}
     resp.raise_for_status = MagicMock()
     return resp
 
 
-def make_sse_response(result: dict, id: str = "1") -> MagicMock:
+def make_sse_response(result: dict, request_id: str = "1") -> MagicMock:
     """Create a fake SSE response object."""
     resp = MagicMock()
     resp.status_code = 200
     resp.headers = {"content-type": "text/event-stream"}
-    resp.text = f'data: {json.dumps({"jsonrpc": "2.0", "id": id, "result": result})}\n\n'
+    resp.text = (
+        f'data: {json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result})}\n\n'
+    )
     resp.raise_for_status = MagicMock()
     return resp
 
 
-def make_json_error_response(message: str = "Method not found", id: str = "1") -> MagicMock:
+def make_json_error_response(
+    message: str = "Method not found",
+    request_id: str = "1",
+) -> MagicMock:
     """Create a fake JSON-RPC error response."""
     resp = MagicMock()
     resp.status_code = 200
     resp.headers = {"content-type": "application/json"}
     resp.json.return_value = {
         "jsonrpc": "2.0",
-        "id": id,
+        "id": request_id,
         "error": {"code": -32601, "message": message},
     }
     resp.raise_for_status = MagicMock()
@@ -91,7 +96,7 @@ async def test_streamable_http_connect_handshake(transport):
     # Second call: initialized notification (no id)
     mock_post = AsyncMock(
         side_effect=[
-            make_json_response(init_result, id="1"),
+            make_json_response(init_result, request_id="1"),
             make_notify_response(),
         ]
     )
@@ -121,6 +126,27 @@ async def test_streamable_http_connect_handshake(transport):
 
 
 @pytest.mark.asyncio
+async def test_streamable_http_connect_cleans_up_on_handshake_failure(transport):
+    """Handshake failures should close and clear the HTTP client."""
+    mock_client = MagicMock()
+    mock_client.aclose = AsyncMock()
+
+    with patch.object(transport, "_create_http_client", return_value=mock_client):
+        with patch.object(
+            transport,
+            "_json_rpc_call",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("initialize failed"),
+        ):
+            with pytest.raises(RuntimeError, match="initialize failed"):
+                await transport.connect()
+
+    mock_client.aclose.assert_awaited_once()
+    assert transport.is_connected is False
+    assert transport._http_client is None
+
+
+@pytest.mark.asyncio
 async def test_streamable_http_list_tools_json_mode(transport):
     """list_tools() should parse tools from a JSON response."""
     tools = [
@@ -128,7 +154,7 @@ async def test_streamable_http_list_tools_json_mode(transport):
         {"name": "add", "description": "adds numbers"},
     ]
     mock_client = MagicMock()
-    mock_client.post = AsyncMock(return_value=make_json_response({"tools": tools}, id="1"))
+    mock_client.post = AsyncMock(return_value=make_json_response({"tools": tools}, request_id="1"))
     mock_client.aclose = AsyncMock()
     transport._http_client = mock_client
     transport._connected = True
@@ -145,7 +171,7 @@ async def test_streamable_http_call_tool_sse_mode(transport):
     """call_tool() should parse result from an SSE response."""
     tool_result = {"content": [{"type": "text", "text": "hello"}]}
     mock_client = MagicMock()
-    mock_client.post = AsyncMock(return_value=make_sse_response(tool_result, id="1"))
+    mock_client.post = AsyncMock(return_value=make_sse_response(tool_result, request_id="1"))
     mock_client.aclose = AsyncMock()
     transport._http_client = mock_client
     transport._connected = True
@@ -190,7 +216,7 @@ async def test_streamable_http_error_response(transport):
     """A JSON-RPC error in the response should raise RuntimeError."""
     mock_client = MagicMock()
     mock_client.post = AsyncMock(
-        return_value=make_json_error_response("Method not found", id="1")
+        return_value=make_json_error_response("Method not found", request_id="1")
     )
     mock_client.aclose = AsyncMock()
     transport._http_client = mock_client

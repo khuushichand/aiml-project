@@ -66,6 +66,40 @@ def test_registry_entry_fields(registry_file):
     assert entry.default is True
 
 
+def test_registry_loads_mcp_fields_from_yaml(tmp_path):
+    """YAML-defined MCP fields should populate the registry entry."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import AgentRegistry
+
+    yaml_content = """
+agents:
+  - type: mcp_agent
+    name: MCP Agent
+    command: python3
+    mcp_orchestration: llm_driven
+    mcp_entry_tool: run
+    mcp_structured_response: true
+    mcp_llm_provider: openai
+    mcp_llm_model: gpt-4o
+    mcp_max_iterations: 7
+    mcp_refresh_tools: true
+"""
+    yaml_file = tmp_path / "agents.yaml"
+    yaml_file.write_text(yaml_content)
+
+    reg = AgentRegistry(yaml_path=str(yaml_file))
+    reg.load()
+
+    entry = reg.get_entry("mcp_agent")
+    assert entry is not None
+    assert entry.mcp_orchestration == "llm_driven"
+    assert entry.mcp_entry_tool == "run"
+    assert entry.mcp_structured_response is True
+    assert entry.mcp_llm_provider == "openai"
+    assert entry.mcp_llm_model == "gpt-4o"
+    assert entry.mcp_max_iterations == 7
+    assert entry.mcp_refresh_tools is True
+
+
 def test_registry_get_entry_none(registry_file):
     """get_entry returns None for unknown type."""
     from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import AgentRegistry
@@ -336,3 +370,57 @@ class TestDynamicRegistration:
     def test_cannot_deregister_yaml_only(self, db_registry):
         """Deregistering a YAML-only entry returns False."""
         assert db_registry.deregister_agent("claude_code") is False
+
+    def test_register_agent_persists_mcp_fields_across_reload(self, db_registry):
+        """Dynamic registrations should keep MCP config across DB-backed reloads."""
+        db_registry.register_agent(
+            type="mcp_agent",
+            name="MCP Agent",
+            command="mcp-cli",
+            mcp_orchestration="llm_driven",
+            mcp_entry_tool="run",
+            mcp_structured_response=True,
+            mcp_llm_provider="openai",
+            mcp_llm_model="gpt-4o",
+            mcp_max_iterations=9,
+            mcp_refresh_tools=True,
+        )
+
+        db_registry.load()
+        entry = db_registry.get_entry("mcp_agent")
+        assert entry is not None
+        assert entry.mcp_orchestration == "llm_driven"
+        assert entry.mcp_entry_tool == "run"
+        assert entry.mcp_structured_response is True
+        assert entry.mcp_llm_provider == "openai"
+        assert entry.mcp_llm_model == "gpt-4o"
+        assert entry.mcp_max_iterations == 9
+        assert entry.mcp_refresh_tools is True
+
+    def test_update_agent_persists_mcp_fields_across_reload(self, db_registry):
+        """Dynamic updates should save MCP config changes back to the DB."""
+        db_registry.register_agent(type="mcp_agent", name="MCP Agent", command="mcp-cli")
+
+        updated = db_registry.update_agent(
+            "mcp_agent",
+            mcp_orchestration="llm_driven",
+            mcp_entry_tool="run",
+            mcp_structured_response=True,
+            mcp_llm_provider="openai",
+            mcp_llm_model="gpt-4o-mini",
+            mcp_max_iterations=11,
+            mcp_refresh_tools=True,
+        )
+
+        assert updated is not None
+
+        db_registry.load()
+        entry = db_registry.get_entry("mcp_agent")
+        assert entry is not None
+        assert entry.mcp_orchestration == "llm_driven"
+        assert entry.mcp_entry_tool == "run"
+        assert entry.mcp_structured_response is True
+        assert entry.mcp_llm_provider == "openai"
+        assert entry.mcp_llm_model == "gpt-4o-mini"
+        assert entry.mcp_max_iterations == 11
+        assert entry.mcp_refresh_tools is True

@@ -1,7 +1,6 @@
 """Tests for MCPAdapter — the main adapter wiring transport + runners + heartbeat + lifecycle."""
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,6 +9,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.base import (
     AdapterConfig,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
+from tldw_Server_API.app.core.exceptions import ValidationError
 
 pytestmark = pytest.mark.unit
 
@@ -105,6 +105,32 @@ async def test_mcp_adapter_connect_lifecycle(mock_transport, event_callback, col
     assert lifecycle_events[1].payload["event"] == "agent_ready"
 
     assert adapter.is_connected is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_adapter_connect_rolls_back_state_when_list_tools_fails(
+    mock_transport,
+    event_callback,
+):
+    """Connect failures should close the transport and clear partial adapter state."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter import MCPAdapter
+
+    adapter = MCPAdapter()
+    config = _make_config(event_callback)
+    mock_transport.list_tools.side_effect = RuntimeError("tools unavailable")
+
+    with patch(
+        "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.create_transport",
+        return_value=mock_transport,
+    ):
+        with pytest.raises(RuntimeError, match="tools unavailable"):
+            await adapter.connect(config)
+
+    mock_transport.close.assert_awaited_once()
+    assert adapter.is_connected is False
+    assert adapter._transport is None
+    assert adapter._config is None
+    assert adapter._tools == []
 
 
 @pytest.mark.asyncio
@@ -241,7 +267,32 @@ async def test_mcp_adapter_send_prompt_llm_driven_requires_llm_caller_and_tool_g
     ):
         await adapter.connect(config)
 
-    with pytest.raises(ValueError, match="llm_driven.*llm_caller.*tool_gate"):
+    with pytest.raises(ValueError, match=r"llm_driven.*llm_caller.*tool_gate"):
+        await adapter.send_prompt([{"role": "user", "content": "hello"}])
+
+
+@pytest.mark.asyncio
+async def test_mcp_adapter_send_prompt_rejects_unknown_orchestration(
+    mock_transport,
+    event_callback,
+):
+    """Unknown orchestration modes should fail fast instead of silently falling back."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter import MCPAdapter
+
+    adapter = MCPAdapter()
+    config = _make_config(event_callback, protocol_config={
+        "mcp_transport": "stdio",
+        "command": "echo",
+        "mcp_orchestration": "surprise_mode",
+    })
+
+    with patch(
+        "tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter.create_transport",
+        return_value=mock_transport,
+    ):
+        await adapter.connect(config)
+
+    with pytest.raises(ValidationError, match=r"mcp_orchestration.*surprise_mode"):
         await adapter.send_prompt([{"role": "user", "content": "hello"}])
 
 
@@ -261,7 +312,7 @@ async def test_mcp_adapter_send_prompt_not_connected():
 
 
 @pytest.mark.asyncio
-async def test_mcp_adapter_cancel(mock_transport, event_callback, collected_events):
+async def test_mcp_adapter_cancel(mock_transport, event_callback):
     """cancel() should set the internal cancel event."""
     from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter import MCPAdapter
 
@@ -285,7 +336,7 @@ async def test_mcp_adapter_cancel(mock_transport, event_callback, collected_even
 
 
 @pytest.mark.asyncio
-async def test_mcp_adapter_is_connected_delegates(mock_transport, event_callback, collected_events):
+async def test_mcp_adapter_is_connected_delegates(mock_transport, event_callback):
     """is_connected should delegate to transport.is_connected."""
     from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter import MCPAdapter
 
@@ -311,7 +362,7 @@ async def test_mcp_adapter_is_connected_delegates(mock_transport, event_callback
 
 
 @pytest.mark.asyncio
-async def test_mcp_adapter_tool_refresh(mock_transport, event_callback, collected_events):
+async def test_mcp_adapter_tool_refresh(mock_transport, event_callback):
     """When mcp_refresh_tools=True, list_tools should be called again on send_prompt."""
     from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_adapter import MCPAdapter
 

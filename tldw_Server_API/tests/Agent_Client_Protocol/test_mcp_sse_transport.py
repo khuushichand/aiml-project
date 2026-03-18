@@ -83,6 +83,31 @@ async def test_sse_transport_connect_with_explicit_post_url():
 
 
 @pytest.mark.asyncio
+async def test_sse_transport_connect_cleans_up_on_handshake_failure():
+    """Failed connect handshakes should close the client and clear partial state."""
+    t = _make_transport(post_url="http://localhost:8080/messages")
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=MagicMock(status_code=200))
+
+    with patch.object(t, "_create_http_client", return_value=mock_http):
+        with patch.object(t, "_sse_reader_loop", new_callable=AsyncMock):
+            with patch.object(
+                t,
+                "_json_rpc_call",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("initialize failed"),
+            ):
+                with pytest.raises(RuntimeError, match="initialize failed"):
+                    await t.connect()
+
+    mock_http.aclose.assert_awaited_once()
+    assert t.is_connected is False
+    assert t._http_client is None
+    assert t._reader_task is None
+    assert t._pending == {}
+
+
+@pytest.mark.asyncio
 async def test_sse_transport_list_tools():
     """list_tools() should call tools/list and return the tools array."""
     t = _make_transport()
@@ -289,6 +314,44 @@ async def test_sse_transport_parse_sse_events():
     assert len(events) == 2
     assert events[0] == ("endpoint", "/messages")
     assert events[1] == ("message", '{"jsonrpc": "2.0", "id": "1", "result": {"ok": true}}')
+
+
+def test_sse_transport_parse_sse_multiline_data_defaults_to_message():
+    """Data-only SSE frames should default to 'message' and preserve all data lines."""
+    t = _make_transport()
+
+    assert t._parse_sse_line("data: first line") is None
+    assert t._parse_sse_line("data: second line") is None
+    assert t._parse_sse_line("") == ("message", "first line\nsecond line")
+
+
+@pytest.mark.asyncio
+async def test_sse_transport_reader_loop_tears_down_on_stream_end():
+    """Reader loop should mark the transport disconnected and fail pending RPCs on EOF."""
+    t = _make_transport()
+    t._connected = True
+    pending = asyncio.get_running_loop().create_future()
+    t._pending["1"] = pending
+
+    async def empty_lines():
+        if False:
+            yield ""
+
+    mock_response = AsyncMock()
+    mock_response.aiter_lines = empty_lines
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http = AsyncMock()
+    mock_http.stream = MagicMock(return_value=mock_response)
+    t._http_client = mock_http
+
+    await t._sse_reader_loop()
+
+    assert t.is_connected is False
+    assert t._pending == {}
+    assert pending.done() is True
+    assert isinstance(pending.exception(), RuntimeError)
 
 
 @pytest.mark.asyncio
