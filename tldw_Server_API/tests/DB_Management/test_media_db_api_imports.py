@@ -93,9 +93,11 @@ from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_backup as media_db_legacy_backup
 from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_document_artifacts
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_content_queries
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_reads as media_db_legacy_reads
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_media_details
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_state as media_db_state
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_transcripts
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as media_db_runtime_factory
 from tldw_Server_API.app.services import admin_bundle_service
@@ -918,6 +920,18 @@ def test_legacy_wrappers_uses_runtime_validation_without_shim_source() -> None:
 
 def test_legacy_document_artifacts_uses_runtime_validation_without_shim_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(legacy_document_artifacts)
+
+
+def test_legacy_content_queries_uses_runtime_validation_without_shim_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(legacy_content_queries)
+
+
+def test_legacy_media_details_uses_runtime_validation_without_shim_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(legacy_media_details)
+
+
+def test_legacy_transcripts_uses_runtime_validation_without_shim_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(legacy_transcripts)
 
 
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():

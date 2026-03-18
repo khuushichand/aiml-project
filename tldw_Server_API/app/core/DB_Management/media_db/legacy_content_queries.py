@@ -1,9 +1,9 @@
-"""Legacy content and keyword query helpers extracted from Media_DB_v2."""
+"""Legacy content and keyword query helpers extracted from the media DB shim."""
 
 from __future__ import annotations
 
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 
@@ -14,25 +14,14 @@ from tldw_Server_API.app.core.DB_Management.media_db.errors import (
 from tldw_Server_API.app.core.DB_Management.media_db.repositories.keywords_repository import (
     KeywordsRepository,
 )
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
-def _require_media_db_instance(
-    db_instance: Any,
-    *,
-    error_message: str,
-) -> "MediaDatabase":
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError(error_message)  # noqa: TRY003
-    return db_instance
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
+    MediaDbLike,
+    require_media_database_like,
+)
 
 
-def get_all_content_from_database(db_instance: "MediaDatabase") -> list[dict[str, Any]]:
-    db_instance = _require_media_db_instance(
+def get_all_content_from_database(db_instance: MediaDbLike) -> list[dict[str, Any]]:
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -47,8 +36,8 @@ def get_all_content_from_database(db_instance: "MediaDatabase") -> list[dict[str
         raise DatabaseError("Error retrieving all content") from exc  # noqa: TRY003
 
 
-def fetch_keywords_for_media(media_id: int, db_instance: "MediaDatabase") -> list[str]:
-    db_instance = _require_media_db_instance(
+def fetch_keywords_for_media(media_id: int, db_instance: MediaDbLike) -> list[str]:
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -58,9 +47,9 @@ def fetch_keywords_for_media(media_id: int, db_instance: "MediaDatabase") -> lis
 
 def fetch_keywords_for_media_batch(
     media_ids: list[int],
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
 ) -> dict[int, list[str]]:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )

@@ -1,11 +1,11 @@
-"""Legacy full-media detail helpers extracted from Media_DB_v2."""
+"""Legacy full-media detail helpers extracted from the media DB shim."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import yaml
 from loguru import logger
@@ -25,9 +25,10 @@ from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries impo
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version,
 )
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
+    MediaDbLike,
+    require_media_database_like,
+)
 
 
 _MEDIA_DETAILS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
@@ -48,27 +49,13 @@ _MEDIA_DETAILS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     sqlite3.Error,
     yaml.YAMLError,
 )
-
-
-def _require_media_db_instance(
-    db_instance: Any,
-    *,
-    error_message: str,
-) -> "MediaDatabase":
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError(error_message)  # noqa: TRY003
-    return db_instance
-
-
 def get_full_media_details(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     media_id: int,
     *,
     include_content: bool = True,
 ) -> dict[str, Any] | None:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -95,14 +82,14 @@ def get_full_media_details(
 
 
 def get_full_media_details_rich(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     media_id: int,
     *,
     include_content: bool = True,
     include_versions: bool = True,
     include_version_content: bool = False,
 ) -> dict[str, Any] | None:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
