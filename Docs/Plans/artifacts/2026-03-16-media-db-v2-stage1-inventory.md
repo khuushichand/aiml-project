@@ -6,8 +6,8 @@
 
 - Raw `MediaDatabase(...)` constructors in app code: 7
 - Operational `create_media_database(...)` call sites in app code: 9
-- Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 126
+- Operational `managed_media_database(...)` call sites in app code: 34
+- `Media_DB_v2` references in app code: 96
 
 Notes:
 

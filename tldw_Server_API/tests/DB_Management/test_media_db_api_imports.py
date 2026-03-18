@@ -746,9 +746,11 @@ def test_embeddings_abtest_jobs_worker_imports_create_media_database_from_media_
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_tts_jobs_worker_imports_create_media_database_from_media_db_api():
+def test_tts_jobs_worker_imports_create_media_database_from_media_db_api(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
     module = importlib.reload(tts_jobs_worker)
     assert module.create_media_database is media_db_api.create_media_database
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_media_db_api_managed_media_database_initializes_and_closes(monkeypatch):
