@@ -10,13 +10,12 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 from sqlite3 import Error as SQLiteError
-from typing import Any
+from typing import Any, Protocol
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 _TEMPLATE_IO_EXCEPTIONS = (AttributeError, OSError, TypeError, ValueError)
 _TEMPLATE_INIT_EXCEPTIONS = (
@@ -28,6 +27,40 @@ _TEMPLATE_INIT_EXCEPTIONS = (
     ValueError,
     json.JSONDecodeError,
 )
+
+
+class _TemplateDatabase(Protocol):
+    def seed_builtin_templates(self, templates: list[dict[str, Any]]) -> int: ...
+
+    def get_chunking_template(self, name: str) -> dict[str, Any] | None: ...
+
+    def update_chunking_template(
+        self,
+        *,
+        name: str,
+        template_json: str,
+        description: str | None,
+        tags: list[str] | None,
+    ) -> bool: ...
+
+    def list_chunking_templates(
+        self,
+        *,
+        include_builtin: bool,
+        include_custom: bool,
+    ) -> list[dict[str, Any]]: ...
+
+
+def _is_template_database(value: Any) -> bool:
+    return value is not None and all(
+        callable(getattr(value, method_name, None))
+        for method_name in (
+            "seed_builtin_templates",
+            "get_chunking_template",
+            "update_chunking_template",
+            "list_chunking_templates",
+        )
+    )
 
 
 def load_builtin_templates() -> list[dict[str, Any]]:
@@ -184,11 +217,11 @@ def _resolve_default_media_db_path() -> str:
 
 @contextlib.contextmanager
 def _resolve_template_db(
-    db_path: str | MediaDatabase | None,
+    db_path: str | _TemplateDatabase | None,
     client_id: str,
-    db: MediaDatabase | None,
-) -> Iterator[MediaDatabase]:
-    if isinstance(db_path, MediaDatabase) and db is None:
+    db: _TemplateDatabase | None,
+) -> Iterator[_TemplateDatabase]:
+    if db is None and _is_template_database(db_path):
         db = db_path
     if db is not None:
         yield db
@@ -203,7 +236,11 @@ def _resolve_template_db(
         yield owned_db
 
 
-def initialize_chunking_templates(db_path: str = None, client_id: str = 'system', db: MediaDatabase = None) -> int:
+def initialize_chunking_templates(
+    db_path: str | None = None,
+    client_id: str = 'system',
+    db: _TemplateDatabase | None = None,
+) -> int:
     """
     Initialize built-in chunking templates in the database.
 
@@ -236,7 +273,12 @@ def initialize_chunking_templates(db_path: str = None, client_id: str = 'system'
         return 0
 
 
-def update_builtin_templates(db_path: str = None, client_id: str = 'system', force: bool = False, db: MediaDatabase = None) -> int:
+def update_builtin_templates(
+    db_path: str | None = None,
+    client_id: str = 'system',
+    force: bool = False,
+    db: _TemplateDatabase | None = None,
+) -> int:
     """
     Update existing built-in templates with latest definitions.
 
@@ -283,7 +325,10 @@ def update_builtin_templates(db_path: str = None, client_id: str = 'system', for
 
 
 # Convenience function to be called during application startup
-def ensure_templates_initialized(db_path: str = None, db: MediaDatabase = None) -> bool:
+def ensure_templates_initialized(
+    db_path: str | None = None,
+    db: _TemplateDatabase | None = None,
+) -> bool:
     """
     Ensure built-in templates are initialized in the database.
     Called during application startup.

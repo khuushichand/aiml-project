@@ -689,9 +689,11 @@ def test_chromadb_library_imports_managed_media_database_from_media_db_api():
     assert module.managed_media_database is media_db_api.managed_media_database
 
 
-def test_template_initialization_imports_managed_media_database_from_media_db_api():
+def test_template_initialization_imports_managed_media_database_from_media_db_api(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
     module = importlib.reload(template_initialization)
     assert module.managed_media_database is media_db_api.managed_media_database
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_watchlists_pipeline_imports_managed_media_database_from_media_db_api():
