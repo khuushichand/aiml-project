@@ -5699,7 +5699,7 @@ elif _MINIMAL_TEST_APP:
 
         app.include_router(consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
     except _IMPORT_EXCEPTIONS as _consent_min_err:
-        logger.debug(f"Skipping consent router in minimal test app: {_consent_min_err}")
+        logger.debug("Skipping consent router in minimal test app: {}", _consent_min_err)
     # Collections endpoints (treated as lightweight; always included in minimal app)
     try:
         from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
@@ -6183,7 +6183,7 @@ else:
 
     _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
-    app.include_router(consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
+    _include_if_enabled("consent", consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
     logger.info("Auth router consolidated: endpoints/auth.py")
     if "users_router" in locals() and users_router is not None:
         _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])

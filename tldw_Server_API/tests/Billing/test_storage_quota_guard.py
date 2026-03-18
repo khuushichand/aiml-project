@@ -1,6 +1,7 @@
 """Tests for the storage quota enforcement FastAPI dependency."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,14 +13,18 @@ from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import (
 )
 
 
-def _fake_user(*, user_id: int = 1, org_ids: list[int] | None = None, active_org_id: int | None = None):
+def _fake_user(
+    *,
+    user_id: int | str = 1,
+    org_ids: Sequence[int] | None = None,
+    active_org_id: int | None = None,
+) -> SimpleNamespace:
     """Return a minimal User-like object."""
-    u = SimpleNamespace(
+    return SimpleNamespace(
         id=user_id,
-        org_ids=org_ids or [],
+        org_ids=list(org_ids or []),
         active_org_id=active_org_id,
     )
-    return u
 
 
 def _fake_request(*, org_id: int | None = None, content_length: str | None = None):
@@ -293,3 +298,32 @@ async def test_guard_passes_content_length_as_file_size(_pool, mock_check, _mode
     )
     call_kwargs = mock_check.call_args.kwargs
     assert call_kwargs["file_size_bytes"] == 5242880
+
+
+@pytest.mark.asyncio
+@patch(
+    "tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard.is_single_user_profile_mode",
+    return_value=False,
+)
+@patch(
+    "tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard.check_storage_quota",
+    new_callable=AsyncMock,
+    return_value={"allowed": True, "reason": "Quota check passed", "used_mb": 0, "quota_mb": 1024, "remaining_mb": 1024},
+)
+@patch(
+    "tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard.get_db_pool",
+    new_callable=AsyncMock,
+    return_value=MagicMock(),
+)
+@patch("tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard.logger.warning")
+async def test_guard_logs_when_user_id_falls_back_to_zero(_warning, _pool, mock_check, _mode):
+    """Invalid user ids fall back to 0 and emit a warning for operator visibility."""
+    await guard_storage_quota(
+        request=_fake_request(org_id=10),
+        response=_fake_response(),
+        current_user=_fake_user(user_id="not-an-int", org_ids=[10]),
+    )
+
+    call_kwargs = mock_check.call_args.kwargs
+    assert call_kwargs["user_id"] == 0
+    _warning.assert_any_call("Storage quota guard falling back to anonymous user_id=0 for user {}", "not-an-int")

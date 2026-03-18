@@ -9,6 +9,7 @@ Verifies that:
 """
 from __future__ import annotations
 
+from datetime import datetime
 import importlib
 import os
 
@@ -19,6 +20,7 @@ from tldw_Server_API.app.api.v1.endpoints.consent import (
     _get_consent_manager,
     _resolve_user_id,
 )
+from tldw_Server_API.app.api.v1.schemas.consent_schemas import ConsentRecordResponse
 from tldw_Server_API.app.core.AuthNZ.consent_manager import ConsentManager
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
@@ -59,6 +61,29 @@ class TestGetConsentDbPath:
         monkeypatch.delenv("CONSENT_DB_PATH", raising=False)
         path = _get_consent_db_path()
         assert "consent.db" in path
+
+    def test_consent_manager_is_cached_per_db_path(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CONSENT_DB_PATH", str(tmp_path / "cached-consent.db"))
+
+        first = _get_consent_manager()
+        second = _get_consent_manager()
+
+        assert first is second
+
+
+class TestConsentSchemas:
+    def test_consent_record_parses_datetime_fields(self):
+        record = ConsentRecordResponse.model_validate(
+            {
+                "user_id": 42,
+                "purpose": "analytics",
+                "granted_at": "2026-03-17T12:34:56Z",
+                "withdrawn_at": "2026-03-18T01:02:03Z",
+            }
+        )
+
+        assert isinstance(record.granted_at, datetime)
+        assert isinstance(record.withdrawn_at, datetime)
 
 
 class TestConsentEndpointLogic:
@@ -164,10 +189,29 @@ class TestConsentRouterWiring:
     def test_production_app_includes_consent_routes(self, monkeypatch):
         monkeypatch.setenv("MINIMAL_TEST_APP", "0")
         monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+        monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+        monkeypatch.delenv("ROUTES_ENABLE", raising=False)
 
+        from tldw_Server_API.app.core import config as config_mod
         from tldw_Server_API.app import main as app_main
 
+        config_mod.clear_config_cache()
         reloaded = importlib.reload(app_main)
         route_paths = {getattr(route, "path", "") for route in reloaded.app.routes}
 
         assert "/api/v1/consent/preferences" in route_paths
+
+    def test_production_app_omits_consent_routes_when_disabled(self, monkeypatch):
+        monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+        monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+        monkeypatch.setenv("ROUTES_DISABLE", "consent")
+        monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+
+        from tldw_Server_API.app.core import config as config_mod
+        from tldw_Server_API.app import main as app_main
+
+        config_mod.clear_config_cache()
+        reloaded = importlib.reload(app_main)
+        route_paths = {getattr(route, "path", "") for route in reloaded.app.routes}
+
+        assert "/api/v1/consent/preferences" not in route_paths

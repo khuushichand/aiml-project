@@ -22,10 +22,10 @@ from tldw_Server_API.app.core.Billing.enforcement import (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def enforcer():
     """Create a BillingEnforcer with short cache TTL for testing."""
-    return BillingEnforcer(cache_ttl=0)
+    return BillingEnforcer(cache_ttl=0, soft_limit_percent=80)
 
 
 class TestOverageHardBlock:
@@ -89,6 +89,7 @@ class TestOverageNotifyOnly:
     async def test_notify_upgrades_allow_to_warn(self, enforcer, monkeypatch):
         monkeypatch.setenv("BILLING_OVERAGE_MODE", "notify_only")
         monkeypatch.setenv("BILLING_OVERAGE_NOTIFY_PCT", "80")
+        monkeypatch.setenv("BILLING_OVERAGE_GRACE_PCT", "5")
 
         # Usage at 85% -- above 80% notify threshold but under limit
         with patch.object(enforcer, "get_org_limits", new_callable=AsyncMock) as mock_limits, \
@@ -103,6 +104,7 @@ class TestOverageNotifyOnly:
     async def test_notify_only_never_blocks(self, enforcer, monkeypatch):
         monkeypatch.setenv("BILLING_OVERAGE_MODE", "notify_only")
         monkeypatch.setenv("BILLING_OVERAGE_NOTIFY_PCT", "80")
+        monkeypatch.setenv("BILLING_OVERAGE_GRACE_PCT", "5")
 
         # Usage at 150% -- way over limit
         with patch.object(enforcer, "get_org_limits", new_callable=AsyncMock) as mock_limits, \
@@ -119,6 +121,7 @@ class TestOverageNotifyOnly:
     async def test_no_warn_below_threshold(self, enforcer, monkeypatch):
         monkeypatch.setenv("BILLING_OVERAGE_MODE", "notify_only")
         monkeypatch.setenv("BILLING_OVERAGE_NOTIFY_PCT", "80")
+        monkeypatch.setenv("BILLING_OVERAGE_GRACE_PCT", "5")
 
         # Usage at 50% -- well under threshold
         with patch.object(enforcer, "get_org_limits", new_callable=AsyncMock) as mock_limits, \

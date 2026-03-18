@@ -9,7 +9,8 @@ Verifies that:
 from __future__ import annotations
 
 import asyncio
-import os
+from collections.abc import Awaitable
+from typing import TypeVar
 
 import aiosqlite
 import pytest
@@ -22,14 +23,16 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     UnifiedAuditService,
 )
 
+_T = TypeVar("_T")
 
-@pytest.fixture()
+
+@pytest.fixture
 def audit_db_path(tmp_path):
     """Return path for a temporary audit database."""
     return str(tmp_path / "audit_chain_test.db")
 
 
-@pytest.fixture()
+@pytest.fixture
 def event_loop():
     """Provide a fresh event loop for async tests."""
     loop = asyncio.new_event_loop()
@@ -37,11 +40,9 @@ def event_loop():
     loop.close()
 
 
-def _run(coro, loop=None):
+def _run(coro: Awaitable[_T], loop: asyncio.AbstractEventLoop) -> _T:
     """Helper to run a coroutine synchronously."""
-    if loop:
-        return loop.run_until_complete(coro)
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return loop.run_until_complete(coro)
 
 
 class TestAuditChainIntegration:
@@ -122,15 +123,16 @@ class TestAuditChainIntegration:
                     rows = [dict(r) for r in await cur.fetchall()]
 
             # Build verification events from stored data
-            verify_events = []
-            for row in rows:
-                verify_events.append({
+            verify_events = [
+                {
                     "action": row.get("action", ""),
                     "user_id": row.get("context_user_id"),
                     "timestamp": row.get("timestamp", ""),
                     "detail": row.get("event_type", ""),
                     "chain_hash": row.get("chain_hash", ""),
-                })
+                }
+                for row in rows
+            ]
 
             result = verify_audit_chain(verify_events)
             assert result["valid"] is True

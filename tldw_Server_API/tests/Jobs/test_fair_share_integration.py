@@ -13,11 +13,14 @@ from unittest.mock import patch
 
 import pytest
 
-from tldw_Server_API.app.core.Jobs.manager import JobManager, _get_fair_share
+from tldw_Server_API.app.core.exceptions import BadRequestError
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
 
+pytestmark = pytest.mark.integration
 
-@pytest.fixture()
+
+@pytest.fixture
 def job_manager(tmp_path, monkeypatch):
     """Create a JobManager backed by a temporary SQLite database."""
     monkeypatch.delenv("JOBS_DISABLE_LEASE_ENFORCEMENT", raising=False)
@@ -61,7 +64,7 @@ class TestFairShareAdmissionControl:
         )
 
         # Third job should be blocked
-        with pytest.raises(ValueError, match="maximum concurrent job limit"):
+        with pytest.raises(BadRequestError, match="maximum concurrent job limit"):
             job_manager.create_job(
                 domain="chatbooks", queue="default", job_type="export",
                 payload={}, owner_user_id="42",
@@ -96,10 +99,22 @@ class TestFairShareAdmissionControl:
             domain="chatbooks", queue="default", job_type="export",
             payload={}, owner_user_id=None,
         )
-        job_manager.create_job(
-            domain="chatbooks", queue="default", job_type="export",
-            payload={}, owner_user_id=None,
+
+    def test_non_numeric_owner_user_id_does_not_require_int_cast(self, job_manager, monkeypatch):
+        monkeypatch.setenv("JOBS_MAX_PER_USER", "3")
+        import tldw_Server_API.app.core.Jobs.manager as mgr_mod
+        mgr_mod._fair_share = None
+
+        job = job_manager.create_job(
+            domain="chatbooks",
+            queue="default",
+            job_type="export",
+            payload={},
+            owner_user_id="user-abc-123",
         )
+
+        assert job is not None
+        assert job.get("status") in ("queued", None) or "uuid" in job
 
 
 class TestFairSharePriorityAdjustment:
@@ -137,24 +152,15 @@ class TestFairSharePriorityAdjustment:
         assert job is not None
         mock_warning.assert_called_once()
 
+    def test_completing_a_job_restores_capacity(self, job_manager, monkeypatch):
+        monkeypatch.setenv("JOBS_MAX_PER_USER", "1")
+        import tldw_Server_API.app.core.Jobs.manager as mgr_mod
+        mgr_mod._fair_share = None
 
-class TestCountActiveJobs:
-    """Verify the _count_active_jobs_for_user helper."""
-
-    def test_counts_queued_jobs(self, job_manager):
-        job_manager.create_job(
-            domain="chatbooks", queue="default", job_type="export",
-            payload={}, owner_user_id="99",
-        )
-        count = job_manager._count_active_jobs_for_user("99")
-        assert count == 1
-
-    def test_does_not_count_completed_jobs(self, job_manager):
         job = job_manager.create_job(
             domain="chatbooks", queue="default", job_type="export",
             payload={}, owner_user_id="99",
         )
-        # Acquire and complete the job
         acq = job_manager.acquire_next_job(
             domain="chatbooks", queue="default", lease_seconds=60, worker_id="w1",
         )
@@ -165,9 +171,11 @@ class TestCountActiveJobs:
                 worker_id="w1",
                 lease_id=str(acq.get("lease_id")),
             )
-        count = job_manager._count_active_jobs_for_user("99")
-        assert count == 0
 
-    def test_counts_zero_for_unknown_user(self, job_manager):
-        count = job_manager._count_active_jobs_for_user("nonexistent")
-        assert count == 0
+        next_job = job_manager.create_job(
+            domain="chatbooks", queue="default", job_type="export",
+            payload={}, owner_user_id="99",
+        )
+
+        assert job is not None
+        assert next_job is not None

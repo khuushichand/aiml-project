@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 import wave
 
@@ -485,6 +486,79 @@ def test_process_single_video_remote_download_validation_rejected(
 
     assert result["status"] == "Error"
     assert "downloaded file failed validation" in str(result.get("error", "")).lower()
+
+
+@patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription")
+@patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.download_video")
+@patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.extract_metadata")
+def test_process_single_video_remote_download_rejects_when_quota_exceeded(
+    mock_extract_metadata,
+    mock_download,
+    mock_transcribe,
+    monkeypatch,
+    tmp_path,
+):
+    mock_extract_metadata.return_value = {"title": "Online Clip"}
+
+    downloaded_file = tmp_path / "downloaded.wav"
+    with wave.open(str(downloaded_file), "wb") as wave_file:
+        wave_file.setnchannels(1)
+        wave_file.setsampwidth(2)
+        wave_file.setframerate(8000)
+        wave_file.writeframes(b"\x00\x00" * 8)
+    mock_download.return_value = str(downloaded_file)
+    mock_transcribe.side_effect = AssertionError(
+        "perform_transcription should not run when quota is exceeded"
+    )
+
+    class _RejectingQuotaService:
+        async def check_quota(self, user_id: int, new_bytes: int, raise_on_exceed: bool = False):
+            assert user_id == 42
+            assert new_bytes == downloaded_file.stat().st_size
+            return False, {
+                "current_usage_mb": 10,
+                "new_size_mb": 1,
+                "quota_mb": 10,
+                "available_mb": 0,
+            }
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "tldw_Server_API.app.services.storage_quota_service",
+        SimpleNamespace(get_storage_quota_service=lambda: _RejectingQuotaService()),
+    )
+
+    result = process_single_video(
+        video_input="https://example.com/video",
+        start_seconds=0,
+        end_seconds=None,
+        diarize=False,
+        vad_use=False,
+        transcription_model="whisper-small",
+        transcription_language="en",
+        perform_analysis=False,
+        custom_prompt=None,
+        system_prompt=None,
+        perform_chunking=False,
+        chunk_method=None,
+        max_chunk_size=1000,
+        chunk_overlap=0,
+        use_adaptive_chunking=False,
+        use_multi_level_chunking=False,
+        chunk_language=None,
+        summarize_recursively=False,
+        api_name=None,
+        use_cookies=False,
+        cookies=None,
+        timestamp_option=False,
+        temp_dir=str(tmp_path),
+        keep_intermediate_audio=False,
+        perform_diarization=False,
+        user_id=42,
+    )
+
+    assert result["status"] == "Error"
+    assert "storage quota exceeded" in str(result.get("error", "")).lower()
 
 
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_single_video")

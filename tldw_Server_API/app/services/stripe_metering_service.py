@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
@@ -73,7 +73,23 @@ class StripeMeteringService:
                 row["bytes_in_total"] = 0
         return rows
 
-    async def _query_usage_for_date(self, pool: Any, target_date: str) -> list[dict[str, Any]]:
+    @staticmethod
+    def _coerce_day(value: str | date) -> date:
+        """Return a real date object for PostgreSQL DATE bindings."""
+        if isinstance(value, date):
+            return value
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+
+    @staticmethod
+    def _is_missing_stripe_resource_error(exc: Exception) -> bool:
+        """Return True when Stripe reports a missing subscription/resource."""
+        code = str(getattr(exc, "code", "") or "").lower()
+        if code == "resource_missing":
+            return True
+        message = str(exc).lower()
+        return "no such subscription" in message or "resource missing" in message
+
+    async def _query_usage_for_date(self, pool: Any, target_date: str | date) -> list[dict[str, Any]]:
         """Fetch usage_daily rows for *target_date*.
 
         Returns a list of dicts with keys: user_id, requests, errors,
@@ -81,12 +97,13 @@ class StripeMeteringService:
         """
         async with pool.acquire() as conn:
             if self._is_postgres(conn):
+                pg_day = self._coerce_day(target_date)
                 try:
                     rows = await conn.fetch(
                         "SELECT user_id, requests, errors, bytes_total, "
                         "COALESCE(bytes_in_total, 0) AS bytes_in_total, latency_avg_ms "
                         "FROM usage_daily WHERE day = $1",
-                        target_date,
+                        pg_day,
                     )
                     return [dict(r) for r in rows]
                 except Exception as exc:
@@ -95,7 +112,7 @@ class StripeMeteringService:
                     rows = await conn.fetch(
                         "SELECT user_id, requests, errors, bytes_total, latency_avg_ms "
                         "FROM usage_daily WHERE day = $1",
-                        target_date,
+                        pg_day,
                     )
                     legacy_rows = [dict(r) for r in rows]
                     for row in legacy_rows:
@@ -237,12 +254,18 @@ class StripeMeteringService:
             # No metered item found — return None so caller can skip
             return None
         except Exception as exc:
+            if self._is_missing_stripe_resource_error(exc):
+                logger.warning(
+                    "Stripe subscription {} is missing; skipping metering sync",
+                    subscription_id,
+                )
+                return None
             logger.warning(
                 "Failed to retrieve subscription items for {}: {}",
                 subscription_id,
                 exc,
             )
-            return None
+            raise
 
     async def _ensure_metering_sync_table(self, pool: Any) -> None:
         """Create the ``metering_sync_log`` tracking table if it does not exist."""
@@ -278,16 +301,17 @@ class StripeMeteringService:
                 await conn.commit()
 
     async def _already_synced(
-        self, pool: Any, user_id: int, day: str, subscription_id: str
+        self, pool: Any, user_id: int, day: str | date, subscription_id: str
     ) -> bool:
         """Return True if usage for this user/day/subscription was already synced."""
         async with pool.acquire() as conn:
             if self._is_postgres(conn):
+                pg_day = self._coerce_day(day)
                 row = await conn.fetchval(
                     "SELECT 1 FROM metering_sync_log "
                     "WHERE user_id = $1 AND day = $2 AND stripe_subscription_id = $3",
                     user_id,
-                    day,
+                    pg_day,
                     subscription_id,
                 )
                 return row is not None
@@ -303,7 +327,7 @@ class StripeMeteringService:
         self,
         pool: Any,
         user_id: int,
-        day: str,
+        day: str | date,
         subscription_id: str,
         requests: int,
         bytes_total: int,
@@ -311,6 +335,7 @@ class StripeMeteringService:
         """Record a successful sync in metering_sync_log."""
         async with pool.acquire() as conn:
             if self._is_postgres(conn):
+                pg_day = self._coerce_day(day)
                 await conn.execute(
                     "INSERT INTO metering_sync_log "
                     "(user_id, day, stripe_subscription_id, requests_synced, bytes_synced) "
@@ -320,7 +345,7 @@ class StripeMeteringService:
                     "    bytes_synced = EXCLUDED.bytes_synced, "
                     "    synced_at = CURRENT_TIMESTAMP",
                     user_id,
-                    day,
+                    pg_day,
                     subscription_id,
                     requests,
                     bytes_total,
@@ -353,14 +378,15 @@ class StripeMeteringService:
             action="set",
         )
 
-    async def _query_sync_totals(self, pool: Any, target_date: str) -> list[dict[str, Any]]:
+    async def _query_sync_totals(self, pool: Any, target_date: str | date) -> list[dict[str, Any]]:
         """Fetch synced totals from metering_sync_log for *target_date*."""
         async with pool.acquire() as conn:
             if self._is_postgres(conn):
+                pg_day = self._coerce_day(target_date)
                 rows = await conn.fetch(
                     "SELECT user_id, stripe_subscription_id, requests_synced, bytes_synced "
                     "FROM metering_sync_log WHERE day = $1",
-                    target_date,
+                    pg_day,
                 )
                 return [dict(r) for r in rows]
             else:
@@ -676,4 +702,4 @@ class StripeMeteringService:
     @property
     def is_enabled(self) -> bool:
         """Whether Stripe metering is enabled."""
-        return self._enabled and bool(self._stripe_key)
+        return self._enabled and bool(self._stripe_key) and STRIPE_AVAILABLE

@@ -1102,15 +1102,15 @@ class JobManager:
             try:
                 scheduler = _get_fair_share()
                 active_count = self._count_active_jobs_for_user(owner_user_id)
-                if not scheduler.can_submit(int(owner_user_id), active_count):
-                    raise ValueError(  # noqa: TRY003
+                if not scheduler.can_submit(owner_user_id, active_count):
+                    raise BadRequestError(
                         f"User {owner_user_id} has reached the maximum concurrent job limit "
                         f"({scheduler.max_per_user})"
                     )
-                fair_priority = scheduler.calculate_priority(int(owner_user_id), active_count)
+                fair_priority = scheduler.calculate_priority(owner_user_id, active_count)
                 fair_priority_mapped = self._map_fair_share_score_to_priority(fair_priority)
                 priority = min(priority, fair_priority_mapped)
-            except ValueError:
+            except BadRequestError:
                 raise
             except _JOB_NONCRITICAL_EXCEPTIONS as _fs_exc:
                 logger.warning(f"Fair-share scheduling check skipped: {_fs_exc}")

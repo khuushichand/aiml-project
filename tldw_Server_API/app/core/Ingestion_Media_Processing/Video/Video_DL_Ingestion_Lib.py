@@ -24,6 +24,7 @@ import json
 #
 ####################
 # Import necessary libraries to run solo for testing
+import asyncio
 import os
 import re
 import shutil
@@ -190,6 +191,34 @@ def _validate_downloaded_url_video_file(downloaded_path: Path) -> None:
         media_mod=None,
         allowed_extensions=None,
     )
+
+
+def _enforce_download_quota(user_id: Optional[int], downloaded_path: Path) -> None:
+    """Raise ValueError when a downloaded URL payload would exceed storage quota."""
+    if user_id is None:
+        return
+
+    from tldw_Server_API.app.services.storage_quota_service import get_storage_quota_service
+
+    async def _check_quota() -> None:
+        quota_service = get_storage_quota_service()
+        size_bytes = downloaded_path.stat().st_size
+        has_quota, info = await quota_service.check_quota(
+            user_id,
+            size_bytes,
+            raise_on_exceed=False,
+        )
+        if has_quota:
+            return
+        raise ValueError(
+            "Storage quota exceeded. Current: "
+            f"{info['current_usage_mb']}MB, "
+            f"New: {info['new_size_mb']}MB, "
+            f"Quota: {info['quota_mb']}MB, "
+            f"Available: {info['available_mb']}MB"
+        )
+
+    asyncio.run(_check_quota())
 
 
 def _safe_remove_file(file_path: Path) -> None:
@@ -1354,6 +1383,7 @@ def process_single_video(
                     "Downloaded file path rejected outside temp directory."
                 )
             _validate_downloaded_url_video_file(safe_downloaded)
+            _enforce_download_quota(user_id, safe_downloaded)
             local_file_path_for_transcription = str(safe_downloaded)
             # *** Update only the processing_source, keep original input_ref ***
             processing_result["processing_source"] = local_file_path_for_transcription

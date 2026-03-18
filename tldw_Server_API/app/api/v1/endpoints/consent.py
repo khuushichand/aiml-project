@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -54,10 +55,16 @@ def _get_consent_db_path() -> str:
         return str(db_dir / "consent.db")
 
 
+@lru_cache(maxsize=4)
+def _build_consent_manager(db_path: str) -> ConsentManager:
+    """Cache consent manager instances by database path."""
+    return ConsentManager(db_path)
+
+
 def _get_consent_manager() -> ConsentManager:
     """Get or create a ConsentManager instance."""
     db_path = _get_consent_db_path()
-    return ConsentManager(db_path)
+    return _build_consent_manager(db_path)
 
 
 def _resolve_user_id(principal: AuthPrincipal) -> int:

@@ -13,6 +13,7 @@ Usage::
 """
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 
 from fastapi import Depends, HTTPException, Request, Response, UploadFile, status
@@ -85,10 +86,12 @@ async def guard_storage_quota(
     except _NONCRITICAL:
         pass
 
+    raw_user_id = getattr(current_user, "id", None)
     try:
-        user_id = int(current_user.id) if current_user.id is not None else 0
+        user_id = int(raw_user_id) if raw_user_id is not None else 0
     except (TypeError, ValueError):
         user_id = 0
+        logger.warning("Storage quota guard falling back to anonymous user_id=0 for user {}", raw_user_id)
 
     try:
         db_pool = await get_db_pool()
@@ -120,7 +123,5 @@ async def guard_storage_quota(
 
     # Soft-limit warning header
     if "soft limit" in result.get("reason", "").lower():
-        try:
+        with suppress(*_NONCRITICAL):
             response.headers["X-Storage-Warning"] = result["reason"]
-        except _NONCRITICAL:
-            pass

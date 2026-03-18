@@ -1,6 +1,8 @@
 """Pydantic schemas for consent endpoints."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -12,8 +14,8 @@ class ConsentRecordResponse(BaseModel):
     id: int | None = None
     user_id: int
     purpose: str
-    granted_at: str | None = None
-    withdrawn_at: str | None = None
+    granted_at: datetime | None = None
+    withdrawn_at: datetime | None = None
     ip_address: str | None = None
     user_agent: str | None = None
     metadata: str | None = None
