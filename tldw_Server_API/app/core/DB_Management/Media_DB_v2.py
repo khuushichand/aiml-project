@@ -103,6 +103,10 @@ from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     InputError,
     SchemaError,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
+    media_dedupe_url_candidates,
+    normalize_media_dedupe_url,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.rows import (
     BackendCursorAdapter,
     RowAdapter,
@@ -242,50 +246,6 @@ def _emit_email_metric_histogram(
 
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DATA_TABLES_UNSET = object()
-
-
-def normalize_media_dedupe_url(url: str | None) -> str | None:
-    """Normalize URL-like media identifiers for dedupe comparisons.
-
-    Rules:
-    - Preserve non-HTTP(S) identifiers as-is (e.g., ``local://...`` or filenames).
-    - For HTTP(S), apply crawl normalization (lowercase scheme/host, drop fragments,
-      strip tracking params, normalize path/query ordering).
-    """
-    if url is None:
-        return None
-    raw = str(url).strip()
-    if not raw:
-        return None
-
-    try:
-        scheme = (urlparse(raw).scheme or "").lower()
-    except _MEDIA_NONCRITICAL_EXCEPTIONS:
-        return raw
-
-    if scheme not in {"http", "https"}:
-        return raw
-
-    try:
-        from tldw_Server_API.app.core.Web_Scraping.url_utils import normalize_for_crawl
-
-        normalized = str(normalize_for_crawl(raw, raw) or "").strip()
-        return normalized or raw
-    except _MEDIA_NONCRITICAL_EXCEPTIONS:
-        return raw
-
-
-def media_dedupe_url_candidates(url: str | None) -> tuple[str, ...]:
-    """Return stable candidate URLs for dedupe lookups (normalized first)."""
-    normalized = normalize_media_dedupe_url(url)
-    raw = str(url).strip() if url is not None else ""
-
-    candidates: list[str] = []
-    if normalized:
-        candidates.append(normalized)
-    if raw and raw not in candidates:
-        candidates.append(raw)
-    return tuple(candidates)
 
 
 _RowAdapter = RowAdapter

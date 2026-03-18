@@ -6,6 +6,10 @@ import sqlite3
 from typing import TYPE_CHECKING, Any
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
+    media_dedupe_url_candidates,
+    normalize_media_dedupe_url,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
@@ -30,8 +34,6 @@ def _load_legacy_media_support():
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
         _CollectionsDB,
         _MEDIA_NONCRITICAL_EXCEPTIONS,
-        media_dedupe_url_candidates,
-        normalize_media_dedupe_url,
     )
 
     return (

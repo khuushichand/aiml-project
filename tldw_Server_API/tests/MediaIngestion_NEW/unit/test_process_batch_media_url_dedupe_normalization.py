@@ -4,7 +4,9 @@ import asyncio
 from types import SimpleNamespace
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import normalize_media_dedupe_url
+from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
+    normalize_media_dedupe_url,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing import (
     persistence as ingestion_persistence,
 )

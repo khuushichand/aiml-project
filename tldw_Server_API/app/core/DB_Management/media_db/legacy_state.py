@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
+    media_dedupe_url_candidates,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError, DatabaseError
 
 if TYPE_CHECKING:
@@ -34,10 +37,6 @@ def check_media_exists(
     db_instance = _require_media_db_instance(
         db_instance,
         error_message="db_instance required.",
-    )
-
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-        media_dedupe_url_candidates,
     )
 
     query_parts: list[str] = []

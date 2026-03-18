@@ -4,10 +4,10 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 5
-- Operational `create_media_database(...)` call sites in app code: 12
+- Raw `MediaDatabase(...)` constructors in app code: 0
+- Operational `create_media_database(...)` call sites in app code: 17
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 71
+- `Media_DB_v2` references in app code: 69
 
 Notes:
 
@@ -70,17 +70,16 @@ Notes:
 | `app/core/Data_Tables/jobs_worker.py` | 1 | cached per-user DB owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Evaluations/embeddings_abtest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | explicit owner-controlled lifetime is fine |
 | `app/core/DB_Management/Users_DB.py` | 1 | factory wrapper returns DB instance | `KEEP_RAW` | wrapper boundary, not local scope |
+| `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owners through shared factory | `MOVE_FACTORY` already satisfied | long-lived and cached Media DB handles now route through `create_media_database(...)` without binding the shim constructor |
 | `app/core/RAG/rag_service/agentic_chunker.py` | 1 | cached singleton structure-index DB owner through shared factory | `MOVE_FACTORY` already satisfied | `_get_media_db_for_structure()` now preserves singleton ownership while routing construction through the shared factory |
 | `app/core/RAG/rag_service/database_retrievers.py` | 2 | retriever-owned adapter attachment through shared factory | `MOVE_FACTORY` already satisfied | media and claims retrievers now preserve explicit owner-controlled close behavior while routing attachment through the shared factory |
+| `app/core/Sync/Sync_Client.py` | 1 | long-lived client sync owner through shared factory | `MOVE_FACTORY` already satisfied | explicit sync-engine lifetime remains, but DB creation now routes through `create_media_database(...)` instead of the shim constructor |
 | `app/core/TTS/tts_jobs_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | `_handle_tts_job(...)` still owns close behavior |
+| `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner through shared factory | `MOVE_FACTORY` already satisfied | cached chatbook export DB now routes through `create_media_database(...)` while preserving module-owned lifetime |
 
 ## Raw `MediaDatabase(...)` Constructor Inventory
 
-| File | Count | Current Pattern | Classification | Notes |
-| --- | ---: | --- | --- | --- |
-| `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
-| `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
-| `app/core/Sync/Sync_Client.py` | 1 | long-lived client sync owner | `KEEP_RAW` | explicit owner lifecycle is part of the design |
+All app-side raw `MediaDatabase(...)` constructor sites have been removed. The remaining owner-controlled lifetime cases now route construction through `create_media_database(...)` and are tracked in the factory inventory above.
 
 ## App-Side `Media_DB_v2` Compatibility Buckets
 
@@ -109,7 +108,8 @@ Representative files:
 
 Assessment:
 
-- These modules own DB lifecycle explicitly or cache DB handles over time.
+- These modules still own DB lifecycle explicitly or cache DB handles over time.
+- They no longer construct raw `MediaDatabase(...)` instances directly; they now rely on the shared factory while preserving owner-controlled lifetime.
 - They are not the first place to chase import-count reduction.
 
 ### 3. Leaf compatibility consumers
@@ -124,6 +124,7 @@ Status:
 - `app/core/RAG/rag_service/agentic_chunker.py` now creates its cached structure-index DB through `media_db.api.create_media_database(...)` instead of the shim constructor.
 - `app/core/RAG/rag_service/database_retrievers.py` now attaches media DB adapters through `media_db.api.create_media_database(...)` and `media_db.errors.DatabaseError` instead of importing those bindings from the shim.
 - `app/core/Utils/metadata_utils.py` now imports `DatabaseError` from `media_db.errors` inside its safe-metadata write helper instead of from the shim.
+- `app/core/Ingestion_Media_Processing/persistence.py` now imports URL dedupe helpers from `media_db.dedupe_urls` instead of from `Media_DB_v2.py`.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory

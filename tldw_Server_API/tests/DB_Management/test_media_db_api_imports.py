@@ -899,6 +899,7 @@ def test_persistence_imports_factory_and_db_errors_outside_shim(monkeypatch):
     assert module.DatabaseError is media_db_errors.DatabaseError
     assert module.InputError is media_db_errors.InputError
     assert "MediaDatabase" not in module.__dict__
+    assert "Media_DB_v2" not in inspect.getsource(module)
 
 
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():
