@@ -79,6 +79,7 @@ from tldw_Server_API.app.core.External_Sources import sync_coordinator
 from tldw_Server_API.app.core.RAG.rag_service import agentic_chunker
 from tldw_Server_API.app.core.RAG.rag_service import database_retrievers
 from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline
+from tldw_Server_API.app.core.Chatbooks import chatbook_service
 from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import slides_module
@@ -88,6 +89,7 @@ from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_backup as media_db_legacy_backup
 from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_reads as media_db_legacy_reads
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_media_details
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_state as media_db_state
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as media_db_runtime_factory
@@ -840,6 +842,15 @@ def test_media_endpoint_package_does_not_bind_media_database_from_shim(monkeypat
     module = importlib.reload(
         importlib.import_module("tldw_Server_API.app.api.v1.endpoints.media")
     )
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_chatbook_service_imports_media_factory_and_legacy_reads(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    module = importlib.reload(chatbook_service)
+    assert module.create_media_database is media_db_api.create_media_database
+    assert module.get_media_prompts is media_db_legacy_reads.get_media_prompts
+    assert module.get_media_transcripts is media_db_legacy_reads.get_media_transcripts
     assert "MediaDatabase" not in module.__dict__
 
 
