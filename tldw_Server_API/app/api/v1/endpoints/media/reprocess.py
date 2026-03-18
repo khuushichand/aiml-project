@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -31,6 +32,8 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import
 )
 
 router = APIRouter(tags=["Media Management"])
+_MARK_PROCESSED_CONFLICT_RETRIES = 3
+_MARK_PROCESSED_CONFLICT_BACKOFF_SECONDS = 0.05
 
 
 def _normalize_chunks(raw_chunks: list[Any]) -> list[dict[str, Any]]:
@@ -91,6 +94,25 @@ def _normalize_chunks(raw_chunks: list[Any]) -> list[dict[str, Any]]:
     return normalized
 
 
+async def _mark_embeddings_complete_with_retry(*, db: MediaDatabase, media_id: int, context: str) -> bool:
+    for attempt in range(1, _MARK_PROCESSED_CONFLICT_RETRIES + 1):
+        try:
+            mark_media_as_processed(db_instance=db, media_id=media_id)
+            return True
+        except ConflictError as exc:
+            if attempt >= _MARK_PROCESSED_CONFLICT_RETRIES:
+                logger.warning(
+                    "Embeddings completed for media {} but the ready-state update still conflicted after {} attempts in {}: {}",
+                    media_id,
+                    attempt,
+                    context,
+                    exc,
+                )
+                return False
+            await asyncio.sleep(_MARK_PROCESSED_CONFLICT_BACKOFF_SECONDS * attempt)
+    return False
+
+
 def _delete_embeddings_for_media(media_id: int, user_id: str) -> None:
     manager = embeddings_endpoint.ChromaDBManager(
         user_id=user_id,
@@ -148,7 +170,11 @@ async def _generate_embeddings(
         )
         allow_zero = bool(result.get("allow_zero_embeddings"))
         if result.get("status") == "success" or allow_zero:
-            mark_media_as_processed(db_instance=db, media_id=media_id)
+            await _mark_embeddings_complete_with_retry(
+                db=db,
+                media_id=media_id,
+                context="media.reprocess",
+            )
         else:
             error_detail = str(
                 result.get("error") or result.get("message") or "Embedding generation failed"

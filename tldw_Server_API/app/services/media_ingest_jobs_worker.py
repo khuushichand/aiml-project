@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.DB_Manager import mark_media_as_processed
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ConflictError
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
@@ -30,6 +31,8 @@ from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 
 _MEDIA_DOMAIN = "media_ingest"
 _MEDIA_JOB_TYPE = "media_ingest_item"
+_MARK_PROCESSED_CONFLICT_RETRIES = 3
+_MARK_PROCESSED_CONFLICT_BACKOFF_SECONDS = 0.05
 
 
 @dataclass
@@ -44,6 +47,25 @@ class MediaIngestJobError(RuntimeError):
         self.retryable = retryable
         if backoff_seconds is not None:
             self.backoff_seconds = backoff_seconds
+
+
+async def _mark_embeddings_complete_with_retry(*, db: Any, media_id: int, context: str) -> bool:
+    for attempt in range(1, _MARK_PROCESSED_CONFLICT_RETRIES + 1):
+        try:
+            mark_media_as_processed(db_instance=db, media_id=media_id)
+            return True
+        except ConflictError as exc:
+            if attempt >= _MARK_PROCESSED_CONFLICT_RETRIES:
+                logger.warning(
+                    "Embeddings completed for media {} but the ready-state update still conflicted after {} attempts in {}: {}",
+                    media_id,
+                    attempt,
+                    context,
+                    exc,
+                )
+                return False
+            await asyncio.sleep(_MARK_PROCESSED_CONFLICT_BACKOFF_SECONDS * attempt)
+    return False
 
 
 def _coerce_int(value: Any, default: int) -> int:
@@ -177,7 +199,11 @@ async def _schedule_embeddings(
         )
         allow_zero = bool(result.get("allow_zero_embeddings"))
         if result.get("status") == "success" or allow_zero:
-            mark_media_as_processed(db_instance=db, media_id=media_id)
+            await _mark_embeddings_complete_with_retry(
+                db=db,
+                media_id=media_id,
+                context="media_ingest_jobs_worker",
+            )
         else:
             db.mark_embeddings_error(
                 media_id,

@@ -612,6 +612,33 @@
     - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `5 passed`
     - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `40 passed`
 
+### WP-014: Successful embeddings runs could still mark workspace sources as `embeddings_error` on version conflicts
+
+- Status: Resolved as product bug
+- Route: `/workspace-playground`, `/api/v1/media/{media_id}/reprocess`
+- Feature: source readiness after live Add Sources ingestion and explicit media reprocess flows
+- Reproduction:
+  1. Ingest a workspace source or trigger media reprocess with embeddings enabled.
+  2. Let embeddings generation complete successfully.
+  3. Hit a concurrent version update when the worker or reprocess task calls `mark_media_as_processed()`.
+  4. Observe that the old code treated the resulting `ConflictError` as an embeddings failure, which could either write `embeddings_error` or crash the reprocess background task.
+- Evidence:
+  - `tldw_Server_API/app/services/media_ingest_jobs_worker.py`
+  - `tldw_Server_API/app/api/v1/endpoints/media/reprocess.py`
+  - `tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_worker.py`
+  - `tldw_Server_API/tests/Media/test_media_reprocess_endpoint.py`
+  - `tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_embeddings_dispatch_modes.py`
+- Suspected layer: backend completion-state handling after successful embeddings generation
+- Why it matters: workspace source ingestion depends on `vector_processing` reaching `Ready`; a false `embeddings_error` or crashed reprocess task turns a successful embeddings run into a user-visible failure state and undermines the beta readiness of Add Sources flows
+- Resolution:
+  - Added targeted retry loops around `mark_media_as_processed()` in both the media-ingest worker and media reprocess embeddings path.
+  - Kept transient `ConflictError` handling out of the `embeddings_error` bucket so successful embeddings work is no longer mislabeled as failed.
+  - Added backend regressions covering the transient-conflict case in both code paths.
+  - Verification:
+    - `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_worker.py tldw_Server_API/tests/Media/test_media_reprocess_endpoint.py -k "conflict or marks_vector_processed" -q` => `3 passed`
+    - `source .venv/bin/activate && python -m pytest tldw_Server_API/tests/MediaIngestion_NEW/unit/test_media_ingest_jobs_worker.py tldw_Server_API/tests/Media/test_media_reprocess_endpoint.py tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_embeddings_dispatch_modes.py -q` => `13 passed`
+    - `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/services/media_ingest_jobs_worker.py tldw_Server_API/app/api/v1/endpoints/media/reprocess.py -f json -o /tmp/bandit_media_conflict_fix_app_only.json` => `0 findings`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`

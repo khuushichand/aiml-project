@@ -244,3 +244,66 @@ async def test_media_ingest_schedule_embeddings_marks_error_on_failure(monkeypat
     )
 
     assert db.errors == [(91, "embedding backend unavailable")]
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_schedule_embeddings_retries_conflict_without_marking_error(monkeypatch):
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ConflictError
+
+    class _DummyDB:
+        def __init__(self) -> None:
+            self.errors: list[tuple[int, str]] = []
+
+        def mark_embeddings_error(self, media_id: int, detail: str) -> None:
+            self.errors.append((media_id, detail))
+
+    attempts = {"processed": 0}
+    captured: dict[str, object] = {}
+
+    async def _fake_get_media_content(media_id: int, db):  # noqa: ARG001
+        return {"media_item": {"title": f"Doc {media_id}"}, "content": {"content": "hello world"}}
+
+    async def _fake_generate_embeddings_for_media(**kwargs):
+        captured["kwargs"] = dict(kwargs)
+        return {"status": "success", "embedding_count": 1, "chunks_processed": 1}
+
+    def _flaky_mark_media_as_processed(*, db_instance, media_id):  # noqa: ANN001
+        attempts["processed"] += 1
+        if attempts["processed"] == 1:
+            raise ConflictError("Media", media_id)
+        captured["processed"] = (db_instance, media_id)
+
+    monkeypatch.setattr(worker, "mark_media_as_processed", _flaky_mark_media_as_processed, raising=True)
+
+    import tldw_Server_API.app.api.v1.endpoints.media_embeddings as media_embeddings
+
+    monkeypatch.setattr(media_embeddings, "get_media_content", _fake_get_media_content, raising=True)
+    monkeypatch.setattr(
+        media_embeddings,
+        "generate_embeddings_for_media",
+        _fake_generate_embeddings_for_media,
+        raising=True,
+    )
+
+    db = _DummyDB()
+    await worker._schedule_embeddings(
+        media_id=73,
+        user_id="22",
+        db=db,
+        form_data=type(
+            "FormData",
+            (),
+            {
+                "embedding_model": None,
+                "embedding_provider": None,
+                "chunk_size": 64,
+                "overlap": 16,
+            },
+        )(),
+    )
+
+    assert attempts["processed"] == 2
+    assert captured["processed"] == (db, 73)
+    assert captured["kwargs"]["user_id"] == "22"
+    assert db.errors == []
