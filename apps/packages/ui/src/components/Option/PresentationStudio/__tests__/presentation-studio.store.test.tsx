@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
-import { usePresentationStudioStore } from "@/store/presentation-studio"
+import {
+  mergePresentationStudioDraftWithRemote,
+  type PresentationStudioPatchPayload,
+  usePresentationStudioStore
+} from "@/store/presentation-studio"
 
 const sampleProject = {
   id: "pres-123",
@@ -9,6 +13,16 @@ const sampleProject = {
   theme: "black",
   marp_theme: null,
   template_id: null,
+  visual_style_id: "minimal-academic",
+  visual_style_scope: "builtin",
+  visual_style_name: "Minimal Academic",
+  visual_style_version: 1,
+  visual_style_snapshot: {
+    id: "minimal-academic",
+    scope: "builtin",
+    name: "Minimal Academic",
+    appearance_defaults: { theme: "white" }
+  },
   settings: null,
   studio_data: { origin: "blank" },
   slides: [
@@ -38,7 +52,7 @@ const sampleProject = {
   deleted: false,
   client_id: "1",
   version: 1
-} as const
+}
 
 const sequenceProject = {
   ...sampleProject,
@@ -83,7 +97,7 @@ const sequenceProject = {
       }
     }
   ]
-} as const
+}
 
 describe("presentation studio store", () => {
   beforeEach(() => {
@@ -109,6 +123,82 @@ describe("presentation studio store", () => {
     expect(usePresentationStudioStore.getState().slides[0]?.metadata?.studio?.audio?.status).toBe(
       "stale"
     )
+  })
+
+  it("loads and persists presentation-level visual style metadata", () => {
+    const store = usePresentationStudioStore.getState()
+    store.loadProject(sampleProject)
+
+    let state = usePresentationStudioStore.getState()
+    expect(state.visualStyleId).toBe("minimal-academic")
+    expect(state.visualStyleScope).toBe("builtin")
+    expect(state.visualStyleName).toBe("Minimal Academic")
+    expect(state.visualStyleVersion).toBe(1)
+    expect(state.visualStyleSnapshot).toEqual(
+      expect.objectContaining({
+        id: "minimal-academic",
+        name: "Minimal Academic"
+      })
+    )
+
+    store.updateProjectMeta({
+      visualStyleId: "timeline",
+      visualStyleScope: "builtin",
+      visualStyleName: "Timeline",
+      visualStyleVersion: 1,
+      visualStyleSnapshot: {
+        id: "timeline",
+        scope: "builtin",
+        name: "Timeline",
+        appearance_defaults: { theme: "beige" }
+      }
+    })
+
+    state = usePresentationStudioStore.getState()
+    expect(state.visualStyleId).toBe("timeline")
+    expect(state.visualStyleScope).toBe("builtin")
+    expect(state.visualStyleName).toBe("Timeline")
+    expect(state.visualStyleSnapshot).toEqual(
+      expect.objectContaining({
+        id: "timeline",
+        appearance_defaults: { theme: "beige" }
+      })
+    )
+
+    expect(state.buildPatchPayload()).toEqual(
+      expect.objectContaining({
+        visual_style_id: "timeline",
+        visual_style_scope: "builtin",
+        visual_style_name: "Timeline",
+        visual_style_version: 1,
+        visual_style_snapshot: expect.objectContaining({
+          id: "timeline"
+        })
+      })
+    )
+  })
+
+  it("preserves explicit visual-style clears when merging remote updates", () => {
+    const localDraft: PresentationStudioPatchPayload = {
+      title: sampleProject.title,
+      description: sampleProject.description,
+      theme: sampleProject.theme,
+      visual_style_id: null,
+      visual_style_scope: null,
+      visual_style_name: null,
+      visual_style_version: null,
+      visual_style_snapshot: null,
+      studio_data: sampleProject.studio_data,
+      slides: sampleProject.slides
+    }
+
+    const merged = mergePresentationStudioDraftWithRemote(sampleProject, localDraft)
+
+    expect(merged.visual_style_id).toBeNull()
+    expect(merged.visual_style_scope).toBeNull()
+    expect(merged.visual_style_name).toBeNull()
+    expect(merged.visual_style_version).toBeNull()
+    expect(merged.visual_style_snapshot).toBeNull()
   })
 
   it("duplicates and removes slides while preserving selection and order", () => {
@@ -188,7 +278,7 @@ describe("presentation studio store", () => {
           transition: "wipe",
           timing_mode: "manual",
           manual_duration_ms: 45_000
-        }
+        } as any
       }
     })
 
@@ -206,7 +296,7 @@ describe("presentation studio store", () => {
       metadata: {
         studio: {
           timing_mode: "manual"
-        }
+        } as any
       }
     })
 
@@ -224,14 +314,14 @@ describe("presentation studio store", () => {
         studio: {
           timing_mode: "manual",
           manual_duration_ms: 45_000
-        }
+        } as any
       }
     })
     store.updateSlide("slide-1", {
       metadata: {
         studio: {
           manual_duration_ms: null
-        }
+        } as any
       }
     })
 

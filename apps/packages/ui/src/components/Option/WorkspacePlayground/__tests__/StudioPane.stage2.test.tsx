@@ -2,6 +2,7 @@ import React from "react"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Modal } from "antd"
+import type { WorkspaceSource } from "@/types/workspace"
 import { StudioPane } from "../StudioPane"
 const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
   () => ({
@@ -58,13 +59,13 @@ const {
   const messageSuccess = vi.fn()
   const messageError = vi.fn()
   const messageInfo = vi.fn()
-  const defaultSources = [
+  const defaultSources: WorkspaceSource[] = [
     {
       id: "source-1",
       mediaId: 101,
       title: "DSPy Prompting Talk",
-      type: "video" as const,
-      status: "ready" as const,
+      type: "video",
+      status: "ready",
       addedAt: new Date("2026-02-18T00:00:00.000Z")
     }
   ]
@@ -229,6 +230,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    listVisualStyles: vi.fn().mockResolvedValue([]),
     createChatCompletion: mockCreateChatCompletion,
     getMediaDetails: mockGetMediaDetails,
     exportPresentation: vi.fn(),
@@ -529,7 +531,7 @@ describe("StudioPane Stage 2 workflows", () => {
         status: "ready",
         addedAt: new Date("2026-02-18T00:00:00.000Z")
       }
-    ]
+    ] as WorkspaceSource[]
 
     renderStudioPane()
 
@@ -978,7 +980,7 @@ describe("StudioPane Stage 2 workflows", () => {
         status: "ready",
         addedAt: new Date("2026-02-18T00:00:00.000Z")
       }
-    ]
+    ] as WorkspaceSource[]
     mockRagSearch.mockResolvedValue({
       generation: "Compared sources output",
       usage: {
@@ -1039,7 +1041,7 @@ describe("StudioPane Stage 2 workflows", () => {
         status: "ready",
         addedAt: new Date("2026-02-18T00:00:00.000Z")
       }
-    ]
+    ] as WorkspaceSource[]
     mockGetMediaDetails
       .mockResolvedValueOnce({
         source: { title: "DSPy Prompting Talk" },
@@ -1184,7 +1186,7 @@ describe("StudioPane Stage 2 workflows", () => {
         status: "ready",
         addedAt: new Date("2026-02-18T00:00:00.000Z")
       }
-    ]
+    ] as WorkspaceSource[]
     mockGetMediaDetails
       .mockResolvedValueOnce({
         source: { title: "DSPy Prompting Talk" },

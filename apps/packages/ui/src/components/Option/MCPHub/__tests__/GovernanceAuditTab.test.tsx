@@ -290,7 +290,7 @@ describe("GovernanceAuditTab", () => {
       "Clear the broken path scope reference from this assignment?\n\nThis removes the broken path scope object reference only. Inline policy and other assignment settings stay unchanged."
     )
     await waitFor(() => {
-      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith("11", {
+      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith(11, {
         path_scope_object_id: null
       })
     })
@@ -347,7 +347,7 @@ describe("GovernanceAuditTab", () => {
       "Clear the broken path scope reference from this permission profile?\n\nThis removes the broken path scope object reference only. Policy content stays unchanged."
     )
     await waitFor(() => {
-      expect(mocks.updatePermissionProfile).toHaveBeenCalledWith("41", {
+      expect(mocks.updatePermissionProfile).toHaveBeenCalledWith(41, {
         path_scope_object_id: null
       })
     })
@@ -404,7 +404,7 @@ describe("GovernanceAuditTab", () => {
       "Clear the broken permission profile reference from this assignment?\n\nThis removes the broken permission profile reference only. Inline policy and other assignment settings stay unchanged."
     )
     await waitFor(() => {
-      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith("14", {
+      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith(14, {
         profile_id: null
       })
     })
@@ -496,7 +496,7 @@ describe("GovernanceAuditTab", () => {
     await user.click(screen.getByRole("button", { name: "Clear broken path scope" }))
 
     await waitFor(() => {
-      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith("11", {
+      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith(11, {
         path_scope_object_id: null
       })
     })
@@ -543,7 +543,7 @@ describe("GovernanceAuditTab", () => {
     await user.click(screen.getByRole("button", { name: "Clear broken profile" }))
 
     await waitFor(() => {
-      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith("14", {
+      expect(mocks.updatePolicyAssignment).toHaveBeenCalledWith(14, {
         profile_id: null
       })
     })

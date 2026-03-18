@@ -221,6 +221,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     }
     if (!hasResults) {
       userClosedRailRef.current = false
+      return
     }
   }, [
     evidenceRailOpen,

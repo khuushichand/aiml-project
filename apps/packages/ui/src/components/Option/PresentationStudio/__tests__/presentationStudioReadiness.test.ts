@@ -7,19 +7,27 @@ import {
 } from "../presentationStudioReadiness"
 import type { PresentationStudioEditorSlide } from "@/store/presentation-studio"
 
+type PresentationStudioMetadata = PresentationStudioEditorSlide["metadata"]
+type PresentationStudioStudioMetadata = PresentationStudioMetadata["studio"]
+type PresentationStudioMetadataOverride = Omit<
+  Partial<PresentationStudioMetadata>,
+  "studio"
+> & {
+  studio?: Partial<PresentationStudioStudioMetadata>
+}
+
 const createSlide = (
-  overrides: Partial<PresentationStudioEditorSlide> & {
-    metadata?: Record<string, any>
+  overrides: Omit<Partial<PresentationStudioEditorSlide>, "metadata"> & {
+    metadata?: PresentationStudioMetadataOverride
   }
-): PresentationStudioEditorSlide => ({
-  order: 0,
-  layout: "content",
-  title: "Slide",
-  content: "Content",
-  speaker_notes: "Narration",
-  metadata: {
+) : PresentationStudioEditorSlide => {
+  const { metadata: metadataOverrides, ...slideOverrides } = overrides
+  const defaultMetadata: PresentationStudioMetadata = {
     studio: {
       slideId: "slide-1",
+      transition: "fade",
+      timing_mode: "auto",
+      manual_duration_ms: null,
       audio: {
         status: "missing"
       },
@@ -27,9 +35,25 @@ const createSlide = (
         status: "missing"
       }
     }
-  },
-  ...overrides
-})
+  }
+
+  return {
+    order: 0,
+    layout: "content",
+    title: "Slide",
+    content: "Content",
+    speaker_notes: "Narration",
+    metadata: {
+      ...defaultMetadata,
+      ...metadataOverrides,
+      studio: {
+        ...defaultMetadata.studio,
+        ...metadataOverrides?.studio
+      }
+    } as PresentationStudioMetadata,
+    ...slideOverrides
+  }
+}
 
 describe("presentationStudioReadiness", () => {
   it("formats narration duration for short and long clips", () => {

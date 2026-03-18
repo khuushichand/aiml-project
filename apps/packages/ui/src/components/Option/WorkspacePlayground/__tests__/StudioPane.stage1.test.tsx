@@ -2,6 +2,7 @@ import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { Modal } from "antd"
+import type { AudioGenerationSettings } from "@/types/workspace"
 import { StudioPane } from "../StudioPane"
 
 const {
@@ -43,12 +44,12 @@ const {
   const createChatCompletion = vi.fn()
   const getMediaDetails = vi.fn()
   const getChatModels = vi.fn()
-  const defaultAudioSettings = {
-    provider: "browser" as const,
+  const defaultAudioSettings: AudioGenerationSettings = {
+    provider: "browser",
     model: "kokoro",
     voice: "af_heart",
     speed: 1,
-    format: "mp3" as const
+    format: "mp3"
   }
   const defaultSources = [
     {
@@ -195,6 +196,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    listVisualStyles: vi.fn().mockResolvedValue([]),
     createChatCompletion: mockCreateChatCompletion,
     getMediaDetails: mockGetMediaDetails,
     exportPresentation: vi.fn(),

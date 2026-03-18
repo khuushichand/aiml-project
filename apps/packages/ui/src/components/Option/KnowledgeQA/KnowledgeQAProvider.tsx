@@ -33,6 +33,7 @@ import {
   DEFAULT_RAG_SETTINGS,
   applyRagPreset,
   buildRagSearchRequest,
+  type RagSearchMode,
   type RagSettings,
   type RagPresetName,
 } from "@/services/rag/unified-rag"
@@ -47,6 +48,21 @@ import { truncateAnswerPreview } from "./historyUtils"
 const LOCAL_THREAD_PREFIX = "local-"
 const DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
 const RAG_QUERY_MAX_LENGTH = 20000
+const VALID_WEB_FALLBACK_MERGE_STRATEGIES = ["prepend", "append", "interleave"] as const
+const VALID_RAG_SEARCH_MODES: ReadonlyArray<RagSearchMode> = ["fts", "vector", "hybrid"]
+
+function isValidWebFallbackMergeStrategy(
+  value: string
+): value is RagSettings["web_fallback_merge_strategy"] {
+  return VALID_WEB_FALLBACK_MERGE_STRATEGIES.includes(
+    value as RagSettings["web_fallback_merge_strategy"]
+  )
+}
+
+function isValidRagSearchMode(value: string): value is RagSearchMode {
+  return VALID_RAG_SEARCH_MODES.includes(value as RagSearchMode)
+}
+
 type CreateThreadOptions = {
   parentConversationId?: string
   forkedFromMessageId?: string
@@ -1215,10 +1231,16 @@ function normalizeRestorableSettingsSnapshot(
   ) {
     normalized.web_fallback_result_count = candidate.web_fallback_result_count
   }
-  if (typeof candidate.web_fallback_merge_strategy === "string") {
+  if (
+    typeof candidate.web_fallback_merge_strategy === "string" &&
+    isValidWebFallbackMergeStrategy(candidate.web_fallback_merge_strategy)
+  ) {
     normalized.web_fallback_merge_strategy = candidate.web_fallback_merge_strategy
   }
-  if (typeof candidate.search_mode === "string") {
+  if (
+    typeof candidate.search_mode === "string" &&
+    isValidRagSearchMode(candidate.search_mode)
+  ) {
     normalized.search_mode = candidate.search_mode
   }
 

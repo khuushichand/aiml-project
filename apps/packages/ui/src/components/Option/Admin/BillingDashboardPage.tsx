@@ -165,7 +165,9 @@ const SubscriptionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ onGu
       loadSubscriptions()
     } catch (err: any) {
       if (err?.errorFields) return
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to override the user plan")
+      )
     } finally {
       setOverriding(false)
     }
@@ -186,7 +188,9 @@ const SubscriptionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ onGu
       loadSubscriptions()
     } catch (err: any) {
       if (err?.errorFields) return
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to grant credits")
+      )
     } finally {
       setGranting(false)
     }

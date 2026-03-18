@@ -249,6 +249,7 @@ const normalizeChatTools = (
 
 export interface TldwChatOptions {
   model: string
+  routing?: ChatCompletionRequest["routing"]
   temperature?: number
   logprobs?: boolean
   topLogprobs?: number
@@ -341,6 +342,7 @@ export class TldwChatService {
       const request: ChatCompletionRequest = {
         messages: requestMessages,
         model: options.model,
+        routing: options.routing,
         stream: false,
         temperature: options.temperature,
         logprobs: options.logprobs,
@@ -421,6 +423,7 @@ export class TldwChatService {
       const request: ChatCompletionRequest = {
         messages: requestMessages,
         model: options.model,
+        routing: options.routing,
         stream: true,
         temperature: options.temperature,
         logprobs: options.logprobs,

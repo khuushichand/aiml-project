@@ -312,7 +312,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
       return
     }
     const headersTemplateResult = parseHeadersTemplate(formState.headersTemplateText)
-    if (!headersTemplateResult.ok) {
+    if (headersTemplateResult.ok === false) {
       setValidationError(headersTemplateResult.error)
       return
     }

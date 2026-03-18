@@ -153,6 +153,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: vi.fn(),
     synthesizeSpeech: vi.fn(),
     generateSlidesFromMedia: vi.fn(),
+    listVisualStyles: vi.fn().mockResolvedValue([]),
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }

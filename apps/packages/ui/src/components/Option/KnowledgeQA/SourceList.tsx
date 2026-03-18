@@ -499,9 +499,10 @@ export function SourceList({ className }: SourceListProps) {
         )
       )
       const isEditableTarget =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.isContentEditable
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
 
       if (event.key === "?" && !event.metaKey && !event.ctrlKey && !event.altKey) {
         if (isEditableTarget) return

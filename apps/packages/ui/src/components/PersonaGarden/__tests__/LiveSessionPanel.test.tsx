@@ -5,19 +5,28 @@ import { describe, expect, it, vi } from "vitest"
 import { AssistantVoiceCard } from "../AssistantVoiceCard"
 import { LiveSessionPanel } from "../LiveSessionPanel"
 
-const defaultVoiceCardProps = () => ({
-  resolvedDefaults: {
+const createResolvedDefaults = (): React.ComponentProps<
+  typeof AssistantVoiceCard
+>["resolvedDefaults"] => ({
     sttLanguage: "en-US",
     sttModel: "whisper-1",
     ttsProvider: "openai",
     ttsVoice: "alloy",
-    confirmationMode: "destructive_only" as const,
+    confirmationMode: "destructive_only",
     voiceChatTriggerPhrases: ["hey helper"],
     autoResume: true,
-    bargeIn: false
-  },
+    bargeIn: false,
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
+  })
+
+const defaultVoiceCardProps = (): React.ComponentProps<typeof AssistantVoiceCard> => ({
+  resolvedDefaults: createResolvedDefaults(),
   connected: true,
-  state: "idle" as const,
+  state: "idle",
   speechAvailable: true,
   isListening: false,
   heardText: "",
@@ -32,7 +41,7 @@ const defaultVoiceCardProps = () => ({
   sessionAutoResume: true,
   sessionBargeIn: false,
   autoCommitEnabled: true,
-  vadPreset: "balanced" as const,
+  vadPreset: "balanced",
   vadThreshold: 0.5,
   minSilenceMs: 250,
   turnStopSecs: 0.2,
@@ -196,16 +205,7 @@ describe("AssistantVoiceCard", () => {
 
     render(
       <AssistantVoiceCard
-        resolvedDefaults={{
-          sttLanguage: "en-US",
-          sttModel: "whisper-1",
-          ttsProvider: "openai",
-          ttsVoice: "alloy",
-          confirmationMode: "destructive_only",
-          voiceChatTriggerPhrases: ["hey helper"],
-          autoResume: true,
-          bargeIn: false
-        }}
+        resolvedDefaults={createResolvedDefaults()}
         state="listening"
         speechAvailable
         isListening
@@ -256,16 +256,7 @@ describe("AssistantVoiceCard", () => {
 
     render(
       <AssistantVoiceCard
-        resolvedDefaults={{
-          sttLanguage: "en-US",
-          sttModel: "whisper-1",
-          ttsProvider: "openai",
-          ttsVoice: "alloy",
-          confirmationMode: "destructive_only",
-          voiceChatTriggerPhrases: ["hey helper"],
-          autoResume: true,
-          bargeIn: false
-        }}
+        resolvedDefaults={createResolvedDefaults()}
         state="thinking"
         speechAvailable
         isListening={false}
@@ -314,16 +305,7 @@ describe("AssistantVoiceCard", () => {
   it("renders the current action line while thinking with active tool status", () => {
     render(
       <AssistantVoiceCard
-        resolvedDefaults={{
-          sttLanguage: "en-US",
-          sttModel: "whisper-1",
-          ttsProvider: "openai",
-          ttsVoice: "alloy",
-          confirmationMode: "destructive_only",
-          voiceChatTriggerPhrases: ["hey helper"],
-          autoResume: true,
-          bargeIn: false
-        }}
+        resolvedDefaults={createResolvedDefaults()}
         state="thinking"
         speechAvailable
         isListening={false}
@@ -360,16 +342,7 @@ describe("AssistantVoiceCard", () => {
   it("hides the current action line when active tool status is empty", () => {
     render(
       <AssistantVoiceCard
-        resolvedDefaults={{
-          sttLanguage: "en-US",
-          sttModel: "whisper-1",
-          ttsProvider: "openai",
-          ttsVoice: "alloy",
-          confirmationMode: "destructive_only",
-          voiceChatTriggerPhrases: ["hey helper"],
-          autoResume: true,
-          bargeIn: false
-        }}
+        resolvedDefaults={createResolvedDefaults()}
         state="thinking"
         speechAvailable
         isListening={false}
@@ -405,16 +378,7 @@ describe("AssistantVoiceCard", () => {
 
     render(
       <AssistantVoiceCard
-        resolvedDefaults={{
-          sttLanguage: "en-US",
-          sttModel: "whisper-1",
-          ttsProvider: "openai",
-          ttsVoice: "alloy",
-          confirmationMode: "destructive_only",
-          voiceChatTriggerPhrases: ["hey helper"],
-          autoResume: true,
-          bargeIn: false
-        }}
+        resolvedDefaults={createResolvedDefaults()}
         state="thinking"
         speechAvailable
         isListening={false}
@@ -454,16 +418,7 @@ describe("AssistantVoiceCard", () => {
   it("prefers approval summary over active tool status", () => {
     render(
       <AssistantVoiceCard
-        resolvedDefaults={{
-          sttLanguage: "en-US",
-          sttModel: "whisper-1",
-          ttsProvider: "openai",
-          ttsVoice: "alloy",
-          confirmationMode: "destructive_only",
-          voiceChatTriggerPhrases: ["hey helper"],
-          autoResume: true,
-          bargeIn: false
-        }}
+        resolvedDefaults={createResolvedDefaults()}
         state="thinking"
         speechAvailable
         isListening={false}

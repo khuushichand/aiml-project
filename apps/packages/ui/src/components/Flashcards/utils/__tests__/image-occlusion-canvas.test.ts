@@ -22,10 +22,10 @@ const createFakeCanvasDeps = (
   imageDimensions: { width: number; height: number }
 ): ImageOcclusionCanvasDeps => ({
   loadImage: async () => ({
-    image: {
+    image: ({
       width: imageDimensions.width,
       height: imageDimensions.height
-    },
+    } as unknown) as CanvasImageSource,
     width: imageDimensions.width,
     height: imageDimensions.height
   }),

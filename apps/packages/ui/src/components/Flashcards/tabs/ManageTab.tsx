@@ -35,6 +35,7 @@ import {
   getFlashcardDocumentQueryKey,
   useDecksQuery,
   useFlashcardDocumentQuery,
+  type DocumentManageSortBy,
   useManageQuery,
   useUpdateFlashcardMutation,
   useUpdateFlashcardsBulkMutation,
@@ -207,7 +208,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const isDocumentSortSupported = DOCUMENT_VIEW_SUPPORTED_SORTS.includes(
     mSort as (typeof DOCUMENT_VIEW_SUPPORTED_SORTS)[number]
   )
-  const documentSort = isDocumentSortSupported ? mSort : "due"
+  const documentSort: DocumentManageSortBy = isDocumentSortSupported
+    ? (mSort as DocumentManageSortBy)
+    : "due"
 
   React.useEffect(() => {
     if (!isDocumentMode || isDocumentSortSupported) return
