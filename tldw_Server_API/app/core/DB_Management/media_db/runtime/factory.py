@@ -80,6 +80,13 @@ def create_media_database(
     )
 
 
+def get_current_media_schema_version() -> int:
+    """Return the current Media DB schema version from the canonical runtime class."""
+
+    media_database_cls = _load_media_database_cls()
+    return int(media_database_cls._CURRENT_SCHEMA_VERSION)
+
+
 def validate_postgres_content_backend(
     *,
     get_content_backend_instance: ContentBackendResolver,
@@ -171,5 +178,6 @@ __all__ = [
     "MediaDbRuntimeConfig",
     "RUNTIME_FACTORY_EXCEPTIONS",
     "create_media_database",
+    "get_current_media_schema_version",
     "validate_postgres_content_backend",
 ]

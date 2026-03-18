@@ -83,6 +83,8 @@ from tldw_Server_API.app.core.DB_Management.media_db import legacy_backup as med
 from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_media_details
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_state as media_db_state
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as media_db_runtime_factory
+from tldw_Server_API.app.services import admin_bundle_service
 from tldw_Server_API.app.services import media_files_cleanup_service
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import claims_alerts_scheduler
@@ -728,6 +730,11 @@ def test_claims_alerts_scheduler_imports_managed_media_database_from_media_db_ap
 def test_claims_review_metrics_scheduler_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(claims_review_metrics_scheduler)
     assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():
+    module = importlib.reload(admin_bundle_service)
+    assert module.get_current_media_schema_version is media_db_runtime_factory.get_current_media_schema_version
 
 
 def test_embeddings_abtest_jobs_worker_imports_create_media_database_from_media_db_api():

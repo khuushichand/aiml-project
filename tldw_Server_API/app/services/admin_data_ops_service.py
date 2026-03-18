@@ -177,6 +177,12 @@ def _resolve_dataset_db_path(dataset: str, user_id: int | None) -> tuple[str, in
             fs_path = parsed.path or url
             if fs_path.startswith("//"):
                 fs_path = fs_path[1:]
+            if fs_path in {":memory:", "/:memory:"}:
+                return ":memory:", None
+            if fs_path.startswith("/./"):
+                fs_path = fs_path[1:]
+            if fs_path.startswith("./"):
+                fs_path = get_project_relative_path(fs_path[2:])
             fs_path = fs_path or url
             return fs_path, None
         return url, None
