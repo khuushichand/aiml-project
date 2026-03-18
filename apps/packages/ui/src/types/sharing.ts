@@ -1,4 +1,5 @@
 export type AccessLevel = "view_chat" | "view_chat_add" | "full_edit"
+export type ShareResourceType = "workspace" | "chatbook"
 
 export const ACCESS_LEVEL_LABELS: Record<AccessLevel, string> = {
   view_chat: "View only",
@@ -11,6 +12,12 @@ export const ACCESS_LEVEL_COLORS: Record<AccessLevel, string> = {
   view_chat_add: "blue",
   full_edit: "green"
 }
+
+export const getAccessLevelLabel = (accessLevel: string): string =>
+  ACCESS_LEVEL_LABELS[accessLevel as AccessLevel] ?? accessLevel
+
+export const getAccessLevelColor = (accessLevel: string): string =>
+  ACCESS_LEVEL_COLORS[accessLevel as AccessLevel] ?? "default"
 
 export interface ShareWorkspaceRequest {
   target_user_id: number
@@ -46,7 +53,7 @@ export interface SharedWithMeItem {
 export type SharedWithMeResponse = SharedWithMeItem[]
 
 export interface CreateTokenRequest {
-  resource_type: "workspace" | "chatbook"
+  resource_type: ShareResourceType
   resource_id: string
   access_level?: AccessLevel
   allow_clone?: boolean
@@ -57,7 +64,7 @@ export interface CreateTokenRequest {
 export interface TokenResponse {
   id: number
   token: string
-  resource_type: "workspace" | "chatbook"
+  resource_type: ShareResourceType
   resource_id: string
   access_level: AccessLevel
   allow_clone: boolean
@@ -69,7 +76,7 @@ export interface TokenResponse {
 export type TokenListResponse = TokenResponse[]
 
 export interface PublicSharePreview {
-  resource_type: "workspace" | "chatbook"
+  resource_type: ShareResourceType
   resource_name?: string | null
   resource_description?: string | null
   access_level: AccessLevel

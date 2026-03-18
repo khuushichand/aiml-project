@@ -462,6 +462,13 @@ class SlidesDatabase:
         conn = self.get_connection()
         return self._fetch_visual_style_by_id(conn, style_id)
 
+    def count_visual_styles(self) -> int:
+        """Return the number of persisted user visual styles."""
+
+        conn = self.get_connection()
+        count_row = conn.execute("SELECT COUNT(*) AS cnt FROM visual_styles").fetchone()
+        return int(count_row["cnt"]) if count_row else 0
+
     def list_visual_styles(self, *, limit: int, offset: int) -> tuple[list[VisualStyleRow], int]:
         """List persisted user visual styles with pagination metadata."""
         if limit < 1:
@@ -487,27 +494,62 @@ class SlidesDatabase:
         style_id: str,
         name: str,
         style_payload: str,
+        expected_updated_at: str,
     ) -> VisualStyleRow:
         """Update a stored visual style and return the refreshed row."""
         if not name:
             raise InputError("name is required")
         normalized_payload = self._normalize_visual_style_payload(style_payload)
+        if not expected_updated_at:
+            raise InputError("expected_updated_at is required")
         with self.transaction() as conn:
             cur = conn.execute(
                 """
                 UPDATE visual_styles
                 SET name = ?, style_payload = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND updated_at = ?
                 """,
-                (name, normalized_payload, self._utcnow_iso(), style_id),
+                (name, normalized_payload, self._utcnow_iso(), style_id, expected_updated_at),
             )
             if cur.rowcount == 0:
-                raise KeyError("visual_style_not_found")
+                current_row = conn.execute(
+                    "SELECT updated_at FROM visual_styles WHERE id = ?",
+                    (style_id,),
+                ).fetchone()
+                if not current_row:
+                    raise KeyError("visual_style_not_found")
+                raise ConflictError(
+                    "visual style update conflicted with a newer revision",
+                    entity="visual_styles",
+                    identifier=style_id,
+                )
             return self._fetch_visual_style_by_id(conn, style_id)
 
     def delete_visual_style(self, style_id: str) -> bool:
         """Delete a stored visual style by identifier."""
         with self.transaction() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM visual_styles WHERE id = ?",
+                (style_id,),
+            ).fetchone()
+            if not existing:
+                return False
+            in_use = conn.execute(
+                """
+                SELECT 1
+                FROM presentations
+                WHERE visual_style_id = ?
+                  AND deleted = 0
+                LIMIT 1
+                """,
+                (style_id,),
+            ).fetchone()
+            if in_use:
+                raise ConflictError(
+                    "visual style is still referenced by presentations",
+                    entity="visual_styles",
+                    identifier=style_id,
+                )
             cur = conn.execute("DELETE FROM visual_styles WHERE id = ?", (style_id,))
             return cur.rowcount > 0
 

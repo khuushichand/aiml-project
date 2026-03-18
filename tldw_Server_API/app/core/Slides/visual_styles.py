@@ -123,6 +123,10 @@ _BUILTIN_VISUAL_STYLES: tuple[VisualStylePreset, ...] = (
     ),
 )
 
+_BUILTIN_VISUAL_STYLES_BY_ID: dict[str, VisualStylePreset] = {
+    style.style_id: style for style in _BUILTIN_VISUAL_STYLES
+}
+
 
 def list_builtin_visual_styles() -> list[VisualStylePreset]:
     """Return all built-in visual style presets."""
@@ -133,7 +137,4 @@ def list_builtin_visual_styles() -> list[VisualStylePreset]:
 def get_builtin_visual_style(style_id: str) -> VisualStylePreset | None:
     """Look up a built-in visual style by identifier."""
 
-    for style in _BUILTIN_VISUAL_STYLES:
-        if style.style_id == style_id:
-            return style
-    return None
+    return _BUILTIN_VISUAL_STYLES_BY_ID.get(style_id)

@@ -155,7 +155,10 @@ def _compile_comparison_matrix(block: dict[str, Any]) -> list[str]:
         value_text = ", ".join(str(item) for item in values) if isinstance(values, list) else ""
         details = summary or value_text
         headline = label or "Comparison"
-        lines.append(f"- {headline}: {details}".rstrip(": "))
+        line = f"- {headline}"
+        if details:
+            line += f": {details}"
+        lines.append(line)
     return lines or _compile_generic_block(block)
 
 

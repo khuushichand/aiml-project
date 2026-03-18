@@ -34,6 +34,11 @@ type GovernanceAuditTabProps = {
 const severityColor = (severity: "error" | "warning"): "red" | "gold" =>
   severity === "error" ? "red" : "gold"
 
+const parseInlineActionObjectId = (objectId: string): number | null => {
+  const parsed = Number(objectId)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
 export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
   const [allItems, setAllItems] = useState<McpHubGovernanceAuditFinding[]>([])
   const [loading, setLoading] = useState(false)
@@ -214,15 +219,25 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
       if (action.kind === "deactivate_external_server") {
         await updateExternalServer(action.object_id, { enabled: false })
         setActionStatus({ type: "success", message: "Server deactivated." })
-      } else if (action.kind === "clear_permission_profile_reference") {
-        await updatePolicyAssignment(Number(action.object_id), { profile_id: null })
-        setActionStatus({ type: "success", message: action.success_message })
-      } else if (action.object_kind === "policy_assignment") {
-        await updatePolicyAssignment(Number(action.object_id), { path_scope_object_id: null })
-        setActionStatus({ type: "success", message: action.success_message })
       } else {
-        await updatePermissionProfile(Number(action.object_id), { path_scope_object_id: null })
-        setActionStatus({ type: "success", message: action.success_message })
+        const objectId = parseInlineActionObjectId(action.object_id)
+        if (objectId === null) {
+          setActionStatus({
+            type: "error",
+            message: "The audit action referenced an invalid object identifier."
+          })
+          return
+        }
+        if (action.kind === "clear_permission_profile_reference") {
+          await updatePolicyAssignment(objectId, { profile_id: null })
+          setActionStatus({ type: "success", message: action.success_message })
+        } else if (action.object_kind === "policy_assignment") {
+          await updatePolicyAssignment(objectId, { path_scope_object_id: null })
+          setActionStatus({ type: "success", message: action.success_message })
+        } else {
+          await updatePermissionProfile(objectId, { path_scope_object_id: null })
+          setActionStatus({ type: "success", message: action.success_message })
+        }
       }
       await loadAuditFindings()
     } catch {

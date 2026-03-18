@@ -17,6 +17,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.Slides.slides_db import SlidesDatabase
 from tldw_Server_API.app.core.Slides.slides_export import SlidesExportError, SlidesExportInputError
+from tldw_Server_API.app.core.Slides.visual_styles import list_builtin_visual_styles
 
 _SAMPLE_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAn8B9XgU1b0AAAAASUVORK5CYII="
@@ -688,10 +689,39 @@ def test_slides_styles_list_returns_builtin_and_user_styles(slides_client):
 
     list_resp = slides_client.get("/api/v1/slides/styles")
     assert list_resp.status_code == 200
-    styles = list_resp.json()["styles"]
+    payload = list_resp.json()
+    styles = payload["styles"]
 
     assert any(item["scope"] == "builtin" and item["id"] == "timeline" for item in styles)
     assert any(item["scope"] == "user" and item["id"] == created_id for item in styles)
+    assert payload["total_count"] >= len(styles)
+    assert payload["limit"] == 50
+    assert payload["offset"] == 0
+
+
+def test_slides_styles_list_supports_pagination(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/styles",
+        json={
+            "name": "User Style",
+            "description": "Recall-first deck",
+            "generation_rules": {"exam_focus": True},
+            "artifact_preferences": ["stat_group"],
+            "appearance_defaults": {"theme": "white"},
+            "fallback_policy": {"mode": "key-points"},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+
+    builtin_count = len(list_builtin_visual_styles())
+    list_resp = slides_client.get(f"/api/v1/slides/styles?limit=1&offset={builtin_count}")
+    assert list_resp.status_code == 200
+    payload = list_resp.json()
+
+    assert payload["limit"] == 1
+    assert payload["offset"] == builtin_count
+    assert len(payload["styles"]) == 1
+    assert payload["styles"][0]["scope"] == "user"
 
 
 def test_slides_styles_crud_for_user_styles(slides_client):
@@ -792,7 +822,7 @@ def test_slides_styles_reject_non_string_custom_css(slides_client):
 
 
 def test_slides_create_rejects_resolved_style_with_non_string_custom_css(slides_client, monkeypatch):
-    def _broken_style(_self, style_id: str):
+    def _broken_style(_self, style_id: str) -> SimpleNamespace:
         return SimpleNamespace(
             id=style_id,
             scope="user",
@@ -835,6 +865,69 @@ def test_slides_create_rejects_resolved_style_with_non_string_custom_css(slides_
     )
     assert resp.status_code == 422
     assert resp.json()["detail"] == "invalid_visual_style_custom_css"
+
+
+def test_slides_styles_patch_accepts_null_theme_in_appearance_defaults(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/styles",
+        json={
+            "name": "Exam Sprint",
+            "description": "Recall-first deck",
+            "generation_rules": {"exam_focus": True},
+            "artifact_preferences": ["stat_group"],
+            "appearance_defaults": {"theme": "white"},
+            "fallback_policy": {"mode": "key-points"},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    style_id = create_resp.json()["id"]
+
+    patch_resp = slides_client.patch(
+        f"/api/v1/slides/styles/{style_id}",
+        json={"appearance_defaults": {"theme": None}},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    assert patch_resp.json()["appearance_defaults"]["theme"] is None
+
+
+def test_slides_styles_delete_rejects_styles_in_use(slides_client):
+    create_style_resp = slides_client.post(
+        "/api/v1/slides/styles",
+        json={
+            "name": "Exam Sprint",
+            "description": "Recall-first deck",
+            "generation_rules": {"exam_focus": True},
+            "artifact_preferences": ["stat_group"],
+            "appearance_defaults": {"theme": "white"},
+            "fallback_policy": {"mode": "key-points"},
+        },
+    )
+    assert create_style_resp.status_code == 201, create_style_resp.text
+    style_id = create_style_resp.json()["id"]
+
+    create_presentation_resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "Exam Deck",
+            "visual_style_id": style_id,
+            "visual_style_scope": "user",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "Exam Deck",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert create_presentation_resp.status_code == 201, create_presentation_resp.text
+
+    delete_resp = slides_client.delete(f"/api/v1/slides/styles/{style_id}")
+    assert delete_resp.status_code == 409
+    assert delete_resp.json()["detail"] == "visual_style_in_use"
 
 
 def test_slides_create_with_template_defaults(slides_client, tmp_path, monkeypatch):

@@ -248,6 +248,11 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
     }
     const { visualStyleId: selectedVisualStyleId, visualStyleScope: selectedVisualStyleScope } =
       parseVisualStyleValue(draftVisualStyleValue)
+    const selectedStyle =
+      styleOptions.find(
+        (style) =>
+          style.id === selectedVisualStyleId && style.scope === selectedVisualStyleScope
+      ) || null
     const blankSlideId = createBlankSlideId()
     setIsCreatingProject(true)
     setLoadError(null)
@@ -257,6 +262,11 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
         description: null,
         visual_style_id: selectedVisualStyleId,
         visual_style_scope: selectedVisualStyleScope,
+        visual_style_name: selectedStyle?.name ?? null,
+        visual_style_version: selectedStyle?.version ?? null,
+        visual_style_snapshot: selectedStyle
+          ? buildPresentationVisualStyleSnapshot(selectedStyle)
+          : null,
         studio_data: {
           origin: "blank",
           entry_surface: "webui_new"
@@ -292,7 +302,7 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
     } finally {
       setIsCreatingProject(false)
     }
-  }, [draftTitle, draftVisualStyleValue, isCreatingProject, loadProject, navigate])
+  }, [draftTitle, draftVisualStyleValue, isCreatingProject, loadProject, navigate, styleOptions])
 
   const handleDetailStyleChange = React.useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>) => {

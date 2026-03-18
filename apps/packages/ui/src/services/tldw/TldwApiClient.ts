@@ -336,6 +336,45 @@ export type VisualStylePatchInput = {
   fallback_policy?: Record<string, any> | null
 }
 
+const cloneVisualStyleValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneVisualStyleValue(item))
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
+        key,
+        cloneVisualStyleValue(entryValue)
+      ])
+    )
+  }
+  return value
+}
+
+const cloneVisualStyleObject = (value: Record<string, any> | null | undefined): Record<string, any> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (cloneVisualStyleValue(value) as Record<string, any>)
+    : {}
+
+export const clonePresentationVisualStyleSnapshot = (
+  snapshot: PresentationVisualStyleSnapshot | null | undefined
+): PresentationVisualStyleSnapshot | null => {
+  if (!snapshot) {
+    return null
+  }
+  return {
+    id: snapshot.id,
+    scope: snapshot.scope,
+    name: snapshot.name,
+    description: snapshot.description ?? null,
+    generation_rules: cloneVisualStyleObject(snapshot.generation_rules),
+    artifact_preferences: [...(snapshot.artifact_preferences || [])],
+    appearance_defaults: cloneVisualStyleObject(snapshot.appearance_defaults),
+    fallback_policy: cloneVisualStyleObject(snapshot.fallback_policy),
+    version: snapshot.version ?? null
+  }
+}
+
 export const buildPresentationVisualStyleSnapshot = (
   style: Pick<
     VisualStyleRecord,
@@ -349,17 +388,18 @@ export const buildPresentationVisualStyleSnapshot = (
     | "fallback_policy"
     | "version"
   >
-): PresentationVisualStyleSnapshot => ({
-  id: style.id,
-  scope: style.scope,
-  name: style.name,
-  description: style.description ?? null,
-  generation_rules: { ...(style.generation_rules || {}) },
-  artifact_preferences: [...(style.artifact_preferences || [])],
-  appearance_defaults: { ...(style.appearance_defaults || {}) },
-  fallback_policy: { ...(style.fallback_policy || {}) },
-  version: style.version ?? null
-})
+): PresentationVisualStyleSnapshot =>
+  clonePresentationVisualStyleSnapshot({
+    id: style.id,
+    scope: style.scope,
+    name: style.name,
+    description: style.description ?? null,
+    generation_rules: cloneVisualStyleObject(style.generation_rules),
+    artifact_preferences: [...(style.artifact_preferences || [])],
+    appearance_defaults: cloneVisualStyleObject(style.appearance_defaults),
+    fallback_policy: cloneVisualStyleObject(style.fallback_policy),
+    version: style.version ?? null
+  })!
 
 export type PresentationStudioRecord = {
   id: string
@@ -428,7 +468,7 @@ const normalizeVisualStyleSnapshot = (
   if (!id || !scope || !name) {
     return null
   }
-  return {
+  return clonePresentationVisualStyleSnapshot({
     id,
     scope,
     name,
@@ -438,7 +478,7 @@ const normalizeVisualStyleSnapshot = (
     appearance_defaults: toRecord(snapshot.appearance_defaults),
     fallback_policy: toRecord(snapshot.fallback_policy),
     version: toOptionalNumber(snapshot.version)
-  }
+  })
 }
 
 const normalizeVisualStyleRecord = (style: unknown): VisualStyleRecord => {
@@ -7882,12 +7922,27 @@ export class TldwApiClient {
   }
 
   async listVisualStyles(): Promise<VisualStyleRecord[]> {
-    const payload = await this.request<any>({
-      path: "/api/v1/slides/styles",
-      method: "GET"
-    })
-    const styles = Array.isArray(payload?.styles) ? payload.styles : []
-    return styles.map((style: unknown) => normalizeVisualStyleRecord(style))
+    const pageSize = 200
+    const allStyles: VisualStyleRecord[] = []
+    let offset = 0
+
+    while (true) {
+      const payload = await this.request<any>({
+        path: `/api/v1/slides/styles?limit=${pageSize}&offset=${offset}`,
+        method: "GET"
+      })
+      const styles = Array.isArray(payload?.styles) ? payload.styles : []
+      allStyles.push(...styles.map((style: unknown) => normalizeVisualStyleRecord(style)))
+
+      const totalCount =
+        typeof payload?.total_count === "number" && Number.isFinite(payload.total_count)
+          ? payload.total_count
+          : allStyles.length
+      if (allStyles.length >= totalCount || styles.length === 0) {
+        return allStyles
+      }
+      offset += styles.length
+    }
   }
 
   async createVisualStyle(payload: VisualStyleCreateInput): Promise<VisualStyleRecord> {
@@ -7927,12 +7982,11 @@ export class TldwApiClient {
     return normalizeVisualStyleRecord(response)
   }
 
-  async deleteVisualStyle(styleId: string): Promise<{ ok: boolean }> {
+  async deleteVisualStyle(styleId: string): Promise<void> {
     await this.request<void>({
       path: `/api/v1/slides/styles/${encodeURIComponent(styleId)}`,
       method: "DELETE"
     })
-    return { ok: true }
   }
 
   async getPresentation(presentationId: string): Promise<PresentationStudioRecord> {
@@ -7951,6 +8005,9 @@ export class TldwApiClient {
     template_id?: string | null
     visual_style_id?: string | null
     visual_style_scope?: string | null
+    visual_style_name?: string | null
+    visual_style_version?: number | null
+    visual_style_snapshot?: PresentationVisualStyleSnapshot | null
     settings?: Record<string, any> | null
     studio_data?: Record<string, any> | null
     slides: PresentationStudioSlide[]
@@ -7967,6 +8024,9 @@ export class TldwApiClient {
       template_id: payload.template_id,
       visual_style_id: payload.visual_style_id,
       visual_style_scope: payload.visual_style_scope,
+      visual_style_name: payload.visual_style_name,
+      visual_style_version: payload.visual_style_version,
+      visual_style_snapshot: clonePresentationVisualStyleSnapshot(payload.visual_style_snapshot),
       settings: payload.settings,
       studio_data: payload.studio_data,
       slides: payload.slides,
@@ -8016,6 +8076,9 @@ export class TldwApiClient {
       template_id: payload.template_id,
       visual_style_id: payload.visual_style_id,
       visual_style_scope: payload.visual_style_scope,
+      visual_style_name: payload.visual_style_name,
+      visual_style_version: payload.visual_style_version,
+      visual_style_snapshot: clonePresentationVisualStyleSnapshot(payload.visual_style_snapshot),
       settings: payload.settings,
       studio_data: payload.studio_data,
       slides: payload.slides,

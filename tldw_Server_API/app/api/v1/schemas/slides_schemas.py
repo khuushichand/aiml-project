@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class SlideLayout(str, Enum):
@@ -31,7 +31,33 @@ class Slide(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class PresentationBase(BaseModel):
+def _validate_visual_style_selection_pair(
+    *,
+    visual_style_id: str | None,
+    visual_style_scope: str | None,
+) -> None:
+    """Require visual-style id and scope to be set or cleared together."""
+
+    if (visual_style_id is None) != (visual_style_scope is None):
+        raise ValueError("visual_style_id and visual_style_scope must be provided together")
+
+
+class VisualStyleSelectionMixin(BaseModel):
+    """Shared validation for presentation-level visual-style selection."""
+
+    visual_style_id: str | None = None
+    visual_style_scope: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_visual_style_selection(self) -> VisualStyleSelectionMixin:
+        _validate_visual_style_selection_pair(
+            visual_style_id=self.visual_style_id,
+            visual_style_scope=self.visual_style_scope,
+        )
+        return self
+
+
+class PresentationBase(VisualStyleSelectionMixin):
     """Shared fields for presentation create/update payloads."""
 
     title: str
@@ -39,8 +65,6 @@ class PresentationBase(BaseModel):
     theme: str = "black"
     marp_theme: str | None = None
     template_id: str | None = None
-    visual_style_id: str | None = None
-    visual_style_scope: str | None = None
     settings: dict[str, Any] | None = None
     studio_data: dict[str, Any] | None = None
     slides: list[Slide] = Field(default_factory=list)
@@ -59,7 +83,7 @@ class PresentationUpdateRequest(PresentationBase):
     pass
 
 
-class PresentationPatchRequest(BaseModel):
+class PresentationPatchRequest(VisualStyleSelectionMixin):
     """Request payload for patching a presentation."""
 
     title: str | None = None
@@ -67,8 +91,6 @@ class PresentationPatchRequest(BaseModel):
     theme: str | None = None
     marp_theme: str | None = None
     template_id: str | None = None
-    visual_style_id: str | None = None
-    visual_style_scope: str | None = None
     settings: dict[str, Any] | None = None
     studio_data: dict[str, Any] | None = None
     slides: list[Slide] | None = None
@@ -177,6 +199,9 @@ class VisualStyleListResponse(BaseModel):
     """List response for visual styles."""
 
     styles: list[VisualStyleResponse]
+    total_count: int
+    limit: int
+    offset: int
 
 
 class PresentationSummary(BaseModel):
@@ -210,15 +235,13 @@ class PresentationSearchResponse(BaseModel):
     offset: int
 
 
-class SlideGenerationBase(BaseModel):
+class SlideGenerationBase(VisualStyleSelectionMixin):
     """Shared settings for slide generation requests."""
 
     title_hint: str | None = None
     theme: str | None = None
     marp_theme: str | None = None
     template_id: str | None = None
-    visual_style_id: str | None = None
-    visual_style_scope: str | None = None
     settings: dict[str, Any] | None = None
     custom_css: str | None = None
     max_source_tokens: int | None = Field(default=None, ge=1)

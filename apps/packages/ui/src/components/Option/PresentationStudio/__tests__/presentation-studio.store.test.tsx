@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest"
 
-import { usePresentationStudioStore } from "@/store/presentation-studio"
+import {
+  mergePresentationStudioDraftWithRemote,
+  type PresentationStudioPatchPayload,
+  usePresentationStudioStore
+} from "@/store/presentation-studio"
 
 const sampleProject = {
   id: "pres-123",
@@ -172,6 +176,29 @@ describe("presentation studio store", () => {
         })
       })
     )
+  })
+
+  it("preserves explicit visual-style clears when merging remote updates", () => {
+    const localDraft: PresentationStudioPatchPayload = {
+      title: sampleProject.title,
+      description: sampleProject.description,
+      theme: sampleProject.theme,
+      visual_style_id: null,
+      visual_style_scope: null,
+      visual_style_name: null,
+      visual_style_version: null,
+      visual_style_snapshot: null,
+      studio_data: sampleProject.studio_data,
+      slides: sampleProject.slides
+    }
+
+    const merged = mergePresentationStudioDraftWithRemote(sampleProject, localDraft)
+
+    expect(merged.visual_style_id).toBeNull()
+    expect(merged.visual_style_scope).toBeNull()
+    expect(merged.visual_style_name).toBeNull()
+    expect(merged.visual_style_version).toBeNull()
+    expect(merged.visual_style_snapshot).toBeNull()
   })
 
   it("duplicates and removes slides while preserving selection and order", () => {

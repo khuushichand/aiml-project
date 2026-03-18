@@ -87,13 +87,18 @@ def test_generate_handles_invalid_json():
 
 
 def test_timeline_style_generates_visual_block_and_text_fallback():
-    captured = {}
+    captured: dict[str, str] = {}
 
-    def timeline_llm_call(api_provider=None, messages=None, **kwargs):
+    def timeline_llm_call(
+        api_provider: str | None = None,
+        messages: list[dict[str, object]] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        del api_provider
         user_content = ""
         if messages:
-            captured["system_prompt"] = messages[0].get("content", "")
-            user_content = messages[-1].get("content", "")
+            captured["system_prompt"] = str(messages[0].get("content", ""))
+            user_content = str(messages[-1].get("content", ""))
         if "Summarize" in user_content:
             return {"choices": [{"message": {"content": "Summary chunk"}}]}
         payload = {

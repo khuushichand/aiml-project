@@ -148,6 +148,7 @@ def test_export_markdown_includes_images():
     assert "![Logo](data:image/png;base64," in md
 
 
+@pytest.mark.unit
 def test_export_markdown_preserves_text_fallback_for_visual_blocks():
     slides = [
         {

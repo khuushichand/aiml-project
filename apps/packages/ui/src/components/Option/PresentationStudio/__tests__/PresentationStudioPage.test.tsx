@@ -46,6 +46,8 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   buildPresentationVisualStyleSnapshot: (style: Record<string, unknown>) => ({
     ...style
   }),
+  clonePresentationVisualStyleSnapshot: (style: Record<string, unknown> | null | undefined) =>
+    style ? { ...style } : null,
   tldwClient: {
     createPresentation: (...args: unknown[]) => clientMocks.createPresentation(...args),
     getPresentation: (...args: unknown[]) => clientMocks.getPresentation(...args),
@@ -162,6 +164,13 @@ describe("PresentationStudioPage", () => {
         title: "Untitled Presentation",
         visual_style_id: "minimal-academic",
         visual_style_scope: "builtin",
+        visual_style_name: "Minimal Academic",
+        visual_style_version: 1,
+        visual_style_snapshot: expect.objectContaining({
+          id: "minimal-academic",
+          scope: "builtin",
+          name: "Minimal Academic"
+        }),
         studio_data: { origin: "blank", entry_surface: "webui_new" },
         slides: [
           expect.objectContaining({
@@ -532,7 +541,7 @@ describe("PresentationStudioPage", () => {
       fallback_policy: {},
       version: 2
     })
-    clientMocks.deleteVisualStyle.mockResolvedValue({ ok: true })
+    clientMocks.deleteVisualStyle.mockResolvedValue(undefined)
 
     render(<PresentationStudioPage mode="detail" projectId="presentation-custom-style" />)
 

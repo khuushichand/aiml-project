@@ -537,7 +537,8 @@ def _validate_visual_style_appearance_defaults(appearance_defaults: dict[str, An
         raise HTTPException(status_code=422, detail="invalid_visual_style_appearance_defaults")
     validated = dict(appearance_defaults)
     if "theme" in validated:
-        _validate_theme(validated.get("theme"))
+        if validated.get("theme") is not None:
+            _validate_theme(validated.get("theme"))
     if "marp_theme" in validated:
         validated["marp_theme"] = _validate_marp_theme(validated.get("marp_theme"))
     if "settings" in validated:
@@ -1436,12 +1437,24 @@ async def get_template(template_id: str) -> SlidesTemplateResponse:
     dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.styles.list"))],
 )
 async def list_visual_styles(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> VisualStyleListResponse:
-    builtin_styles = [_visual_style_response_from_builtin(style) for style in list_builtin_visual_styles()]
-    user_rows, _ = db.list_visual_styles(limit=500, offset=0)
-    user_styles = [_visual_style_response_from_row(row) for row in user_rows]
-    return VisualStyleListResponse(styles=[*builtin_styles, *user_styles])
+    builtin_presets = list_builtin_visual_styles()
+    builtin_total = len(builtin_presets)
+    builtin_slice = builtin_presets[offset : offset + limit]
+    remaining = limit - len(builtin_slice)
+    user_offset = max(offset - builtin_total, 0)
+    user_rows: list[VisualStyleRow] = []
+    if remaining > 0:
+        user_rows, _ = db.list_visual_styles(limit=remaining, offset=user_offset)
+    total_count = builtin_total + db.count_visual_styles()
+    styles = [
+        *(_visual_style_response_from_builtin(style) for style in builtin_slice),
+        *(_visual_style_response_from_row(row) for row in user_rows),
+    ]
+    return VisualStyleListResponse(styles=styles, total_count=total_count, limit=limit, offset=offset)
 
 
 @router.get(
@@ -1551,19 +1564,25 @@ async def patch_visual_style(
         }
     ):
         raise HTTPException(status_code=400, detail="no_fields_to_update")
-    row = db.update_visual_style(
-        style_id=style_id,
-        name=name,
-        style_payload=_serialize_visual_style_payload(
-            description=merged_description if isinstance(merged_description, str) or merged_description is None else None,
-            generation_rules=merged_generation_rules if isinstance(merged_generation_rules, dict) else {},
-            artifact_preferences=[str(item) for item in merged_artifact_preferences]
-            if isinstance(merged_artifact_preferences, list)
-            else [],
-            appearance_defaults=merged_appearance_defaults if isinstance(merged_appearance_defaults, dict) else {},
-            fallback_policy=merged_fallback_policy if isinstance(merged_fallback_policy, dict) else {},
-        ),
-    )
+    try:
+        row = db.update_visual_style(
+            style_id=style_id,
+            name=name,
+            style_payload=_serialize_visual_style_payload(
+                description=merged_description if isinstance(merged_description, str) or merged_description is None else None,
+                generation_rules=merged_generation_rules if isinstance(merged_generation_rules, dict) else {},
+                artifact_preferences=[str(item) for item in merged_artifact_preferences]
+                if isinstance(merged_artifact_preferences, list)
+                else [],
+                appearance_defaults=merged_appearance_defaults if isinstance(merged_appearance_defaults, dict) else {},
+                fallback_policy=merged_fallback_policy if isinstance(merged_fallback_policy, dict) else {},
+            ),
+            expected_updated_at=existing.updated_at,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+    except ConflictError:
+        raise HTTPException(status_code=409, detail="visual_style_version_conflict") from None
     return _visual_style_response_from_row(row)
 
 
@@ -1579,7 +1598,10 @@ async def delete_visual_style(
 ) -> Response:
     if get_builtin_visual_style(style_id) is not None:
         raise HTTPException(status_code=403, detail="builtin_visual_style_read_only")
-    deleted = db.delete_visual_style(style_id)
+    try:
+        deleted = db.delete_visual_style(style_id)
+    except ConflictError:
+        raise HTTPException(status_code=409, detail="visual_style_in_use") from None
     if not deleted:
         raise HTTPException(status_code=404, detail="visual_style_not_found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

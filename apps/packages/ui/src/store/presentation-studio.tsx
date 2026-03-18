@@ -5,6 +5,7 @@ import type {
   PresentationStudioRecord,
   PresentationStudioSlide
 } from "@/services/tldw/TldwApiClient"
+import { clonePresentationVisualStyleSnapshot } from "@/services/tldw/TldwApiClient"
 
 export type PresentationStudioAssetStatus =
   | "missing"
@@ -269,9 +270,7 @@ const buildPatchPayloadFromSlides = (input: {
   visual_style_scope: input.visual_style_scope ?? null,
   visual_style_name: input.visual_style_name ?? null,
   visual_style_version: input.visual_style_version ?? null,
-  visual_style_snapshot: input.visual_style_snapshot
-    ? { ...input.visual_style_snapshot }
-    : null,
+  visual_style_snapshot: clonePresentationVisualStyleSnapshot(input.visual_style_snapshot),
   studio_data: input.studio_data ?? null,
   slides: input.slides.map((slide, index) => ({
     order: index,
@@ -400,6 +399,18 @@ export const mergePresentationStudioDraftWithRemote = (
   latest: PresentationStudioRecord,
   localDraft: PresentationStudioPatchPayload
 ): PresentationStudioRecord => {
+  const localHasVisualStyleName = Object.prototype.hasOwnProperty.call(
+    localDraft,
+    "visual_style_name"
+  )
+  const localHasVisualStyleVersion = Object.prototype.hasOwnProperty.call(
+    localDraft,
+    "visual_style_version"
+  )
+  const localHasVisualStyleSnapshot = Object.prototype.hasOwnProperty.call(
+    localDraft,
+    "visual_style_snapshot"
+  )
   const remoteSlides = (latest.slides || []).map((slide, index) => normalizeSlide(slide, index))
   const localSlides = (localDraft.slides || []).map((slide, index) => normalizeSlide(slide, index))
   const remoteBySlideId = new Map(
@@ -445,15 +456,16 @@ export const mergePresentationStudioDraftWithRemote = (
     visual_style_id: localDraft.visual_style_id,
     visual_style_scope: localDraft.visual_style_scope,
     visual_style_name:
-      localDraft.visual_style_name ??
-      latest.visual_style_name ??
-      latest.visual_style_snapshot?.name ??
-      null,
-    visual_style_version: localDraft.visual_style_version ?? latest.visual_style_version ?? null,
+      localHasVisualStyleName
+        ? localDraft.visual_style_name ?? null
+        : latest.visual_style_name ?? latest.visual_style_snapshot?.name ?? null,
+    visual_style_version: localHasVisualStyleVersion
+      ? localDraft.visual_style_version ?? null
+      : latest.visual_style_version ?? null,
     visual_style_snapshot:
-      localDraft.visual_style_snapshot ??
-      latest.visual_style_snapshot ??
-      null,
+      localHasVisualStyleSnapshot
+        ? clonePresentationVisualStyleSnapshot(localDraft.visual_style_snapshot)
+        : clonePresentationVisualStyleSnapshot(latest.visual_style_snapshot),
     studio_data: localDraft.studio_data,
     slides: mergedSlides
   }
@@ -550,9 +562,7 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
         visualStyleName:
           project.visual_style_name ?? project.visual_style_snapshot?.name ?? null,
         visualStyleVersion: project.visual_style_version ?? null,
-        visualStyleSnapshot: project.visual_style_snapshot
-          ? { ...project.visual_style_snapshot }
-          : null,
+        visualStyleSnapshot: clonePresentationVisualStyleSnapshot(project.visual_style_snapshot),
         studioData:
           project.studio_data && typeof project.studio_data === "object"
             ? { ...project.studio_data }
@@ -585,9 +595,7 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
             : state.visualStyleVersion,
         visualStyleSnapshot:
           updates.visualStyleSnapshot !== undefined
-            ? updates.visualStyleSnapshot
-              ? { ...updates.visualStyleSnapshot }
-              : null
+            ? clonePresentationVisualStyleSnapshot(updates.visualStyleSnapshot)
             : state.visualStyleSnapshot,
         studioData: updates.studioData ?? state.studioData,
         isDirty: true

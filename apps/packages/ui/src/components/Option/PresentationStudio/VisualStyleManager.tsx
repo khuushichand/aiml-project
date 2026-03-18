@@ -135,7 +135,7 @@ const styleToCustomStyleDraft = (style: VisualStyleRecord): CustomVisualStyleDra
 
   const emphasisSignals = VISUAL_STYLE_SIGNAL_OPTIONS.flatMap((option) => {
     const value = generationRules[option.key]
-    if (option.key === "exam_focus" ? value === true : value === "high") {
+    if (option.key === "exam_focus" ? value === true || value === "high" : value === "high") {
       delete generationRules[option.key]
       return [option.key]
     }

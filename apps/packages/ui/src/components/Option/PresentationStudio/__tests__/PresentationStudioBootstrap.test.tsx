@@ -43,6 +43,8 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   buildPresentationVisualStyleSnapshot: (style: Record<string, unknown>) => ({
     ...style
   }),
+  clonePresentationVisualStyleSnapshot: (style: Record<string, unknown> | null | undefined) =>
+    style ? { ...style } : null,
   tldwClient: {
     createPresentation: (...args: unknown[]) => clientMocks.createPresentation(...args),
     getPresentation: (...args: unknown[]) => clientMocks.getPresentation(...args),

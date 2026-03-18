@@ -468,7 +468,7 @@ const UserPermissionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ on
       message.success("Role removed")
       await loadUserData(selectedUserId)
     } catch (err: any) {
-      message.error(sanitizeAdminErrorMessage(err, "Failed to create permission"))
+      message.error(sanitizeAdminErrorMessage(err, "Failed to remove role"))
     }
   }, [selectedUserId, loadUserData])
 
@@ -482,7 +482,7 @@ const UserPermissionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ on
       setAddRoleId(null)
       await loadUserData(selectedUserId)
     } catch (err: any) {
-      message.error(sanitizeAdminErrorMessage(err, "Failed to delete permission"))
+      message.error(sanitizeAdminErrorMessage(err, "Failed to assign role"))
     } finally {
       setAddingRole(false)
     }

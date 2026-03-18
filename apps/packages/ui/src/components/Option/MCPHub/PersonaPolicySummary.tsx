@@ -124,7 +124,7 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
         <Typography.Text type="secondary">Loading effective policy...</Typography.Text>
       ) : policy ? (
         <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-          {getPathScopeLabel(authoredPolicyDocument.path_scope_mode) ? (
+          {getPathScopeLabel(resolvedPolicyDocument.path_scope_mode) ? (
             <Typography.Text type="secondary">
               {`Local file scope: ${getPathScopeLabel(resolvedPolicyDocument.path_scope_mode)}`}
             </Typography.Text>

@@ -1,11 +1,11 @@
 import React from "react"
 import { CopyOutlined } from "@ant-design/icons"
-import { Button, Card, Empty, List, Space, Spin, Tag, Typography } from "antd"
+import { Button, Card, Empty, List, Space, Spin, Tag, Typography, message } from "antd"
 
 import { useCloneWorkspace, useSharedWithMe } from "@/hooks/useSharing"
 import {
-  ACCESS_LEVEL_COLORS,
-  ACCESS_LEVEL_LABELS
+  getAccessLevelColor,
+  getAccessLevelLabel
 } from "@/types/sharing"
 
 const { Paragraph, Text } = Typography
@@ -14,6 +14,24 @@ export const SharedWithMe: React.FC = () => {
   const { data, isLoading, error } = useSharedWithMe()
   const cloneWorkspace = useCloneWorkspace()
   const shares = Array.isArray(data) ? data : []
+  const [messageApi, messageContext] = message.useMessage()
+
+  const _cloneWorkspace = (shareId: number, workspaceName: string) => {
+    cloneWorkspace.mutate(
+      {
+        shareId,
+        new_name: `${workspaceName} (Copy)`
+      },
+      {
+        onSuccess: () => {
+          messageApi.success(`Cloned "${workspaceName}" into your workspace list.`)
+        },
+        onError: (cloneError) => {
+          messageApi.error(cloneError.message || "Failed to clone shared workspace.")
+        }
+      }
+    )
+  }
 
   if (isLoading) {
     return (
@@ -43,6 +61,7 @@ export const SharedWithMe: React.FC = () => {
 
   return (
     <Card title="Shared With Me">
+      {messageContext}
       <List
         dataSource={shares}
         renderItem={(share) => (
@@ -56,12 +75,7 @@ export const SharedWithMe: React.FC = () => {
                   cloneWorkspace.isPending &&
                   cloneWorkspace.variables?.shareId === share.share_id
                 }
-                onClick={() =>
-                  cloneWorkspace.mutate({
-                    shareId: share.share_id,
-                    new_name: `${share.workspace_name} (Copy)`
-                  })
-                }
+                onClick={() => _cloneWorkspace(share.share_id, share.workspace_name)}
               >
                 Clone
               </Button>
@@ -71,8 +85,8 @@ export const SharedWithMe: React.FC = () => {
               title={
                 <Space size="small">
                   <span>{share.workspace_name}</span>
-                  <Tag color={ACCESS_LEVEL_COLORS[share.access_level]}>
-                    {ACCESS_LEVEL_LABELS[share.access_level]}
+                  <Tag color={getAccessLevelColor(String(share.access_level || ""))}>
+                    {getAccessLevelLabel(String(share.access_level || "Unknown access"))}
                   </Tag>
                 </Space>
               }
@@ -81,7 +95,9 @@ export const SharedWithMe: React.FC = () => {
                   {share.workspace_description ? (
                     <Text type="secondary">{share.workspace_description}</Text>
                   ) : null}
-                  <Text type="secondary">Shared by user #{share.owner_user_id}</Text>
+                  <Text type="secondary">
+                    {`Shared by workspace owner (account ${share.owner_user_id})`}
+                  </Text>
                 </Space>
               }
             />
