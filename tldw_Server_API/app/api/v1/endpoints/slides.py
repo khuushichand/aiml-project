@@ -354,6 +354,18 @@ def _validate_settings(settings: dict[str, Any] | None) -> dict[str, Any] | None
     return settings
 
 
+def _validate_custom_css(
+    custom_css: Any,
+    *,
+    detail: str = "invalid_custom_css",
+) -> str | None:
+    if custom_css is None:
+        return None
+    if not isinstance(custom_css, str):
+        raise HTTPException(status_code=422, detail=detail)
+    return custom_css
+
+
 def _serialize_settings(settings: dict[str, Any] | None) -> str | None:
     if settings is None:
         return None
@@ -450,13 +462,19 @@ def _apply_template_defaults(
     theme = request.theme if _field_was_set(request, "theme") else None
     marp_theme = request.marp_theme if _field_was_set(request, "marp_theme") else None
     settings = request.settings if _field_was_set(request, "settings") else None
-    custom_css = request.custom_css if _field_was_set(request, "custom_css") else None
+    custom_css = _validate_custom_css(request.custom_css) if _field_was_set(request, "custom_css") else None
 
     appearance_defaults = (
         visual_style_snapshot.get("appearance_defaults")
         if isinstance(visual_style_snapshot, dict) and isinstance(visual_style_snapshot.get("appearance_defaults"), dict)
         else {}
     )
+    if "custom_css" in appearance_defaults:
+        appearance_defaults = dict(appearance_defaults)
+        appearance_defaults["custom_css"] = _validate_custom_css(
+            appearance_defaults.get("custom_css"),
+            detail="invalid_visual_style_custom_css",
+        )
     if theme is None:
         theme = appearance_defaults.get("theme")
     if marp_theme is None:
@@ -474,7 +492,7 @@ def _apply_template_defaults(
         if settings is None:
             settings = template.settings
         if custom_css is None:
-            custom_css = template.custom_css
+            custom_css = _validate_custom_css(template.custom_css)
 
     if theme is None:
         theme = "black"
@@ -520,6 +538,11 @@ def _validate_visual_style_appearance_defaults(appearance_defaults: dict[str, An
         validated["marp_theme"] = _validate_marp_theme(validated.get("marp_theme"))
     if "settings" in validated:
         validated["settings"] = _validate_settings(validated.get("settings"))
+    if "custom_css" in validated:
+        validated["custom_css"] = _validate_custom_css(
+            validated.get("custom_css"),
+            detail="invalid_visual_style_custom_css",
+        )
     return validated
 
 

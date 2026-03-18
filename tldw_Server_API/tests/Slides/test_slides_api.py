@@ -747,6 +747,71 @@ def test_slides_styles_reject_builtin_mutation(slides_client):
     assert patch_resp.json()["detail"] == "builtin_visual_style_read_only"
 
 
+def test_slides_styles_reject_non_string_custom_css(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/styles",
+        json={
+            "name": "Broken CSS Style",
+            "description": "Should fail validation",
+            "generation_rules": {},
+            "artifact_preferences": [],
+            "appearance_defaults": {
+                "theme": "white",
+                "custom_css": {"selector": ".reveal"},
+            },
+            "fallback_policy": {"mode": "outline"},
+        },
+    )
+    assert create_resp.status_code == 422
+    assert create_resp.json()["detail"] == "invalid_visual_style_custom_css"
+
+
+def test_slides_create_rejects_resolved_style_with_non_string_custom_css(slides_client, monkeypatch):
+    def _broken_style(_self, style_id: str):
+        return SimpleNamespace(
+            id=style_id,
+            scope="user",
+            name="Broken CSS Style",
+            style_payload=json.dumps(
+                {
+                    "description": "Broken style payload",
+                    "generation_rules": {},
+                    "artifact_preferences": [],
+                    "appearance_defaults": {
+                        "theme": "white",
+                        "custom_css": {"selector": ".reveal"},
+                    },
+                    "fallback_policy": {"mode": "outline"},
+                }
+            ),
+            created_at="2026-03-17T00:00:00Z",
+            updated_at="2026-03-17T00:00:00Z",
+        )
+
+    monkeypatch.setattr(SlidesDatabase, "get_visual_style_by_id", _broken_style)
+
+    resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "Broken Style Deck",
+            "visual_style_id": "broken-css-style",
+            "visual_style_scope": "user",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "Broken",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "invalid_visual_style_custom_css"
+
+
 def test_slides_create_with_template_defaults(slides_client, tmp_path, monkeypatch):
     templates_path = _write_templates(tmp_path)
     monkeypatch.setenv("SLIDES_TEMPLATES_PATH", str(templates_path))
