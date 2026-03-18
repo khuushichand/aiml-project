@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
@@ -10,6 +10,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError,
     InputError,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 
 try:
     from loguru import logger
@@ -18,18 +19,14 @@ except ImportError:  # pragma: no cover - defensive fallback
 
     logger = _stdlib_logging.getLogger("media_db.keywords_repository")
 
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
 class KeywordsRepository:
     """Repository for keyword rows and media-keyword links."""
 
-    def __init__(self, session: MediaDatabase):
+    def __init__(self, session: MediaDbLike):
         self.session = session
 
     @classmethod
-    def from_legacy_db(cls, db: MediaDatabase) -> "KeywordsRepository":
+    def from_legacy_db(cls, db: MediaDbLike) -> "KeywordsRepository":
         return cls(session=db)
 
     def fetch_for_media(self, media_id: int) -> list[str]:

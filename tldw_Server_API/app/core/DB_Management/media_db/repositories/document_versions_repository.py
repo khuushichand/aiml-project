@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 
 try:
     from loguru import logger
@@ -16,18 +17,14 @@ except ImportError:  # pragma: no cover - defensive fallback
 
     logger = _stdlib_logging.getLogger("media_db.document_versions_repository")
 
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
 class DocumentVersionsRepository:
     """Repository for document version persistence and lookup."""
 
-    def __init__(self, session: MediaDatabase):
+    def __init__(self, session: MediaDbLike):
         self.session = session
 
     @classmethod
-    def from_legacy_db(cls, db: MediaDatabase) -> "DocumentVersionsRepository":
+    def from_legacy_db(cls, db: MediaDbLike) -> "DocumentVersionsRepository":
         return cls(session=db)
 
     def create(

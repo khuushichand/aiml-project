@@ -100,6 +100,10 @@ from tldw_Server_API.app.core.DB_Management.media_db import legacy_media_details
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_state as media_db_state
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_transcripts
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
+from tldw_Server_API.app.core.DB_Management.media_db.repositories import chunks_repository
+from tldw_Server_API.app.core.DB_Management.media_db.repositories import document_versions_repository
+from tldw_Server_API.app.core.DB_Management.media_db.repositories import keywords_repository
+from tldw_Server_API.app.core.DB_Management.media_db.repositories import media_files_repository
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as media_db_runtime_factory
 from tldw_Server_API.app.services import admin_bundle_service
 from tldw_Server_API.app.services import media_files_cleanup_service
@@ -949,6 +953,22 @@ def test_legacy_maintenance_uses_runtime_validation_without_shim_source() -> Non
 
 def test_legacy_backup_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(media_db_legacy_backup)
+
+
+def test_chunks_repository_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(chunks_repository)
+
+
+def test_document_versions_repository_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(document_versions_repository)
+
+
+def test_keywords_repository_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(keywords_repository)
+
+
+def test_media_files_repository_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_files_repository)
 
 
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError, InputError
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 
 try:
     from loguru import logger
@@ -12,18 +13,14 @@ except ImportError:  # pragma: no cover - defensive fallback
 
     logger = _stdlib_logging.getLogger("media_db.chunks_repository")
 
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
 class ChunksRepository:
     """Repository for MediaChunks persistence."""
 
-    def __init__(self, session: MediaDatabase):
+    def __init__(self, session: MediaDbLike):
         self.session = session
 
     @classmethod
-    def from_legacy_db(cls, db: MediaDatabase) -> "ChunksRepository":
+    def from_legacy_db(cls, db: MediaDbLike) -> "ChunksRepository":
         return cls(session=db)
 
     def add(

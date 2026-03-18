@@ -3,23 +3,21 @@ from __future__ import annotations
 import json
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 import uuid
 
 from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 
 
 class MediaFilesRepository:
     """Repository for MediaFiles rows."""
 
-    def __init__(self, session: MediaDatabase):
+    def __init__(self, session: MediaDbLike):
         self.session = session
 
     @classmethod
-    def from_legacy_db(cls, db: MediaDatabase) -> "MediaFilesRepository":
+    def from_legacy_db(cls, db: MediaDbLike) -> "MediaFilesRepository":
         return cls(session=db)
 
     def insert(
