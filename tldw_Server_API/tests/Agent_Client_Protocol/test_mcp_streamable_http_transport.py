@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transports.streamable_http import (
     MCPStreamableHTTPTransport,
@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 
 
 def make_json_response(result: dict, id: str = "1") -> MagicMock:
-    """Create a mock httpx response with application/json content-type."""
+    """Create a fake JSON response object."""
     resp = MagicMock()
     resp.status_code = 200
     resp.headers = {"content-type": "application/json"}
@@ -27,7 +27,7 @@ def make_json_response(result: dict, id: str = "1") -> MagicMock:
 
 
 def make_sse_response(result: dict, id: str = "1") -> MagicMock:
-    """Create a mock httpx response with text/event-stream content-type."""
+    """Create a fake SSE response object."""
     resp = MagicMock()
     resp.status_code = 200
     resp.headers = {"content-type": "text/event-stream"}
@@ -37,7 +37,7 @@ def make_sse_response(result: dict, id: str = "1") -> MagicMock:
 
 
 def make_json_error_response(message: str = "Method not found", id: str = "1") -> MagicMock:
-    """Create a mock httpx response with a JSON-RPC error."""
+    """Create a fake JSON-RPC error response."""
     resp = MagicMock()
     resp.status_code = 200
     resp.headers = {"content-type": "application/json"}
@@ -51,7 +51,7 @@ def make_json_error_response(message: str = "Method not found", id: str = "1") -
 
 
 def make_notify_response() -> MagicMock:
-    """Create a mock httpx response for a notification (no body needed)."""
+    """Create a fake notification response."""
     resp = MagicMock()
     resp.status_code = 200
     resp.headers = {"content-type": "application/json"}
@@ -96,12 +96,10 @@ async def test_streamable_http_connect_handshake(transport):
         ]
     )
 
-    with patch("httpx.AsyncClient") as MockClient:
-        instance = MagicMock()
-        instance.post = mock_post
-        instance.aclose = AsyncMock()
-        MockClient.return_value = instance
-
+    instance = MagicMock()
+    instance.post = mock_post
+    instance.aclose = AsyncMock()
+    with patch.object(transport, "_create_http_client", return_value=instance):
         await transport.connect()
 
     assert transport.is_connected is True

@@ -20,7 +20,7 @@ class MCPStreamableHTTPTransport(MCPTransport):
     """MCP transport over the *Streamable HTTP* protocol.
 
     Connection flow:
-    1. Create an ``httpx.AsyncClient``.
+    1. Create an HTTP client.
     2. Perform the MCP ``initialize`` handshake via POST.
     3. Send the ``initialized`` notification.
     4. Mark connected.
@@ -47,10 +47,7 @@ class MCPStreamableHTTPTransport(MCPTransport):
 
     async def connect(self) -> None:
         """Establish a connection: create HTTP client, run MCP handshake."""
-        self._http_client = httpx.AsyncClient(
-            headers=self._headers,
-            timeout=self._timeout_sec,
-        )
+        self._http_client = self._create_http_client()
         await self._json_rpc_call(
             "initialize",
             {
@@ -88,6 +85,13 @@ class MCPStreamableHTTPTransport(MCPTransport):
         return self._connected
 
     # -- Internal helpers ------------------------------------------------------
+
+    def _create_http_client(self) -> httpx.AsyncClient:
+        """Create the async HTTP client. Extracted so tests can replace it."""
+        return httpx.AsyncClient(
+            headers=self._headers,
+            timeout=self._timeout_sec,
+        )
 
     async def _json_rpc_call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Send a JSON-RPC *request* (has ``id``) and return the result."""
