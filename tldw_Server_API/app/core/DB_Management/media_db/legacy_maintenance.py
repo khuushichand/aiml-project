@@ -1,40 +1,55 @@
-"""Legacy maintenance helpers extracted from Media_DB_v2."""
+"""Legacy maintenance helpers extracted from the media DB shim."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+import yaml
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
+from tldw_Server_API.app.core.DB_Management.db_migration import MigrationError
 from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError, DatabaseError
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
-def _require_media_db_instance(
-    db_instance: Any,
-    *,
-    error_message: str,
-) -> "MediaDatabase":
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError(error_message)  # noqa: TRY003
-    return db_instance
+from tldw_Server_API.app.core.DB_Management.media_db.errors import InputError
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
+    MediaDbLike,
+    require_media_database_like,
+)
 
 
-def empty_trash(db_instance: "MediaDatabase", days_threshold: int) -> tuple[int, int]:
-    db_instance = _require_media_db_instance(
+_MAINTENANCE_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    BackendDatabaseError,
+    ConflictError,
+    DatabaseError,
+    InputError,
+    MigrationError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    yaml.YAMLError,
+)
+
+
+def empty_trash(db_instance: MediaDbLike, days_threshold: int) -> tuple[int, int]:
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
     if not isinstance(days_threshold, int) or days_threshold < 0:
         raise ValueError("Days must be non-negative int.")  # noqa: TRY003
-
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import _MEDIA_NONCRITICAL_EXCEPTIONS
 
     threshold_date_str = (
         datetime.now(timezone.utc) - timedelta(days=days_threshold)
@@ -76,7 +91,7 @@ def empty_trash(db_instance: "MediaDatabase", days_threshold: int) -> tuple[int,
                     logger.exception(
                         f"DB error processing item ID {media_id} during trash emptying"
                     )
-                except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+                except _MAINTENANCE_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(
                         f"Unexpected error processing item ID {media_id} during trash emptying: {exc}",
                         exc_info=True,
@@ -96,7 +111,7 @@ def empty_trash(db_instance: "MediaDatabase", days_threshold: int) -> tuple[int,
             exc_info=True,
         )
         return 0, -1
-    except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+    except _MAINTENANCE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             f"Unexpected error emptying trash DB '{db_instance.db_path_str}': {exc}",
             exc_info=True,
@@ -112,13 +127,11 @@ def check_media_and_whisper_model(*args: Any, **kwargs: Any) -> tuple[bool, str]
     return True, "Deprecated"
 
 
-def permanently_delete_item(db_instance: "MediaDatabase", media_id: int) -> bool:
-    db_instance = _require_media_db_instance(
+def permanently_delete_item(db_instance: MediaDbLike, media_id: int) -> bool:
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
-
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import _MEDIA_NONCRITICAL_EXCEPTIONS
 
     logger.warning(
         f"!!! PERMANENT DELETE initiated Media ID: {media_id} DB {db_instance.db_path_str}. NOT SYNCED !!!"
@@ -143,7 +156,7 @@ def permanently_delete_item(db_instance: "MediaDatabase", media_id: int) -> bool
 
             try:
                 db_instance._delete_fts_media(conn, media_id)
-            except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+            except _MAINTENANCE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"FTS cleanup during permanent delete skipped/failed: {exc}")
 
         if int(deleted_count) > 0:
@@ -154,7 +167,7 @@ def permanently_delete_item(db_instance: "MediaDatabase", media_id: int) -> bool
                 )
 
                 invalidate_intra_doc_vectors(str(media_id))
-            except _MEDIA_NONCRITICAL_EXCEPTIONS:
+            except _MAINTENANCE_NONCRITICAL_EXCEPTIONS:
                 pass
             return True
 
@@ -162,7 +175,7 @@ def permanently_delete_item(db_instance: "MediaDatabase", media_id: int) -> bool
     except sqlite3.Error as exc:
         logger.error(f"Error permanently deleting Media {media_id}: {exc}", exc_info=True)
         raise DatabaseError(f"Failed permanently delete item: {exc}") from exc  # noqa: TRY003
-    except _MEDIA_NONCRITICAL_EXCEPTIONS as exc:
+    except _MAINTENANCE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             f"Unexpected error permanently deleting Media {media_id}: {exc}",
             exc_info=True,

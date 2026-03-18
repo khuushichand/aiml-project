@@ -7,7 +7,7 @@
 - Raw `MediaDatabase(...)` constructors in app code: 0
 - Operational `create_media_database(...)` call sites in app code: 17
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 48
+- `Media_DB_v2` references in app code: 43
 
 Notes:
 
@@ -125,6 +125,7 @@ Status:
 - `app/core/RAG/rag_service/database_retrievers.py` now attaches media DB adapters through `media_db.api.create_media_database(...)` and `media_db.errors.DatabaseError` instead of importing those bindings from the shim.
 - `app/core/Utils/metadata_utils.py` now imports `DatabaseError` from `media_db.errors` inside its safe-metadata write helper instead of from the shim.
 - `app/core/Ingestion_Media_Processing/persistence.py` now imports URL dedupe helpers from `media_db.dedupe_urls` instead of from `Media_DB_v2.py`.
+- `app/core/DB_Management/media_db/legacy_maintenance.py` now uses `media_db.runtime.validation` plus a local noncritical-exception tuple instead of shim-bound `MediaDatabase` checks and `_MEDIA_NONCRITICAL_EXCEPTIONS` imports.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory
