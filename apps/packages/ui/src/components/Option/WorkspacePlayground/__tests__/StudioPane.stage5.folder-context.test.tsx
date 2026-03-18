@@ -284,7 +284,11 @@ describe("StudioPane Stage 5 folder-derived context", () => {
       )
     })
 
-    const summaryRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalledTimes(1)
+    })
+
+    const summaryRequest = mockCreateChatCompletion.mock.calls[0][0]
     expect(summaryRequest).toMatchObject({
       model: "gpt-4o-mini"
     })

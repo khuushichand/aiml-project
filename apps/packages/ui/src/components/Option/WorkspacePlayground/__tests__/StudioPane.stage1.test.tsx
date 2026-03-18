@@ -376,6 +376,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       min_score: 0.2,
       enable_reranking: true
     }
+    chatModelSettingsStoreState.apiProvider = undefined
     mockRagSearch.mockResolvedValue({ generation: "Generated summary" })
     mockCreateChatCompletion.mockResolvedValue(
       createChatCompletionResponse("Generated summary")
@@ -618,6 +619,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       generation_prompt:
         "Write an executive summary focused on failures, tradeoffs, and next steps."
     }
+    chatModelSettingsStoreState.apiProvider = "openai"
     mockGetMediaDetails.mockResolvedValue({
       source: { title: "DSPy Prompting Talk" },
       content: {
@@ -635,7 +637,8 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
 
     const summaryRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
     expect(summaryRequest).toMatchObject({
-      model: "gpt-4o-mini"
+      model: "gpt-4o-mini",
+      api_provider: "openai"
     })
     expect(summaryRequest.messages?.[0]).toMatchObject({
       role: "system"
