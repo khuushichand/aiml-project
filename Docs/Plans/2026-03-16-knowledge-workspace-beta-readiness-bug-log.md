@@ -517,6 +517,33 @@
     - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `2 passed`
     - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `39 passed`
 
+### WP-013: Workspace live URL-intake audit used backend `mediaId` as the DOM source identifier and produced a false red
+
+- Status: Resolved in audit worktree
+- Route: `/workspace-playground`
+- Feature: live Add Sources `URL` tab coverage
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Add a public URL through the live `URL` tab
+  3. Observe that `/api/v1/media/add` succeeds and returns a valid backend `db_id`
+  4. Observe that the previous audit test then looks for `[data-source-id="<db_id>"]` and times out even though the new source is visible in the pane
+- Evidence:
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.real-backend.spec.ts`
+  - `apps/packages/ui/src/store/workspace.ts`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/SourcesPane/index.tsx`
+  - failure artifact showing the inserted `https://example.com/?workspace-url-probe=...` row rendered as `Ready` while the locator still waited on `[data-source-id="90"]`
+- Suspected layer: audit-spec identifier assumption rather than product route behavior
+- Why it matters: the live URL-ingestion path was working, but the audit underreported coverage because workspace DOM rows use generated `source.id` values while the backend returns `mediaId`/`db_id`
+- Resolution:
+  - Kept the backend media ID only for API assertions and cleanup.
+  - Switched the live route test to identify the inserted source row by its unique public URL text, then read the generated `data-source-id` from the rendered row for selection assertions.
+  - Hardened the interim UI assertion so it only requires visible `Processing` state when the backend media detail is still mid-vectorization, avoiding a false failure when the source reaches `Ready` before the DOM check.
+  - Promoted workspace URL-tab intake to `Live-covered` in the audit matrix.
+  - Verification:
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests a public URL through the live add-source URL tab and promotes it to ready" --reporter=line --workers=1` => `1 passed`
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line --workers=1` => `5 passed`
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `40 passed`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
@@ -549,9 +576,11 @@
 - Current `/workspace-playground` targeted studio cancel/recovery verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
-- Current `/workspace-playground` real-backend summary after repairs: `4 passed`, `0 failed`
-- Current four-spec audit rerun: `39 passed`, `0 failed`
-- `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
+- Current `/workspace-playground` targeted live URL-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests a public URL through the live add-source URL tab and promotes it to ready" --reporter=line --workers=1`
+- Current `/workspace-playground` targeted live URL-intake verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` real-backend summary after repairs: `5 passed`, `0 failed`
+- Current four-spec audit rerun: `40 passed`, `0 failed`
+- `/workspace-playground` live add-source ingestion and source selection now also pass through real pasted-text and public-URL workflows
 - `/workspace-playground` route-level advanced filter and sort persistence is now covered deterministically across sources-pane remounts
 - `/workspace-playground` route-level grounded chat plus result-backed global search is now covered deterministically, and the broken chat-focus handoff has been fixed
 - `/workspace-playground` route-level compare-sources generation is now covered deterministically from source selection through completed artifact viewing

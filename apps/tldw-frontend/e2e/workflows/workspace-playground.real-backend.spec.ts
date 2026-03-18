@@ -177,6 +177,22 @@ const fetchLiveMediaDetail = async (mediaId: number): Promise<Record<string, unk
   return payload as Record<string, unknown>
 }
 
+const extractAddedMediaId = (payload: Record<string, unknown> | null): number => {
+  const candidate =
+    payload?.results?.[0]?.media_id ??
+    payload?.results?.[0]?.db_id ??
+    payload?.result?.media_id ??
+    payload?.result?.db_id ??
+    payload?.media_id ??
+    payload?.db_id ??
+    payload?.id
+  const mediaId = Number(candidate)
+  if (!Number.isFinite(mediaId) || mediaId <= 0) {
+    throw new Error(`Media add response returned no usable media id: ${JSON.stringify(payload)}`)
+  }
+  return mediaId
+}
+
 const buildSeedSources = () => {
   const base = Date.now() % 1_000_000
   return [
@@ -389,6 +405,128 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
       await ensureNoServerReachabilityDialog(authedPage)
     } finally {
       tracker.dispose()
+      await cleanupMediaItem(createdMediaId)
+    }
+
+    await assertNoCriticalErrors(diagnostics)
+  })
+
+  test("ingests a public URL through the live add-source URL tab and promotes it to ready", async ({
+    authedPage,
+    serverInfo,
+    diagnostics
+  }) => {
+    skipIfServerUnavailable(serverInfo)
+
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    const uniqueSlug = generateTestId("workspace-live-url")
+    const urlUnderTest = `https://example.com/?workspace-url-probe=${uniqueSlug}`
+    let createdMediaId: number | null = null
+
+    try {
+      await workspacePage.goto()
+      await workspacePage.waitForReady()
+      await ensureNoServerReachabilityDialog(authedPage)
+
+      const workspaceTag = await authedPage.evaluate(() => {
+        const store = (window as { __tldw_useWorkspaceStore?: unknown })
+          .__tldw_useWorkspaceStore as
+            | {
+                getState?: () => { workspaceTag?: string | null }
+              }
+            | undefined
+        return store?.getState?.().workspaceTag ?? null
+      })
+
+      await workspacePage.openAddSourcesModal()
+      await workspacePage.addSourceModal.getByRole("tab", { name: /^url$/i }).click()
+      await workspacePage.addSourceModal
+        .getByPlaceholder("https://example.com/article or YouTube URL")
+        .fill(urlUnderTest)
+
+      const addResponsePromise = authedPage.waitForResponse(
+        (response) =>
+          response.url().includes("/api/v1/media/add") &&
+          response.request().method().toUpperCase() === "POST"
+      )
+      await workspacePage.addSourceModal.getByRole("button", { name: /^add url$/i }).click()
+      const addResponse = await addResponsePromise
+      expect(addResponse.ok()).toBe(true)
+
+      const addPayload = (await addResponse.json().catch(() => null)) as
+        | Record<string, unknown>
+        | null
+      createdMediaId = extractAddedMediaId(addPayload)
+
+      await expect(workspacePage.addSourceModal).toBeHidden({ timeout: 10_000 })
+
+      let liveMediaDetail = await fetchLiveMediaDetail(createdMediaId)
+      const initialVectorStatus =
+        (liveMediaDetail.processing as Record<string, unknown> | undefined)
+          ?.vector_processing_status ?? null
+      expect(
+        initialVectorStatus !== null,
+        `Expected media details to expose vector_processing_status, received ${JSON.stringify(liveMediaDetail)}`
+      ).toBeTruthy()
+
+      const sourceRow = workspacePage.sourcesPanel
+        .locator("[data-source-id]", { hasText: urlUnderTest })
+        .first()
+      await expect(sourceRow).toBeVisible({ timeout: 30_000 })
+      await expect(sourceRow).toContainText(urlUnderTest, { timeout: 10_000 })
+
+      if (initialVectorStatus !== 1) {
+        await expect(
+          sourceRow.locator("span").filter({ hasText: /^processing$/i }).first()
+        ).toBeVisible({ timeout: 10_000 })
+        await expect(sourceRow.locator('input[type="checkbox"]')).toBeDisabled()
+      }
+
+      await expect
+        .poll(
+          async () => {
+            liveMediaDetail = await fetchLiveMediaDetail(createdMediaId!)
+            return (
+              (liveMediaDetail.processing as Record<string, unknown> | undefined)
+                ?.vector_processing_status ?? null
+            )
+          },
+          {
+            timeout: 60_000,
+            message: `Timed out waiting for URL-ingested workspace source to become vector-ready: ${JSON.stringify(
+              liveMediaDetail
+            )}`,
+          }
+        )
+        .toBe(1)
+
+      await expect(sourceRow.locator("span").filter({ hasText: /^ready$/i }).first()).toBeVisible({
+        timeout: 15_000
+      })
+      await expect(sourceRow.locator('input[type="checkbox"]')).toBeEnabled({
+        timeout: 15_000
+      })
+
+      if (typeof workspaceTag === "string" && workspaceTag.trim().length > 0) {
+        await expect
+          .poll(
+            async () => {
+              const detail = await fetchLiveMediaDetail(createdMediaId!)
+              return Array.isArray(detail.keywords) ? detail.keywords : []
+            },
+            {
+              timeout: 15_000,
+              message: `Timed out waiting for workspace keyword tag on media ${createdMediaId}`
+          }
+        )
+        .toContain(workspaceTag)
+      }
+
+      const sourceId = await sourceRow.getAttribute("data-source-id")
+      expect(sourceId).toBeTruthy()
+      await workspacePage.selectSourceById(sourceId!)
+      await workspacePage.expectSourceSelected(sourceId!)
+    } finally {
       await cleanupMediaItem(createdMediaId)
     }
 
