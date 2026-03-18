@@ -13,6 +13,7 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path as PathlibPath
+from typing import Any
 from uuid import uuid4
 
 from cachetools import LRUCache
@@ -56,7 +57,6 @@ from tldw_Server_API.app.core.Chunking.strategies.ebook_chapters import EbookCha
 from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib import (
     extract_epub_metadata_from_text,
     process_epub,
@@ -429,7 +429,7 @@ def _parse_progress_message(
 async def parse_audiobook_source(
     request: AudiobookParseRequest,
     _current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ) -> AudiobookParseResponse:
     source = request.source
     input_type = source.input_type

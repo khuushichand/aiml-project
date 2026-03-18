@@ -11,6 +11,7 @@ from tldw_Server_API.app.api.v1.endpoints import rag_unified as rag_unified_endp
 from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.api.v1.endpoints import claims as claims_endpoint
 from tldw_Server_API.app.api.v1.endpoints import chunking as chunking_endpoint
+from tldw_Server_API.app.api.v1.endpoints.audio import audiobooks as audiobooks_endpoint
 from tldw_Server_API.app.api.v1.endpoints import slides as slides_endpoint
 from tldw_Server_API.app.api.v1.endpoints import text2sql as text2sql_endpoint
 from tldw_Server_API.app.api.v1.endpoints import media_embeddings as media_embeddings_endpoint
@@ -25,6 +26,7 @@ from tldw_Server_API.app.api.v1.endpoints.media import document_insights
 from tldw_Server_API.app.api.v1.endpoints.media import document_references
 from tldw_Server_API.app.api.v1.endpoints.media import add as media_add_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import debug as media_debug_endpoint
+from tldw_Server_API.app.api.v1.endpoints.media import document_figures as media_document_figures_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import file as media_file_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import ingest_web_content as media_ingest_web_content_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import item as media_item
@@ -513,6 +515,22 @@ def test_media_reprocess_endpoint_does_not_bind_media_database_from_media_db_v2(
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(media_reprocess_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_document_figures_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_document_figures_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_audiobooks_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(audiobooks_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 
