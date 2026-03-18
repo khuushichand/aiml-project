@@ -301,6 +301,14 @@ def test_db_manager_does_not_bind_detail_helpers_from_media_db_v2(monkeypatch):
     assert module.sqlite_create_automated_backup is media_db_legacy_backup.create_automated_backup
 
 
+def test_db_manager_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(DB_Manager)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
 def test_claim_review_assignment_does_not_bind_media_database_from_media_db_v2(monkeypatch):
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 

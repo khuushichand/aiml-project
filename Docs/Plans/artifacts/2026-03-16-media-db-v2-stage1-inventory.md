@@ -90,7 +90,7 @@ Notes:
 Assessment:
 
 - `DB_Deps.py` is still a real app boundary, not a leaf detail. It now depends on `media_db.errors`, `MediaDbFactory`, and `MediaDbSession` instead of importing runtime error types or `MediaDatabase` from the shim directly, but it still owns request/session scoping and cache compatibility.
-- `DB_Manager.py` is already thinner, but it still imports `MediaDatabase` and selected compatibility exports from `Media_DB_v2.py`.
+- `DB_Manager.py` is already thinner and no longer binds `MediaDatabase` from the shim directly, but it still imports selected compatibility exports from `Media_DB_v2.py` and remains part of the boundary allowlist discussion.
 
 Recommendation:
 
