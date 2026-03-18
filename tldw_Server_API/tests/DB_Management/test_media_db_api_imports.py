@@ -52,6 +52,7 @@ from tldw_Server_API.app.api.v1.utils import http_errors
 from tldw_Server_API.app.api.v1.endpoints.media import versions as media_versions
 from tldw_Server_API.app.core.Claims_Extraction import (
     claims_clustering,
+    ingestion_claims,
     claims_notifications,
     claims_rebuild_service,
     claims_service,
@@ -729,6 +730,14 @@ def test_claims_notifications_imports_managed_media_database_from_media_db_api(m
 def test_claims_service_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(claims_service)
     assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_ingestion_claims_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(ingestion_claims)
+
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_claims_rebuild_service_imports_managed_media_database_from_media_db_api():

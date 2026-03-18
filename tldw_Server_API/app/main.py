@@ -17,7 +17,7 @@ import os as _env_os
 # 3rd-party Libraries
 import sys
 import threading
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -46,6 +46,12 @@ from tldw_Server_API.app.core.testing import (
 )
 from tldw_Server_API.app.core.testing import (
     is_truthy as _shared_is_truthy,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    get_user_media_db_path,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    managed_media_database,
 )
 
 # Backward-compat for Starlette variants that expose 413 as
@@ -103,6 +109,20 @@ _REQUEST_GUARD_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+
+
+@contextmanager
+def _claims_rebuild_db_session(app_settings):
+    user_id = int(app_settings.get("SINGLE_USER_FIXED_ID", "1"))
+    db_path = str(get_user_media_db_path(user_id))
+    client_id = str(app_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1"))
+    with managed_media_database(
+        client_id=client_id,
+        db_path=db_path,
+        initialize=False,
+        suppress_close_exceptions=_STARTUP_GUARD_EXCEPTIONS,
+    ) as db:
+        yield user_id, db_path, db
 
 _early_os.environ.setdefault("MCP_INHERIT_GLOBAL_LOGGER", "1")
 try:
@@ -2991,8 +3011,6 @@ async def lifespan(app: FastAPI):
             get_claims_rebuild_service as _get_claims_svc,
         )
         from tldw_Server_API.app.core.config import settings as _app_settings
-        from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path as _get_media_db_path
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MediaDB
 
         _claims_enabled = bool(_app_settings.get("CLAIMS_REBUILD_ENABLED", False))
         _claims_interval = int(_app_settings.get("CLAIMS_REBUILD_INTERVAL_SEC", 3600))
@@ -3006,40 +3024,33 @@ async def lifespan(app: FastAPI):
             svc = _get_claims_svc()
             while True:
                 try:
-                    # Single-user path; for multi-user extend with per-user iteration
-                    user_id = int(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
-                    db_path = _get_media_db_path(user_id)
-                    db = _MediaDB(
-                        db_path=db_path, client_id=str(_app_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1"))
-                    )
-                    # Find media missing claims
-                    if _claims_policy == "missing":
-                        sql = (
-                            "SELECT m.id FROM Media m "
-                            "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
-                            "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
-                            ") LIMIT 25"
-                        )
-                    elif _claims_policy == "all":
-                        sql = "SELECT m.id FROM Media m WHERE m.deleted=0 AND m.is_trash=0 LIMIT 25"
-                    else:
-                        # rudimentary stale policy: claims older than N days since media last_modified
-                        int(_app_settings.get("CLAIMS_STALE_DAYS", 7))
-                        sql = (
-                            "SELECT m.id FROM Media m "
-                            "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
-                            "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR julianday('now') - julianday(c.lastc) >= ?) "
-                            "LIMIT 25"
-                        )
-                    if _claims_policy == "stale":
-                        rows = db.execute_query(sql, (int(_app_settings.get("CLAIMS_STALE_DAYS", 7)),)).fetchall()
-                    else:
-                        rows = db.execute_query(sql).fetchall()
-                    mids = [int(r[0]) for r in rows]
-                    for mid in mids:
-                        svc.submit(media_id=mid, db_path=db_path)
-                    with suppress(_STARTUP_GUARD_EXCEPTIONS):
-                        db.close_connection()
+                    with _claims_rebuild_db_session(_app_settings) as (_, db_path, db):
+                        # Find media missing claims
+                        if _claims_policy == "missing":
+                            sql = (
+                                "SELECT m.id FROM Media m "
+                                "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
+                                "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
+                                ") LIMIT 25"
+                            )
+                        elif _claims_policy == "all":
+                            sql = "SELECT m.id FROM Media m WHERE m.deleted=0 AND m.is_trash=0 LIMIT 25"
+                        else:
+                            # rudimentary stale policy: claims older than N days since media last_modified
+                            int(_app_settings.get("CLAIMS_STALE_DAYS", 7))
+                            sql = (
+                                "SELECT m.id FROM Media m "
+                                "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
+                                "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR julianday('now') - julianday(c.lastc) >= ?) "
+                                "LIMIT 25"
+                            )
+                        if _claims_policy == "stale":
+                            rows = db.execute_query(sql, (int(_app_settings.get("CLAIMS_STALE_DAYS", 7)),)).fetchall()
+                        else:
+                            rows = db.execute_query(sql).fetchall()
+                        mids = [int(r[0]) for r in rows]
+                        for mid in mids:
+                            svc.submit(media_id=mid, db_path=db_path)
                 except _STARTUP_GUARD_EXCEPTIONS as e:
                     logger.warning(f"Claims rebuild loop error: {e}")
                 await _asyncio.sleep(_claims_interval)

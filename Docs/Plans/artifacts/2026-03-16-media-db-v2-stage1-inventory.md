@@ -6,8 +6,8 @@
 
 - Raw `MediaDatabase(...)` constructors in app code: 7
 - Operational `create_media_database(...)` call sites in app code: 9
-- Operational `managed_media_database(...)` call sites in app code: 34
-- `Media_DB_v2` references in app code: 85
+- Operational `managed_media_database(...)` call sites in app code: 35
+- `Media_DB_v2` references in app code: 83
 
 Notes:
 
@@ -50,6 +50,7 @@ Notes:
 | `app/core/Claims_Extraction/claims_notifications.py` | 1 | `MOVE_MANAGED` already satisfied | Review notification delivery now scopes its DB session through the managed helper with suppressed init/close failures |
 | `app/core/Claims_Extraction/claims_rebuild_service.py` | 2 | `MOVE_MANAGED` already satisfied | Health persistence and task processing now scope their DB sessions through the managed helper while preserving first-run health DB initialization semantics |
 | `app/core/Claims_Extraction/claims_service.py` | 3 | `MOVE_MANAGED` already satisfied | Webhook event persistence, persisted rebuild-health reads, and the cross-user SQLite override helper now scope their DB sessions through the managed helper with suppressed close failures |
+| `app/main.py` | 1 | `MOVE_MANAGED` already satisfied | Claims rebuild startup scanning now scopes its Media DB session through a local managed-helper wrapper with `initialize=False` and startup close-error suppression |
 | `app/core/Embeddings/ChromaDB_Library.py` | 1 | `MOVE_MANAGED` already satisfied | Ingestion-claims SQL fallback now uses the managed helper with `initialize=False` and suppressed close failures |
 | `app/core/Embeddings/services/jobs_worker.py` | 1 | `MOVE_MANAGED` already satisfied | Local media-content reads now scope their DB session through the managed helper with `initialize=False` |
 | `app/core/Embeddings/services/vector_compactor.py` | 1 | `MOVE_MANAGED` already satisfied | Soft-delete lookup now scopes its Media DB read through the managed helper with `initialize=False` and suppressed close failures |
@@ -119,6 +120,7 @@ Status:
 - `app/services/admin_bundle_service.py` now resolves the media schema version through `media_db.runtime.factory.get_current_media_schema_version()` instead of importing `MediaDatabase` from the shim directly.
 - `app/services/claims_review_metrics_scheduler.py` no longer binds `MediaDatabase` from the shim just for the optional `db` parameter annotation.
 - `app/core/Claims_Extraction/claims_notifications.py` no longer binds `MediaDatabase` from the shim just for notification-helper annotations.
+- `app/core/Claims_Extraction/ingestion_claims.py` no longer binds `MediaDatabase` from the shim just for claim-storage typing.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory
