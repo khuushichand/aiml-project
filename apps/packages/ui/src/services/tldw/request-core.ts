@@ -415,6 +415,7 @@ export const tldwRequest = async (
       let detail: unknown = undefined
       if (typeof data === "object" && data) {
         const raw = data.detail ?? data.error ?? data.message
+        // FastAPI validation errors return detail as an array
         if (Array.isArray(raw)) {
           detail = raw
             .map((item: any) =>

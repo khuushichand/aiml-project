@@ -46,6 +46,15 @@ class AgentRegistryEntry:
     sandbox: Literal["required", "optional", "none"] = "none"
     trust_level: Literal["untrusted", "standard", "trusted"] = "standard"
 
+    # MCP orchestration fields (Phase B)
+    mcp_orchestration: Literal["agent_driven", "llm_driven"] = "agent_driven"
+    mcp_entry_tool: str = "execute"
+    mcp_structured_response: bool = False
+    mcp_llm_provider: str | None = None
+    mcp_llm_model: str | None = None
+    mcp_max_iterations: int = 20
+    mcp_refresh_tools: bool = False
+
     def check_availability(self) -> dict[str, Any]:
         """Check runtime availability of this agent."""
         result: dict[str, Any] = {
@@ -150,6 +159,13 @@ class AgentRegistry:
                 default=bool(item.get("default", False)),
                 install_instructions=list(item.get("install_instructions", [])),
                 docs_url=item.get("docs_url"),
+                mcp_orchestration=item.get("mcp_orchestration", "agent_driven"),
+                mcp_entry_tool=str(item.get("mcp_entry_tool", "execute")),
+                mcp_structured_response=bool(item.get("mcp_structured_response", False)),
+                mcp_llm_provider=item.get("mcp_llm_provider"),
+                mcp_llm_model=item.get("mcp_llm_model"),
+                mcp_max_iterations=int(item.get("mcp_max_iterations", 20)),
+                mcp_refresh_tools=bool(item.get("mcp_refresh_tools", False)),
             )
             entries.append(entry)
             if entry.default:
@@ -213,6 +229,13 @@ class AgentRegistry:
                     default=bool(row.get("is_default", 0)),
                     install_instructions=self._load_json(row.get("install_instructions"), []),
                     docs_url=row.get("docs_url"),
+                    mcp_orchestration=row.get("mcp_orchestration", "agent_driven"),
+                    mcp_entry_tool=row.get("mcp_entry_tool", "execute"),
+                    mcp_structured_response=bool(row.get("mcp_structured_response", 0)),
+                    mcp_llm_provider=row.get("mcp_llm_provider"),
+                    mcp_llm_model=row.get("mcp_llm_model"),
+                    mcp_max_iterations=int(row.get("mcp_max_iterations", 20)),
+                    mcp_refresh_tools=bool(row.get("mcp_refresh_tools", 0)),
                 ))
             self._api_entries = entries
 
@@ -264,6 +287,13 @@ class AgentRegistry:
         requires_api_key: str | None = None,
         install_instructions: list[str] | None = None,
         docs_url: str | None = None,
+        mcp_orchestration: Literal["agent_driven", "llm_driven"] = "agent_driven",
+        mcp_entry_tool: str = "execute",
+        mcp_structured_response: bool = False,
+        mcp_llm_provider: str | None = None,
+        mcp_llm_model: str | None = None,
+        mcp_max_iterations: int = 20,
+        mcp_refresh_tools: bool = False,
     ) -> AgentRegistryEntry:
         """Register or update a dynamic agent entry."""
         with self._lock:
@@ -277,6 +307,13 @@ class AgentRegistry:
                 requires_api_key=requires_api_key,
                 install_instructions=install_instructions or [],
                 docs_url=docs_url,
+                mcp_orchestration=mcp_orchestration,
+                mcp_entry_tool=mcp_entry_tool,
+                mcp_structured_response=mcp_structured_response,
+                mcp_llm_provider=mcp_llm_provider,
+                mcp_llm_model=mcp_llm_model,
+                mcp_max_iterations=mcp_max_iterations,
+                mcp_refresh_tools=mcp_refresh_tools,
             )
             if self._db is not None:
                 self._db.save_agent_entry({
@@ -289,6 +326,13 @@ class AgentRegistry:
                     "requires_api_key": requires_api_key,
                     "install_instructions": json.dumps(install_instructions or []),
                     "docs_url": docs_url,
+                    "mcp_orchestration": mcp_orchestration,
+                    "mcp_entry_tool": mcp_entry_tool,
+                    "mcp_structured_response": mcp_structured_response,
+                    "mcp_llm_provider": mcp_llm_provider,
+                    "mcp_llm_model": mcp_llm_model,
+                    "mcp_max_iterations": mcp_max_iterations,
+                    "mcp_refresh_tools": mcp_refresh_tools,
                     "source": "api",
                 })
             self._api_entries = [e for e in self._api_entries if e.type != type]
@@ -308,6 +352,8 @@ class AgentRegistry:
     _UPDATABLE_FIELDS = frozenset({
         "name", "description", "command", "args", "env",
         "requires_api_key", "install_instructions", "docs_url",
+        "mcp_orchestration", "mcp_entry_tool", "mcp_structured_response",
+        "mcp_llm_provider", "mcp_llm_model", "mcp_max_iterations", "mcp_refresh_tools",
     })
 
     # Defaults for fields that must never be None at runtime
@@ -340,6 +386,13 @@ class AgentRegistry:
                     "requires_api_key": existing.requires_api_key,
                     "install_instructions": json.dumps(existing.install_instructions),
                     "docs_url": existing.docs_url,
+                    "mcp_orchestration": existing.mcp_orchestration,
+                    "mcp_entry_tool": existing.mcp_entry_tool,
+                    "mcp_structured_response": existing.mcp_structured_response,
+                    "mcp_llm_provider": existing.mcp_llm_provider,
+                    "mcp_llm_model": existing.mcp_llm_model,
+                    "mcp_max_iterations": existing.mcp_max_iterations,
+                    "mcp_refresh_tools": existing.mcp_refresh_tools,
                     "source": "api",
                 })
             return existing

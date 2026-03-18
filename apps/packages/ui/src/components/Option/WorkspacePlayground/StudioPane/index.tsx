@@ -4392,7 +4392,10 @@ async function generateSlidesFromApi(
       throw error
     }
     // Fallback to RAG-based generation if API fails
-    console.error("Slides API failed, falling back to RAG:", error)
+    console.warn(
+      "Slides API failed, falling back to RAG:",
+      error instanceof Error ? error.message : String(error)
+    )
     return generateSlidesFallback([mediaId], options?.abortSignal)
   }
 }

@@ -2,7 +2,7 @@
  * AnswerPanel - Displays generated answer with inline citations
  */
 
-import React, { type ReactNode, useEffect, useMemo, useState } from "react"
+import React, { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { Sparkles, AlertCircle, Loader2, ThumbsUp, ThumbsDown } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { cn } from "@/libs/utils"
@@ -156,6 +156,8 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
   )
   const [copiedAnswer, setCopiedAnswer] = useState(false)
   const [loadingElapsedSeconds, setLoadingElapsedSeconds] = useState(0)
+  const copiedAnswerTimeoutRef = useRef<number | null>(null)
+  const activeAnswerSessionKeyRef = useRef("")
   const messageApi = useAntdMessage()
   const navigate = useNavigate()
 
@@ -173,6 +175,13 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
     if (typeof answer !== "string") return null
     return answer.trim().length > 0 ? answer : null
   }, [answer])
+  const answerSessionKey = useMemo(
+    () =>
+      `${currentThreadId ?? "no-thread"}::${latestAssistantMessageId ?? "no-assistant"}::${
+        normalizedAnswer ?? ""
+      }`,
+    [currentThreadId, latestAssistantMessageId, normalizedAnswer]
+  )
   const answerWordCount = useMemo(() => {
     if (!normalizedAnswer) return 0
     return normalizedAnswer.trim().split(/\s+/).filter(Boolean).length
@@ -192,11 +201,23 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
   )
 
   useEffect(() => {
+    activeAnswerSessionKeyRef.current = answerSessionKey
+  }, [answerSessionKey])
+
+  useEffect(() => {
     setIsExpanded(false)
+    setAnswerLengthAction(null)
     setAnswerFeedback(null)
+    setAnswerFeedbackSubmitting(false)
     setAnswerFeedbackError(null)
     setPendingFeedbackThumb(null)
-  }, [normalizedAnswer])
+    setWorkspaceHandoffPending(false)
+    if (copiedAnswerTimeoutRef.current != null) {
+      window.clearTimeout(copiedAnswerTimeoutRef.current)
+      copiedAnswerTimeoutRef.current = null
+    }
+    setCopiedAnswer(false)
+  }, [answerSessionKey])
 
   useEffect(() => {
     if (!isSearching) {
@@ -213,16 +234,20 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
   }, [isSearching])
 
   useEffect(() => {
-    if (!copiedAnswer) return
-    const timeout = window.setTimeout(() => setCopiedAnswer(false), 2000)
-    return () => window.clearTimeout(timeout)
-  }, [copiedAnswer])
+    return () => {
+      if (copiedAnswerTimeoutRef.current != null) {
+        window.clearTimeout(copiedAnswerTimeoutRef.current)
+        copiedAnswerTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   const handleCitationClick = (index: number) => {
     scrollToSource(index - 1) // Convert from 1-based to 0-based
   }
 
   const handleSubmitAnswerFeedback = async (thumb: "up" | "down") => {
+    const requestSessionKey = answerSessionKey
     setAnswerFeedbackSubmitting(true)
     setPendingFeedbackThumb(thumb)
     setAnswerFeedbackError(null)
@@ -236,6 +261,9 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
         feedback_id: searchDetails?.feedbackId || undefined,
         session_id: getFeedbackSessionId(),
       })
+      if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+        return
+      }
       void trackKnowledgeQaSearchMetric({
         type: "answer_feedback_submit",
         helpful: thumb === "up",
@@ -243,10 +271,13 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
       setAnswerFeedback(thumb)
       messageApi.open({
         type: "success",
-        content: "Feedback submitted.",
-        duration: 2,
+          content: "Feedback submitted.",
+          duration: 2,
       })
     } catch (submissionError) {
+      if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+        return
+      }
       const detail =
         submissionError instanceof Error && submissionError.message
           ? submissionError.message
@@ -258,7 +289,9 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
         duration: 3,
       })
     } finally {
-      setAnswerFeedbackSubmitting(false)
+      if (activeAnswerSessionKeyRef.current === requestSessionKey) {
+        setAnswerFeedbackSubmitting(false)
+      }
     }
   }
 
@@ -300,6 +333,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
   const handleOpenInWorkspace = async () => {
     if (workspaceHandoffPending) return
 
+    const requestSessionKey = answerSessionKey
     setWorkspaceHandoffPending(true)
     try {
       const payload = buildKnowledgeQaWorkspacePrefill({
@@ -310,12 +344,18 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
         results,
       })
       await queueWorkspacePlaygroundPrefill(payload)
+      if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+        return
+      }
       void trackKnowledgeQaSearchMetric({
         type: "workspace_handoff",
         source_count: results.length,
       })
       navigate("/workspace-playground")
     } catch (error) {
+      if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+        return
+      }
       console.error("Failed to open workspace with Knowledge QA context:", error)
       messageApi.open({
         type: "error",
@@ -323,21 +363,40 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
         duration: 3,
       })
     } finally {
-      setWorkspaceHandoffPending(false)
+      if (activeAnswerSessionKeyRef.current === requestSessionKey) {
+        setWorkspaceHandoffPending(false)
+      }
     }
   }
 
   const handleCopyAnswer = async () => {
     if (!normalizedAnswer) return
+    const requestSessionKey = answerSessionKey
     try {
       await navigator.clipboard.writeText(normalizedAnswer)
+      if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+        return
+      }
       setCopiedAnswer(true)
+      if (copiedAnswerTimeoutRef.current != null) {
+        window.clearTimeout(copiedAnswerTimeoutRef.current)
+      }
+      copiedAnswerTimeoutRef.current = window.setTimeout(() => {
+        if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+          return
+        }
+        copiedAnswerTimeoutRef.current = null
+        setCopiedAnswer(false)
+      }, 2000)
       messageApi.open({
         type: "success",
         content: "Answer copied.",
         duration: 2,
       })
     } catch {
+      if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+        return
+      }
       messageApi.open({
         type: "error",
         content: "Unable to copy answer.",
@@ -348,6 +407,7 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
 
   const handleAdjustAnswerLength = async (action: "shorter" | "longer") => {
     if (!query?.trim() || isSearching) return
+    const requestSessionKey = answerSessionKey
     const baseTokens =
       typeof settings?.max_generation_tokens === "number"
         ? settings.max_generation_tokens
@@ -361,7 +421,9 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
     try {
       await rerunWithTokenLimit(nextLimit)
     } finally {
-      setAnswerLengthAction(null)
+      if (activeAnswerSessionKeyRef.current === requestSessionKey) {
+        setAnswerLengthAction(null)
+      }
     }
   }
 

@@ -35,6 +35,16 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
 }))
 
 describe("ConversationThread", () => {
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void
+    let reject!: (reason?: unknown) => void
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
   beforeEach(() => {
     state.messages = []
     state.searchHistory = []
@@ -168,6 +178,61 @@ describe("ConversationThread", () => {
     expect(state.branchFromTurn).toHaveBeenCalledWith("u1")
   })
 
+  it("prevents starting a second branch while another branch is still pending", async () => {
+    const pendingBranch = createDeferred<void>()
+    state.branchFromTurn.mockImplementation(() => pendingBranch.promise)
+    state.messages = [
+      {
+        id: "u1",
+        role: "user",
+        content: "What happened in quarter one?",
+        timestamp: "2026-02-18T08:00:00.000Z",
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Quarter one answer.",
+        timestamp: "2026-02-18T08:00:03.000Z",
+      },
+      {
+        id: "u2",
+        role: "user",
+        content: "What happened in quarter two?",
+        timestamp: "2026-02-18T08:01:00.000Z",
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "Quarter two answer.",
+        timestamp: "2026-02-18T08:01:03.000Z",
+      },
+      {
+        id: "u3",
+        role: "user",
+        content: "What happened in quarter three?",
+        timestamp: "2026-02-18T08:02:00.000Z",
+      },
+      {
+        id: "a3",
+        role: "assistant",
+        content: "Quarter three answer.",
+        timestamp: "2026-02-18T08:02:03.000Z",
+      },
+    ]
+
+    render(<ConversationThread />)
+
+    const branchButtons = screen.getAllByRole("button", { name: "Start Branch" })
+    await userEvent.click(branchButtons[0])
+
+    expect(state.branchFromTurn).toHaveBeenCalledTimes(1)
+    expect(state.branchFromTurn).toHaveBeenCalledWith("u1")
+    expect(branchButtons[1]).toBeDisabled()
+
+    await userEvent.click(branchButtons[1])
+    expect(state.branchFromTurn).toHaveBeenCalledTimes(1)
+  })
+
   it("supports side-by-side comparison using arbitrary thread selectors", async () => {
     state.messages = [
       {
@@ -244,6 +309,197 @@ describe("ConversationThread", () => {
     )
     expect(screen.getAllByText("How did Q1 perform?").length).toBeGreaterThan(0)
     expect(screen.getAllByText("How did Q4 perform?").length).toBeGreaterThan(0)
+  })
+
+  it("retries a comparison thread after a transient load failure", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    state.messages = [
+      {
+        id: "u1",
+        role: "user",
+        content: "How did Q1 perform?",
+        timestamp: "2026-02-18T08:00:00.000Z",
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Q1 increased by 12% [1].",
+        timestamp: "2026-02-18T08:00:03.000Z",
+      },
+      {
+        id: "u2",
+        role: "user",
+        content: "How did Q2 perform?",
+        timestamp: "2026-02-18T08:01:00.000Z",
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "Q2 increased by 9% [2].",
+        timestamp: "2026-02-18T08:01:03.000Z",
+      },
+    ]
+    state.searchHistory = [
+      {
+        id: "history-1",
+        query: "Historical baseline thread",
+        timestamp: "2026-02-17T10:00:00.000Z",
+        conversationId: "thread-history",
+      },
+    ]
+    fetchWithAuthMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => [],
+        text: async () => "Temporary outage",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [
+          {
+            id: "h-u1",
+            role: "user",
+            content: "How did Q4 perform?",
+            created_at: "2026-02-17T08:00:00.000Z",
+          },
+          {
+            id: "h-a1",
+            role: "assistant",
+            content: "Q4 increased by 6% [3].",
+            created_at: "2026-02-17T08:00:03.000Z",
+          },
+        ],
+        text: async () => "",
+      })
+
+    render(<ConversationThread />)
+
+    await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(1))
+
+    await userEvent.click(screen.getByRole("button", { name: "Compare turns" }))
+
+    expect(
+      screen.getByText("Unable to load one of the selected comparison threads. Choose it again to retry.")
+    ).toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByLabelText("Right thread"), "thread-current")
+    await userEvent.selectOptions(screen.getByLabelText("Right thread"), "thread-history")
+
+    await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Side-by-side query comparison" })
+      ).toBeInTheDocument()
+    )
+    expect(
+      screen.queryByText(
+        "Unable to load one of the selected comparison threads. Choose it again to retry."
+      )
+    ).not.toBeInTheDocument()
+    expect(screen.getAllByText("How did Q4 perform?").length).toBeGreaterThan(0)
+
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("keeps the comparison loading state visible until all selected remote threads finish loading", async () => {
+    state.messages = []
+    state.currentThreadId = null
+    state.searchHistory = [
+      {
+        id: "history-1",
+        query: "Historical thread one",
+        timestamp: "2026-02-17T10:00:00.000Z",
+        conversationId: "thread-history-1",
+      },
+      {
+        id: "history-2",
+        query: "Historical thread two",
+        timestamp: "2026-02-16T10:00:00.000Z",
+        conversationId: "thread-history-2",
+      },
+    ]
+
+    let resolveFirstThread: ((value: any) => void) | null = null
+    let resolveSecondThread: ((value: any) => void) | null = null
+
+    fetchWithAuthMock.mockImplementation((url: string) => {
+      if (url.includes("thread-history-1")) {
+        return new Promise((resolve) => {
+          resolveFirstThread = resolve
+        })
+      }
+      if (url.includes("thread-history-2")) {
+        return new Promise((resolve) => {
+          resolveSecondThread = resolve
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => [],
+        text: async () => "",
+      })
+    })
+
+    render(<ConversationThread />)
+
+    await waitFor(() => expect(fetchWithAuthMock).toHaveBeenCalledTimes(2))
+
+    await userEvent.click(screen.getByRole("button", { name: "Compare turns" }))
+
+    expect(screen.getByText("Loading comparison thread...")).toBeInTheDocument()
+
+    resolveSecondThread?.({
+      ok: true,
+      status: 200,
+      json: async () => [
+        {
+          id: "t2-u1",
+          role: "user",
+          content: "How did Q4 perform?",
+          created_at: "2026-02-16T08:00:00.000Z",
+        },
+        {
+          id: "t2-a1",
+          role: "assistant",
+          content: "Q4 increased by 6% [3].",
+          created_at: "2026-02-16T08:00:03.000Z",
+        },
+      ],
+      text: async () => "",
+    })
+
+    await waitFor(() => expect(screen.getByText("Loading comparison thread...")).toBeInTheDocument())
+
+    resolveFirstThread?.({
+      ok: true,
+      status: 200,
+      json: async () => [
+        {
+          id: "t1-u1",
+          role: "user",
+          content: "How did Q3 perform?",
+          created_at: "2026-02-17T08:00:00.000Z",
+        },
+        {
+          id: "t1-a1",
+          role: "assistant",
+          content: "Q3 increased by 8% [2].",
+          created_at: "2026-02-17T08:00:03.000Z",
+        },
+      ],
+      text: async () => "",
+    })
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "Side-by-side query comparison" })
+      ).toBeInTheDocument()
+    )
+    expect(screen.queryByText("Loading comparison thread...")).not.toBeInTheDocument()
   })
 
   it("provides one-click compare with previous turn in current thread", async () => {

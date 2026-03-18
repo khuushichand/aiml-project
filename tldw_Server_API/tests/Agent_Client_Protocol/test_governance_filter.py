@@ -150,3 +150,49 @@ async def test_governance_timeout_auto_denies(bus):
     assert error_result.payload["is_error"] is True
     assert "timeout" in error_result.payload["output"].lower()
     assert gov.pending_count == 0
+
+
+@pytest.mark.asyncio
+async def test_governance_internal_approval_only_resolves_future(bus, gov):
+    """ToolGate approval requests should not publish held tool events on decision."""
+    future = asyncio.get_running_loop().create_future()
+    q = bus.subscribe("test")
+    ev = _make_event(
+        kind=AgentEventKind.TOOL_CALL,
+        payload={"tool_id": "t1", "tool_name": "bash", "arguments": {"cmd": "ls"}},
+        session_id="s1",
+    )
+    ev.metadata["_approval_future"] = future
+
+    await gov.process(ev)
+
+    perm_req = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert perm_req.kind == AgentEventKind.PERMISSION_REQUEST
+    request_id = perm_req.payload["request_id"]
+
+    await gov.on_permission_response(request_id, decision="approve")
+    decision, reason = await asyncio.wait_for(future, timeout=1.0)
+
+    assert decision == "approve"
+    assert reason is None
+    assert gov.pending_count == 0
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(q.get(), timeout=0.05)
+
+
+@pytest.mark.asyncio
+async def test_governance_already_approved_tool_call_bypasses_reapproval(bus, gov):
+    """Runner-emitted TOOL_CALL events should pass through once already approved."""
+    q = bus.subscribe("test")
+    ev = _make_event(
+        kind=AgentEventKind.TOOL_CALL,
+        payload={"tool_id": "t1", "tool_name": "bash", "arguments": {"cmd": "ls"}},
+    )
+    ev.metadata["_already_approved"] = True
+
+    await gov.process(ev)
+
+    got = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert got is ev
+    assert got.kind == AgentEventKind.TOOL_CALL
+    assert gov.pending_count == 0

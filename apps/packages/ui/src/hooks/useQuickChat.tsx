@@ -196,6 +196,7 @@ export const useQuickChat = () => {
     setIsOpen(false)
   }, [cancelStream, setIsOpen])
 
+  // Abort in-flight streams on unmount to prevent state updates on unmounted component
   useEffect(() => {
     return () => {
       quickChatService.cancelStream()

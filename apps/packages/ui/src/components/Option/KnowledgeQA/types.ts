@@ -141,6 +141,7 @@ export type SearchHistoryItem = {
   answerPreview?: string
   pinned?: boolean
   preset?: RagPresetName
+  settingsSnapshot?: Partial<RagSettings>
   keywords?: string[]
 }
 
@@ -215,8 +216,9 @@ export type KnowledgeQAActions = {
 
   // Thread actions
   createNewThread: (title?: string) => Promise<string>
-  selectThread: (threadId: string) => Promise<void>
-  selectSharedThread: (shareToken: string) => Promise<void>
+  startNewTopic: () => Promise<string>
+  selectThread: (threadId: string) => Promise<boolean>
+  selectSharedThread: (shareToken: string) => Promise<boolean>
   askFollowUp: (question: string) => Promise<void>
   branchFromTurn: (messageId: string) => Promise<void>
 
@@ -248,7 +250,10 @@ export type KnowledgeQAActions = {
 }
 
 // Context value combining state and actions
-export type KnowledgeQAContextValue = KnowledgeQAState & KnowledgeQAActions
+export type KnowledgeQAContextValue = KnowledgeQAState &
+  KnowledgeQAActions & {
+    historyHydrated: boolean
+  }
 
 // Export format options
 export type ExportFormat = "markdown" | "pdf" | "chatbook"
