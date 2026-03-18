@@ -12,6 +12,7 @@ from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.api.v1.endpoints import claims as claims_endpoint
 from tldw_Server_API.app.api.v1.endpoints import chunking as chunking_endpoint
 from tldw_Server_API.app.api.v1.endpoints import slides as slides_endpoint
+from tldw_Server_API.app.api.v1.endpoints import text2sql as text2sql_endpoint
 from tldw_Server_API.app.api.v1.endpoints import data_tables
 from tldw_Server_API.app.api.v1.endpoints import items
 from tldw_Server_API.app.api.v1.endpoints import quizzes as quizzes_endpoint
@@ -30,6 +31,7 @@ from tldw_Server_API.app.api.v1.endpoints.media import navigation as media_navig
 from tldw_Server_API.app.api.v1.endpoints.media import process_ebooks as media_process_ebooks_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import process_documents
 from tldw_Server_API.app.api.v1.endpoints.media import process_pdfs
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_history as audio_history_endpoint
 from tldw_Server_API.app.api.v1.utils import http_errors
 from tldw_Server_API.app.api.v1.endpoints.media import versions as media_versions
 from tldw_Server_API.app.core.Claims_Extraction import (
@@ -383,6 +385,22 @@ def test_vector_stores_endpoint_does_not_bind_media_database_from_media_db_v2(mo
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(vector_stores_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_text2sql_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(text2sql_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_audio_history_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(audio_history_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 

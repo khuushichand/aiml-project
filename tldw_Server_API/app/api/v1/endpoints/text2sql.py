@@ -26,7 +26,6 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Text2SQL.executor import SqliteReadOnlyExecutor
 from tldw_Server_API.app.core.Text2SQL.service import Text2SQLCoreService
 from tldw_Server_API.app.core.Text2SQL.source_registry import normalize_source
@@ -48,7 +47,7 @@ class _PassThroughSqlGenerator:
         return {"sql": text}
 
 
-def _resolve_internal_target(target_id: str, media_db: MediaDatabase) -> tuple[str, str]:
+def _resolve_internal_target(target_id: str, media_db: Any) -> tuple[str, str]:
     try:
         normalized = normalize_source(target_id)
     except ValueError as exc:
@@ -107,7 +106,7 @@ def _connector_acl_allows(current_user: User, target_id: str) -> bool:
 async def query_text2sql(
     request: Text2SQLRequest,
     current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ) -> Text2SQLResponse:
     """Execute a read-only SQL query through Text2SQL policy guardrails."""
     target_id, db_path = _resolve_internal_target(request.target_id, media_db)
