@@ -8,9 +8,17 @@ const addChatMessageMock = vi.fn()
 const fetchWithAuthMock = vi.fn()
 const messageOpenMock = vi.fn()
 const trackMetricMock = vi.fn()
+let storedPresetValue: unknown = undefined
+let storedSettingsValue: unknown = undefined
+let storedStreamingFlagValue: unknown = undefined
 
 vi.mock("@plasmohq/storage/hook", () => ({
-  useStorage: () => [undefined],
+  useStorage: (key: string) => {
+    if (key === "ragSearchPreset") return [storedPresetValue]
+    if (key === "ragSearchSettingsV2") return [storedSettingsValue]
+    if (key === "ff_knowledgeQaStreaming") return [storedStreamingFlagValue]
+    return [undefined]
+  },
 }))
 
 vi.mock("@/hooks/useAntdMessage", () => ({
@@ -48,6 +56,9 @@ describe("KnowledgeQAProvider persistence safeguards", () => {
     vi.clearAllMocks()
     localStorage.clear()
     latestContext = null
+    storedPresetValue = undefined
+    storedSettingsValue = undefined
+    storedStreamingFlagValue = undefined
     trackMetricMock.mockResolvedValue(undefined)
     ragSearchMock.mockResolvedValue({
       results: [],
@@ -136,5 +147,27 @@ describe("KnowledgeQAProvider persistence safeguards", () => {
       )
     })
     expect(warningCalls).toHaveLength(1)
+  })
+
+  it("preserves legacy numeric note ids when hydrating persisted settings", async () => {
+    storedSettingsValue = {
+      include_note_ids: [101, "note-legacy-string", 202.9, null],
+    }
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    await waitFor(() => {
+      expect(latestContext!.settings.include_note_ids).toEqual([
+        "101",
+        "note-legacy-string",
+        "202",
+      ])
+    })
   })
 })

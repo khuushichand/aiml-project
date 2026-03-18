@@ -35,8 +35,8 @@
 | `/knowledge` | History sidebar and restored prior searches | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Live-covered | Route-scoped sidebar open and `Cmd+K` reset passed in the earlier live run; the suite now preflight-skips these checks when the backend is unavailable instead of timing out behind the connection modal | Resolved `KQ-003`; add explicit reload-restore coverage separately |
 | `/knowledge` | Error state when API fails | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Forces `500` via route interception | Keep as non-gating edge coverage |
 | `/knowledge` | Workspace handoff from answer panel | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/AnswerPanel.workspace-handoff.test.tsx` | Mock-only | Route-level deterministic Playwright now proves answer-panel click, `/workspace-playground` navigation, source prefill selection, and imported note content | Promote to live once backend preflight is stable again |
-| `/knowledge` | Export dialog and share-link management | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/ExportDialog.a11y.test.tsx` | Mock-only | Deterministic route test now proves export dialog open plus share-link create/revoke on a server-backed thread | Promote to live once backend preflight is stable again |
-| `/knowledge` | Shared permalink hydration | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, provider/component tests | Mock-only | Deterministic route test now proves `/knowledge/shared/:token` resolves into hydrated query/answer/results, and the missing Next deep-link pages were added so direct links no longer 404 before React mounts | Promote to live once backend preflight is stable again |
+| `/knowledge` | Export dialog and share-link management | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/ExportDialog.a11y.test.tsx` | Live-covered | Deterministic route coverage still proves export dialog open plus share-link create/revoke on a server-backed thread, and a live seeded-thread Playwright flow now creates a real share link from `/knowledge/thread/:threadId`, verifies the results-shell wiring, and navigates via the returned `share_path`; component coverage separately locks the clipboard-failure recovery path | Keep the clipboard-failure regression paired with the live share-link flow |
+| `/knowledge` | Shared permalink hydration | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, provider/component tests | Live-covered | Deterministic route coverage still proves `/knowledge/shared/:token` hydration and the missing Next deep-link pages stop 404ing before React mounts, while the new live seeded-thread/share-path flow proves the actual backend `messages-with-context` payload hydrates query, answer, and evidence state correctly even when the API returns `sender` instead of `role` | Keep paired with the provider regression for `sender` payloads |
 | `/knowledge` | Branch from conversation turn | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts`, provider/component tests | Mock-only | Deterministic route test now proves `/knowledge/thread/:threadId` hydrates a multi-turn thread, exposes `Start Branch`, and creates a child thread seeded from the selected turn | Promote to live once backend preflight is stable again |
 | `/knowledge` | Citation-to-source coherence | `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts` | Mock-only | Deterministic route test clicks `Jump to source 2`, then asserts the citation becomes current and focus transfers to `#source-card-1` while source 1 loses focus | Promote to live once backend preflight is stable again |
 
@@ -83,15 +83,19 @@
 ## Current Route Verification
 
 - `/knowledge` command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
-- `/knowledge` current live-backed outcome: `22 passed`, `0 failed`, runtime about `1.2m`
+- `/knowledge` current live-backed outcome: `23 passed`, `0 failed`, runtime about `1.2m`
 - `/knowledge` net effect:
   - removed stale selector failures from settings and history flows
   - replaced brittle mocked delayed-answer text assertion with rendered citation/evidence assertions
   - added deterministic citation-to-source identity coverage
   - isolated the whitespace-only mock case from live bootstrap dependencies
   - added deterministic export/share route coverage for server-backed KnowledgeQA threads
-  - fixed direct `/knowledge/shared/:token` deep links by wiring the missing Next page routes and added deterministic shared-permalink hydration coverage
+  - promoted export/share to live-covered by seeding a real thread, creating a live share link, and navigating via the backend `share_path`
+  - fixed direct `/knowledge/shared/:token` deep links by wiring the missing Next page routes, then promoted shared-permalink hydration to live-covered with the seeded-thread/share-path flow
   - added deterministic `/knowledge/thread/:threadId` branch coverage seeded from a multi-turn server thread
+  - fixed persisted settings hydration so legacy numeric note IDs are preserved instead of silently dropping note filters
+  - fixed live permalink hydration so `sender`-based `messages-with-context` payloads restore the expected query/answer/results state
+  - fixed export/share UX so clipboard failures no longer hide an already-created share link
   - upgraded settings/history checks from permissive smoke tests to route-scoped behavioral assertions, with preflight skips when live backend is unavailable
 - `/knowledge` targeted handoff command:
   - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "should carry answer context into workspace route" --reporter=line --workers=1`
@@ -109,6 +113,10 @@
   - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "hydrates shared conversations from tokenized knowledge routes" --reporter=line --workers=1`
   - outcome: `1 passed`, runtime about `8.8s`
   - classification note: this is deterministic route coverage, not live-backend coverage
+- `/knowledge` targeted live share/permalink command:
+  - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8081 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "creates a live share link and hydrates the shared permalink from a seeded thread" --reporter=line --workers=1`
+  - outcome: `1 passed`, runtime about `4.6s`
+  - classification note: this is the live-backed proof for export/share and shared permalink hydration
 - `/knowledge` targeted branch command:
   - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
   - outcome: `1 passed`, runtime about `6.6s`

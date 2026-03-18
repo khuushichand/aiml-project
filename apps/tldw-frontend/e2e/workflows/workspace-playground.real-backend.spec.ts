@@ -177,12 +177,18 @@ const fetchLiveMediaDetail = async (mediaId: number): Promise<Record<string, unk
   return payload as Record<string, unknown>
 }
 
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" ? (value as Record<string, unknown>) : null
+
 const extractAddedMediaId = (payload: Record<string, unknown> | null): number => {
+  const firstResult =
+    Array.isArray(payload?.results) ? asRecord(payload.results[0]) : null
+  const singleResult = asRecord(payload?.result)
   const candidate =
-    payload?.results?.[0]?.media_id ??
-    payload?.results?.[0]?.db_id ??
-    payload?.result?.media_id ??
-    payload?.result?.db_id ??
+    firstResult?.media_id ??
+    firstResult?.db_id ??
+    singleResult?.media_id ??
+    singleResult?.db_id ??
     payload?.media_id ??
     payload?.db_id ??
     payload?.id

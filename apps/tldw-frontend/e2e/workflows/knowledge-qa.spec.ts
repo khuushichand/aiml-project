@@ -10,6 +10,7 @@
  *
  * Run: npx playwright test e2e/workflows/knowledge-qa.spec.ts
  */
+import { type Page } from "@playwright/test"
 import {
   test,
   expect,
@@ -22,11 +23,258 @@ import {
   seedAuth,
   generateTestId,
   waitForConnection,
-  dismissConnectionModals
+  dismissConnectionModals,
+  fetchWithApiKey,
+  TEST_CONFIG
 } from "../utils/helpers"
+
+type SeededKnowledgeThread = {
+  threadId: string
+  query: string
+  answer: string
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" ? (value as Record<string, unknown>) : null
+
+const parseJsonRecord = async (
+  response: { json: () => Promise<unknown> },
+  label: string
+): Promise<Record<string, unknown>> => {
+  const payload = await response.json().catch(() => null)
+  const record = asRecord(payload)
+  if (!record) {
+    throw new Error(`${label} returned a non-object payload`)
+  }
+  return record
+}
+
+const canReachKnowledgeChatEndpoint = async (): Promise<{
+  reachable: boolean
+  reason?: string
+}> => {
+  const endpoint = `${TEST_CONFIG.serverUrl}/api/v1/chats/?limit=1&offset=0&ordering=-updated_at`
+  try {
+    const response = await fetchWithApiKey(endpoint)
+    if (response.ok) {
+      return { reachable: true }
+    }
+    return {
+      reachable: false,
+      reason: `GET /api/v1/chats preflight returned HTTP ${response.status}`
+    }
+  } catch (error) {
+    return {
+      reachable: false,
+      reason:
+        error instanceof Error ? error.message : "GET /api/v1/chats preflight failed"
+    }
+  }
+}
+
+const resolveKnowledgeCharacterId = async (): Promise<number> => {
+  const response = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/chats/?limit=20&offset=0&ordering=-updated_at`
+  )
+  if (!response.ok) {
+    return 2
+  }
+
+  const payload = await response.json().catch(() => null)
+  const chats = Array.isArray(payload)
+    ? payload
+    : Array.isArray(asRecord(payload)?.chats)
+      ? (asRecord(payload)?.chats as unknown[])
+      : Array.isArray(asRecord(payload)?.conversations)
+        ? (asRecord(payload)?.conversations as unknown[])
+        : []
+
+  const matchingChat = chats.find((entry) => {
+    const candidate = asRecord(entry)
+    return (
+      candidate?.source === "knowledge_qa" &&
+      Number.isFinite(Number(candidate.character_id)) &&
+      Number(candidate.character_id) > 0
+    )
+  })
+
+  const characterId = Number(asRecord(matchingChat)?.character_id)
+  return Number.isFinite(characterId) && characterId > 0 ? Math.trunc(characterId) : 2
+}
+
+const createSeededKnowledgeThread = async (slug: string): Promise<SeededKnowledgeThread> => {
+  const characterId = await resolveKnowledgeCharacterId()
+  const query = `Knowledge live share query ${slug}`
+  const answer = `Knowledge live share answer for ${slug} [1]`
+
+  const createResponse = await fetchWithApiKey(`${TEST_CONFIG.serverUrl}/api/v1/chats/`, TEST_CONFIG.apiKey, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      character_id: characterId,
+      title: `Knowledge live share ${slug}`,
+      state: "in-progress",
+      source: "knowledge_qa"
+    })
+  })
+  if (!createResponse.ok) {
+    throw new Error(`POST /api/v1/chats returned HTTP ${createResponse.status}`)
+  }
+  const createdThread = await parseJsonRecord(createResponse, "create knowledge thread")
+  const threadId = String(createdThread.id || "")
+  if (!threadId) {
+    throw new Error(`Create chat returned no usable id: ${JSON.stringify(createdThread)}`)
+  }
+
+  const userResponse = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/chats/${encodeURIComponent(threadId)}/messages`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        role: "user",
+        content: query
+      })
+    }
+  )
+  if (!userResponse.ok) {
+    throw new Error(`POST user message returned HTTP ${userResponse.status}`)
+  }
+
+  const assistantResponse = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/chats/${encodeURIComponent(threadId)}/messages`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        role: "assistant",
+        content: answer
+      })
+    }
+  )
+  if (!assistantResponse.ok) {
+    throw new Error(`POST assistant message returned HTTP ${assistantResponse.status}`)
+  }
+  const assistantMessage = await parseJsonRecord(
+    assistantResponse,
+    "create knowledge assistant message"
+  )
+  const assistantMessageId = String(assistantMessage.id || "")
+  if (!assistantMessageId) {
+    throw new Error(`Assistant message returned no id: ${JSON.stringify(assistantMessage)}`)
+  }
+
+  const ragContextResponse = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/chat/messages/${encodeURIComponent(assistantMessageId)}/rag-context`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message_id: assistantMessageId,
+        rag_context: {
+          search_query: query,
+          search_mode: "hybrid",
+          generated_answer: answer,
+          retrieved_documents: [
+            {
+              id: `knowledge-live-share-doc-${slug}`,
+              title: "Knowledge Live Share Source",
+              source_type: "media_db",
+              excerpt: `Evidence for ${slug}`,
+              score: 0.97,
+              url: `https://example.com/knowledge-live-share?slug=${slug}`
+            }
+          ],
+          citations: [
+            {
+              index: 1,
+              documentId: `knowledge-live-share-doc-${slug}`
+            }
+          ],
+          settings_snapshot: {
+            keyword: "__knowledge_QA__"
+          }
+        }
+      })
+    }
+  )
+  if (!ragContextResponse.ok) {
+    throw new Error(
+      `POST /api/v1/chat/messages/${assistantMessageId}/rag-context returned HTTP ${ragContextResponse.status}`
+    )
+  }
+
+  return {
+    threadId,
+    query,
+    answer
+  }
+}
+
+const revokeKnowledgeShareLink = async (
+  threadId: string,
+  shareId: string | null
+): Promise<void> => {
+  if (!threadId || !shareId) return
+
+  const response = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/chat/conversations/${encodeURIComponent(threadId)}/share-links/${encodeURIComponent(shareId)}`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "DELETE"
+    }
+  ).catch(() => null)
+
+  if (response && !response.ok && response.status !== 404) {
+    throw new Error(
+      `DELETE /api/v1/chat/conversations/${threadId}/share-links/${shareId} returned HTTP ${response.status}`
+    )
+  }
+}
+
+const deleteKnowledgeThread = async (threadId: string): Promise<void> => {
+  if (!threadId) return
+
+  const softDeleteResponse = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/chats/${encodeURIComponent(threadId)}`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "DELETE"
+    }
+  ).catch(() => null)
+
+  if (softDeleteResponse && !softDeleteResponse.ok && softDeleteResponse.status !== 404) {
+    throw new Error(
+      `DELETE /api/v1/chats/${threadId} returned HTTP ${softDeleteResponse.status}`
+    )
+  }
+
+  const hardDeleteResponse = await fetchWithApiKey(
+    `${TEST_CONFIG.serverUrl}/api/v1/chats/${encodeURIComponent(threadId)}?hard_delete=true`,
+    TEST_CONFIG.apiKey,
+    {
+      method: "DELETE"
+    }
+  ).catch(() => null)
+
+  if (hardDeleteResponse && !hardDeleteResponse.ok && hardDeleteResponse.status !== 404) {
+    throw new Error(
+      `DELETE /api/v1/chats/${threadId}?hard_delete=true returned HTTP ${hardDeleteResponse.status}`
+    )
+  }
+}
 
 test.describe("KnowledgeQA Workflow", () => {
   let qaPage: KnowledgeQAPage
+
+  const clickAskButton = async (page: Page): Promise<void> => {
+    const askButton = page.getByRole("button", { name: /^Ask$/i })
+    await expect(askButton).toBeEnabled({ timeout: 10_000 })
+    await askButton.click()
+  }
 
   test.beforeEach(async ({ page }) => {
     await seedAuth(page)
@@ -283,9 +531,7 @@ test.describe("KnowledgeQA Workflow", () => {
       const searchInput = await qaPage.getSearchInput()
       await searchInput.fill(query)
       await dismissConnectionModals(authedPage)
-      await authedPage.getByRole("button", { name: /^Ask$/i }).click({
-        force: true
-      })
+      await clickAskButton(authedPage)
 
       await qaPage.waitForResults()
       await expect(
@@ -761,6 +1007,130 @@ test.describe("KnowledgeQA Workflow", () => {
   // ═════════════════════════════════════════════════════════════════════
 
   test.describe("Export & Sharing", () => {
+    test("creates a live share link and hydrates the shared permalink from a seeded thread", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      skipIfServerUnavailable(serverInfo)
+
+      const knowledgeChatPreflight = await canReachKnowledgeChatEndpoint()
+      test.skip(
+        !knowledgeChatPreflight.reachable,
+        knowledgeChatPreflight.reason ||
+          "Skipping live KnowledgeQA share flow: chat bootstrap endpoint unavailable"
+      )
+
+      qaPage = new KnowledgeQAPage(authedPage)
+      const slug = generateTestId("knowledge-live-share")
+      let seededThreadId = ""
+      let createdShareId: string | null = null
+
+      try {
+        const seededThread = await createSeededKnowledgeThread(slug)
+        seededThreadId = seededThread.threadId
+        const renderedAnswerText = seededThread.answer.replace(" [1]", "")
+
+        const threadLoadResponsePromise = authedPage.waitForResponse(
+          (response) =>
+            response.request().method().toUpperCase() === "GET" &&
+            response.url().includes(
+              `/api/v1/chat/conversations/${encodeURIComponent(seededThread.threadId)}/messages-with-context`
+            ),
+          { timeout: 15_000 }
+        )
+
+        await authedPage.goto(`/knowledge/thread/${encodeURIComponent(seededThread.threadId)}`, {
+          waitUntil: "domcontentloaded"
+        })
+        await waitForConnection(authedPage)
+        await qaPage.waitForReady()
+
+        const threadLoadResponse = await threadLoadResponsePromise
+        expect(threadLoadResponse.ok()).toBeTruthy()
+        const threadMessages = await threadLoadResponse.json().catch(() => null)
+        expect(Array.isArray(threadMessages)).toBeTruthy()
+        expect(threadMessages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ sender: "user", content: seededThread.query }),
+            expect.objectContaining({
+              sender: "assistant",
+              content: seededThread.answer,
+              rag_context: expect.objectContaining({
+                search_query: seededThread.query,
+                generated_answer: seededThread.answer
+              })
+            })
+          ])
+        )
+        await qaPage.waitForResults()
+
+        const searchInput = await qaPage.getSearchInput()
+        await expect(searchInput).toHaveValue(seededThread.query)
+        await expect(authedPage.getByTestId("knowledge-answer-content")).toContainText(
+          renderedAnswerText
+        )
+        await expect(
+          qaPage.getEvidencePanel().getByRole("heading", {
+            name: /Knowledge Live Share Source/i
+          })
+        ).toBeVisible()
+
+        const shareResponsePromise = authedPage.waitForResponse((response) => {
+          const request = response.request()
+          return (
+            request.method().toUpperCase() === "POST" &&
+            response.url().includes(
+              `/api/v1/chat/conversations/${encodeURIComponent(seededThread.threadId)}/share-links`
+            )
+          )
+        })
+
+        await authedPage.keyboard.press("Escape").catch(() => {})
+        const exportButton = qaPage.resultsShell.getByRole("button", { name: /^Export$/i })
+        await expect(exportButton).toBeVisible()
+        await exportButton.click()
+        const exportDialog = authedPage.getByRole("dialog", { name: /Export Conversation/i })
+        await expect(exportDialog).toBeVisible()
+        await exportDialog.getByRole("button", { name: /Create share link/i }).click()
+
+        const shareResponse = await shareResponsePromise
+        expect(shareResponse.ok()).toBeTruthy()
+        const sharePayload = await parseJsonRecord(
+          shareResponse,
+          "create knowledge share link"
+        )
+        const sharePath = String(sharePayload.share_path || "")
+        createdShareId = String(sharePayload.share_id || "") || null
+        expect(sharePath).toMatch(/^\/knowledge\/shared\//)
+        await expect(exportDialog.getByText(/Active link expires/i)).toBeVisible()
+
+        await authedPage.goto(sharePath, {
+          waitUntil: "domcontentloaded"
+        })
+        await waitForConnection(authedPage)
+        await qaPage.waitForReady()
+        await qaPage.waitForResults()
+
+        const sharedSearchInput = await qaPage.getSearchInput()
+        await expect(sharedSearchInput).toHaveValue(seededThread.query)
+        await expect(authedPage.getByTestId("knowledge-answer-content")).toContainText(
+          renderedAnswerText
+        )
+        await expect(
+          qaPage.getEvidencePanel().getByRole("heading", {
+            name: /Knowledge Live Share Source/i
+          })
+        ).toBeVisible()
+        await expect(authedPage.getByRole("button", { name: /^Export$/i })).toBeVisible()
+      } finally {
+        await revokeKnowledgeShareLink(seededThreadId, createdShareId)
+        await deleteKnowledgeThread(seededThreadId)
+      }
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
     test("opens the export dialog and manages share links for a server-backed thread", async ({
       authedPage,
       diagnostics
@@ -933,9 +1303,7 @@ test.describe("KnowledgeQA Workflow", () => {
       const searchInput = await qaPage.getSearchInput()
       await searchInput.fill(query)
       await dismissConnectionModals(authedPage)
-      await authedPage.getByRole("button", { name: /^Ask$/i }).click({
-        force: true
-      })
+      await clickAskButton(authedPage)
       await qaPage.waitForResults()
 
       await authedPage.getByRole("button", { name: /^Export$/i }).click()
@@ -1414,9 +1782,7 @@ test.describe("KnowledgeQA Workflow", () => {
       const searchInput = await qaPage.getSearchInput()
       await searchInput.fill(query)
       await dismissConnectionModals(authedPage)
-      await authedPage.getByRole("button", { name: /^Ask$/i }).click({
-        force: true
-      })
+      await clickAskButton(authedPage)
       await qaPage.waitForResults()
 
       await expect(authedPage.getByTestId("knowledge-answer-content")).toContainText(

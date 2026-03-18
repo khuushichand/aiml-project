@@ -236,7 +236,7 @@ export class KnowledgeQAPage {
 
   async getHistoryItems(): Promise<Locator> {
     return this.getHistorySidebar().locator(
-      "[data-testid*='history-item'], [aria-current], button"
+      "[data-testid='knowledge-history-item'], [data-testid*='history-item'], .group.relative > button:not([aria-label])"
     )
   }
 

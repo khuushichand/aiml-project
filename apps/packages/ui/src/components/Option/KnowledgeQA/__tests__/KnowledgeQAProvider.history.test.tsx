@@ -206,6 +206,72 @@ describe("KnowledgeQAProvider history hydration", () => {
     })
   })
 
+  it("hydrates sender-based thread payloads returned by the live messages-with-context API", async () => {
+    fetchWithAuthMock.mockImplementation(async (path: string) => {
+      if (path.includes("/messages-with-context")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              id: "msg-user-live",
+              sender: "user",
+              content: "Which source supports the conclusion?",
+              timestamp: "2026-02-18T10:02:00.000Z",
+            },
+            {
+              id: "msg-assistant-live",
+              sender: "assistant",
+              content: "The conclusion is supported by Source A [1].",
+              timestamp: "2026-02-18T10:02:02.000Z",
+              rag_context: {
+                search_query: "Which source supports the conclusion?",
+                generated_answer: "The conclusion is supported by Source A [1].",
+                retrieved_documents: [
+                  {
+                    id: "doc-live-1",
+                    title: "Source A",
+                    source_type: "media_db",
+                    excerpt: "Source A confirms the conclusion.",
+                    score: 0.94,
+                  },
+                ],
+              },
+            },
+          ],
+          text: async () => "",
+        }
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => [],
+        text: async () => "",
+      }
+    })
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    await act(async () => {
+      await latestContext!.selectThread("remote-thread-live-sender")
+    })
+
+    await waitFor(() => {
+      expect(latestContext!.query).toBe("Which source supports the conclusion?")
+      expect(latestContext!.answer).toBe("The conclusion is supported by Source A [1].")
+      expect(latestContext!.results).toHaveLength(1)
+      expect(latestContext!.citations).toEqual(
+        expect.arrayContaining([expect.objectContaining({ index: 1 })])
+      )
+    })
+  })
+
   it("toggles pin state and persists to localStorage", async () => {
     render(
       <KnowledgeQAProvider>

@@ -260,6 +260,74 @@
   - Added a deterministic route-level Playwright case that hydrates `/knowledge/thread/source-thread-1`, clicks `Start Branch`, asserts the child-thread creation payload includes `parent_conversation_id` and `forked_from_message_id`, and verifies the UI rehydrates to the seeded branch turn.
   - Verification: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1` => `1 passed (6.6s)`
 
+### KQ-010: Persisted Knowledge note filters silently dropped legacy numeric note IDs
+
+- Status: Resolved as product bug
+- Route: `/knowledge`
+- Feature: restoring persisted note filters from local settings
+- Reproduction:
+  1. Persist KnowledgeQA settings where `include_note_ids` contains legacy numeric IDs from older stored state.
+  2. Reload `/knowledge` so the provider hydrates from persisted settings.
+  3. Observe that numeric note IDs are discarded during normalization and the note-filter state restores incomplete.
+- Evidence:
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/KnowledgeQAProvider.tsx:330`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/KnowledgeQAProvider.persistence.test.tsx`
+- Suspected layer: provider settings normalization in `normalizeNoteFilterIds`
+- Why it matters: beta users carrying forward older KnowledgeQA settings could lose note scoping silently, changing retrieval behavior without any visible warning
+- Resolution:
+  - Updated `normalizeNoteFilterIds` to preserve finite numeric IDs by stringifying them before the merged string-filter pass.
+  - Added a provider regression proving legacy numeric note IDs still hydrate into the restored settings state.
+  - Verification: `bunx vitest run ../packages/ui/src/components/Option/KnowledgeQA/__tests__/KnowledgeQAProvider.persistence.test.tsx` => `1 passed`
+
+### KQ-011: Live permalink hydration failed because the backend returned `sender` instead of `role`
+
+- Status: Resolved as product bug
+- Route: `/knowledge/thread/:threadId`, `/knowledge/shared/:shareToken`
+- Feature: hydrating live KnowledgeQA permalinks from `/api/v1/chat/conversations/:id/messages-with-context`
+- Reproduction:
+  1. Seed a real KnowledgeQA thread with user and assistant turns plus stored `rag_context`.
+  2. Open `/knowledge/thread/:threadId` or create a share link and open `/knowledge/shared/:shareToken`.
+  3. Observe that the live API responds with message objects using `sender`, not `role`.
+  4. Observe that the route renders the landing shell instead of the hydrated query/answer/results state because the provider normalizes those turns incorrectly.
+- Evidence:
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/KnowledgeQAProvider.tsx:350`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/KnowledgeQAProvider.tsx:380`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/KnowledgeQAProvider.history.test.tsx`
+  - `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts:1010`
+- Suspected layer: provider message normalization for live `messages-with-context` payloads
+- Why it matters: direct thread links and shared KnowledgeQA permalinks are core beta flows; with live `sender` payloads, users could open valid permalinks and see no hydrated answer or evidence
+- Resolution:
+  - Updated `normalizeMessagesWithContext` to fall back to `candidate.sender` when `candidate.role` is absent.
+  - Added a provider regression using sender-based payloads returned by the live API.
+  - Added a live seeded-thread Playwright case that creates a share link from a real thread, follows the returned `share_path`, and verifies the shared permalink renders the expected query, answer, and evidence.
+  - Verification:
+    - `bunx vitest run ../packages/ui/src/components/Option/KnowledgeQA/__tests__/KnowledgeQAProvider.history.test.tsx` => `1 passed`
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8081 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "creates a live share link and hydrates the shared permalink from a seeded thread" --reporter=line --workers=1` => `1 passed`
+
+### KQ-012: Clipboard failures hid an already-created KnowledgeQA share link
+
+- Status: Resolved as product bug
+- Route: `/knowledge`
+- Feature: export/share dialog after creating a share link
+- Reproduction:
+  1. Open the KnowledgeQA export dialog for a server-backed thread.
+  2. Click `Create Share Link` while clipboard write access is denied or rejected.
+  3. Observe that the backend still returns a valid share link, but the dialog never surfaces the active-link state and offers no revoke path.
+- Evidence:
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/ExportDialog.tsx:263`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/ExportDialog.tsx:295`
+  - `apps/packages/ui/src/components/Option/KnowledgeQA/__tests__/ExportDialog.a11y.test.tsx`
+  - `apps/tldw-frontend/e2e/workflows/knowledge-qa.spec.ts:1010`
+- Suspected layer: export dialog state ordering around share-link creation versus clipboard copy
+- Why it matters: beta users can hit clipboard permission failures in browsers; without the fix, a real server-created share link became invisible and effectively unrevokable from the UI
+- Resolution:
+  - Moved `setActiveShareLink` so the created link is stored before the clipboard write.
+  - Split clipboard-copy failure into its own error path so the dialog keeps the active link visible and still offers revoke.
+  - Added a dialog regression for rejected clipboard writes and kept the live share/permalink flow as end-to-end proof that the real route now surfaces the created link.
+  - Verification:
+    - `bunx vitest run ../packages/ui/src/components/Option/KnowledgeQA/__tests__/ExportDialog.a11y.test.tsx` => `1 passed`
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8081 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "creates a live share link and hydrates the shared permalink from a seeded thread|opens the export dialog and manages share links|keeps citation jumps aligned" --reporter=line --workers=1` => `3 passed (8.4s)`
+
 ### WP-002: Workspace offline E2E bypass flag was ignored, so non-critical bootstrap failures spawned blocking connection modals
 
 - Status: Resolved as suite + layout hardening
@@ -547,7 +615,7 @@
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
-- Current `/knowledge` live-backed summary after repairs: `22 passed`, `0 failed`
+- Current `/knowledge` live-backed summary after repairs: `23 passed`, `0 failed`
 - Current `/knowledge` verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --reporter=line --workers=1`
 - Current `/knowledge` failure-cluster verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "treats whitespace-only answers as no generated answer|should open settings panel|should switch between presets|should toggle expert mode|should open history sidebar|should start new search with Cmd\\+K" --reporter=line --workers=1`
 - Current `/knowledge` failure-cluster verification summary: `1 passed`, `5 skipped`
@@ -559,6 +627,8 @@
 - Current `/knowledge` export/share verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` shared-permalink verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "hydrates shared conversations from tokenized knowledge routes" --reporter=line --workers=1`
 - Current `/knowledge` shared-permalink verification summary: `1 passed`, `0 failed`
+- Current `/knowledge` live share/permalink verification command: `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8081 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "creates a live share link and hydrates the shared permalink from a seeded thread" --reporter=line --workers=1`
+- Current `/knowledge` live share/permalink verification summary: `1 passed`, `0 failed`
 - Current `/knowledge` branch verification command: `bunx playwright test e2e/workflows/knowledge-qa.spec.ts --grep "branches from a prior turn on the thread permalink route" --reporter=line --workers=1`
 - Current `/knowledge` branch verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` deterministic summary after repairs: `11 passed`, `0 failed`

@@ -329,7 +329,14 @@ function normalizeAnswerText(value: unknown): string | null {
 
 function normalizeNoteFilterIds(values: unknown): string[] {
   if (!Array.isArray(values)) return []
-  return mergeStringFilters(values as Array<string | null | undefined>)
+  const normalizedValues = values.map((candidate) => {
+    if (typeof candidate === "string") return candidate
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return String(Math.trunc(candidate))
+    }
+    return null
+  })
+  return mergeStringFilters(normalizedValues)
 }
 
 function normalizeMessageRole(role: unknown): KnowledgeQAMessage["role"] {
@@ -370,7 +377,7 @@ function normalizeMessagesWithContext(
       return {
         id,
         conversationId: threadId,
-        role: normalizeMessageRole(candidate.role),
+        role: normalizeMessageRole(candidate.role ?? candidate.sender),
         content,
         timestamp:
           typeof timestampCandidate === "string"
