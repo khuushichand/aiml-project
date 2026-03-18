@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Callable
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -23,7 +23,6 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import content_db_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -70,7 +69,7 @@ async def run_claims_review_metrics_once(
     aggregator: Callable[..., int] | None = None,
     lookback_days: int | None = None,
     report_date: str | None = None,
-    db: MediaDatabase | None = None,
+    db: Any | None = None,
     target_user_id: str | None = None,
 ) -> int:
     agg_fn = aggregator or aggregate_claims_review_extractor_metrics_daily

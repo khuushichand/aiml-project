@@ -7,7 +7,7 @@
 - Raw `MediaDatabase(...)` constructors in app code: 7
 - Operational `create_media_database(...)` call sites in app code: 9
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 128
+- `Media_DB_v2` references in app code: 127
 
 Notes:
 
@@ -117,6 +117,7 @@ Status:
 
 - Completed for the previously identified representative leaves.
 - `app/services/admin_bundle_service.py` now resolves the media schema version through `media_db.runtime.factory.get_current_media_schema_version()` instead of importing `MediaDatabase` from the shim directly.
+- `app/services/claims_review_metrics_scheduler.py` no longer binds `MediaDatabase` from the shim just for the optional `db` parameter annotation.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory

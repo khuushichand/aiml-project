@@ -727,9 +727,11 @@ def test_claims_alerts_scheduler_imports_managed_media_database_from_media_db_ap
     assert module.managed_media_database is media_db_api.managed_media_database
 
 
-def test_claims_review_metrics_scheduler_imports_managed_media_database_from_media_db_api():
+def test_claims_review_metrics_scheduler_imports_managed_media_database_from_media_db_api(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
     module = importlib.reload(claims_review_metrics_scheduler)
     assert module.managed_media_database is media_db_api.managed_media_database
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():
