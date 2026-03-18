@@ -323,6 +323,10 @@ def test_db_manager_does_not_bind_media_database_from_media_db_v2(monkeypatch):
     assert "MediaDatabase" not in module.__dict__
 
 
+def test_db_manager_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(DB_Manager)
+
+
 def test_claim_review_assignment_does_not_bind_media_database_from_media_db_v2(monkeypatch):
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 

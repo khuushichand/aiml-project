@@ -569,7 +569,7 @@ def _require_db_instance(args, kwargs, func_name: str) -> Any:
 
 def get_all_content_from_database(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
-        # Media_DB_v2 exposes this as a standalone helper requiring db_instance
+        # The extracted legacy helper still expects an explicit db_instance.
         return sqlite_get_all_content_from_database(*args, **kwargs)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("get_all_content_from_database")
@@ -887,7 +887,7 @@ def get_latest_transcription(*args, **kwargs):
 def fetch_paginated_data(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
         db_instance: Any = _require_db_instance(args, kwargs, 'fetch_paginated_data')
-        # Media_DB_v2 does not expose fetch_paginated_data; prefer get_paginated_files
+        # The underlying content DB exposes paginated file listing directly.
         page = kwargs.get('page', 1)
         results_per_page = kwargs.get('results_per_page', 50)
         return db_instance.get_paginated_files(page=page, results_per_page=results_per_page)
@@ -917,8 +917,8 @@ def get_all_document_versions(db_instance: Any, media_id: int, **kwargs):
     """
     Wrapper to get all document versions for a given media_id from a MediaDatabase instance.
     """
-    # db_type check might be relevant if you support multiple DB backends via DB_Manager
-    # For now, assume db_instance is always a Media_DB_v2.MediaDatabase instance.
+    # db_type check might be relevant if you support multiple DB backends via DB_Manager.
+    # For now, this wrapper expects a Media DB-like instance.
     db_instance = _unwrap_media_database(db_instance)
     if _is_media_database_instance(db_instance):
         # Call the INSTANCE method, passing only the relevant kwargs
