@@ -5,9 +5,9 @@
 ## Normalized Counts
 
 - Raw `MediaDatabase(...)` constructors in app code: 7
-- Operational `create_media_database(...)` call sites in app code: 9
+- Operational `create_media_database(...)` call sites in app code: 10
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 83
+- `Media_DB_v2` references in app code: 82
 
 Notes:
 
@@ -70,6 +70,7 @@ Notes:
 | `app/core/Data_Tables/jobs_worker.py` | 1 | cached per-user DB owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Evaluations/embeddings_abtest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | explicit owner-controlled lifetime is fine |
 | `app/core/DB_Management/Users_DB.py` | 1 | factory wrapper returns DB instance | `KEEP_RAW` | wrapper boundary, not local scope |
+| `app/core/RAG/rag_service/agentic_chunker.py` | 1 | cached singleton structure-index DB owner through shared factory | `MOVE_FACTORY` already satisfied | `_get_media_db_for_structure()` now preserves singleton ownership while routing construction through the shared factory |
 | `app/core/TTS/tts_jobs_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | `_handle_tts_job(...)` still owns close behavior |
 
 ## Raw `MediaDatabase(...)` Constructor Inventory
@@ -121,6 +122,7 @@ Status:
 - `app/services/claims_review_metrics_scheduler.py` no longer binds `MediaDatabase` from the shim just for the optional `db` parameter annotation.
 - `app/core/Claims_Extraction/claims_notifications.py` no longer binds `MediaDatabase` from the shim just for notification-helper annotations.
 - `app/core/Claims_Extraction/ingestion_claims.py` no longer binds `MediaDatabase` from the shim just for claim-storage typing.
+- `app/core/RAG/rag_service/agentic_chunker.py` now creates its cached structure-index DB through `media_db.api.create_media_database(...)` instead of the shim constructor.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory

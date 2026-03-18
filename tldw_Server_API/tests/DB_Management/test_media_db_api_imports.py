@@ -76,6 +76,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Li
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
 from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
 from tldw_Server_API.app.core.External_Sources import sync_coordinator
+from tldw_Server_API.app.core.RAG.rag_service import agentic_chunker
 from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline
 from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
@@ -780,6 +781,12 @@ def test_workflow_knowledge_crud_imports_managed_media_database_from_media_db_ap
 def test_unified_pipeline_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(unified_pipeline)
     assert module.managed_media_database is media_db_api.managed_media_database
+
+
+def test_agentic_chunker_imports_create_media_database_from_media_db_api(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    module = importlib.reload(agentic_chunker)
+    assert module.create_media_database is media_db_api.create_media_database
 
 
 def test_workflow_media_ingest_imports_managed_media_database_from_media_db_api():

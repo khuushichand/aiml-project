@@ -179,3 +179,30 @@ def test_open_section_anchor_and_table_heuristic():
     # At least the first after reordering should be the table-like region
     text_first = (doc.content or "")[reordered[0][0]:reordered[0][1]]
     assert tb.looks_table(text_first)
+
+
+def test_get_media_db_for_structure_uses_shared_factory(monkeypatch):
+    import tldw_Server_API.app.core.RAG.rag_service.agentic_chunker as ac
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(ac, "_STRUCT_DB", None)
+    monkeypatch.setattr(ac, "create_media_database", lambda client_id, **kwargs: captured.update({"client_id": client_id, **kwargs}) or "db-sentinel")
+    monkeypatch.setitem(ac.__dict__, "_STRUCT_DB", None)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.config.load_comprehensive_config",
+        lambda: {"stub": True},
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.DB_Management.content_backend.get_content_backend",
+        lambda _cfg: "backend-sentinel",
+    )
+
+    db = ac._get_media_db_for_structure()
+
+    assert db == "db-sentinel"
+    assert captured == {
+        "client_id": "agentic_toolbox",
+        "db_path": ":memory:",
+        "backend": "backend-sentinel",
+    }

@@ -34,6 +34,9 @@ from tldw_Server_API.app.core.LLM_Calls.structured_output import (
     StructuredOutputOptions,
     parse_structured_output,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    create_media_database,
+)
 
 from .advanced_cache import AGENTIC_CACHE
 from .agentic_tools import make_default_registry
@@ -121,13 +124,16 @@ def _get_media_db_for_structure() -> Any:
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config as _load_cfg
         from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend as _get_cb
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MDB
         cfg = _load_cfg()
         backend = _get_cb(cfg) if cfg else None
         if backend is None:
             return None
         # Use in-memory path; backend drives the actual connection
-        _STRUCT_DB = _MDB(db_path=":memory:", client_id="agentic_toolbox", backend=backend)
+        _STRUCT_DB = create_media_database(
+            "agentic_toolbox",
+            db_path=":memory:",
+            backend=backend,
+        )
     except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return None
     return _STRUCT_DB
