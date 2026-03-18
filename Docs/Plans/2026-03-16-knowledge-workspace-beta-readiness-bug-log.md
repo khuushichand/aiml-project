@@ -460,6 +460,32 @@
     - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18005 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --grep "generates and downloads live slides for a document-backed workspace source" --reporter=line --workers=1` => `1 passed`
     - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18005 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `2 passed`
 
+### WP-011: Workspace mind map and data-table live proof was blocked by generic chat test-mode responses
+
+- Status: Resolved as backend test-mode hardening plus live-proof expansion
+- Route: `/workspace-playground`
+- Feature: studio mind-map and data-table generation for workspace-selected sources
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Select one or more ready sources and trigger `Mind Map` or `Data Table`
+  3. Observe that the route sends those outputs through `/api/v1/chat/completions`
+  4. Observe that the audit backend’s test-mode mock returned the same generic `Mock response: ...` string regardless of the system prompt
+  5. Observe that `Mind Map` and `Data Table` could therefore only be covered deterministically, because the live workspace probe could not receive valid Mermaid or markdown-table content from the backend
+- Evidence:
+  - `tldw_Server_API/app/api/v1/endpoints/chat.py`
+  - `tldw_Server_API/tests/Chat/unit/test_chat_endpoint_helpers.py`
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.output-matrix.probe.spec.ts`
+- Suspected layer: chat endpoint test-mode mock behavior rather than the workspace route itself
+- Why it matters: the previous audit backend could not honestly live-prove two visible beta-surface workspace outputs, and the matrix would have stayed stuck at `Mock-only` even though the page wiring and download flows were otherwise intact
+- Resolution:
+  - Hardened the chat endpoint’s test-mode mock builder so it inspects both `system_message` and message payloads, returning deterministic Mermaid for mind-map prompts and deterministic markdown tables for data-table prompts instead of a generic placeholder string.
+  - Added focused backend regressions covering dict-backed messages, object-backed messages, and the explicit `system_message` path used on the live endpoint.
+  - Expanded the live workspace output probe so it now generates plus downloads `Mind Map` and `Data Table` alongside the previously live-proved outputs.
+  - Verification:
+    - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Chat/unit/test_chat_endpoint_helpers.py -q` => `8 passed`
+    - Direct `POST /api/v1/chat/completions` against `127.0.0.1:18008` now returns valid Mermaid mindmap content for the mind-map prompt and a valid markdown table for the data-table prompt
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18008 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `2 passed`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
@@ -500,7 +526,7 @@
 - `/workspace-playground` route-level compare-sources generation is now covered deterministically from source selection through completed artifact viewing
 - `/workspace-playground` route-level studio cancel and interrupted-reload recovery is now covered deterministically
 - `/workspace-playground` live non-audio studio output generation and downloads now pass end to end for report, compare-sources, timeline, and slides
-- Audit correction: mind map and data-table outputs remain non-live in this backend because `/api/v1/chat/completions` stays in test-mode mock behavior, and quiz/flashcards remain non-live because `/api/v1/quizzes/generate` still requires real provider credentials
+- Audit correction: quiz and flashcards remain non-live because `/api/v1/quizzes/generate` still requires real provider credentials in this backend
 - Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search; grounded chat, compare generation, and global search now have deterministic route proof, but remain `Mock-only` overall until live proof exists
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly

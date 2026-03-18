@@ -26,6 +26,8 @@ const BACKEND_SUPPORTED_OUTPUTS: WorkspaceProbeOutput[] = [
   { label: "Report", textDownload: true },
   { label: "Compare Sources", textDownload: true },
   { label: "Timeline", textDownload: true },
+  { label: "Mind Map", textDownload: true },
+  { label: "Data Table", textDownload: true },
 ]
 
 const hasErrorText = (content: string) =>
