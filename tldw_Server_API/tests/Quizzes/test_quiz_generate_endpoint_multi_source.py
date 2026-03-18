@@ -46,6 +46,30 @@ async def test_generate_quiz_forwards_sources_array(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_quiz_forwards_model_and_api_provider(monkeypatch):
+    captured: dict = {}
+
+    async def fake_generate_quiz_from_sources(**kwargs):
+        captured.update(kwargs)
+        return {"quiz": {"id": 1}, "questions": []}
+
+    monkeypatch.setattr(quizzes_endpoint, "generate_quiz_from_sources", fake_generate_quiz_from_sources)
+
+    request = QuizGenerateRequest.model_validate(
+        {
+            "media_id": 42,
+            "num_questions": 3,
+            "model": "gpt-4o-mini",
+            "api_provider": "openai",
+        }
+    )
+    await quizzes_endpoint.generate_quiz(request=request, db=Mock(), media_db=Mock())
+
+    assert captured["model"] == "gpt-4o-mini"
+    assert captured["api_provider"] == "openai"
+
+
+@pytest.mark.asyncio
 async def test_generate_quiz_maps_provenance_validation_error_to_422(monkeypatch):
     async def fake_generate_quiz_from_sources(**kwargs):
         raise QuizProvenanceValidationError("invalid source citations")

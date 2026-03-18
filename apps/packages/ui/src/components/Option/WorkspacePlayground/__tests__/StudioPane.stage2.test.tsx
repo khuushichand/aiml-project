@@ -530,6 +530,13 @@ describe("StudioPane Stage 2 workflows", () => {
         addedAt: new Date("2026-02-18T00:00:00.000Z")
       }
     ]
+    mockGetChatModels.mockResolvedValue([
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        provider: "openai"
+      }
+    ])
 
     renderStudioPane()
 
@@ -541,12 +548,20 @@ describe("StudioPane Stage 2 workflows", () => {
 
     expect(mockGenerateQuiz).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ media_id: 101 }),
+      expect.objectContaining({
+        media_id: 101,
+        model: "gpt-4o-mini",
+        api_provider: "openai"
+      }),
       expect.any(Object)
     )
     expect(mockGenerateQuiz).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ media_id: 202 }),
+      expect.objectContaining({
+        media_id: 202,
+        model: "gpt-4o-mini",
+        api_provider: "openai"
+      }),
       expect.any(Object)
     )
   })

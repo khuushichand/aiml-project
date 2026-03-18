@@ -26,12 +26,14 @@ const BACKEND_SUPPORTED_OUTPUTS: WorkspaceProbeOutput[] = [
   { label: "Report", textDownload: true },
   { label: "Compare Sources", textDownload: true },
   { label: "Timeline", textDownload: true },
+  { label: "Quiz", textDownload: true },
+  { label: "Flashcards", textDownload: true },
   { label: "Mind Map", textDownload: true },
   { label: "Data Table", textDownload: true },
 ]
 
 const hasErrorText = (content: string) =>
-  /error encountered|generation failed|generation canceled before completion|interrupted|no usable|download failed|could not/i.test(
+  /error encountered|generation failed|generation canceled before completion|interrupted|no usable|download failed|could not|api key/i.test(
     content,
   )
 const WORKSPACE_EMBEDDING_PROVIDER = "huggingface"
@@ -325,7 +327,7 @@ const verifyGeneratedOutputs = async (
 
           const cardText = (await artifactCard.textContent()) || ""
           if (
-            /failed|encountered an error|generation canceled before completion|interrupted|no usable/i.test(
+            /failed|encountered an error|generation canceled before completion|interrupted|no usable|api key/i.test(
               cardText,
             )
           ) {

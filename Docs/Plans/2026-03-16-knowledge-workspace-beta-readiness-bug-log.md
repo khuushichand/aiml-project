@@ -486,6 +486,37 @@
     - Direct `POST /api/v1/chat/completions` against `127.0.0.1:18008` now returns valid Mermaid mindmap content for the mind-map prompt and a valid markdown table for the data-table prompt
     - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18008 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `2 passed`
 
+### WP-012: Workspace flashcards live study-aid runs stalled when provider-selected test mode returned a different API-key error string
+
+- Status: Resolved as backend test-mode hardening plus live-proof promotion
+- Route: `/workspace-playground`
+- Feature: studio quiz and flashcards study-aid generation for workspace-selected sources
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Select ready sources and trigger `Flashcards` with a selected chat runtime
+  3. Observe that the workspace route passes `provider` and `model` through to `/api/v1/flashcards/generate`
+  4. Observe that the backend test-mode fallback only handled `"LLM provider is required"` and `"requires an API key"`
+  5. Observe that the actual provider-selected failure string was `"You didn't provide an API key"`, so the endpoint returned a hard error instead of deterministic cards
+  6. Observe that the live output probe then sat in a false `pending` state because the flashcards artifact never completed and the probe did not classify API-key text as a terminal failure
+- Evidence:
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx`
+  - `tldw_Server_API/app/api/v1/endpoints/flashcards.py`
+  - `tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py`
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.output-matrix.probe.spec.ts`
+  - Direct `POST /api/v1/flashcards/generate` against `127.0.0.1:18012` with `provider=openai` and `model=gpt-4o` now returns deterministic cards after the fix
+- Suspected layer: backend flashcards test-mode fallback logic plus probe failure classification, not the workspace route wiring itself
+- Why it matters: the matrix would have continued understating live study-aid readiness, and a real regression here would have been reported by the probe as an opaque timeout instead of a diagnosable terminal failure
+- Resolution:
+  - Added a backend regression covering provider-selected missing-API-key errors in test mode.
+  - Expanded the flashcards test-mode fallback matcher so it also catches `"didn't provide an API key"` responses, which are produced when the workspace route passes a selected provider/model.
+  - Hardened the live output probe so API-key text is treated as a failed terminal state instead of sitting in `pending`.
+  - Re-ran the live output probe and the full four-spec audit against a fresh backend, promoting workspace quiz and flashcards study aids to `Live-covered`.
+  - Verification:
+    - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Flashcards/test_flashcards_endpoint_integration.py -k "missing_api_key_errors or without_provider_config" -q` => `2 passed`
+    - Direct `POST /api/v1/flashcards/generate` against `127.0.0.1:18012` with `provider=openai` and `model=gpt-4o` => deterministic `count: 2`
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `2 passed`
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18012 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `39 passed`
+
 ## Notes
 
 - Baseline summary: `17 passed`, `7 failed`
@@ -513,20 +544,20 @@
 - Current `/workspace-playground` targeted compare-sources verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "generates compare-sources output for two selected sources through the studio pane" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted compare-sources verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted live output-matrix verification command: `bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1`
-- Current `/workspace-playground` targeted live output-matrix verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` targeted live output-matrix verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted studio cancel/recovery verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "cancels in-flight summary generation|recovers interrupted summary generation" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted studio cancel/recovery verification summary: `2 passed`, `0 failed`
 - Current `/workspace-playground` targeted live paste-intake verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "ingests pasted text through the live add-source flow" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted live paste-intake verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` real-backend summary after repairs: `4 passed`, `0 failed`
-- Current four-spec audit rerun: `38 passed`, `0 failed`
+- Current four-spec audit rerun: `39 passed`, `0 failed`
 - `/workspace-playground` live add-source ingestion and source selection now also pass through a real pasted-text workflow
 - `/workspace-playground` route-level advanced filter and sort persistence is now covered deterministically across sources-pane remounts
 - `/workspace-playground` route-level grounded chat plus result-backed global search is now covered deterministically, and the broken chat-focus handoff has been fixed
 - `/workspace-playground` route-level compare-sources generation is now covered deterministically from source selection through completed artifact viewing
 - `/workspace-playground` route-level studio cancel and interrupted-reload recovery is now covered deterministically
-- `/workspace-playground` live non-audio studio output generation and downloads now pass end to end for report, compare-sources, timeline, and slides
-- Audit correction: quiz and flashcards remain non-live because `/api/v1/quizzes/generate` still requires real provider credentials in this backend
+- `/workspace-playground` live non-audio studio output generation and downloads now pass end to end for report, compare-sources, timeline, quiz, flashcards, and slides
+- `/workspace-playground` live study-aid generation now also passes end to end for quiz and flashcards in the audit backend
 - Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search; grounded chat, compare generation, and global search now have deterministic route proof, but remain `Mock-only` overall until live proof exists
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly

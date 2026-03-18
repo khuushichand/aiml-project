@@ -571,6 +571,7 @@ async def generate_quiz(
             difficulty=request.difficulty,
             focus_topics=request.focus_topics,
             model=request.model,
+            api_provider=request.api_provider,
             workspace_tag=request.workspace_tag,
         )
     except QuizProvenanceValidationError as e:

@@ -336,6 +336,69 @@ def test_generate_flashcards_endpoint_returns_generated_cards(
     assert payload["flashcards"][1]["tags"] == ["biology", "metabolism"]
 
 
+def test_generate_flashcards_endpoint_returns_test_mode_cards_without_provider_config(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/generate",
+        json={
+            "text": "Alpha program requires citations, review boards, and Friday freshness checks.",
+            "num_cards": 2,
+            "card_type": "basic",
+            "difficulty": "mixed",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert payload["flashcards"][0]["front"] == "What study point 1 should you remember?"
+    assert payload["flashcards"][0]["back"].startswith("Alpha program requires citations")
+
+
+def test_generate_flashcards_endpoint_returns_test_mode_cards_for_missing_api_key_errors(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    async def fake_generate_adapter(config, context):
+        return {
+            "error": (
+                "flashcard_generate_error:invalid_request_error You didn't provide an API key. "
+                "You need to provide your API key in an Authorization header using Bearer auth."
+            )
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.flashcards.run_flashcard_generate_adapter",
+        fake_generate_adapter,
+    )
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/generate",
+        json={
+            "text": "Alpha program requires citations, review boards, and Friday freshness checks.",
+            "num_cards": 2,
+            "card_type": "basic",
+            "difficulty": "mixed",
+            "provider": "openai",
+            "model": "gpt-4o",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert payload["flashcards"][0]["front"] == "What study point 1 should you remember?"
+    assert payload["flashcards"][0]["back"].startswith("Alpha program requires citations")
+
+
 def test_export_apkg_include_reverse_flag_generates_reverse(client_with_flashcards_db: TestClient):
     # Create deck and a plain basic card (no reverse/model_type)
     r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckTwo"}, headers=AUTH_HEADERS)

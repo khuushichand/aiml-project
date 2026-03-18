@@ -1706,10 +1706,13 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           )
           break
         case "quiz":
+          const quizRuntime = await resolveStudioChatRuntime()
           result = await generateQuizFromMedia(
             mediaIds,
             workspaceTag,
-            activeAbort.signal
+            activeAbort.signal,
+            quizRuntime.model,
+            quizRuntime.provider
           )
           break
         case "flashcards":
@@ -3854,7 +3857,9 @@ Use markdown headings and bullet lists. Cite source-specific evidence when possi
 async function generateQuizFromMedia(
   mediaIds: number[],
   workspaceTag?: string,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  model?: string,
+  apiProvider?: string
 ): Promise<GenerationResult> {
   const uniqueMediaIds = Array.from(new Set(mediaIds))
   if (uniqueMediaIds.length === 0) {
@@ -3873,6 +3878,8 @@ async function generateQuizFromMedia(
         num_questions: Math.max(3, Math.ceil(10 / uniqueMediaIds.length)),
         question_types: ["multiple_choice", "true_false"],
         difficulty: "mixed",
+        model,
+        api_provider: apiProvider,
         workspace_tag: workspaceTag || undefined
       },
       { signal: abortSignal }
@@ -3890,7 +3897,7 @@ async function generateQuizFromMedia(
       options: Array.isArray(question.options)
         ? question.options.map((option: unknown) => String(option))
         : [],
-      answer: String(question.correct_answer || "").trim(),
+      answer: String(question.correct_answer ?? "").trim(),
       explanation: question.explanation
         ? String(question.explanation)
         : undefined,
@@ -4560,7 +4567,7 @@ function getArtifactQuizQuestions(artifact: GeneratedArtifact): QuizQuestionDraf
               ? entry.options.map((option) => String(option).trim()).filter(Boolean)
               : []
             const answer = String(
-              entry.answer || entry.correct_answer || ""
+              entry.answer ?? entry.correct_answer ?? ""
             ).trim()
             const explanation = entry.explanation
               ? String(entry.explanation)
