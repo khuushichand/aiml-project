@@ -522,15 +522,28 @@ def _raise_elasticsearch_not_supported(op: str) -> None:
 
 
 def _require_db_instance(args, kwargs, func_name: str) -> MediaDatabase:
-    """Extract MediaDatabase instance from kwargs or first positional arg.
+    """Extract a MediaDatabase instance from kwargs or first positional arg.
 
-    Emits a deprecation warning if provided positionally. Returns the instance
-    or raises ValueError if invalid/missing.
+    Accepts either a raw MediaDatabase or a request-scoped wrapper exposing
+    the underlying instance at ``.database``. Emits a deprecation warning if
+    provided positionally. Returns the unwrapped MediaDatabase or raises
+    ValueError if invalid/missing.
     """
+
+    def _unwrap_media_database(candidate):
+        if isinstance(candidate, MediaDatabase):
+            return candidate
+
+        wrapped = getattr(candidate, "database", None)
+        if isinstance(wrapped, MediaDatabase):
+            return wrapped
+
+        return candidate
+
     provided_positionally = False
     if 'db_instance' in kwargs and kwargs['db_instance'] is not None:
         dbi = kwargs.pop('db_instance')
-    elif args and isinstance(args[0], MediaDatabase):
+    elif args and isinstance(_unwrap_media_database(args[0]), MediaDatabase):
         dbi = args[0]
         provided_positionally = True
     else:
@@ -543,6 +556,7 @@ def _require_db_instance(args, kwargs, func_name: str) -> MediaDatabase:
             func_name,
         )
 
+    dbi = _unwrap_media_database(dbi)
     if not isinstance(dbi, MediaDatabase):
         raise ValueError(f"{func_name} requires 'db_instance' (MediaDatabase)")
     return dbi

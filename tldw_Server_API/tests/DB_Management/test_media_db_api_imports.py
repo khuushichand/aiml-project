@@ -24,8 +24,10 @@ from tldw_Server_API.app.api.v1.endpoints.media import document_references
 from tldw_Server_API.app.api.v1.endpoints.media import add as media_add_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import debug as media_debug_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import file as media_file_endpoint
+from tldw_Server_API.app.api.v1.endpoints.media import ingest_web_content as media_ingest_web_content_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import item as media_item
 from tldw_Server_API.app.api.v1.endpoints.media import navigation as media_navigation
+from tldw_Server_API.app.api.v1.endpoints.media import process_ebooks as media_process_ebooks_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import process_documents
 from tldw_Server_API.app.api.v1.endpoints.media import process_pdfs
 from tldw_Server_API.app.api.v1.utils import http_errors
@@ -405,6 +407,22 @@ def test_media_file_endpoint_does_not_bind_media_database_from_media_db_v2(monke
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(media_file_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_ingest_web_content_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_ingest_web_content_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_process_ebooks_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_process_ebooks_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 

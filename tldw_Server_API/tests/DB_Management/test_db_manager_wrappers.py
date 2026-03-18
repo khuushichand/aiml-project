@@ -3,6 +3,7 @@ import pytest
 from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.session import MediaDbSession
 
 
 def test_add_media_with_keywords_requires_db_instance():
@@ -67,6 +68,34 @@ def test_add_media_and_paginated_files_success():
     assert isinstance(mid, int) and muuid and isinstance(muuid, str)
     rows, total_pages, page, total_items = DB_Manager.get_paginated_files(db_instance=db, page=1, results_per_page=10)
     assert total_items >= 1
+    assert page == 1
+    assert isinstance(rows, list)
+
+
+def test_get_paginated_files_accepts_request_scoped_media_db_session():
+
+    db = _make_memory_db(client_id="unit-db-manager-session")
+    DB_Manager.add_media_with_keywords(
+        db_instance=db,
+        title="Doc Session",
+        media_type="text",
+        content="session content",
+        keywords=["tag-session"],
+    )
+    session = MediaDbSession(
+        db_path=":memory:",
+        client_id="unit-db-manager-session",
+        database=db,
+    )
+
+    rows, total_pages, page, total_items = DB_Manager.get_paginated_files(
+        db_instance=session,
+        page=1,
+        results_per_page=10,
+    )
+
+    assert total_items >= 1
+    assert total_pages >= 1
     assert page == 1
     assert isinstance(rows, list)
 
