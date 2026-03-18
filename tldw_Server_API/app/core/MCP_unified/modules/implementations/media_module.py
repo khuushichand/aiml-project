@@ -23,8 +23,8 @@ from urllib.parse import urlsplit
 from loguru import logger
 
 from ....DB_Management.db_path_utils import DatabasePaths
-from ....DB_Management.Media_DB_v2 import (
-    MediaDatabase,
+from ....DB_Management.Media_DB_v2 import MediaDatabase
+from ....DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
     get_media_transcripts,
 )

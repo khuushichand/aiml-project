@@ -157,3 +157,34 @@ def test_navigation_endpoint_imports_read_helpers_from_legacy_reads(
     reloaded = importlib.reload(navigation_endpoint)
     assert reloaded.get_latest_transcription is legacy_reads.get_latest_transcription
     assert reloaded.get_media_transcripts is legacy_reads.get_media_transcripts
+
+
+def test_media_module_imports_read_helpers_from_legacy_reads(
+    monkeypatch,
+) -> None:
+    media_db_v2 = importlib.import_module(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
+    )
+    media_module_impl = importlib.import_module(
+        "tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module"
+    )
+
+    def _shim_should_not_be_bound(*args, **kwargs):
+        raise AssertionError(
+            "media_module should not bind read helpers from Media_DB_v2"
+        )
+
+    monkeypatch.setattr(
+        media_db_v2,
+        "get_latest_transcription",
+        _shim_should_not_be_bound,
+    )
+    monkeypatch.setattr(
+        media_db_v2,
+        "get_media_transcripts",
+        _shim_should_not_be_bound,
+    )
+
+    reloaded = importlib.reload(media_module_impl)
+    assert reloaded.get_latest_transcription is legacy_reads.get_latest_transcription
+    assert reloaded.get_media_transcripts is legacy_reads.get_media_transcripts
