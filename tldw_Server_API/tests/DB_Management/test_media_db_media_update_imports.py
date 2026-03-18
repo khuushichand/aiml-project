@@ -52,3 +52,23 @@ def test_media_update_lib_imports_document_version_from_legacy_wrappers(
 
     reloaded = importlib.reload(media_update_lib)
     assert reloaded._get_document_version is legacy_wrappers.get_document_version
+
+
+def test_media_update_lib_does_not_bind_media_database_from_media_db_v2(
+    monkeypatch,
+) -> None:
+    media_db_v2 = importlib.import_module(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
+    )
+    media_update_lib = importlib.import_module(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Media_Update_lib"
+    )
+
+    monkeypatch.setattr(
+        media_db_v2,
+        "MediaDatabase",
+        object(),
+    )
+
+    reloaded = importlib.reload(media_update_lib)
+    assert "MediaDatabase" not in reloaded.__dict__

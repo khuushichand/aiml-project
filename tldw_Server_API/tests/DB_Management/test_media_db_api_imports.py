@@ -640,6 +640,14 @@ def test_ingestion_sources_worker_imports_create_media_database_from_media_db_ap
     assert module.create_media_database is media_db_api.create_media_database
 
 
+def test_ingestion_sources_worker_imports_media_db_error_from_media_db_errors(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+
+    module = importlib.reload(ingestion_sources_worker)
+
+    assert module.MediaDatabaseError is media_db_errors.DatabaseError
+
+
 def test_mediawiki_imports_managed_media_database_from_media_db_api():
     module = importlib.reload(Media_Wiki)
     assert module.managed_media_database is media_db_api.managed_media_database

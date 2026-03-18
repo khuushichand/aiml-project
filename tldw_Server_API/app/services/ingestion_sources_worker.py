@@ -59,7 +59,7 @@ except ImportError:  # pragma: no cover - optional
     NotesDatabaseError = None  # type: ignore
 
 try:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    from tldw_Server_API.app.core.DB_Management.media_db.errors import (
         DatabaseError as MediaDatabaseError,
     )
 except ImportError:  # pragma: no cover - optional
