@@ -1186,6 +1186,10 @@ describe("StudioPane Stage 2 workflows", () => {
         text: "DSPy helps optimize prompting workflows and compound AI pipelines."
       }
     })
+    let resolveRepairResponse: ((response: Response) => void) | undefined
+    const repairResponsePromise = new Promise<Response>((resolve) => {
+      resolveRepairResponse = resolve
+    })
     mockCreateChatCompletion
       .mockResolvedValueOnce(
         new Response(
@@ -1205,24 +1209,7 @@ describe("StudioPane Stage 2 workflows", () => {
           }
         )
       )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content:
-                    "```mermaid\nmindmap\n  root((Workspace Research))\n    Prompting workflows\n    Compound AI pipelines\n```"
-                }
-              }
-            ]
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" }
-          }
-        )
-      )
+      .mockImplementationOnce(() => repairResponsePromise)
 
     renderStudioPane()
 
@@ -1231,6 +1218,18 @@ describe("StudioPane Stage 2 workflows", () => {
     await waitFor(() => {
       expect(mockCreateChatCompletion).toHaveBeenCalledTimes(2)
     })
+
+    expect(mockUpdateArtifactStatus).not.toHaveBeenCalledWith(
+      expect.any(String),
+      "failed",
+      expect.anything()
+    )
+    expect(mockUpdateArtifactStatus).not.toHaveBeenCalledWith(
+      expect.any(String),
+      "completed",
+      expect.anything()
+    )
+    expect(mockMessageError).not.toHaveBeenCalled()
 
     expect(mockCreateChatCompletion).toHaveBeenNthCalledWith(
       2,
@@ -1249,6 +1248,25 @@ describe("StudioPane Stage 2 workflows", () => {
           })
         ]
       })
+    )
+
+    resolveRepairResponse?.(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  "```mermaid\nmindmap\n  root((Workspace Research))\n    Prompting workflows\n    Compound AI pipelines\n```"
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
     )
 
     await waitFor(() => {
