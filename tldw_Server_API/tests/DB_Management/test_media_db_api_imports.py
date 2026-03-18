@@ -50,12 +50,14 @@ from tldw_Server_API.app.api.v1.endpoints.audio import audio_tts as audio_tts_en
 from tldw_Server_API.app.api.v1.utils import http_errors
 from tldw_Server_API.app.api.v1.endpoints.media import versions as media_versions
 from tldw_Server_API.app.core.Claims_Extraction import (
+    claims_clustering,
     claims_notifications,
     claims_rebuild_service,
     claims_service,
     claims_utils,
     review_assignment,
 )
+from tldw_Server_API.app.core.Evaluations import embeddings_abtest_service
 from tldw_Server_API.app.core.Evaluations import embeddings_abtest_jobs_worker
 from tldw_Server_API.app.core.Embeddings.services import (
     jobs_worker as embeddings_jobs_worker,
@@ -746,6 +748,18 @@ def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory()
 def test_embeddings_abtest_jobs_worker_imports_create_media_database_from_media_db_api():
     module = importlib.reload(embeddings_abtest_jobs_worker)
     assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_embeddings_abtest_service_does_not_bind_media_database_from_shim(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    module = importlib.reload(embeddings_abtest_service)
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_claims_clustering_does_not_bind_media_database_from_shim(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    module = importlib.reload(claims_clustering)
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_tts_jobs_worker_imports_create_media_database_from_media_db_api(monkeypatch):

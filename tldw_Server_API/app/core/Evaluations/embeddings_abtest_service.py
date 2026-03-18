@@ -15,7 +15,6 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
 )
 from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
@@ -284,7 +283,7 @@ async def build_collections_vector_only(
     config: EmbeddingsABTestConfig,
     test_id: str,
     user_id: str,
-    media_db: MediaDatabase,
+    media_db: Any,
 ) -> list[dict[str, str]]:
     """Chunk, embed, and store vectors per arm into per-user collections.
 
@@ -831,7 +830,7 @@ async def run_abtest_full(
     config: EmbeddingsABTestConfig,
     test_id: str,
     user_id: str,
-    media_db: MediaDatabase,
+    media_db: Any,
 ) -> None:
     """Background job that builds collections and executes evaluation, updating DB progress."""
     run_start = time.monotonic()
