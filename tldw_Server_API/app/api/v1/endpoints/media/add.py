@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, UploadFile
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
@@ -12,7 +14,6 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
     add_media_persist,
 )
@@ -38,7 +39,7 @@ async def add_media(
         None,
         description="List of files to upload",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
