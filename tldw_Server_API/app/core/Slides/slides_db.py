@@ -424,6 +424,7 @@ class SlidesDatabase:
         style_payload: str,
         style_id: str | None = None,
     ) -> VisualStyleRow:
+        """Create and persist a visual style for the current user."""
         if not name:
             raise InputError("name is required")
         resolved_scope = self._validate_visual_style_scope(scope)
@@ -457,10 +458,12 @@ class SlidesDatabase:
             raise SlidesDatabaseError(f"Failed to create visual style: {exc}") from exc
 
     def get_visual_style_by_id(self, style_id: str) -> VisualStyleRow:
+        """Fetch a single visual style by identifier."""
         conn = self.get_connection()
         return self._fetch_visual_style_by_id(conn, style_id)
 
     def list_visual_styles(self, *, limit: int, offset: int) -> tuple[list[VisualStyleRow], int]:
+        """List persisted user visual styles with pagination metadata."""
         if limit < 1:
             raise InputError("limit must be >= 1")
         if offset < 0:
@@ -485,6 +488,7 @@ class SlidesDatabase:
         name: str,
         style_payload: str,
     ) -> VisualStyleRow:
+        """Update a stored visual style and return the refreshed row."""
         if not name:
             raise InputError("name is required")
         normalized_payload = self._normalize_visual_style_payload(style_payload)
@@ -502,6 +506,7 @@ class SlidesDatabase:
             return self._fetch_visual_style_by_id(conn, style_id)
 
     def delete_visual_style(self, style_id: str) -> bool:
+        """Delete a stored visual style by identifier."""
         with self.transaction() as conn:
             cur = conn.execute("DELETE FROM visual_styles WHERE id = ?", (style_id,))
             return cur.rowcount > 0

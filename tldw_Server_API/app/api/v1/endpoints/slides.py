@@ -64,7 +64,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, ge
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
-from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase
+from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase, VisualStyleRow
 from tldw_Server_API.app.core.Slides.slides_assets import resolve_slide_asset
 from tldw_Server_API.app.core.Slides.slides_export import (
     SlidesAssetsMissingError,
@@ -401,6 +401,7 @@ def _deserialize_studio_data(value: str | None) -> dict[str, Any] | None:
 
 
 def _serialize_visual_style_snapshot(snapshot: dict[str, Any] | None) -> str | None:
+    """Serialize a validated visual-style snapshot for presentation persistence."""
     if snapshot is None:
         return None
     if not isinstance(snapshot, dict):
@@ -409,6 +410,7 @@ def _serialize_visual_style_snapshot(snapshot: dict[str, Any] | None) -> str | N
 
 
 def _deserialize_visual_style_snapshot(value: str | None) -> dict[str, Any] | None:
+    """Deserialize a persisted visual-style snapshot into a dictionary payload."""
     if not value:
         return None
     try:
@@ -519,6 +521,7 @@ def _template_to_response(template: SlidesTemplate) -> SlidesTemplateResponse:
 
 
 def _deserialize_visual_style_payload(value: str) -> dict[str, Any]:
+    """Deserialize a stored visual-style payload and assert its top-level shape."""
     try:
         payload = json.loads(value)
     except json.JSONDecodeError as exc:
@@ -529,6 +532,7 @@ def _deserialize_visual_style_payload(value: str) -> dict[str, Any]:
 
 
 def _validate_visual_style_appearance_defaults(appearance_defaults: dict[str, Any]) -> dict[str, Any]:
+    """Validate the appearance defaults section for a visual-style payload."""
     if not isinstance(appearance_defaults, dict):
         raise HTTPException(status_code=422, detail="invalid_visual_style_appearance_defaults")
     validated = dict(appearance_defaults)
@@ -554,6 +558,7 @@ def _serialize_visual_style_payload(
     appearance_defaults: dict[str, Any],
     fallback_policy: dict[str, Any],
 ) -> str:
+    """Serialize a validated visual-style payload for database storage."""
     payload = {
         "description": description,
         "generation_rules": generation_rules,
@@ -580,7 +585,8 @@ def _visual_style_response_from_builtin(style: VisualStylePreset) -> VisualStyle
     )
 
 
-def _visual_style_response_from_row(row) -> VisualStyleResponse:
+def _visual_style_response_from_row(row: VisualStyleRow) -> VisualStyleResponse:
+    """Convert a stored visual-style row into the public API response shape."""
     payload = _deserialize_visual_style_payload(row.style_payload)
     generation_rules = payload.get("generation_rules") if isinstance(payload.get("generation_rules"), dict) else {}
     appearance_defaults = payload.get("appearance_defaults") if isinstance(payload.get("appearance_defaults"), dict) else {}
@@ -1497,26 +1503,40 @@ async def patch_visual_style(
     except KeyError:
         raise HTTPException(status_code=404, detail="visual_style_not_found") from None
     payload = _deserialize_visual_style_payload(existing.style_payload)
-    merged_description = request.description if request.description is not None else payload.get("description")
-    merged_generation_rules = (
-        request.generation_rules if request.generation_rules is not None else payload.get("generation_rules") or {}
+    merged_description = (
+        request.description if _field_was_set(request, "description") else payload.get("description")
     )
+    merged_generation_rules = (
+        request.generation_rules
+        if _field_was_set(request, "generation_rules")
+        else payload.get("generation_rules") or {}
+    )
+    if merged_generation_rules is None:
+        merged_generation_rules = {}
     merged_artifact_preferences = (
         request.artifact_preferences
-        if request.artifact_preferences is not None
+        if _field_was_set(request, "artifact_preferences")
         else payload.get("artifact_preferences") or []
     )
+    if merged_artifact_preferences is None:
+        merged_artifact_preferences = []
     merged_appearance_defaults = (
         request.appearance_defaults
-        if request.appearance_defaults is not None
+        if _field_was_set(request, "appearance_defaults")
         else payload.get("appearance_defaults") or {}
     )
+    if merged_appearance_defaults is None:
+        merged_appearance_defaults = {}
     merged_fallback_policy = (
         request.fallback_policy
-        if request.fallback_policy is not None
+        if _field_was_set(request, "fallback_policy")
         else payload.get("fallback_policy") or {}
     )
-    name = request.name.strip() if request.name is not None else existing.name
+    if merged_fallback_policy is None:
+        merged_fallback_policy = {}
+    name = (
+        request.name.strip() if _field_was_set(request, "name") and isinstance(request.name, str) else existing.name
+    )
     if not name:
         raise HTTPException(status_code=422, detail="visual_style_name_required")
     if not any(

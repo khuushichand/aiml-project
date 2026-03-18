@@ -738,6 +738,31 @@ def test_slides_styles_crud_for_user_styles(slides_client):
     assert missing_resp.json()["detail"] == "visual_style_not_found"
 
 
+def test_slides_styles_patch_can_clear_description(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/styles",
+        json={
+            "name": "Exam Sprint",
+            "description": "Recall-first deck",
+            "generation_rules": {"exam_focus": True},
+            "artifact_preferences": ["stat_group"],
+            "appearance_defaults": {"theme": "white"},
+            "fallback_policy": {"mode": "key-points"},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    style_id = create_resp.json()["id"]
+
+    patch_resp = slides_client.patch(
+        f"/api/v1/slides/styles/{style_id}",
+        json={"description": None},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    patched = patch_resp.json()
+    assert patched["description"] is None
+    assert patched["generation_rules"] == {"exam_focus": True}
+
+
 def test_slides_styles_reject_builtin_mutation(slides_client):
     patch_resp = slides_client.patch(
         "/api/v1/slides/styles/timeline",
