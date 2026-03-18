@@ -11,13 +11,13 @@ that can be used as a cutover gate artifact for EMAIL-M3-002.
 
 Examples:
   python Helper_Scripts/checks/email_search_dual_read_parity.py \
-    --db-path /path/to/Media_DB_v2.db \
+    --db-path /path/to/media.db \
     --tenant-id user:1 \
     --query-mix-file Helper_Scripts/checks/fixtures/email_dual_read_query_mix.sample.json \
     --out .benchmarks/email_dual_read_parity_report.json
 
   python Helper_Scripts/checks/email_search_dual_read_parity.py \
-    --db-path /path/to/Media_DB_v2.db \
+    --db-path /path/to/media.db \
     --tenant-id user:1 \
     --auto-query-count 25 \
     --limit 100
@@ -35,7 +35,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 
@@ -51,20 +51,18 @@ from common.repo_utils import ensure_repo_root
 
 ensure_repo_root()
 
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+try:
+    from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+except Exception:
+    print(
+        "tldw_Server_API not available; run from repo root or set PYTHONPATH.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from None
 
 
-def _load_media_database_class():
-    try:
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as media_db_cls
-    except Exception:
-        print(
-            "tldw_Server_API not available; run from repo root or set PYTHONPATH.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1) from None
-    return media_db_cls
+def _open_media_database(*, db_path: Path, client_id: str) -> Any:
+    return create_media_database(client_id, db_path=db_path)
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@._-]{2,}")
@@ -468,7 +466,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tenant-id",
         type=str,
         default=None,
-        help="Tenant id used by normalized email search. Defaults to MediaDatabase client scope.",
+        help="Tenant id used by normalized email search. Defaults to the DB client scope.",
     )
     parser.add_argument(
         "--query-mix-file",
@@ -554,8 +552,7 @@ def main() -> int:
         min_backfill_coverage=_clamp_01(args.min_backfill_coverage),
     )
 
-    media_db_cls = _load_media_database_class()
-    db = media_db_cls(db_path=db_path, client_id=args.client_id)
+    db = _open_media_database(db_path=db_path, client_id=args.client_id)
     try:
         if args.query_mix_file is not None:
             query_cases = _load_query_mix_file(args.query_mix_file.expanduser().resolve())
@@ -601,7 +598,7 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001 - keep report generation resilient
                 row.update(
                     {
-                        "pass": False,
+                        "pass": False,  # nosec B105 - report field name, not a credential
                         "error": f"{type(exc).__name__}: {exc}",
                         "fail_reasons": ["query_error"],
                     }

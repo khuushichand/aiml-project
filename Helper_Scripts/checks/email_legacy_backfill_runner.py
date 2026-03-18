@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -24,7 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tenant-id",
         default=None,
-        help="Explicit tenant id for normalized email tables (defaults to MediaDatabase scope).",
+        help="Explicit tenant id for normalized email tables (defaults to the DB client scope).",
     )
     parser.add_argument(
         "--backfill-key",
@@ -51,7 +51,7 @@ def main() -> None:
     db_path = str(Path(args.db_path).expanduser())
     client_id = str(args.tenant_id or "legacy_backfill_worker")
 
-    db = MediaDatabase(db_path=db_path, client_id=client_id)
+    db = create_media_database(client_id, db_path=db_path)
     try:
         result: dict[str, Any] = db.run_email_legacy_backfill_worker(
             batch_size=int(args.batch_size),
