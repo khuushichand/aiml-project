@@ -77,6 +77,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_
 from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
 from tldw_Server_API.app.core.External_Sources import sync_coordinator
 from tldw_Server_API.app.core.RAG.rag_service import agentic_chunker
+from tldw_Server_API.app.core.RAG.rag_service import database_retrievers
 from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline
 from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
@@ -787,6 +788,16 @@ def test_agentic_chunker_imports_create_media_database_from_media_db_api(monkeyp
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
     module = importlib.reload(agentic_chunker)
     assert module.create_media_database is media_db_api.create_media_database
+
+
+def test_database_retrievers_import_media_db_factory_and_errors_outside_shim(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+
+    module = importlib.reload(database_retrievers)
+
+    assert module.create_media_database is media_db_api.create_media_database
+    assert module.MediaDatabaseError is media_db_errors.DatabaseError
 
 
 def test_workflow_media_ingest_imports_managed_media_database_from_media_db_api():

@@ -4,10 +4,10 @@
 
 ## Normalized Counts
 
-- Raw `MediaDatabase(...)` constructors in app code: 7
-- Operational `create_media_database(...)` call sites in app code: 10
+- Raw `MediaDatabase(...)` constructors in app code: 5
+- Operational `create_media_database(...)` call sites in app code: 12
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 82
+- `Media_DB_v2` references in app code: 77
 
 Notes:
 
@@ -71,6 +71,7 @@ Notes:
 | `app/core/Evaluations/embeddings_abtest_jobs_worker.py` | 1 | helper returns DB handle | `KEEP_RAW` | explicit owner-controlled lifetime is fine |
 | `app/core/DB_Management/Users_DB.py` | 1 | factory wrapper returns DB instance | `KEEP_RAW` | wrapper boundary, not local scope |
 | `app/core/RAG/rag_service/agentic_chunker.py` | 1 | cached singleton structure-index DB owner through shared factory | `MOVE_FACTORY` already satisfied | `_get_media_db_for_structure()` now preserves singleton ownership while routing construction through the shared factory |
+| `app/core/RAG/rag_service/database_retrievers.py` | 2 | retriever-owned adapter attachment through shared factory | `MOVE_FACTORY` already satisfied | media and claims retrievers now preserve explicit owner-controlled close behavior while routing attachment through the shared factory |
 | `app/core/TTS/tts_jobs_worker.py` | 1 | helper returns DB handle through shared factory | `MOVE_FACTORY` already satisfied | `_handle_tts_job(...)` still owns close behavior |
 
 ## Raw `MediaDatabase(...)` Constructor Inventory
@@ -80,7 +81,6 @@ Notes:
 | `app/core/MCP_unified/modules/implementations/media_module.py` | 3 | module-level cached owner | `KEEP_RAW` | explicit long-lived owner and cache management are intentional |
 | `app/core/Chatbooks/chatbook_service.py` | 1 | lazy cached owner | `KEEP_RAW` | explicit cache owner is intentional |
 | `app/core/Sync/Sync_Client.py` | 1 | long-lived client sync owner | `KEEP_RAW` | explicit owner lifecycle is part of the design |
-| `app/core/RAG/rag_service/database_retrievers.py` | 2 | retriever-owned DB instances | `KEEP_RAW` | lifetime is owned by retriever instances with explicit `close()` |
 
 ## App-Side `Media_DB_v2` Compatibility Buckets
 
@@ -106,7 +106,6 @@ Representative files:
 - `app/core/MCP_unified/modules/implementations/media_module.py`
 - `app/core/Chatbooks/chatbook_service.py`
 - `app/core/Sync/Sync_Client.py`
-- `app/core/RAG/rag_service/database_retrievers.py`
 
 Assessment:
 
@@ -123,6 +122,7 @@ Status:
 - `app/core/Claims_Extraction/claims_notifications.py` no longer binds `MediaDatabase` from the shim just for notification-helper annotations.
 - `app/core/Claims_Extraction/ingestion_claims.py` no longer binds `MediaDatabase` from the shim just for claim-storage typing.
 - `app/core/RAG/rag_service/agentic_chunker.py` now creates its cached structure-index DB through `media_db.api.create_media_database(...)` instead of the shim constructor.
+- `app/core/RAG/rag_service/database_retrievers.py` now attaches media DB adapters through `media_db.api.create_media_database(...)` and `media_db.errors.DatabaseError` instead of importing those bindings from the shim.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory

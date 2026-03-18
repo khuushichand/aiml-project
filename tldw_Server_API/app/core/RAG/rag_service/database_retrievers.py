@@ -25,6 +25,12 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    create_media_database,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
+    DatabaseError as MediaDatabaseError,
+)
 
 from .types import DataSource, Document
 from .utils import get_float_env as _get_float_env
@@ -36,7 +42,6 @@ from .vector_stores import (
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
 class DatabasePathError(ValueError):
@@ -430,11 +435,11 @@ class MediaDBRetriever(BaseRetriever):
         db_path: Optional[str],
         config: Optional[RetrievalConfig] = None,
         user_id: str = "0",
-        media_db: Optional['MediaDatabase'] = None
+        media_db: Optional[Any] = None
     ) -> None:
         """Initialize MediaDBRetriever with optional vector store."""
         super().__init__(db_path, config, db_adapter=media_db)
-        # Prefer an explicit adapter, otherwise try to attach the canonical MediaDatabase
+        # Prefer an explicit adapter, otherwise try to attach the canonical media DB adapter.
         attached = None
         own = False
         if media_db is None:
@@ -447,7 +452,7 @@ class MediaDBRetriever(BaseRetriever):
         self._initialize_vector_store()
 
     def _maybe_attach_media_db(self, db_path: Optional[str]):
-        """Best-effort: attach MediaDatabase adapter if path points to a Media_DB_v2 file.
+        """Best-effort: attach a content DB adapter when a canonical media DB path is provided.
 
         This enables robust retrieval in tests/CI where only the sqlite path is provided.
         """
@@ -458,13 +463,8 @@ class MediaDBRetriever(BaseRetriever):
             validated_path = self._validate_path(db_path)
             if not validated_path:
                 return None
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-                DatabaseError as MediaDatabaseError,
-            )
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-            return MediaDatabase(db_path=validated_path, client_id="rag_service")
+            return create_media_database("rag_service", db_path=validated_path)
         except (
-            ImportError,
             AttributeError,
             OSError,
             RuntimeError,
@@ -2707,7 +2707,7 @@ class ClaimsRetriever(BaseRetriever):
         db_path: Optional[str],
         config: Optional[RetrievalConfig] = None,
         *,
-        media_db: Optional['MediaDatabase'] = None
+        media_db: Optional[Any] = None
     ) -> None:
         super().__init__(db_path, config, db_adapter=media_db)
         attached = None
@@ -2726,9 +2726,16 @@ class ClaimsRetriever(BaseRetriever):
             validated_path = self._validate_path(db_path)
             if not validated_path:
                 return None
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-            return MediaDatabase(db_path=validated_path, client_id="rag_service")
-        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            return create_media_database("rag_service", db_path=validated_path)
+        except (
+            AttributeError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            sqlite3.Error,
+            MediaDatabaseError,
+        ):
             return None
 
     def close(self):
