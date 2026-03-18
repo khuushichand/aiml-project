@@ -108,7 +108,9 @@ const PermissionMatrixTab: React.FC<{ onGuardError: (err: any) => void }> = ({ o
       await loadMatrix()
       message.success(currentValue ? "Permission revoked" : "Permission granted")
     } catch (err: any) {
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to update permission matrix")
+      )
     } finally {
       setToggling(null)
     }
@@ -227,7 +229,7 @@ const RolesTab: React.FC<{ onGuardError: (err: any) => void }> = ({ onGuardError
       await loadRoles()
     } catch (err: any) {
       if (err?.errorFields) return
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(sanitizeAdminErrorMessage(err, "Failed to create role"))
     } finally {
       setCreating(false)
     }
@@ -239,7 +241,7 @@ const RolesTab: React.FC<{ onGuardError: (err: any) => void }> = ({ onGuardError
       message.success("Role deleted")
       await loadRoles()
     } catch (err: any) {
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(sanitizeAdminErrorMessage(err, "Failed to delete role"))
     }
   }, [loadRoles])
 
@@ -466,7 +468,7 @@ const UserPermissionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ on
       message.success("Role removed")
       await loadUserData(selectedUserId)
     } catch (err: any) {
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(sanitizeAdminErrorMessage(err, "Failed to create permission"))
     }
   }, [selectedUserId, loadUserData])
 
@@ -480,7 +482,7 @@ const UserPermissionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ on
       setAddRoleId(null)
       await loadUserData(selectedUserId)
     } catch (err: any) {
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(sanitizeAdminErrorMessage(err, "Failed to delete permission"))
     } finally {
       setAddingRole(false)
     }
@@ -501,7 +503,9 @@ const UserPermissionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ on
       await loadUserData(selectedUserId)
     } catch (err: any) {
       if (err?.errorFields) return
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to save user permission overrides")
+      )
     } finally {
       setAddingOverride(false)
     }
@@ -514,7 +518,9 @@ const UserPermissionsTab: React.FC<{ onGuardError: (err: any) => void }> = ({ on
       message.success("Override removed")
       await loadUserData(selectedUserId)
     } catch (err: any) {
-      message.error(sanitizeAdminErrorMessage(err))
+      message.error(
+        sanitizeAdminErrorMessage(err, "Failed to revoke user permission override")
+      )
     }
   }, [selectedUserId, loadUserData])
 

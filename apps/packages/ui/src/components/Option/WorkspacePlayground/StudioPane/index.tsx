@@ -4120,19 +4120,23 @@ async function generateFlashcards(
   const flashcards: GeneratedFlashcardDraft[] = (
     Array.isArray(generated.flashcards) ? generated.flashcards : []
   )
-    .map((card) => ({
-      front: typeof card.front === "string" ? card.front.trim() : "",
-      back: typeof card.back === "string" ? card.back.trim() : "",
-      tags: Array.isArray(card.tags)
-        ? card.tags.filter((tag) => typeof tag === "string" && tag.trim().length > 0)
-        : [],
-      notes: typeof card.notes === "string" ? card.notes.trim() : "",
-      extra: typeof card.extra === "string" ? card.extra.trim() : "",
-      modelType:
+    .map((card): GeneratedFlashcardDraft => {
+      const modelType: GeneratedFlashcardDraft["modelType"] =
         card.model_type === "basic_reverse" || card.model_type === "cloze"
           ? card.model_type
           : "basic"
-    }))
+
+      return {
+        front: typeof card.front === "string" ? card.front.trim() : "",
+        back: typeof card.back === "string" ? card.back.trim() : "",
+        tags: Array.isArray(card.tags)
+          ? card.tags.filter((tag) => typeof tag === "string" && tag.trim().length > 0)
+          : [],
+        notes: typeof card.notes === "string" ? card.notes.trim() : "",
+        extra: typeof card.extra === "string" ? card.extra.trim() : "",
+        modelType
+      }
+    })
     .filter((card) => card.front && card.back)
   if (!flashcards.length) {
     throw new Error("Flashcard generation returned no usable cards")

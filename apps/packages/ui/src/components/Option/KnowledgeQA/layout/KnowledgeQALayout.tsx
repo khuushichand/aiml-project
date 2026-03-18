@@ -37,6 +37,14 @@ function normalizeSourceSet(values: string[]): string {
   return [...values].sort((left, right) => left.localeCompare(right)).join("|")
 }
 
+function normalizeFilterSet(values: Array<string | number>): string {
+  return values
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right))
+    .join("|")
+}
+
 function hasConversationId(item: { conversationId?: string }): boolean {
   return (
     typeof item.conversationId === "string" &&
@@ -135,24 +143,49 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     return (
       lastSearchScope.preset !== preset ||
       lastSearchScope.webFallback !== settings.enable_web_fallback ||
-      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources)
+      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources) ||
+      normalizeFilterSet(lastSearchScope.includeMediaIds) !==
+        normalizeFilterSet(
+          Array.isArray(settings.include_media_ids) ? settings.include_media_ids : []
+        ) ||
+      normalizeFilterSet(lastSearchScope.includeNoteIds) !==
+        normalizeFilterSet(
+          Array.isArray(settings.include_note_ids) ? settings.include_note_ids : []
+        )
     )
   }, [
     lastSearchScope,
     preset,
     settings.enable_web_fallback,
     settings.sources,
+    settings.include_media_ids,
+    settings.include_note_ids,
   ])
 
   useEffect(() => {
-    if (hasResults && !evidenceRailOpen && !userClosedRailRef.current) {
-      setEvidenceRailOpen(true)
-    }
     // Reset manual-close flag when results clear (new search)
     if (!hasResults) {
       userClosedRailRef.current = false
+      return
     }
-  }, [hasResults, evidenceRailOpen, setEvidenceRailOpen])
+    if (isSearching || queryStage === "searching") {
+      userClosedRailRef.current = false
+      return
+    }
+    if (settingsPanelOpen) {
+      return
+    }
+    if (!evidenceRailOpen && !userClosedRailRef.current) {
+      setEvidenceRailOpen(true)
+    }
+  }, [
+    hasResults,
+    evidenceRailOpen,
+    isSearching,
+    queryStage,
+    setEvidenceRailOpen,
+    settingsPanelOpen,
+  ])
 
   useEffect(() => {
     if (settingsPanelOpen && evidenceRailOpen) {

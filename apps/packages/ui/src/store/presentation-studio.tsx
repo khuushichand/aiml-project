@@ -39,6 +39,12 @@ export type PresentationStudioEditorSlide = Omit<PresentationStudioSlide, "metad
   }
 }
 
+type PresentationStudioSlideUpdate = Partial<Omit<PresentationStudioEditorSlide, "metadata">> & {
+  metadata?: Record<string, any> & {
+    studio?: Partial<PresentationStudioSlideStudioMeta>
+  }
+}
+
 export type PresentationStudioPatchPayload = {
   title: string
   description: string | null
@@ -97,7 +103,7 @@ type PresentationStudioStore = {
   reorderSlides: (fromIndex: number, toIndex: number) => void
   updateSlide: (
     slideId: string,
-    updates: Partial<PresentationStudioEditorSlide>
+    updates: PresentationStudioSlideUpdate
   ) => void
   setAutosaveState: (state: AutosaveState, error?: string | null) => void
   markPersisted: (etag?: string | null, project?: PresentationStudioRecord) => void

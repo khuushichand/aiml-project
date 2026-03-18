@@ -1068,6 +1068,12 @@ function buildScopeSnapshot(
     preset,
     sources: [...settings.sources],
     webFallback: Boolean(settings.enable_web_fallback),
+    includeMediaIds: Array.isArray(settings.include_media_ids)
+      ? settings.include_media_ids.filter((value): value is number => typeof value === "number")
+      : [],
+    includeNoteIds: Array.isArray(settings.include_note_ids)
+      ? settings.include_note_ids.filter((value): value is string => typeof value === "string")
+      : [],
   }
 }
 

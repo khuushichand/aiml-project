@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { FlashcardEditDrawer } from "../FlashcardEditDrawer"
 import type { Flashcard } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 
 const uploadFlashcardAsset = vi.hoisted(() => vi.fn())
 
@@ -86,6 +87,7 @@ const sampleCard: Flashcard = {
   interval_days: 0,
   repetitions: 0,
   lapses: 0,
+  queue_state: "new",
   due_at: null,
   created_at: null,
   last_reviewed_at: null,
@@ -123,7 +125,9 @@ describe("FlashcardEditDrawer image insertion", () => {
             description: null,
             deleted: false,
             client_id: "1",
-            version: 1
+            version: 1,
+            scheduler_type: "sm2_plus",
+            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
           }
         ]}
       />

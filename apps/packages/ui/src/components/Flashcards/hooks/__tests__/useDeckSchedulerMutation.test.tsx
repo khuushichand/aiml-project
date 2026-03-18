@@ -9,6 +9,7 @@ import {
   type Deck,
   type DeckSchedulerSettings
 } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
   useServerCapabilities: () => ({
@@ -67,6 +68,11 @@ const baseSettings: DeckSchedulerSettings = {
   enable_fuzz: true
 }
 
+const baseEnvelope = {
+  ...DEFAULT_SCHEDULER_SETTINGS_ENVELOPE,
+  sm2_plus: baseSettings
+}
+
 const makeDeck = (overrides: Partial<Deck> = {}): Deck => ({
   id: 7,
   name: "Biology",
@@ -76,8 +82,9 @@ const makeDeck = (overrides: Partial<Deck> = {}): Deck => ({
   version: 2,
   created_at: "2026-03-13T08:00:00Z",
   last_modified: "2026-03-13T08:00:00Z",
-  scheduler_settings_json: JSON.stringify(baseSettings),
-  scheduler_settings: baseSettings,
+  scheduler_type: "sm2_plus",
+  scheduler_settings_json: JSON.stringify(baseEnvelope),
+  scheduler_settings: baseEnvelope,
   ...overrides
 })
 
@@ -103,9 +110,12 @@ describe("useUpdateDeckMutation", () => {
     const updatedDeck = makeDeck({
       version: 3,
       scheduler_settings: {
-        ...baseSettings,
-        new_steps_minutes: [2, 20],
-        enable_fuzz: false
+        ...baseEnvelope,
+        sm2_plus: {
+          ...baseSettings,
+          new_steps_minutes: [2, 20],
+          enable_fuzz: false
+        }
       }
     })
     vi.mocked(updateDeck).mockResolvedValue(updatedDeck)
@@ -121,8 +131,10 @@ describe("useUpdateDeckMutation", () => {
         deckId: 7,
         update: {
           scheduler_settings: {
-            new_steps_minutes: [2, 20],
-            enable_fuzz: false
+            sm2_plus: {
+              new_steps_minutes: [2, 20],
+              enable_fuzz: false
+            }
           },
           expected_version: 2
         }
@@ -133,8 +145,10 @@ describe("useUpdateDeckMutation", () => {
       7,
       {
         scheduler_settings: {
-          new_steps_minutes: [2, 20],
-          enable_fuzz: false
+          sm2_plus: {
+            new_steps_minutes: [2, 20],
+            enable_fuzz: false
+          }
         },
         expected_version: 2
       }
@@ -166,7 +180,9 @@ describe("useUpdateDeckMutation", () => {
         deckId: 7,
         update: {
           scheduler_settings: {
-            leech_threshold: 10
+            sm2_plus: {
+              leech_threshold: 10
+            }
           },
           expected_version: 2
         }

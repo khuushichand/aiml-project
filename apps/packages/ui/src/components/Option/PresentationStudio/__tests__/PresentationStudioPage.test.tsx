@@ -408,11 +408,18 @@ describe("PresentationStudioPage", () => {
     fireEvent.change(screen.getByLabelText("Default theme"), {
       target: { value: "beige" }
     })
-    fireEvent.change(screen.getByLabelText("Artifact preferences"), {
-      target: { value: "timeline, comparison_matrix" }
+    fireEvent.change(screen.getByLabelText("Content density"), {
+      target: { value: "high" }
     })
-    fireEvent.change(screen.getByLabelText("Generation rules JSON"), {
-      target: { value: '{"exam_focus":"high"}' }
+    fireEvent.change(screen.getByLabelText("Bullet emphasis"), {
+      target: { value: "high" }
+    })
+    fireEvent.click(screen.getByLabelText("Timeline artifact preference"))
+    fireEvent.click(screen.getByLabelText("Comparison Matrix artifact preference"))
+    fireEvent.click(screen.getByLabelText("Exam focus emphasis signal"))
+    fireEvent.click(screen.getByText("Advanced JSON overrides"))
+    fireEvent.change(screen.getByLabelText("Additional generation rules JSON"), {
+      target: { value: '{"visual_callouts":"high"}' }
     })
 
     fireEvent.click(screen.getByTestId("presentation-studio-save-custom-style"))
@@ -424,7 +431,16 @@ describe("PresentationStudioPage", () => {
           description: "Recall-heavy revision deck",
           artifact_preferences: ["timeline", "comparison_matrix"],
           appearance_defaults: { theme: "beige" },
-          generation_rules: { exam_focus: "high" }
+          generation_rules: {
+            density: "high",
+            bullet_bias: "high",
+            exam_focus: true,
+            visual_callouts: "high"
+          },
+          fallback_policy: {
+            mode: "outline",
+            preserve_key_stats: true
+          }
         })
       )
     })

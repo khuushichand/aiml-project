@@ -18,7 +18,7 @@ const state = {
     sources: [] as string[],
     enable_web_fallback: true,
     top_k: 10,
-    include_media_ids: [] as string[],
+    include_media_ids: [] as number[],
     include_note_ids: [] as string[],
   },
   updateSetting: vi.fn(),

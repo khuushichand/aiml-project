@@ -43,6 +43,42 @@ const VISUAL_STYLE_THEME_OPTIONS = [
   "moon",
   "dracula"
 ] as const
+const VISUAL_STYLE_DENSITY_OPTIONS = ["low", "medium", "high"] as const
+const VISUAL_STYLE_ARTIFACT_OPTIONS = [
+  { value: "timeline", label: "Timeline" },
+  { value: "comparison_matrix", label: "Comparison Matrix" },
+  { value: "process_flow", label: "Process Flow" },
+  { value: "stat_group", label: "Stat Group" },
+  { value: "chart_spec", label: "Chart Spec" },
+  { value: "map_spec", label: "Map Spec" }
+] as const
+const VISUAL_STYLE_SIGNAL_OPTIONS = [
+  { key: "exam_focus", label: "Exam focus" },
+  { key: "chronology_bias", label: "Chronology" },
+  { key: "narrative_bias", label: "Narrative" },
+  { key: "comparison_bias", label: "Comparison" },
+  { key: "quant_focus", label: "Quant focus" },
+  { key: "spatial_reasoning", label: "Spatial reasoning" },
+  { key: "scanability", label: "Scanability" },
+  { key: "citation_bias", label: "Citation bias" },
+  { key: "visual_callouts", label: "Visual callouts" },
+  { key: "argument_bias", label: "Argument bias" }
+] as const
+const VISUAL_STYLE_FALLBACK_MODE_OPTIONS = [
+  "textual-summary",
+  "outline",
+  "key-points",
+  "labeled-outline",
+  "ordered-bullets",
+  "metric-summary",
+  "narrative-outline",
+  "flashcard-points",
+  "two-column-summary",
+  "brief-outline"
+] as const
+const VISUAL_STYLE_SIGNAL_KEYS = new Set(
+  VISUAL_STYLE_SIGNAL_OPTIONS.map((option) => option.key)
+)
 
 type InFlightProjectRequest = {
   projectId: string | null
@@ -53,10 +89,15 @@ type CustomVisualStyleDraft = {
   name: string
   description: string
   theme: string
-  artifactPreferences: string
-  generationRulesJson: string
-  appearanceDefaultsJson: string
-  fallbackPolicyJson: string
+  density: string
+  bulletBias: string
+  artifactPreferences: string[]
+  emphasisSignals: string[]
+  extraGenerationRulesJson: string
+  extraAppearanceDefaultsJson: string
+  fallbackMode: string
+  preserveKeyStats: boolean
+  extraFallbackPolicyJson: string
 }
 
 const encodeVisualStyleValue = (styleId: string | null, styleScope: string | null): string =>
@@ -87,28 +128,105 @@ const getDefaultVisualStyleValue = (styles: VisualStyleRecord[]): string => {
   return preferred ? encodeVisualStyleValue(preferred.id, preferred.scope) : ""
 }
 
+const isDensityValue = (value: unknown): value is (typeof VISUAL_STYLE_DENSITY_OPTIONS)[number] =>
+  typeof value === "string" &&
+  VISUAL_STYLE_DENSITY_OPTIONS.includes(
+    value as (typeof VISUAL_STYLE_DENSITY_OPTIONS)[number]
+  )
+
+const isFallbackModeValue = (
+  value: unknown
+): value is (typeof VISUAL_STYLE_FALLBACK_MODE_OPTIONS)[number] =>
+  typeof value === "string" &&
+  VISUAL_STYLE_FALLBACK_MODE_OPTIONS.includes(
+    value as (typeof VISUAL_STYLE_FALLBACK_MODE_OPTIONS)[number]
+  )
+
+const toggleListValue = (values: string[], nextValue: string, checked: boolean): string[] => {
+  if (checked) {
+    return values.includes(nextValue) ? values : [...values, nextValue]
+  }
+  return values.filter((value) => value !== nextValue)
+}
+
 const createEmptyCustomStyleDraft = (): CustomVisualStyleDraft => ({
   name: "",
   description: "",
   theme: "white",
-  artifactPreferences: "",
-  generationRulesJson: "{}",
-  appearanceDefaultsJson: "{}",
-  fallbackPolicyJson: "{}"
+  density: "medium",
+  bulletBias: "medium",
+  artifactPreferences: [],
+  emphasisSignals: [],
+  extraGenerationRulesJson: "{}",
+  extraAppearanceDefaultsJson: "{}",
+  fallbackMode: "outline",
+  preserveKeyStats: true,
+  extraFallbackPolicyJson: "{}"
 })
 
-const styleToCustomStyleDraft = (style: VisualStyleRecord): CustomVisualStyleDraft => ({
-  name: style.name,
-  description: style.description || "",
-  theme:
-    typeof style.appearance_defaults?.theme === "string" && style.appearance_defaults.theme
-      ? style.appearance_defaults.theme
-      : "white",
-  artifactPreferences: (style.artifact_preferences || []).join(", "),
-  generationRulesJson: JSON.stringify(style.generation_rules || {}, null, 2),
-  appearanceDefaultsJson: JSON.stringify(style.appearance_defaults || {}, null, 2),
-  fallbackPolicyJson: JSON.stringify(style.fallback_policy || {}, null, 2)
-})
+const styleToCustomStyleDraft = (style: VisualStyleRecord): CustomVisualStyleDraft => {
+  const generationRules = { ...(style.generation_rules || {}) }
+  const appearanceDefaults = { ...(style.appearance_defaults || {}) }
+  const fallbackPolicy = { ...(style.fallback_policy || {}) }
+
+  const density = isDensityValue(generationRules.density) ? generationRules.density : "medium"
+  if (isDensityValue(generationRules.density)) {
+    delete generationRules.density
+  }
+
+  const bulletBias = isDensityValue(generationRules.bullet_bias)
+    ? generationRules.bullet_bias
+    : "medium"
+  if (isDensityValue(generationRules.bullet_bias)) {
+    delete generationRules.bullet_bias
+  }
+
+  const emphasisSignals = VISUAL_STYLE_SIGNAL_OPTIONS.flatMap((option) => {
+    const value = generationRules[option.key]
+    if (option.key === "exam_focus" ? value === true : value === "high") {
+      delete generationRules[option.key]
+      return [option.key]
+    }
+    return []
+  })
+
+  const theme =
+    typeof appearanceDefaults.theme === "string" && appearanceDefaults.theme
+      ? appearanceDefaults.theme
+      : "white"
+  if (typeof appearanceDefaults.theme === "string") {
+    delete appearanceDefaults.theme
+  }
+
+  const fallbackMode = isFallbackModeValue(fallbackPolicy.mode)
+    ? fallbackPolicy.mode
+    : "outline"
+  if (isFallbackModeValue(fallbackPolicy.mode)) {
+    delete fallbackPolicy.mode
+  }
+  const preserveKeyStats =
+    typeof fallbackPolicy.preserve_key_stats === "boolean"
+      ? fallbackPolicy.preserve_key_stats
+      : true
+  if (typeof fallbackPolicy.preserve_key_stats === "boolean") {
+    delete fallbackPolicy.preserve_key_stats
+  }
+
+  return {
+    name: style.name,
+    description: style.description || "",
+    theme,
+    density,
+    bulletBias,
+    artifactPreferences: [...(style.artifact_preferences || [])],
+    emphasisSignals,
+    extraGenerationRulesJson: JSON.stringify(generationRules, null, 2),
+    extraAppearanceDefaultsJson: JSON.stringify(appearanceDefaults, null, 2),
+    fallbackMode,
+    preserveKeyStats,
+    extraFallbackPolicyJson: JSON.stringify(fallbackPolicy, null, 2)
+  }
+}
 
 const parseJsonObjectInput = (
   value: string,
@@ -138,22 +256,36 @@ const buildCustomVisualStylePayload = (
     throw new Error("Custom style name is required.")
   }
   const appearanceDefaults = parseJsonObjectInput(
-    draft.appearanceDefaultsJson,
-    "Appearance defaults"
+    draft.extraAppearanceDefaultsJson,
+    "Additional appearance defaults"
   )
   if (draft.theme.trim()) {
     appearanceDefaults.theme = draft.theme.trim()
   }
+  const generationRules = parseJsonObjectInput(
+    draft.extraGenerationRulesJson,
+    "Additional generation rules"
+  )
+  generationRules.density = draft.density.trim() || "medium"
+  generationRules.bullet_bias = draft.bulletBias.trim() || "medium"
+  for (const signal of draft.emphasisSignals) {
+    generationRules[signal] = signal === "exam_focus" ? true : "high"
+  }
+  const fallbackPolicy = parseJsonObjectInput(
+    draft.extraFallbackPolicyJson,
+    "Additional fallback policy"
+  )
+  if (draft.fallbackMode.trim()) {
+    fallbackPolicy.mode = draft.fallbackMode.trim()
+  }
+  fallbackPolicy.preserve_key_stats = draft.preserveKeyStats
   return {
     name,
     description: draft.description.trim() || null,
-    generation_rules: parseJsonObjectInput(draft.generationRulesJson, "Generation rules"),
-    artifact_preferences: draft.artifactPreferences
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean),
+    generation_rules: generationRules,
+    artifact_preferences: draft.artifactPreferences.filter(Boolean),
     appearance_defaults: appearanceDefaults,
-    fallback_policy: parseJsonObjectInput(draft.fallbackPolicyJson, "Fallback policy")
+    fallback_policy: fallbackPolicy
   }
 }
 
@@ -604,90 +736,266 @@ export const PresentationStudioPage: React.FC<PresentationStudioPageProps> = ({
           <div>
             <label
               className="mb-1 block text-sm font-medium text-slate-700"
-              htmlFor="presentation-studio-custom-style-artifacts"
+              htmlFor="presentation-studio-custom-style-density"
             >
-              Artifact preferences
+              Content density
             </label>
-            <input
-              id="presentation-studio-custom-style-artifacts"
-              aria-label="Artifact preferences"
-              value={customStyleDraft.artifactPreferences}
+            <select
+              id="presentation-studio-custom-style-density"
+              aria-label="Content density"
+              value={customStyleDraft.density}
               onChange={(event) =>
                 setCustomStyleDraft((current) => ({
                   ...current,
-                  artifactPreferences: event.target.value
+                  density: event.target.value
                 }))
               }
-              placeholder="timeline, comparison_matrix, process_flow"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-            />
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            >
+              {VISUAL_STYLE_DENSITY_OPTIONS.map((density) => (
+                <option key={density} value={density}>
+                  {density}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
             <label
               className="mb-1 block text-sm font-medium text-slate-700"
-              htmlFor="presentation-studio-custom-style-generation-rules"
+              htmlFor="presentation-studio-custom-style-bullet-bias"
             >
-              Generation rules JSON
+              Bullet emphasis
             </label>
-            <textarea
-              id="presentation-studio-custom-style-generation-rules"
-              aria-label="Generation rules JSON"
-              value={customStyleDraft.generationRulesJson}
+            <select
+              id="presentation-studio-custom-style-bullet-bias"
+              aria-label="Bullet emphasis"
+              value={customStyleDraft.bulletBias}
               onChange={(event) =>
                 setCustomStyleDraft((current) => ({
                   ...current,
-                  generationRulesJson: event.target.value
+                  bulletBias: event.target.value
                 }))
               }
-              rows={8}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-            />
-          </div>
-
-          <div>
-            <label
-              className="mb-1 block text-sm font-medium text-slate-700"
-              htmlFor="presentation-studio-custom-style-appearance-defaults"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
             >
-              Appearance defaults JSON
-            </label>
-            <textarea
-              id="presentation-studio-custom-style-appearance-defaults"
-              aria-label="Appearance defaults JSON"
-              value={customStyleDraft.appearanceDefaultsJson}
-              onChange={(event) =>
-                setCustomStyleDraft((current) => ({
-                  ...current,
-                  appearanceDefaultsJson: event.target.value
-                }))
-              }
-              rows={8}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-            />
+              {VISUAL_STYLE_DENSITY_OPTIONS.map((density) => (
+                <option key={density} value={density}>
+                  {density}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="md:col-span-2">
+            <span className="mb-2 block text-sm font-medium text-slate-700">
+              Artifact preferences
+            </span>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {VISUAL_STYLE_ARTIFACT_OPTIONS.map((option) => {
+                const checked = customStyleDraft.artifactPreferences.includes(option.value)
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 text-sm transition ${
+                      checked
+                        ? "border-sky-400 bg-sky-50 text-slate-900"
+                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={`${option.label} artifact preference`}
+                      checked={checked}
+                      onChange={(event) =>
+                        setCustomStyleDraft((current) => ({
+                          ...current,
+                          artifactPreferences: toggleListValue(
+                            current.artifactPreferences,
+                            option.value,
+                            event.target.checked
+                          )
+                        }))
+                      }
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                    />
+                    <span>{option.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              These tell the generator which structured visual blocks to prefer when it can.
+            </p>
+          </div>
+
+          <div className="md:col-span-2">
+            <span className="mb-2 block text-sm font-medium text-slate-700">
+              Emphasis signals
+            </span>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {VISUAL_STYLE_SIGNAL_OPTIONS.map((option) => {
+                const checked = customStyleDraft.emphasisSignals.includes(option.key)
+                return (
+                  <label
+                    key={option.key}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 text-sm transition ${
+                      checked
+                        ? "border-sky-400 bg-sky-50 text-slate-900"
+                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={`${option.label} emphasis signal`}
+                      checked={checked}
+                      onChange={(event) =>
+                        setCustomStyleDraft((current) => ({
+                          ...current,
+                          emphasisSignals: toggleListValue(
+                            current.emphasisSignals,
+                            option.key,
+                            event.target.checked
+                          )
+                        }))
+                      }
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                    />
+                    <span>{option.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Guided emphasis uses the common preset signals. Use Advanced JSON below for less
+              common rule shapes or custom strengths.
+            </p>
+          </div>
+
+          <div>
             <label
               className="mb-1 block text-sm font-medium text-slate-700"
-              htmlFor="presentation-studio-custom-style-fallback-policy"
+              htmlFor="presentation-studio-custom-style-fallback-mode"
             >
-              Fallback policy JSON
+              Fallback mode
             </label>
-            <textarea
-              id="presentation-studio-custom-style-fallback-policy"
-              aria-label="Fallback policy JSON"
-              value={customStyleDraft.fallbackPolicyJson}
+            <select
+              id="presentation-studio-custom-style-fallback-mode"
+              aria-label="Fallback mode"
+              value={customStyleDraft.fallbackMode}
               onChange={(event) =>
                 setCustomStyleDraft((current) => ({
                   ...current,
-                  fallbackPolicyJson: event.target.value
+                  fallbackMode: event.target.value
                 }))
               }
-              rows={6}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-            />
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+            >
+              {VISUAL_STYLE_FALLBACK_MODE_OPTIONS.map((modeOption) => (
+                <option key={modeOption} value={modeOption}>
+                  {modeOption}
+                </option>
+              ))}
+            </select>
           </div>
+
+          <div className="flex items-end">
+            <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                aria-label="Preserve key stats"
+                checked={customStyleDraft.preserveKeyStats}
+                onChange={(event) =>
+                  setCustomStyleDraft((current) => ({
+                    ...current,
+                    preserveKeyStats: event.target.checked
+                  }))
+                }
+                className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+              />
+              Preserve key stats in fallback output
+            </label>
+          </div>
+
+          <details
+            className="md:col-span-2 rounded-lg border border-slate-200 bg-white"
+            data-testid="presentation-studio-custom-style-advanced"
+          >
+            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-slate-800">
+              Advanced JSON overrides
+            </summary>
+            <div className="grid gap-4 border-t border-slate-200 px-4 py-4 md:grid-cols-2">
+              <div>
+                <label
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                  htmlFor="presentation-studio-custom-style-generation-rules"
+                >
+                  Additional generation rules JSON
+                </label>
+                <textarea
+                  id="presentation-studio-custom-style-generation-rules"
+                  aria-label="Additional generation rules JSON"
+                  value={customStyleDraft.extraGenerationRulesJson}
+                  onChange={(event) =>
+                    setCustomStyleDraft((current) => ({
+                      ...current,
+                      extraGenerationRulesJson: event.target.value
+                    }))
+                  }
+                  rows={8}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                />
+              </div>
+
+              <div>
+                <label
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                  htmlFor="presentation-studio-custom-style-appearance-defaults"
+                >
+                  Additional appearance defaults JSON
+                </label>
+                <textarea
+                  id="presentation-studio-custom-style-appearance-defaults"
+                  aria-label="Additional appearance defaults JSON"
+                  value={customStyleDraft.extraAppearanceDefaultsJson}
+                  onChange={(event) =>
+                    setCustomStyleDraft((current) => ({
+                      ...current,
+                      extraAppearanceDefaultsJson: event.target.value
+                    }))
+                  }
+                  rows={8}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label
+                  className="mb-1 block text-sm font-medium text-slate-700"
+                  htmlFor="presentation-studio-custom-style-fallback-policy"
+                >
+                  Additional fallback policy JSON
+                </label>
+                <textarea
+                  id="presentation-studio-custom-style-fallback-policy"
+                  aria-label="Additional fallback policy JSON"
+                  value={customStyleDraft.extraFallbackPolicyJson}
+                  onChange={(event) =>
+                    setCustomStyleDraft((current) => ({
+                      ...current,
+                      extraFallbackPolicyJson: event.target.value
+                    }))
+                  }
+                  rows={6}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 shadow-sm outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                />
+                <p className="mt-2 text-xs text-slate-500">
+                  Advanced JSON is merged with the guided controls above. The guided fields win
+                  when the same keys appear in both places.
+                </p>
+              </div>
+            </div>
+          </details>
 
           {customStyleError && (
             <p className="md:col-span-2 text-sm text-rose-600">{customStyleError}</p>

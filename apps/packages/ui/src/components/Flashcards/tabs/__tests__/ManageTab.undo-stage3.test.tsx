@@ -172,6 +172,7 @@ const sampleCard: Flashcard = {
   interval_days: 5,
   repetitions: 3,
   lapses: 1,
+  queue_state: "review",
   due_at: null,
   last_reviewed_at: null,
   last_modified: null,

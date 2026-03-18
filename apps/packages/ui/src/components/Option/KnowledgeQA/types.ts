@@ -17,6 +17,8 @@ export type ScopeSnapshot = {
   preset: RagPresetName
   sources: RagSettings["sources"]
   webFallback: boolean
+  includeMediaIds: number[]
+  includeNoteIds: string[]
 }
 
 export type PinnedSourceFilters = {
