@@ -1,4 +1,4 @@
-"""Shared Media DB error types extracted from Media_DB_v2."""
+"""Shared Media DB error types for extracted package modules."""
 
 from __future__ import annotations
 
@@ -38,4 +38,3 @@ class ConflictError(DatabaseError):
         if self.identifier:
             details.append(f"ID: {self.identifier}")
         return f"{base} ({', '.join(details)})" if details else base
-

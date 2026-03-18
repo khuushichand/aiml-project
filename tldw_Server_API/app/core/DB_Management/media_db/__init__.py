@@ -1,2 +1,1 @@
-"""Media database package for incremental extraction from Media_DB_v2."""
-
+"""Media database package for incremental extraction from the legacy monolith."""

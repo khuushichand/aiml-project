@@ -90,6 +90,7 @@ from tldw_Server_API.app.core.Utils import metadata_utils
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.app.core.DB_Management import media_db as media_db_package
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_backup as media_db_legacy_backup
 from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_document_artifacts
@@ -106,12 +107,15 @@ from tldw_Server_API.app.core.DB_Management.media_db.repositories import keyword
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import media_files_repository
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import media_repository
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as media_db_runtime_factory
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import execution as media_db_runtime_execution
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import rows as media_db_runtime_rows
 from tldw_Server_API.app.services import admin_bundle_service
 from tldw_Server_API.app.services import media_files_cleanup_service
 from tldw_Server_API.app.services import document_processing_service
 from tldw_Server_API.app.services import claims_alerts_scheduler
 from tldw_Server_API.app.services import claims_review_metrics_scheduler
 from tldw_Server_API.app.services import connectors_worker
+from tldw_Server_API.app.services import meetings_webhook_dlq_service
 from tldw_Server_API.app.services import quiz_generator
 from tldw_Server_API.app.services import quiz_source_resolver
 from tldw_Server_API.app.services import audiobook_jobs_worker
@@ -162,6 +166,30 @@ def test_media_db_api_no_longer_mentions_media_db_v2_in_source() -> None:
 
 def test_media_repository_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(media_repository)
+
+
+def test_chunking_templates_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(chunking_templates_endpoint)
+
+
+def test_media_db_errors_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_errors)
+
+
+def test_media_db_package_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_package)
+
+
+def test_media_db_runtime_rows_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_runtime_rows)
+
+
+def test_media_db_runtime_execution_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_runtime_execution)
+
+
+def test_meetings_webhook_dlq_service_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(meetings_webhook_dlq_service)
 
 
 def test_db_deps_imports_errors_from_media_db_errors_and_not_media_db_v2(monkeypatch):

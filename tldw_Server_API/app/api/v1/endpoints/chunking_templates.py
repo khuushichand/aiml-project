@@ -87,12 +87,11 @@ def _emit_db_capability_headers(response: Response, db: Any, required: list[str]
             response.headers["X-Template-DB-Capability"] = "fallback"
             response.headers["X-Template-DB-Missing"] = ",".join(missing)
             response.headers["X-Template-DB-Hint"] = (
-                "Ensure Media_DB_v2.MediaDatabase is used: "
-                "tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase"
+                "Use a native media DB session that implements chunking-template methods."
             )
             logger.warning(
                 f"Chunking Templates DB missing methods {missing} on {response.headers.get('X-Template-DB-Class')} - "
-                "using in-memory fallback; hint: use Media_DB_v2.MediaDatabase"
+                "using in-memory fallback; hint: use a native media DB session"
             )
         else:
             response.headers["X-Template-DB-Capability"] = "native"
@@ -123,7 +122,7 @@ async def diagnostics(
         "capability": "native" if not missing else "fallback",
         "missing_methods": missing,
         "fallback_enabled": _fallback_allowed(),
-        "hint": "Use tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase for native support.",
+        "hint": "Use a native media DB session that implements chunking-template methods.",
     }
 
 # Observability helpers (no-op fallbacks)
@@ -147,8 +146,8 @@ def _ensure_fallback_policy(db: Any, required: list[str]) -> None:
             "success": False,
             "error": "Templates fallback store is disabled",
             "error_code": "FALLBACK_DISABLED",
-            "details": [{"field": ",".join(missing), "message": "DB capability missing. Use Media_DB_v2.MediaDatabase.", "code": "DB_CAPABILITY"}],
-            "hint": "Enable CHUNKING_TEMPLATES_FALLBACK_ENABLED=1 for dev/test or use proper MediaDatabase in production.",
+            "details": [{"field": ",".join(missing), "message": "DB capability missing. Use a native media DB session.", "code": "DB_CAPABILITY"}],
+            "hint": "Enable CHUNKING_TEMPLATES_FALLBACK_ENABLED=1 for dev/test or use a native media DB session in production.",
         }
         raise HTTPException(status_code=500, detail=detail)
 

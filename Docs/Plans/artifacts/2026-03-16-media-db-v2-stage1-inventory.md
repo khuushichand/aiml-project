@@ -7,7 +7,7 @@
 - Raw `MediaDatabase(...)` constructors in app code: 0
 - Operational `create_media_database(...)` call sites in app code: 17
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 31
+- `Media_DB_v2` references in app code: 21
 
 Notes:
 
@@ -131,6 +131,9 @@ Status:
 - `app/core/DB_Management/media_db/repositories/chunks_repository.py`, `document_versions_repository.py`, `keywords_repository.py`, and `media_files_repository.py` now use `MediaDbLike` from `runtime.validation` instead of type-only shim imports.
 - `app/core/DB_Management/media_db/repositories/media_repository.py` now uses `MediaDbLike`, `runtime/collections.py`, and `runtime/noncritical.py` instead of reaching back into `Media_DB_v2` for optional collections support and noncritical exception policy.
 - `app/core/DB_Management/media_db/runtime/factory.py` now resolves the canonical runtime class through `runtime/media_class.py`, so the factory itself no longer names `Media_DB_v2` directly.
+- `app/api/v1/endpoints/chunking_templates.py` no longer tells callers to use `Media_DB_v2.MediaDatabase`; its fallback diagnostics and error payloads now describe the required capability generically in terms of a native media DB session.
+- `app/core/DB_Management/media_db/errors.py`, `app/core/DB_Management/media_db/__init__.py`, `app/core/DB_Management/media_db/runtime/rows.py`, and `app/core/DB_Management/media_db/runtime/execution.py` no longer mention `Media_DB_v2` in package docstrings.
+- `app/services/meetings_webhook_dlq_service.py` no longer mentions `Media_DB_v2` in its meetings-target discovery helper docstring.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory

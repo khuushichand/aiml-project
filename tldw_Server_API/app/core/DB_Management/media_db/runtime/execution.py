@@ -1,4 +1,4 @@
-"""Execution helpers extracted from Media_DB_v2."""
+"""Execution helpers for extracted media DB runtime modules."""
 
 from __future__ import annotations
 
@@ -14,4 +14,3 @@ def close_sqlite_ephemeral(cursor: Any | None, connection: Any | None) -> None:
     if connection is not None:
         with suppress(Exception):
             connection.close()
-

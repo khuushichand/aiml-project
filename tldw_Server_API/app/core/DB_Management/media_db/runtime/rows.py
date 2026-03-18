@@ -1,4 +1,4 @@
-"""Row and cursor adapters extracted from Media_DB_v2."""
+"""Row and cursor adapters for extracted media DB runtime helpers."""
 
 from __future__ import annotations
 
@@ -88,4 +88,3 @@ class BackendCursorAdapter:
         self.rowcount = 0
         self.lastrowid = None
         self.description = None
-
