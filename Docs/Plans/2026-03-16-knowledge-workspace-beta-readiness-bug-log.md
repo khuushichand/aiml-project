@@ -568,6 +568,8 @@
 - Current `/workspace-playground` targeted filter/sort remount verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted grounded-chat search verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "submits grounded chat for selected sources and reopens the matching assistant turn from workspace search" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted grounded-chat search verification summary: `1 passed`, `0 failed`
+- Current `/workspace-playground` targeted live grounded-chat search verification command: `bunx playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --grep "submits grounded live chat for a selected source and reopens the matching assistant turn from workspace search" --reporter=line --workers=1`
+- Current `/workspace-playground` targeted live grounded-chat search verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted compare-sources verification command: `bunx playwright test e2e/workflows/workspace-playground.spec.ts --grep "generates compare-sources output for two selected sources through the studio pane" --reporter=line --workers=1`
 - Current `/workspace-playground` targeted compare-sources verification summary: `1 passed`, `0 failed`
 - Current `/workspace-playground` targeted live output-matrix verification command: `bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1`
@@ -587,6 +589,6 @@
 - `/workspace-playground` route-level studio cancel and interrupted-reload recovery is now covered deterministically
 - `/workspace-playground` live non-audio studio output generation and downloads now pass end to end for report, compare-sources, timeline, quiz, flashcards, and slides
 - `/workspace-playground` live study-aid generation now also passes end to end for quiz and flashcards in the audit backend
-- Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search; grounded chat, compare generation, and global search now have deterministic route proof, but remain `Mock-only` overall until live proof exists
+- Audit correction: the current real-backend workspace suite now covers grounded chat turns and result-backed global search; compare-sources route-shape assertions remain paired with deterministic coverage, while the separate live studio-output probe continues to provide the backend proof for compare generation itself
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
-- Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly
+- Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full four-spec audit passed cleanly
