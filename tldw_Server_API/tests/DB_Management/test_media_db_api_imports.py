@@ -9,6 +9,7 @@ from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.core.DB_Management import Users_DB
 from tldw_Server_API.app.core.DB_Management import Media_DB_v2 as legacy_media_db
 from tldw_Server_API.app.core.DB_Management import Prompts_DB as prompts_db_module
+from tldw_Server_API.app.core.DB_Management import db_path_utils
 from tldw_Server_API.app.core.AuthNZ import migrate_to_multiuser
 from tldw_Server_API.app.api.v1.endpoints import rag_unified as rag_unified_endpoint
 from tldw_Server_API.app.api.v1.endpoints import research
@@ -96,6 +97,7 @@ from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management import media_db as media_db_package
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_backup as media_db_legacy_backup
 from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_identifiers as media_db_legacy_identifiers
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_document_artifacts
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_content_queries
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_maintenance
@@ -111,6 +113,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.repositories import media_f
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import media_repository
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as media_db_runtime_factory
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import execution as media_db_runtime_execution
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import media_class as media_db_runtime_media_class
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import rows as media_db_runtime_rows
 from tldw_Server_API.app.services import admin_bundle_service
 from tldw_Server_API.app.services import media_files_cleanup_service
@@ -191,6 +194,10 @@ def test_migrate_to_multiuser_no_longer_mentions_media_db_v2_in_source() -> None
     assert "Media_DB_v2" not in inspect.getsource(migrate_to_multiuser)
 
 
+def test_db_path_utils_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(db_path_utils)
+
+
 def test_media_db_errors_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(media_db_errors)
 
@@ -205,6 +212,14 @@ def test_media_db_runtime_rows_no_longer_mentions_media_db_v2_in_source() -> Non
 
 def test_media_db_runtime_execution_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(media_db_runtime_execution)
+
+
+def test_media_db_runtime_media_class_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_runtime_media_class)
+
+
+def test_media_db_legacy_identifiers_owns_media_db_v2_reference() -> None:
+    assert "Media_DB_v2" in inspect.getsource(media_db_legacy_identifiers)
 
 
 def test_meetings_webhook_dlq_service_no_longer_mentions_media_db_v2_in_source() -> None:

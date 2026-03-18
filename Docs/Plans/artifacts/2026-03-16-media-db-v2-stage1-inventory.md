@@ -7,13 +7,13 @@
 - Raw `MediaDatabase(...)` constructors in app code: 0
 - Operational `create_media_database(...)` call sites in app code: 17
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 2
+- `Media_DB_v2` references in app code: 1
 
 Notes:
 
 - The operational counts exclude helper definitions in `media_db/api.py`, `media_db/runtime/factory.py`, `DB_Manager.py`, and README examples.
 - The normalized counts also exclude test modules located under `app/**/tests`.
-- The remaining `Media_DB_v2` references are intentional compatibility/path markers: the legacy filename constant and the runtime class loader.
+- The remaining `Media_DB_v2` reference is an intentional compatibility marker centralized in `media_db/legacy_identifiers.py`.
 
 ## Classification Rubric
 
