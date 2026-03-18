@@ -20,4 +20,4 @@
 **Goal**: Re-run backend/UI verification, push the fixes, and respond to the PR comments.
 **Success Criteria**: Relevant tests, typecheck, and Bandit pass for the touched scope; PR threads receive concrete replies tied to the fix.
 **Tests**: Targeted `pytest`, targeted `vitest`, UI `tsc`, Bandit on touched backend files.
-**Status**: In Progress
+**Status**: Complete
