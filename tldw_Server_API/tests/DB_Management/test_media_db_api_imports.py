@@ -27,6 +27,7 @@ from tldw_Server_API.app.api.v1.endpoints.media import document_outline
 from tldw_Server_API.app.api.v1.endpoints.media import document_insights
 from tldw_Server_API.app.api.v1.endpoints.media import document_references
 from tldw_Server_API.app.api.v1.endpoints.media import add as media_add_endpoint
+from tldw_Server_API.app.api.v1.endpoints.media import document_annotations as media_document_annotations_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import debug as media_debug_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import document_figures as media_document_figures_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import file as media_file_endpoint
@@ -558,6 +559,14 @@ def test_chunking_templates_endpoint_does_not_bind_media_database_from_media_db_
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(chunking_templates_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_document_annotations_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_document_annotations_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 
