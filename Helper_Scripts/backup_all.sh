@@ -2,7 +2,7 @@
 # backup_all.sh - Unified backup script for all tldw_server databases
 #
 # Backs up:
-#   1. Per-user Media_DB_v2.db and ChaChaNotes.db
+#   1. Per-user content DBs and ChaChaNotes.db
 #   2. AuthNZ users.db
 #   3. ChromaDB data directories (tar archive)
 #
@@ -149,12 +149,6 @@ if [[ -d "$USER_DB_BASE" ]]; then
         fi
         user_id="$(basename "$user_dir")"
 
-        # Media DB
-        MEDIA_DB="$user_dir/Media_DB_v2.db"
-        if [[ -f "$MEDIA_DB" ]]; then
-            backup_file "$MEDIA_DB" "user_databases/$user_id"
-        fi
-
         # ChaChaNotes DB
         CHACHA_DB="$user_dir/ChaChaNotes.db"
         if [[ -f "$CHACHA_DB" ]]; then
@@ -175,7 +169,7 @@ if [[ -d "$USER_DB_BASE" ]]; then
             other_name="$(basename "$other_db")"
             # Skip ones we already handled
             case "$other_name" in
-                Media_DB_v2.db|ChaChaNotes.db|prompts.db)
+                ChaChaNotes.db|prompts.db)
                     continue
                     ;;
             esac

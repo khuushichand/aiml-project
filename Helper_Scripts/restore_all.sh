@@ -40,7 +40,7 @@ IMPORTANT: Stop the tldw_server before restoring. Active database connections
 The script will:
   1. Validate the backup directory structure
   2. Restore AuthNZ database (users.db)
-  3. Restore each user's databases (Media_DB_v2.db, ChaChaNotes.db, etc.)
+  3. Restore each user's databases (content DBs, ChaChaNotes.db, etc.)
   4. Restore ChromaDB data from tar archives
   5. Report what was restored
 EOF
