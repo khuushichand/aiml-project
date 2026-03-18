@@ -52,8 +52,8 @@ modules:
     circuit_breaker_threshold: 5
     circuit_breaker_timeout: 60
     settings:
-      # Per-user default example path; adjust user id accordingly
-      db_path: Databases/user_databases/1/Media_DB_v2.db
+      # Per-user example path; replace <content-db>.db with your configured content DB filename
+      db_path: Databases/user_databases/1/<content-db>.db
       cache_ttl: 300
 ```
 
