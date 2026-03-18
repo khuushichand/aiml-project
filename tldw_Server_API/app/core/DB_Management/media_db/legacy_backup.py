@@ -1,4 +1,4 @@
-"""Legacy backup helpers extracted from Media_DB_v2."""
+"""Legacy backup helpers extracted from the media DB shim."""
 
 from __future__ import annotations
 

@@ -939,6 +939,10 @@ def test_legacy_maintenance_uses_runtime_validation_without_shim_source() -> Non
     assert "Media_DB_v2" not in inspect.getsource(legacy_maintenance)
 
 
+def test_legacy_backup_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_legacy_backup)
+
+
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():
     module = importlib.reload(admin_bundle_service)
     assert module.get_current_media_schema_version is media_db_runtime_factory.get_current_media_schema_version
