@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import os
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from typing import Any
 
 from loguru import logger
 
@@ -23,9 +23,6 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 _TTS_HISTORY_CLEANUP_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -122,14 +119,14 @@ def _enumerate_user_ids_from_fs() -> list[str]:
     return sorted(set(uids))
 
 
-def _create_cleanup_db(db_path: str) -> MediaDatabase:
+def _create_cleanup_db(db_path: str) -> Any:
     return create_media_database(
         client_id="tts_history_cleanup",
         db_path=db_path,
     )
 
 
-def _purge_with_db(db: MediaDatabase, user_ids: Iterable[str], retention_days: int, max_rows: int) -> int:
+def _purge_with_db(db: Any, user_ids: Iterable[str], retention_days: int, max_rows: int) -> int:
     removed_total = 0
     for uid in user_ids:
         try:

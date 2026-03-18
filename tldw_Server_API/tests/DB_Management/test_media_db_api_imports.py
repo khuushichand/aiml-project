@@ -1,4 +1,5 @@
 import configparser
+import inspect
 import importlib
 import sys
 
@@ -637,6 +638,7 @@ def test_outputs_purge_scheduler_imports_managed_media_database_from_media_db_ap
 def test_tts_history_cleanup_service_imports_create_media_database_from_media_db_api():
     module = importlib.reload(tts_history_cleanup_service)
     assert module.create_media_database is media_db_api.create_media_database
+    assert "Media_DB_v2" not in inspect.getsource(module)
 
 
 def test_audiobook_jobs_worker_imports_managed_media_database_from_media_db_api():
