@@ -404,7 +404,7 @@
 - Resolution:
   - Trimmed the live workspace output probe to the backend-supported RAG outputs it can honestly prove today: report, compare-sources, and timeline.
   - Kept the probe’s failure detection strict and made cleanup best-effort so the route proof does not hang on slow deletion paths.
-  - Reclassified slides as missing for the workspace route, and reclassified mind map, data table, quiz, and flashcards away from live-covered status in the audit matrix.
+  - Temporarily reclassified slides as missing for the workspace route at that audit stage, and reclassified mind map, data table, quiz, and flashcards away from live-covered status in the audit matrix until route-specific proof existed.
   - Verification:
     - `bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `1 passed (2.8s)`
     - `bunx playwright test e2e/workflows/knowledge-qa.spec.ts e2e/workflows/workspace-playground.spec.ts e2e/workflows/workspace-playground.real-backend.spec.ts e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `38 passed (1.3m)`
@@ -429,6 +429,36 @@
   - Added a regression test proving the second-pass repair path completes the artifact instead of failing.
   - Verification:
     - `bunx vitest run src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage2.test.tsx` => `22 passed`
+
+### WP-010: Workspace slides generation was broken for document-backed sources and ignored the selected studio runtime
+
+- Status: Resolved as product fix plus live-proof hardening
+- Route: `/workspace-playground`
+- Feature: studio slides generation for workspace-selected sources
+- Reproduction:
+  1. Open `/workspace-playground`
+  2. Add a document-backed source through the workspace flow
+  3. Select the source and trigger `Slides`
+  4. Observe that the prior backend route only looked for a transcription, so document-backed media returned `media_transcript_not_found`
+  5. Observe that the audit backend still could not prove the flow in test mode because slide generation called the lower-level LLM service directly and surfaced `llm_call_failed`
+  6. Observe that the workspace route also failed to pass the selected provider/model into the slides API, so successful runs could silently use the server default runtime instead of the chosen studio runtime
+- Evidence:
+  - `tldw_Server_API/app/api/v1/endpoints/slides.py`
+  - `tldw_Server_API/app/core/Slides/slides_generator.py`
+  - `apps/packages/ui/src/components/Option/WorkspacePlayground/StudioPane/index.tsx`
+  - `apps/tldw-frontend/e2e/workflows/workspace-playground.output-matrix.probe.spec.ts`
+- Suspected layer: mixed backend and route wiring defects across media-content resolution, test-mode generation behavior, and studio runtime passthrough
+- Why it matters: slides are a beta-surface workspace output, and the prior state meant document/PDF/text sources could fail entirely, the audit backend could not prove the route live, and user-selected model/provider choices were not reliably honored
+- Resolution:
+  - Updated the slides API to resolve source text from document content and stored media content when a transcription is unavailable, instead of assuming all slide generation starts from an audio/video transcript.
+  - Added a deterministic slides-generator test-mode payload so the audit backend can prove the route without depending on external provider credentials.
+  - Wired the workspace StudioPane slides action to pass the selected provider, model, and temperature through to the slides API.
+  - Added backend regressions for document-backed media and test-mode generation, a UI regression for runtime passthrough, and a live workspace probe that now generates plus downloads slides for a document-backed source.
+  - Verification:
+    - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Slides/test_slides_generator.py tldw_Server_API/tests/Slides/test_slides_api.py -k "deterministic_test_mode_payload or document_media_uses_document_content or missing_transcript" -q` => `3 passed`
+    - `bunx vitest run src/components/Option/WorkspacePlayground/__tests__/StudioPane.stage1.test.tsx -t "passes the selected model runtime through to slides generation"` => `1 passed`
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18005 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --grep "generates and downloads live slides for a document-backed workspace source" --reporter=line --workers=1` => `1 passed`
+    - `TLDW_WEB_AUTOSTART=false TLDW_WEB_URL=http://127.0.0.1:8080 TLDW_SERVER_URL=http://127.0.0.1:18005 TLDW_API_KEY=THIS-IS-A-SECURE-KEY-123-FAKE-KEY bunx playwright test e2e/workflows/workspace-playground.output-matrix.probe.spec.ts --reporter=line --workers=1` => `2 passed`
 
 ## Notes
 
@@ -469,7 +499,8 @@
 - `/workspace-playground` route-level grounded chat plus result-backed global search is now covered deterministically, and the broken chat-focus handoff has been fixed
 - `/workspace-playground` route-level compare-sources generation is now covered deterministically from source selection through completed artifact viewing
 - `/workspace-playground` route-level studio cancel and interrupted-reload recovery is now covered deterministically
-- `/workspace-playground` live non-audio studio output generation and downloads now pass end to end, and the timeout policies for slides plus flashcards are explicitly covered
+- `/workspace-playground` live non-audio studio output generation and downloads now pass end to end for report, compare-sources, timeline, and slides
+- Audit correction: mind map and data-table outputs remain non-live in this backend because `/api/v1/chat/completions` stays in test-mode mock behavior, and quiz/flashcards remain non-live because `/api/v1/quizzes/generate` still requires real provider credentials
 - Audit correction: the current real-backend workspace suite does not presently cover grounded chat turns, compare-sources generation, or result-backed global search; grounded chat, compare generation, and global search now have deterministic route proof, but remain `Mock-only` overall until live proof exists
 - `/knowledge` basic live search, follow-up, and no-results/error-state paths passed in the same run
 - Session note: the local API listener dropped earlier in the audit and direct restart attempts hit missing-env then OpenMP shared-memory startup failures, but later verification recovered to a healthy live-backed state and the full three-spec audit passed cleanly

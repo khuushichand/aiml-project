@@ -429,4 +429,40 @@ test.describe("Workspace Playground output matrix probe", () => {
       }
     }
   })
+
+  test("generates and downloads live slides for a document-backed workspace source", async ({
+    authedPage,
+    serverInfo,
+    diagnostics,
+  }) => {
+    test.setTimeout(300_000)
+    skipIfServerUnavailable(serverInfo)
+    const availableModel = serverInfo.models?.[0]
+    test.skip(
+      !availableModel,
+      "Skipping workspace slides probe: no live chat models reported by /api/v1/llm/providers",
+    )
+
+    const workspacePage = new WorkspacePlaygroundPage(authedPage)
+    const uniqueSlug = generateTestId("workspace-slides-probe")
+    let createdMediaIds: number[] = []
+
+    try {
+      createdMediaIds = await setupLiveProbeWorkspace({
+        authedPage,
+        workspacePage,
+        availableModel: availableModel!,
+        uniqueSlug,
+        documentCount: 1,
+      })
+      await verifyGeneratedOutputs(authedPage, [
+        { label: "Slides", textDownload: true },
+      ])
+      await assertNoCriticalErrors(diagnostics)
+    } finally {
+      for (const mediaId of createdMediaIds) {
+        await cleanupMediaItem(mediaId)
+      }
+    }
+  })
 })

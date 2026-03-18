@@ -704,6 +704,26 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockCreateChatCompletion).not.toHaveBeenCalled()
   })
 
+  it("passes the selected model runtime through to slides generation", async () => {
+    messageOptionStoreState.selectedModel = "llama-3.1-8b"
+    chatModelSettingsStoreState.apiProvider = "ollama"
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Slides" }))
+
+    await waitFor(() => {
+      expect(mockGenerateSlidesFromMedia).toHaveBeenCalledWith(
+        101,
+        expect.objectContaining({
+          model: "llama-3.1-8b",
+          provider: "ollama",
+          temperature: 0.7
+        })
+      )
+    })
+  })
+
   it("downloads quiz artifacts locally instead of calling outputs download", async () => {
     mockDownloadOutput.mockResolvedValue(new Blob(["server download"]))
 

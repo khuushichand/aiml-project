@@ -1748,7 +1748,14 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           )
           break
         case "slides":
-          result = await generateSlidesFromApi(mediaIds[0], activeAbort.signal)
+          const slidesRuntime = await resolveStudioChatRuntime()
+          result = await generateSlidesFromApi({
+            mediaId: mediaIds[0],
+            model: slidesRuntime.model,
+            apiProvider: slidesRuntime.provider,
+            temperature: resolvedTemperature,
+            abortSignal: activeAbort.signal
+          })
           break
         case "data_table":
           result = await generateDataTable({
@@ -4197,13 +4204,21 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
 }
 
 async function generateSlidesFromApi(
-  mediaId: number,
-  abortSignal?: AbortSignal
+  options: {
+    mediaId: number
+    model?: string
+    apiProvider?: string
+    temperature?: number
+    abortSignal?: AbortSignal
+  }
 ): Promise<GenerationResult> {
   try {
     // Use the Slides API to generate a real presentation
-    const presentation = await tldwClient.generateSlidesFromMedia(mediaId, {
-      signal: abortSignal
+    const presentation = await tldwClient.generateSlidesFromMedia(options.mediaId, {
+      provider: options.apiProvider,
+      model: options.model,
+      temperature: options.temperature,
+      signal: options.abortSignal
     })
     const usage = extractUsageMetrics(presentation)
 
@@ -4237,7 +4252,7 @@ async function generateSlidesFromApi(
     }
     // Fallback to RAG-based generation if API fails
     console.error("Slides API failed, falling back to RAG:", error)
-    return generateSlidesFallback([mediaId], abortSignal)
+    return generateSlidesFallback([options.mediaId], options.abortSignal)
   }
 }
 
