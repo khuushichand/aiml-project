@@ -835,6 +835,14 @@ def test_claims_review_metrics_scheduler_imports_managed_media_database_from_med
     assert "MediaDatabase" not in module.__dict__
 
 
+def test_media_endpoint_package_does_not_bind_media_database_from_shim(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    module = importlib.reload(
+        importlib.import_module("tldw_Server_API.app.api.v1.endpoints.media")
+    )
+    assert "MediaDatabase" not in module.__dict__
+
+
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():
     module = importlib.reload(admin_bundle_service)
     assert module.get_current_media_schema_version is media_db_runtime_factory.get_current_media_schema_version

@@ -1,4 +1,5 @@
 import importlib
+from contextlib import contextmanager
 
 import pytest
 
@@ -99,7 +100,12 @@ async def test_legacy_document_version_callers_use_extracted_wrapper(
     assert content_payload["media_item"]["content"] == "document body"
 
     monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda user_id: "/tmp/fake.db")
-    monkeypatch.setattr(jobs_worker, "create_media_database", lambda client_id, db_path: StubDb())
+
+    @contextmanager
+    def _fake_managed_media_database(*args, **kwargs):
+        yield StubDb()
+
+    monkeypatch.setattr(jobs_worker, "managed_media_database", _fake_managed_media_database)
 
     jobs_payload = jobs_worker._load_media_content(7, "user-1")
     assert jobs_payload["media_item"]["content"] == "document body"
@@ -208,4 +214,29 @@ def test_data_tables_jobs_worker_imports_document_version_from_legacy_wrappers(
     )
 
     reloaded = importlib.reload(data_tables_jobs_worker)
+    assert reloaded.get_document_version is legacy_wrappers.get_document_version
+
+
+def test_media_endpoint_package_imports_document_version_from_legacy_wrappers(
+    monkeypatch,
+) -> None:
+    media_db_v2 = importlib.import_module(
+        "tldw_Server_API.app.core.DB_Management.Media_DB_v2"
+    )
+    media_endpoint_package = importlib.import_module(
+        "tldw_Server_API.app.api.v1.endpoints.media"
+    )
+
+    def _shim_should_not_be_bound(*args, **kwargs):
+        raise AssertionError(
+            "media endpoint package should not bind get_document_version from Media_DB_v2"
+        )
+
+    monkeypatch.setattr(
+        media_db_v2,
+        "get_document_version",
+        _shim_should_not_be_bound,
+    )
+
+    reloaded = importlib.reload(media_endpoint_package)
     assert reloaded.get_document_version is legacy_wrappers.get_document_version
