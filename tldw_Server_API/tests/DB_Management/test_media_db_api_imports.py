@@ -13,6 +13,7 @@ from tldw_Server_API.app.api.v1.endpoints import claims as claims_endpoint
 from tldw_Server_API.app.api.v1.endpoints import chunking as chunking_endpoint
 from tldw_Server_API.app.api.v1.endpoints import slides as slides_endpoint
 from tldw_Server_API.app.api.v1.endpoints import text2sql as text2sql_endpoint
+from tldw_Server_API.app.api.v1.endpoints import media_embeddings as media_embeddings_endpoint
 from tldw_Server_API.app.api.v1.endpoints import data_tables
 from tldw_Server_API.app.api.v1.endpoints import items
 from tldw_Server_API.app.api.v1.endpoints import quizzes as quizzes_endpoint
@@ -28,10 +29,16 @@ from tldw_Server_API.app.api.v1.endpoints.media import file as media_file_endpoi
 from tldw_Server_API.app.api.v1.endpoints.media import ingest_web_content as media_ingest_web_content_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import item as media_item
 from tldw_Server_API.app.api.v1.endpoints.media import navigation as media_navigation
+from tldw_Server_API.app.api.v1.endpoints.media import process_audios as media_process_audios_endpoint
+from tldw_Server_API.app.api.v1.endpoints.media import process_code as media_process_code_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import process_ebooks as media_process_ebooks_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import process_documents
+from tldw_Server_API.app.api.v1.endpoints.media import process_emails as media_process_emails_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import process_pdfs
+from tldw_Server_API.app.api.v1.endpoints.media import process_videos as media_process_videos_endpoint
+from tldw_Server_API.app.api.v1.endpoints.media import process_web_scraping as media_process_web_scraping_endpoint
 from tldw_Server_API.app.api.v1.endpoints.audio import audio_history as audio_history_endpoint
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_tts as audio_tts_endpoint
 from tldw_Server_API.app.api.v1.utils import http_errors
 from tldw_Server_API.app.api.v1.endpoints.media import versions as media_versions
 from tldw_Server_API.app.core.Claims_Extraction import (
@@ -405,6 +412,22 @@ def test_audio_history_endpoint_does_not_bind_media_database_from_media_db_v2(mo
     assert "MediaDatabase" not in module.__dict__
 
 
+def test_audio_tts_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(audio_tts_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_embeddings_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_embeddings_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
 def test_media_debug_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
@@ -441,6 +464,46 @@ def test_media_process_ebooks_endpoint_does_not_bind_media_database_from_media_d
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(media_process_ebooks_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_process_web_scraping_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_process_web_scraping_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_process_videos_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_process_videos_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_process_audios_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_process_audios_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_process_emails_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_process_emails_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_process_code_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_process_code_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 

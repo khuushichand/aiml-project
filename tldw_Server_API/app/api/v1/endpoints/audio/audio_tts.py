@@ -26,7 +26,6 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, Stora
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
@@ -289,7 +288,7 @@ async def create_speech(
     request: Request,
     tts_service: TTSServiceV2 = Depends(get_tts_service),
     current_user: User = Depends(get_request_user),
-    media_db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
+    media_db: Optional[Any] = Depends(try_get_media_db_for_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """

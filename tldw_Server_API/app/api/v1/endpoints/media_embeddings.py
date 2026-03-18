@@ -28,7 +28,6 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Embeddings.jobs_adapter import EmbeddingsJobsAdapter
@@ -219,7 +218,7 @@ class EmbeddingsSearchResponse(BaseModel):
     count: int
 
 
-async def get_media_content(media_id: int, db: MediaDatabase) -> dict[str, Any]:
+async def get_media_content(media_id: int, db: Any) -> dict[str, Any]:
     """Retrieve media content from database"""
     try:
         # Get media item details
@@ -584,7 +583,7 @@ async def generate_embeddings_for_media(
 )
 async def get_embeddings_status(
     media_id: int,
-    db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
+    db: Annotated[Any, Depends(get_media_db_for_user)],
     current_user: Annotated[User, Depends(get_request_user)],
 ) -> EmbeddingsStatusResponse:
     """Check if embeddings exist for a media item"""
@@ -652,7 +651,7 @@ async def get_embeddings_status(
 async def generate_embeddings(
     media_id: int,
     request: GenerateEmbeddingsRequest,
-    db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
+    db: Annotated[Any, Depends(get_media_db_for_user)],
     current_user: Annotated[User, Depends(get_request_user)],
 ) -> GenerateEmbeddingsResponse:
     """Generate embeddings for a media item"""
@@ -744,7 +743,7 @@ async def generate_embeddings(
 )
 async def generate_embeddings_batch(
     request: BatchMediaEmbeddingsRequest,
-    db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
+    db: Annotated[Any, Depends(get_media_db_for_user)],
     current_user: Annotated[User, Depends(get_request_user)],
 ) -> BatchMediaEmbeddingsResponse:
     """Launch embedding jobs for multiple media items."""
@@ -925,7 +924,7 @@ async def search_embeddings(
 )
 async def delete_embeddings(
     media_id: int,
-    db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
+    db: Annotated[Any, Depends(get_media_db_for_user)],
     current_user: Annotated[User, Depends(get_request_user)],
 ) -> dict[str, Any]:
     """Delete embeddings for a media item"""
