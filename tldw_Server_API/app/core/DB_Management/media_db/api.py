@@ -2,7 +2,6 @@
 
 import contextlib
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
 
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import (
     MediaRepository,
@@ -17,9 +16,9 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.session import (
     MediaDbFactory,
     MediaDbSession,
 )
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
+    MediaDbLike,
+)
 
 
 def create_media_database(
@@ -28,7 +27,7 @@ def create_media_database(
     db_path: str | None = None,
     backend=None,
     config=None,
-) -> "MediaDatabase":
+) -> MediaDbLike:
     """Create a MediaDatabase using the shared content runtime defaults."""
     from tldw_Server_API.app.core.DB_Management import DB_Manager
 
@@ -57,7 +56,7 @@ def managed_media_database(
     initialize: bool = True,
     suppress_init_exceptions: tuple[type[BaseException], ...] = (),
     suppress_close_exceptions: tuple[type[BaseException], ...] = (),
-) -> Iterator["MediaDatabase"]:
+) -> Iterator[MediaDbLike]:
     """Create a MediaDatabase, optionally initialize it, and always close it on exit."""
     db = create_media_database(
         client_id,
@@ -81,7 +80,7 @@ def managed_media_database(
             db.close_connection()
 
 
-def get_media_repository(db: "MediaDatabase") -> MediaRepository:
+def get_media_repository(db: MediaDbLike) -> MediaRepository:
     """Return the repository-backed media ingest interface for a legacy DB session."""
     return MediaRepository.from_legacy_db(db)
 

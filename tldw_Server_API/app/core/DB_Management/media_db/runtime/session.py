@@ -9,6 +9,14 @@ from typing import Any, Callable
 DatabaseFactory = Callable[..., Any]
 
 
+def _load_default_media_database_factory() -> DatabaseFactory:
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
+        _load_media_database_cls,
+    )
+
+    return _load_media_database_cls()
+
+
 @dataclass(slots=True)
 class MediaDbSession:
     db_path: str
@@ -45,9 +53,7 @@ class MediaDbFactory:
     ) -> MediaDbSession:
         database_factory = self.database_factory
         if database_factory is None:
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-            database_factory = MediaDatabase
+            database_factory = _load_default_media_database_factory()
 
         if self.backend is not None:
             database = database_factory(

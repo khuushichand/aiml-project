@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from tldw_Server_API.app.api.v1.API_Deps import DB_Deps as deps
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.DB_Management.media_db.api import MediaDbFactory
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import session as media_db_session
 
 
 def test_factory_returns_distinct_sessions_for_distinct_scopes() -> None:
@@ -15,6 +16,11 @@ def test_factory_returns_distinct_sessions_for_distinct_scopes() -> None:
     assert first is not second
     assert (first.org_id, first.team_id) == (10, 20)
     assert (second.org_id, second.team_id) == (11, 21)
+
+
+def test_media_db_session_runtime_module_no_longer_mentions_media_db_v2_in_source() -> None:
+    source = Path(media_db_session.__file__).read_text()
+    assert "Media_DB_v2" not in source
 
 
 def test_cached_factory_does_not_mutate_existing_session_scope() -> None:

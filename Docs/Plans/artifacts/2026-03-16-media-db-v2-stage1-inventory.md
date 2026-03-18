@@ -7,7 +7,7 @@
 - Raw `MediaDatabase(...)` constructors in app code: 0
 - Operational `create_media_database(...)` call sites in app code: 17
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 39
+- `Media_DB_v2` references in app code: 37
 
 Notes:
 
@@ -127,6 +127,7 @@ Status:
 - `app/core/Ingestion_Media_Processing/persistence.py` now imports URL dedupe helpers from `media_db.dedupe_urls` instead of from `Media_DB_v2.py`.
 - `app/core/DB_Management/media_db/legacy_maintenance.py` now uses `media_db.runtime.validation` plus a local noncritical-exception tuple instead of shim-bound `MediaDatabase` checks and `_MEDIA_NONCRITICAL_EXCEPTIONS` imports.
 - `app/core/DB_Management/media_db/legacy_backup.py` no longer mentions `Media_DB_v2` in source; it remains a thin compatibility wrapper over `DB_Backups.create_backup(...)`.
+- `app/core/DB_Management/media_db/api.py` and `app/core/DB_Management/media_db/runtime/session.py` no longer mention `Media_DB_v2` in source; they now rely on `MediaDbLike` and the runtime factory loader instead of naming the shim directly.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory

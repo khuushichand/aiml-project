@@ -151,6 +151,10 @@ def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch):
     assert captured["runtime"].postgres_content_mode is True
 
 
+def test_media_db_api_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_api)
+
+
 def test_db_deps_imports_errors_from_media_db_errors_and_not_media_db_v2(monkeypatch):
     monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
     monkeypatch.setattr(legacy_media_db, "SchemaError", object(), raising=False)
