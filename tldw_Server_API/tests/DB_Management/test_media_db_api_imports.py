@@ -9,6 +9,7 @@ from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.core.DB_Management import Users_DB
 from tldw_Server_API.app.core.DB_Management import Media_DB_v2 as legacy_media_db
 from tldw_Server_API.app.core.DB_Management import Prompts_DB as prompts_db_module
+from tldw_Server_API.app.core.AuthNZ import migrate_to_multiuser
 from tldw_Server_API.app.api.v1.endpoints import rag_unified as rag_unified_endpoint
 from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.api.v1.endpoints import claims as claims_endpoint
@@ -184,6 +185,10 @@ def test_embeddings_v5_endpoint_no_longer_mentions_media_db_v2_in_source() -> No
 
 def test_prompts_db_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(prompts_db_module)
+
+
+def test_migrate_to_multiuser_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(migrate_to_multiuser)
 
 
 def test_media_db_errors_no_longer_mentions_media_db_v2_in_source() -> None:

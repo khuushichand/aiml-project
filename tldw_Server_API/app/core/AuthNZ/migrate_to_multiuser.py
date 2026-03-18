@@ -223,7 +223,7 @@ def migrate_existing_data(user_db: UserDatabase) -> None:
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
         single_user_id = DatabasePaths.get_single_user_id()
         legacy_candidates = [
-            ("Media", project_root / "Databases" / "Media_DB_v2.db", DatabasePaths.get_media_db_path(single_user_id)),
+            ("Media", project_root / "Databases" / DatabasePaths.MEDIA_DB_NAME, DatabasePaths.get_media_db_path(single_user_id)),
             ("ChaChaNotes", project_root / "Databases" / "ChaChaNotes.db", DatabasePaths.get_chacha_db_path(single_user_id)),
         ]
     except Exception:

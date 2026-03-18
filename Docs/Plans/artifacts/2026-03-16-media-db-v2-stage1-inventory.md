@@ -7,13 +7,13 @@
 - Raw `MediaDatabase(...)` constructors in app code: 0
 - Operational `create_media_database(...)` call sites in app code: 17
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 3
+- `Media_DB_v2` references in app code: 2
 
 Notes:
 
 - The operational counts exclude helper definitions in `media_db/api.py`, `media_db/runtime/factory.py`, `DB_Manager.py`, and README examples.
 - The normalized counts also exclude test modules located under `app/**/tests`.
-- The remaining `Media_DB_v2` references are intentional compatibility/path markers: the legacy filename constant, the legacy single-user migration path, and the runtime class loader.
+- The remaining `Media_DB_v2` references are intentional compatibility/path markers: the legacy filename constant and the runtime class loader.
 
 ## Classification Rubric
 
@@ -135,6 +135,7 @@ Status:
 - `app/core/DB_Management/media_db/errors.py`, `app/core/DB_Management/media_db/__init__.py`, `app/core/DB_Management/media_db/runtime/rows.py`, and `app/core/DB_Management/media_db/runtime/execution.py` no longer mention `Media_DB_v2` in package docstrings.
 - `app/services/meetings_webhook_dlq_service.py` no longer mentions `Media_DB_v2` in its meetings-target discovery helper docstring.
 - `app/core/DB_Management/Media_DB_v2.py` no longer self-identifies with `Media_DB_v2` in source comments or logger names; the remaining app-side count is now down to the truly intentional loader/path references.
+- `app/core/AuthNZ/migrate_to_multiuser.py` now uses `DatabasePaths.MEDIA_DB_NAME` instead of hardcoding the legacy media DB filename, so the migration helper no longer contributes a direct `Media_DB_v2` source reference.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory
