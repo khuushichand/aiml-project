@@ -92,9 +92,11 @@ from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_backup as media_db_legacy_backup
 from tldw_Server_API.app.core.DB_Management.media_db import errors as media_db_errors
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_document_artifacts
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_reads as media_db_legacy_reads
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_media_details
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_state as media_db_state
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as media_db_runtime_factory
 from tldw_Server_API.app.services import admin_bundle_service
 from tldw_Server_API.app.services import media_files_cleanup_service
@@ -900,6 +902,22 @@ def test_persistence_imports_factory_and_db_errors_outside_shim(monkeypatch):
     assert module.InputError is media_db_errors.InputError
     assert "MediaDatabase" not in module.__dict__
     assert "Media_DB_v2" not in inspect.getsource(module)
+
+
+def test_legacy_state_uses_runtime_validation_without_shim_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_state)
+
+
+def test_legacy_reads_uses_runtime_validation_without_shim_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(media_db_legacy_reads)
+
+
+def test_legacy_wrappers_uses_runtime_validation_without_shim_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(legacy_wrappers)
+
+
+def test_legacy_document_artifacts_uses_runtime_validation_without_shim_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(legacy_document_artifacts)
 
 
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():

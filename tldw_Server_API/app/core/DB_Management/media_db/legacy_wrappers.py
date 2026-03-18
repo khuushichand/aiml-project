@@ -1,8 +1,8 @@
-"""Repository-backed legacy wrapper functions extracted from Media_DB_v2."""
+"""Repository-backed legacy wrapper functions extracted from the media DB shim."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import yaml
 from loguru import logger
@@ -14,30 +14,19 @@ from tldw_Server_API.app.core.DB_Management.media_db.repositories.document_versi
 from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_repository import (
     MediaRepository,
 )
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
-def _require_media_db_instance(
-    db_instance: Any,
-    *,
-    error_message: str,
-) -> "MediaDatabase":
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError(error_message)  # noqa: TRY003
-    return db_instance
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
+    MediaDbLike,
+    require_media_database_like,
+)
 
 
 def get_document_version(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     media_id: int,
     version_number: int | None = None,
     include_content: bool = True,
 ) -> dict[str, Any] | None:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance must be a Database object.",
     )
@@ -49,7 +38,7 @@ def get_document_version(
 
 
 def ingest_article_to_db_new(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     *,
     url: str,
     title: str,
@@ -61,7 +50,7 @@ def ingest_article_to_db_new(
     custom_prompt: str | None = None,
     overwrite: bool = False,
 ) -> tuple[int | None, str | None, str]:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -83,10 +72,10 @@ def ingest_article_to_db_new(
 
 
 def import_obsidian_note_to_db(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     note_data: dict[str, Any],
 ) -> tuple[int | None, str | None, str]:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )

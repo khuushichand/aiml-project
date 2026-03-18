@@ -1,9 +1,9 @@
-"""Legacy media state helpers extracted from Media_DB_v2."""
+"""Legacy media state helpers extracted from the media DB shim."""
 
 from __future__ import annotations
 
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 
@@ -11,30 +11,19 @@ from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
     media_dedupe_url_candidates,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError, DatabaseError
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
-def _require_media_db_instance(
-    db_instance: Any,
-    *,
-    error_message: str,
-) -> "MediaDatabase":
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError(error_message)  # noqa: TRY003
-    return db_instance
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
+    MediaDbLike,
+    require_media_database_like,
+)
 
 
 def check_media_exists(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     media_id: int | None = None,
     url: str | None = None,
     content_hash: str | None = None,
 ) -> int | None:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -69,8 +58,8 @@ def check_media_exists(
         raise DatabaseError(f"Failed check media existence: {exc}") from exc  # noqa: TRY003
 
 
-def get_unprocessed_media(db_instance: "MediaDatabase") -> list[dict]:
-    db_instance = _require_media_db_instance(
+def get_unprocessed_media(db_instance: MediaDbLike) -> list[dict]:
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -87,10 +76,10 @@ def get_unprocessed_media(db_instance: "MediaDatabase") -> list[dict]:
 
 
 def mark_media_as_processed(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     media_id: int,
 ) -> None:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )

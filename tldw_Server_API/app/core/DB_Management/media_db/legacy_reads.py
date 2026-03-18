@@ -1,36 +1,25 @@
-"""Legacy read helpers extracted from Media_DB_v2."""
+"""Legacy read helpers extracted from the media DB shim."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
-def _require_media_db_instance(
-    db_instance: Any,
-    *,
-    error_message: str,
-) -> "MediaDatabase":
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    if not isinstance(db_instance, MediaDatabase):
-        raise TypeError(error_message)  # noqa: TRY003
-    return db_instance
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
+    MediaDbLike,
+    require_media_database_like,
+)
 
 
 def get_media_transcripts(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     media_id: int,
 ) -> list[dict]:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -53,10 +42,10 @@ def get_media_transcripts(
 
 
 def get_latest_transcription(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     media_id: int,
 ) -> str | None:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -99,10 +88,10 @@ def get_latest_transcription(
 
 
 def get_specific_transcript(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     transcript_uuid: str,
 ) -> dict[str, Any] | None:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -124,10 +113,10 @@ def get_specific_transcript(
 
 
 def get_media_prompts(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     media_id: int,
 ) -> list[dict]:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
@@ -159,10 +148,10 @@ def get_media_prompts(
 
 
 def get_specific_prompt(
-    db_instance: "MediaDatabase",
+    db_instance: MediaDbLike,
     version_uuid: str,
 ) -> str | None:
-    db_instance = _require_media_db_instance(
+    db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
     )
