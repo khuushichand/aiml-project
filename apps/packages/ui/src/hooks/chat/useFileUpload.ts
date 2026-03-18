@@ -75,6 +75,7 @@ export const useFileUpload = ({
         processed: false,
       };
 
+      // Read current values from refs to avoid stale closure on concurrent uploads
       setUploadedFiles([...uploadedFilesRef.current, uploadedFile]);
       setContextFiles([...contextFilesRef.current, uploadedFile]);
 

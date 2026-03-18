@@ -437,13 +437,6 @@ export interface ChatCompletionRequest {
   grammar_inline?: string
   grammar_override?: string
   response_format?: { type: "json_object" | "text" }
-  routing?: {
-    strategy?: "llm_router" | "rules_router"
-    objective?: "highest_quality" | "lowest_cost" | "lowest_latency" | "balanced"
-    mode?: "per_turn" | "sticky_session"
-    cross_provider?: boolean
-    failure_mode?: "fallback_then_error" | "error"
-  }
 }
 
 export interface ServerChatSummary {
@@ -2451,6 +2444,7 @@ export class TldwApiClient {
         const parsed = JSON.parse(line)
         yield parsed
       } catch (e) {
+        // Ignore empty/whitespace-only lines and SSE comments (": ...")
         const trimmed = line.trim()
         if (trimmed && !trimmed.startsWith(":")) {
           console.warn("[tldw:stream] Unparseable SSE line:", trimmed.slice(0, 200))

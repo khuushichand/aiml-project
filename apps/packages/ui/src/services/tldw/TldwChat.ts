@@ -146,6 +146,7 @@ const buildRequestMessages = (
   let withSystemPrompt: ChatMessage[]
   if (systemPrompt) {
     if (sanitizedMessages[0]?.role === "system") {
+      // Replace existing system message with the user-configured one
       withSystemPrompt = [
         { role: "system", content: systemPrompt } as ChatMessage,
         ...sanitizedMessages.slice(1)
@@ -248,7 +249,6 @@ const normalizeChatTools = (
 
 export interface TldwChatOptions {
   model: string
-  routing?: ChatCompletionRequest["routing"]
   temperature?: number
   logprobs?: boolean
   topLogprobs?: number
@@ -353,7 +353,6 @@ export class TldwChatService {
         frequency_penalty: options.frequencyPenalty,
         presence_penalty: options.presencePenalty,
         reasoning_effort: options.reasoningEffort,
-        routing: options.routing,
         tool_choice: toolChoice,
         tools: normalizedTools,
         save_to_db: options.saveToDb,
@@ -434,7 +433,6 @@ export class TldwChatService {
         frequency_penalty: options.frequencyPenalty,
         presence_penalty: options.presencePenalty,
         reasoning_effort: options.reasoningEffort,
-        routing: options.routing,
         tool_choice: toolChoice,
         tools: normalizedTools,
         save_to_db: options.saveToDb,
@@ -575,9 +573,10 @@ export class TldwChatService {
           } else if (part?.type === "text" && typeof part.text === "string") {
             partTokens += part.text.length
           } else if (part?.type === "image_url") {
+            // Rough image token estimate: 85 tokens for low detail, 765 for high
             const detail = part.image_url?.detail
             const imageTokens = detail === "low" ? 85 : 765
-            partTokens += imageTokens * 4
+            partTokens += imageTokens * 4 // convert to char-equivalents
           }
         }
         totalChars += partTokens

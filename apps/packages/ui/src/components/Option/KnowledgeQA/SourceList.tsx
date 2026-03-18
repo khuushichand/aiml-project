@@ -122,6 +122,33 @@ function parsePersistedSourceListFilters(
   }
 }
 
+function readPersistedSourceListFilters(
+  storageKey: string
+): PersistedSourceListFilters | null {
+  if (typeof window === "undefined") return null
+
+  try {
+    const rawStoredValue = window.localStorage.getItem(storageKey)
+    return rawStoredValue ? parsePersistedSourceListFilters(rawStoredValue) : null
+  } catch (error) {
+    console.warn("SourceList filter restore skipped because storage is unavailable.", error)
+    return null
+  }
+}
+
+function persistSourceListFilters(
+  storageKey: string,
+  payload: PersistedSourceListFilters
+): void {
+  if (typeof window === "undefined") return
+
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(payload))
+  } catch (error) {
+    console.warn("SourceList filter persistence skipped because storage is unavailable.", error)
+  }
+}
+
 function getResultFeedbackKey(result: RagResult, index: number): string {
   if (typeof result.id === "string" && result.id.length > 0) {
     return result.id
@@ -238,6 +265,7 @@ export function SourceList({ className }: SourceListProps) {
     () => getSourceFilterStorageKey(currentThreadId),
     [currentThreadId]
   )
+  const activeAnswerSessionKeyRef = React.useRef("")
   const feedbackSessionId = React.useMemo(() => getFeedbackSessionId(), [])
   const latestAssistantMessageId = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -247,6 +275,13 @@ export function SourceList({ className }: SourceListProps) {
     }
     return null
   }, [messages])
+  const answerSessionKey = useMemo(
+    () =>
+      `${currentThreadId ?? "no-thread"}::${latestAssistantMessageId ?? "no-assistant"}::${
+        query.trim() || "no-query"
+      }`,
+    [currentThreadId, latestAssistantMessageId, query]
+  )
   const highlightTerms = useMemo(
     () => buildHighlightTerms(query, searchDetails?.expandedQueries || []),
     [query, searchDetails?.expandedQueries]
@@ -383,12 +418,7 @@ export function SourceList({ className }: SourceListProps) {
   }, [results, activeSourceType, activeContentFacet, dateFilter, keywordFilter, sortMode])
 
   useEffect(() => {
-    if (typeof window === "undefined") return
-
-    const rawStoredValue = window.localStorage.getItem(filterStorageKey)
-    const persistedFilters = rawStoredValue
-      ? parsePersistedSourceListFilters(rawStoredValue)
-      : null
+    const persistedFilters = readPersistedSourceListFilters(filterStorageKey)
     const resolvedFilters: PersistedSourceListFilters = persistedFilters || {
       sortMode: DEFAULT_SORT_MODE,
       sourceType: DEFAULT_SOURCE_TYPE_FILTER,
@@ -406,7 +436,6 @@ export function SourceList({ className }: SourceListProps) {
   }, [filterStorageKey])
 
   useEffect(() => {
-    if (typeof window === "undefined") return
     if (hydratedFilterStorageKey !== filterStorageKey) return
 
     const payload: PersistedSourceListFilters = {
@@ -416,7 +445,7 @@ export function SourceList({ className }: SourceListProps) {
       dateFilter,
       keyword: keywordFilter,
     }
-    window.localStorage.setItem(filterStorageKey, JSON.stringify(payload))
+    persistSourceListFilters(filterStorageKey, payload)
   }, [
     activeContentFacet,
     activeSourceType,
@@ -460,7 +489,15 @@ export function SourceList({ className }: SourceListProps) {
   // Handle keyboard navigation
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
+      const target =
+        event.target instanceof HTMLElement || event.target instanceof SVGElement
+          ? event.target
+          : null
+      const interactiveCardTarget = Boolean(
+        target?.closest(
+          'button, a, input, select, textarea, [role="button"], [role="link"], [contenteditable]'
+        )
+      )
       const isEditableTarget =
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA" ||
@@ -498,10 +535,12 @@ export function SourceList({ className }: SourceListProps) {
 
       // Tab to navigate between visible sources
       if (event.key === "Tab" && !event.shiftKey && visibleIndices.length > 0) {
-        if (!target?.closest('[id^="source-card-"]')) return
+        const focusedCard = target?.closest('[id^="source-card-"]')
+        if (!focusedCard || interactiveCardTarget) return
 
         event.preventDefault()
-        const focusedElementId = target.closest('[id^="source-card-"]')?.id
+        const focusedElementId =
+          focusedCard instanceof HTMLElement ? focusedCard.id : null
         const focusedElementIndex = focusedElementId
           ? Number.parseInt(focusedElementId.replace("source-card-", ""), 10)
           : null
@@ -567,6 +606,7 @@ export function SourceList({ className }: SourceListProps) {
 
   const submitSourceFeedback = useCallback(
     async (result: RagResult, resultIndex: number, thumb: "up" | "down") => {
+      const requestSessionKey = answerSessionKey
       const sourceKey = getResultFeedbackKey(result, resultIndex)
       const chunkId =
         typeof result.metadata?.chunk_id === "string" &&
@@ -595,6 +635,9 @@ export function SourceList({ className }: SourceListProps) {
           chunk_ids: chunkId ? [chunkId] : undefined,
           session_id: feedbackSessionId,
         })
+        if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+          return
+        }
         setFeedbackBySource((previous) => ({
           ...previous,
           [sourceKey]: {
@@ -609,6 +652,9 @@ export function SourceList({ className }: SourceListProps) {
           relevant: thumb === "up",
         })
       } catch (feedbackError) {
+        if (activeAnswerSessionKeyRef.current !== requestSessionKey) {
+          return
+        }
         const detail =
           feedbackError instanceof Error && feedbackError.message
             ? feedbackError.message
@@ -635,6 +681,7 @@ export function SourceList({ className }: SourceListProps) {
       latestAssistantMessageId,
       messageApi,
       query,
+      answerSessionKey,
     ]
   )
 
@@ -663,8 +710,12 @@ export function SourceList({ className }: SourceListProps) {
   }, [])
 
   useEffect(() => {
+    activeAnswerSessionKeyRef.current = answerSessionKey
+  }, [answerSessionKey])
+
+  useEffect(() => {
     setFeedbackBySource({})
-  }, [results])
+  }, [answerSessionKey, results])
 
   if (results.length === 0) {
     return null

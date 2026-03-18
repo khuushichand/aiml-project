@@ -17110,6 +17110,8 @@ def get_full_media_details_rich(
             "safe_metadata": safe_metadata,
             "model": media.get("transcription_model"),
             "timestamp_option": media.get("timestamp_option"),
+            "chunking_status": media.get("chunking_status"),
+            "vector_processing_status": media.get("vector_processing"),
         },
         "content": {
             "metadata": content_meta,

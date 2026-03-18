@@ -14,6 +14,8 @@ export interface Shortcut {
   modifiers: ShortcutModifier[]
   action: () => void
   description: string
+  /** Whether the shortcut listener should be active */
+  enabled?: boolean
   /** Scope where this shortcut is active */
   scope?: "global" | "chat" | "settings" | "sidepanel"
   /** Whether shortcut works when input is focused */
@@ -152,6 +154,10 @@ export function useShortcut(
   actionRef.current = shortcut.action
 
   useEffect(() => {
+    if (shortcut.enabled === false) {
+      return
+    }
+
     const handler = (event: KeyboardEvent) => {
       // Skip if in input and not allowed
       if (!shortcut.allowInInput && isInputElement(event.target)) {
@@ -167,7 +173,8 @@ export function useShortcut(
 
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [
+    }, [
+    shortcut.enabled,
     shortcut.key,
     JSON.stringify(shortcut.modifiers),
     shortcut.allowInInput,
