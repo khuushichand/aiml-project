@@ -17,7 +17,6 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_review_webhook_delivery,
 )
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 
@@ -55,7 +54,7 @@ _CLAIMS_WEBHOOK_EXCEPTIONS = (
 
 def record_review_assignment_notifications(
     *,
-    db: MediaDatabase,
+    db: Any,
     owner_user_id: str,
     assignments: list[dict[str, Any]],
 ) -> list[int]:
@@ -101,7 +100,7 @@ def record_review_assignment_notifications(
 
 def record_watchlist_cluster_notifications(
     *,
-    db: MediaDatabase,
+    db: Any,
     owner_user_id: str,
     clusters: dict[int, dict[str, Any]],
     member_counts: dict[int, int],

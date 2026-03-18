@@ -657,9 +657,11 @@ def test_data_tables_jobs_worker_imports_create_media_database_from_media_db_api
     assert module.create_media_database is media_db_api.create_media_database
 
 
-def test_claims_notifications_imports_managed_media_database_from_media_db_api():
+def test_claims_notifications_imports_managed_media_database_from_media_db_api(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
     module = importlib.reload(claims_notifications)
     assert module.managed_media_database is media_db_api.managed_media_database
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_claims_service_imports_managed_media_database_from_media_db_api():
