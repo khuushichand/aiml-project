@@ -7,13 +7,13 @@
 - Raw `MediaDatabase(...)` constructors in app code: 0
 - Operational `create_media_database(...)` call sites in app code: 17
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 21
+- `Media_DB_v2` references in app code: 3
 
 Notes:
 
 - The operational counts exclude helper definitions in `media_db/api.py`, `media_db/runtime/factory.py`, `DB_Manager.py`, and README examples.
 - The normalized counts also exclude test modules located under `app/**/tests`.
-- The `Media_DB_v2` reference count is not all migration debt. A significant fraction is still compatibility-oriented app boundary code.
+- The remaining `Media_DB_v2` references are intentional compatibility/path markers: the legacy filename constant, the legacy single-user migration path, and the runtime class loader.
 
 ## Classification Rubric
 
@@ -134,6 +134,7 @@ Status:
 - `app/api/v1/endpoints/chunking_templates.py` no longer tells callers to use `Media_DB_v2.MediaDatabase`; its fallback diagnostics and error payloads now describe the required capability generically in terms of a native media DB session.
 - `app/core/DB_Management/media_db/errors.py`, `app/core/DB_Management/media_db/__init__.py`, `app/core/DB_Management/media_db/runtime/rows.py`, and `app/core/DB_Management/media_db/runtime/execution.py` no longer mention `Media_DB_v2` in package docstrings.
 - `app/services/meetings_webhook_dlq_service.py` no longer mentions `Media_DB_v2` in its meetings-target discovery helper docstring.
+- `app/core/DB_Management/Media_DB_v2.py` no longer self-identifies with `Media_DB_v2` in source comments or logger names; the remaining app-side count is now down to the truly intentional loader/path references.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory

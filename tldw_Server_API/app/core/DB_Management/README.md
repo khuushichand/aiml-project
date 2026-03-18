@@ -36,7 +36,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
   - Scope: `scope_context.py` records per-request user/org/team scope for row-level filtering and Postgres RLS policies.
   - Path management: `db_path_utils.py` centralizes per-user DB locations under `<USER_DB_BASE_DIR>/<user_id>/...` (defaults to `Databases/user_databases` under repo root; `USER_DB_BASE` is a deprecated alias for rewrite cache resolution).
 - Key Classes/Modules:
-  - `Media_DB_v2.MediaDatabase` — content store with schema versioning, FTS, chunking, claims, sync logs, soft deletes, and versioned entities.
+  - Legacy media database module and runtime wrappers — content store with schema versioning, FTS, chunking, claims, sync logs, soft deletes, and versioned entities.
   - `ChaChaNotes_DB.CharactersRAGDB` — notes/characters/messages with search and content helpers.
   - `Prompts_DB.PromptsDatabase`, `PromptStudioDatabase.PromptStudioDatabase` — prompt storage and Prompt Studio artifacts with FTS and migrations.
   - `Evaluations_DB.EvaluationsDatabase` — evaluation runs, datasets, metrics.
@@ -65,7 +65,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
 
 - Folder Structure:
   - Backends: `backends/` (base, sqlite/postgresql implementations, FTS/query helpers, RLS policies).
-  - Content DBs: `Media_DB_v2.py`, `ChaChaNotes_DB.py`, `Collections_DB.py`, `Watchlists_DB.py`.
+  - Content DBs: legacy media DB module, `ChaChaNotes_DB.py`, `Collections_DB.py`, `Watchlists_DB.py`.
   - Prompting/Studio: `Prompts_DB.py`, `PromptStudioDatabase.py`, `migrations/` (SQL/JSON migrations).
   - Evaluations/Workflows: `Evaluations_DB.py`, `Workflows_DB.py`, `Workflows_Scheduler_DB.py`.
   - Utilities: `DB_Manager.py`, `db_path_utils.py`, `db_migration.py`, `migration_tools.py`, `transaction_utils.py`, `async_db_wrapper.py`, `content_backend.py`, `scope_context.py`, `DB_Backups.py`.

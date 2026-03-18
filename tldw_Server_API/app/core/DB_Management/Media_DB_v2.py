@@ -1,9 +1,9 @@
-# Media_DB_v2.py (Refactored for Multi-DB Instances & Internal Sync Meta)
+# Legacy media database module (refactored for multi-DB instances and internal sync metadata)
 #########################################
 from __future__ import annotations
 
-# Media_DB_v2 Library
-# Manages Media_DB_v2 operations for specific instances, handling sync metadata internally.
+# Legacy media database library
+# Manages media database operations for specific instances, handling sync metadata internally.
 # Requires a client_id during Database initialization.
 # Standalone functions require a Database instance passed as an argument.
 #
@@ -70,7 +70,7 @@ try:
     logging = logger  # alias used throughout this module
 except ImportError:  # pragma: no cover - defensive fallback
     import logging as _stdlib_logging
-    logger = _stdlib_logging.getLogger("Media_DB_v2")
+    logger = _stdlib_logging.getLogger("legacy_media_db")
     logging = logger
 
 import yaml
@@ -12150,7 +12150,7 @@ class MediaDatabase:
                 self._update_fts_keyword(conn, keyword_id, str(row.get("keyword") or ""))
             return
 
-        # In Media_DB_v2.py (within the Database class)
+        # Within the legacy media database class
 
         # Add 'media_ids_filter' to the method signature
         # from typing import List, Tuple, Dict, Any, Optional, Union # Ensure Union is imported
@@ -16139,5 +16139,5 @@ if not _:
     MediaDatabase.get_media_by_title = _get_media_by_title
 
 #
-# End of Media_DB_v2.py
+# End of legacy media database module
 #######################################################################################################################

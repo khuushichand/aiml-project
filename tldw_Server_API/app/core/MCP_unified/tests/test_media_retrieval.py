@@ -9,7 +9,6 @@ import pytest
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import media_module as media_module_impl
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module import MediaModule
 from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
@@ -212,12 +211,9 @@ async def test_search_media_semantic_path(monkeypatch):
 
 def test_media_open_db_requires_context():
     mod = MediaModule(ModuleConfig(name="media"))
-    mod.db = MediaDatabase(db_path=":memory:", client_id="test")
-    try:
-        with pytest.raises(PermissionError):
-            mod._open_media_db(context=None)
-    finally:
-        mod.db.close_connection()
+    mod.db = SimpleNamespace(db_path_str=":memory:", close_connection=lambda: None)
+    with pytest.raises(PermissionError):
+        mod._open_media_db(context=None)
 
 
 @pytest.mark.asyncio

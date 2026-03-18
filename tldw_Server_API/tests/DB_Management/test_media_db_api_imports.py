@@ -8,11 +8,13 @@ import pytest
 from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.core.DB_Management import Users_DB
 from tldw_Server_API.app.core.DB_Management import Media_DB_v2 as legacy_media_db
+from tldw_Server_API.app.core.DB_Management import Prompts_DB as prompts_db_module
 from tldw_Server_API.app.api.v1.endpoints import rag_unified as rag_unified_endpoint
 from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.api.v1.endpoints import claims as claims_endpoint
 from tldw_Server_API.app.api.v1.endpoints import chunking as chunking_endpoint
 from tldw_Server_API.app.api.v1.endpoints import chunking_templates as chunking_templates_endpoint
+from tldw_Server_API.app.api.v1.endpoints import embeddings_v5_production_enhanced as embeddings_v5_endpoint
 from tldw_Server_API.app.api.v1.endpoints import paper_search as paper_search_endpoint
 from tldw_Server_API.app.api.v1.endpoints.audio import audiobooks as audiobooks_endpoint
 from tldw_Server_API.app.api.v1.endpoints import slides as slides_endpoint
@@ -168,8 +170,20 @@ def test_media_repository_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(media_repository)
 
 
+def test_legacy_media_db_module_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(legacy_media_db)
+
+
 def test_chunking_templates_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(chunking_templates_endpoint)
+
+
+def test_embeddings_v5_endpoint_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(embeddings_v5_endpoint)
+
+
+def test_prompts_db_no_longer_mentions_media_db_v2_in_source() -> None:
+    assert "Media_DB_v2" not in inspect.getsource(prompts_db_module)
 
 
 def test_media_db_errors_no_longer_mentions_media_db_v2_in_source() -> None:
