@@ -80,6 +80,7 @@ from tldw_Server_API.app.core.RAG.rag_service import agentic_chunker
 from tldw_Server_API.app.core.RAG.rag_service import database_retrievers
 from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline
 from tldw_Server_API.app.core.Chatbooks import chatbook_service
+from tldw_Server_API.app.core.Sync import Sync_Client as sync_client_module
 from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import slides_module
@@ -852,6 +853,16 @@ def test_chatbook_service_imports_media_factory_and_legacy_reads(monkeypatch):
     assert module.get_media_prompts is media_db_legacy_reads.get_media_prompts
     assert module.get_media_transcripts is media_db_legacy_reads.get_media_transcripts
     assert "MediaDatabase" not in module.__dict__
+
+
+def test_sync_client_imports_db_errors_from_media_db_errors(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "ConflictError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+    module = importlib.reload(sync_client_module)
+    assert module.ConflictError is media_db_errors.ConflictError
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.InputError is media_db_errors.InputError
 
 
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():

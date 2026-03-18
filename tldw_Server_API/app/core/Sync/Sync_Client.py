@@ -12,11 +12,11 @@ from loguru import logger
 #
 # Local Imports
 try:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+    from tldw_Server_API.app.core.DB_Management.media_db.errors import (
         ConflictError,
         DatabaseError,
         InputError,
-        MediaDatabase,
     )
 except ImportError:
     logger.error("Could not import the 'Media_DB' library. Make sure Media_DB.py is accessible.")
