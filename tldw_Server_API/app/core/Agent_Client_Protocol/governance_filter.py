@@ -12,23 +12,33 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from contextlib import suppress
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Agent_Client_Protocol.event_bus import SessionEventBus
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
 from tldw_Server_API.app.core.Agent_Client_Protocol.permission_tiers import determine_permission_tier
+from tldw_Server_API.app.core.Agent_Client_Protocol.tool_gate import ToolGate, ToolGateResult
 
 
 class _PendingEntry:
     """A held tool_call with its creation time for timeout enforcement."""
 
-    __slots__ = ("event", "created_at", "timeout_task")
+    __slots__ = ("event", "created_at", "timeout_task", "approval_future", "internal_only")
 
-    def __init__(self, event: AgentEvent, timeout_task: asyncio.Task[None] | None = None) -> None:
+    def __init__(
+        self,
+        event: AgentEvent,
+        timeout_task: asyncio.Task[None] | None = None,
+        approval_future: asyncio.Future | None = None,
+        internal_only: bool = False,
+    ) -> None:
         self.event = event
         self.created_at = time.monotonic()
         self.timeout_task = timeout_task
+        self.approval_future = approval_future
+        self.internal_only = internal_only
 
 
 class GovernanceFilter:
@@ -75,18 +85,34 @@ class GovernanceFilter:
             await self._bus.publish(event)
             return
 
+        if event.metadata.get("_already_approved"):
+            await self._bus.publish(event)
+            return
+
         tool_name: str = event.payload.get("tool_name", "")
         # Use the adapter-provided tier if present; fall back to re-resolving
         tier = event.payload.get("permission_tier") or determine_permission_tier(tool_name)
 
+        approval_future = event.metadata.get("_approval_future")
+        internal_only = approval_future is not None
+
         if tier == "auto":
+            if approval_future is not None and not approval_future.done():
+                approval_future.set_result(("approve", None))
+            if internal_only:
+                return
             await self._bus.publish(event)
             return
 
         # Hold the event and publish a permission request
         request_id = str(uuid.uuid4())
         timeout_task = asyncio.create_task(self._timeout_pending(request_id, self._default_timeout_sec))
-        self._pending[request_id] = _PendingEntry(event=event, timeout_task=timeout_task)
+        self._pending[request_id] = _PendingEntry(
+            event=event,
+            timeout_task=timeout_task,
+            approval_future=approval_future,
+            internal_only=internal_only,
+        )
 
         perm_request = AgentEvent(
             session_id=event.session_id,
@@ -142,6 +168,18 @@ class GovernanceFilter:
 
         held_event = entry.event
 
+        # Resolve the approval future if one was attached
+        if entry.approval_future is not None and not entry.approval_future.done():
+            entry.approval_future.set_result((decision, reason))
+
+        if entry.internal_only:
+            logger.info(
+                "Governance: resolved internal approval request_id={} decision={}",
+                request_id,
+                decision,
+            )
+            return
+
         if decision == "approve":
             await self._bus.publish(held_event)
             logger.info("Governance: approved request_id={}", request_id)
@@ -192,11 +230,65 @@ class GovernanceFilter:
     # Cleanup
     # ------------------------------------------------------------------
 
-    async def cancel_all_pending(self) -> None:
-        """Cancel all pending permission requests (e.g. on session teardown)."""
-        for request_id in list(self._pending):
+    async def cancel_all_pending(self, session_id: str | None = None) -> None:
+        """Cancel pending permission requests, optionally scoped to one session."""
+        for request_id, entry in list(self._pending.items()):
+            if session_id is not None and entry.event.session_id != session_id:
+                continue
             await self.on_permission_response(
                 request_id,
                 decision="deny",
                 reason="session cancelled",
             )
+
+
+class GovernanceToolGate(ToolGate):
+    """Concrete ToolGate that delegates to GovernanceFilter.
+
+    Creates an ``asyncio.Future`` per tool call, attaches it to the event
+    metadata, and awaits the governance decision.
+    """
+
+    def __init__(self, governance_filter: GovernanceFilter) -> None:
+        self._filter = governance_filter
+
+    async def request_approval(
+        self,
+        session_id: str,
+        tool_name: str,
+        arguments: dict,
+        *,
+        cancel_event: asyncio.Event | None = None,
+    ) -> ToolGateResult:
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        event = AgentEvent(
+            session_id=session_id,
+            kind=AgentEventKind.TOOL_CALL,
+            payload={
+                "tool_id": str(uuid.uuid4()),
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "permission_tier": determine_permission_tier(tool_name),
+            },
+            metadata={"_approval_future": future},
+        )
+        await self._filter.process(event)
+        if cancel_event is None:
+            decision, reason = await future
+            return ToolGateResult(approved=(decision == "approve"), reason=reason)
+
+        cancel_task = asyncio.create_task(cancel_event.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                {future, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel_task in done and cancel_event.is_set():
+                await self._filter.cancel_all_pending(session_id=session_id)
+            decision, reason = await future
+        finally:
+            cancel_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cancel_task
+
+        return ToolGateResult(approved=(decision == "approve"), reason=reason)
