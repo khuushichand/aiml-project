@@ -1218,6 +1218,7 @@ else:
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
+    from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
@@ -5696,6 +5697,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
     except _IMPORT_EXCEPTIONS as _billing_webhooks_min_err:
         logger.debug(f"Skipping billing webhooks router in minimal test app: {_billing_webhooks_min_err}")
+    # Consent management endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
+
+        app.include_router(consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
+    except _IMPORT_EXCEPTIONS as _consent_min_err:
+        logger.debug("Skipping consent router in minimal test app: {}", _consent_min_err)
     # Collections endpoints (treated as lightweight; always included in minimal app)
     try:
         from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
@@ -6183,6 +6191,7 @@ else:
 
     _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    _include_if_enabled("consent", consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
     logger.info("Auth router consolidated: endpoints/auth.py")
     if "users_router" in locals() and users_router is not None:
         _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
