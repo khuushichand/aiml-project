@@ -37,6 +37,7 @@ from tldw_Server_API.app.api.v1.endpoints.media import process_emails as media_p
 from tldw_Server_API.app.api.v1.endpoints.media import process_pdfs
 from tldw_Server_API.app.api.v1.endpoints.media import process_videos as media_process_videos_endpoint
 from tldw_Server_API.app.api.v1.endpoints.media import process_web_scraping as media_process_web_scraping_endpoint
+from tldw_Server_API.app.api.v1.endpoints.media import reprocess as media_reprocess_endpoint
 from tldw_Server_API.app.api.v1.endpoints.audio import audio_history as audio_history_endpoint
 from tldw_Server_API.app.api.v1.endpoints.audio import audio_tts as audio_tts_endpoint
 from tldw_Server_API.app.api.v1.utils import http_errors
@@ -504,6 +505,14 @@ def test_media_process_code_endpoint_does_not_bind_media_database_from_media_db_
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(media_process_code_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_reprocess_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(media_reprocess_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 

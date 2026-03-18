@@ -22,7 +22,6 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     ConflictError,
     DatabaseError,
     InputError,
-    MediaDatabase,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
@@ -124,7 +123,7 @@ async def _generate_embeddings(
     media_payload: dict[str, Any],
     request: ReprocessMediaRequest,
     user_id: str,
-    db: MediaDatabase,
+    db: Any,
     cache_namespaces: list[str] | None = None,
 ) -> None:
     try:
@@ -174,7 +173,7 @@ async def reprocess_media_item(
     payload: ReprocessMediaRequest,
     background_tasks: BackgroundTasks,
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> ReprocessMediaResponse:
     """
