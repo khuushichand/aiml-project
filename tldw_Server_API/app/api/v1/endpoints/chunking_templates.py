@@ -37,7 +37,6 @@ from tldw_Server_API.app.core.Chunking.templates import (
     TemplateProcessor,
     TemplateStage,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/chunking/templates", tags=["chunking-templates"])
@@ -104,7 +103,7 @@ def _emit_db_capability_headers(response: Response, db: Any, required: list[str]
 @router.get("/diagnostics")
 async def diagnostics(
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ):
     """Diagnostics for chunking templates backend capabilities."""
@@ -168,7 +167,7 @@ async def list_templates(
     tags: Optional[list[str]] = Query(None, description="Filter by tags"),
     user_id: Optional[str] = Query(None, description="Filter by user ID"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> ChunkingTemplateListResponse:
     """
@@ -233,7 +232,7 @@ async def list_templates(
 async def get_template(
     template_name: str,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ) -> ChunkingTemplateResponse:
     """
     Get a specific chunking template by name.
@@ -286,7 +285,7 @@ async def get_template(
 async def create_template(
     template_data: ChunkingTemplateCreate,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> ChunkingTemplateResponse:
     """
@@ -380,7 +379,7 @@ async def update_template(
     template_name: str,
     template_update: ChunkingTemplateUpdate,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> ChunkingTemplateResponse:
     """
@@ -554,7 +553,7 @@ async def delete_template(
     template_name: str,
     hard_delete: bool = Query(False, description="Permanently delete template"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> None:
     """
@@ -661,7 +660,7 @@ async def apply_template(
     request: ApplyTemplateRequest,
     include_metadata: bool = Query(False, description="Return chunk metadata; if false, return only text list"),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     response: Response = None,
 ) -> ApplyTemplateResponse:
     """
@@ -998,7 +997,7 @@ async def match_templates(
     url: Optional[str] = Query(None),
     filename: Optional[str] = Query(None),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ):
     """Return templates ranked by a simple metadata-based score for auto-apply."""
     try:
@@ -1031,7 +1030,7 @@ class LearnTemplateRequest(BaseModel):
 async def learn_template(
     req: LearnTemplateRequest,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ):
     """Learn a basic hierarchical boundary template from an example text and optionally save it."""
     try:

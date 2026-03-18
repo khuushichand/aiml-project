@@ -11,6 +11,7 @@ from tldw_Server_API.app.api.v1.endpoints import rag_unified as rag_unified_endp
 from tldw_Server_API.app.api.v1.endpoints import research
 from tldw_Server_API.app.api.v1.endpoints import claims as claims_endpoint
 from tldw_Server_API.app.api.v1.endpoints import chunking as chunking_endpoint
+from tldw_Server_API.app.api.v1.endpoints import chunking_templates as chunking_templates_endpoint
 from tldw_Server_API.app.api.v1.endpoints.audio import audiobooks as audiobooks_endpoint
 from tldw_Server_API.app.api.v1.endpoints import slides as slides_endpoint
 from tldw_Server_API.app.api.v1.endpoints import text2sql as text2sql_endpoint
@@ -549,6 +550,14 @@ def test_media_listing_endpoint_does_not_bind_media_database_from_media_db_v2(mo
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
 
     module = importlib.reload(media_listing_endpoint)
+
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_chunking_templates_endpoint_does_not_bind_media_database_from_media_db_v2(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+
+    module = importlib.reload(chunking_templates_endpoint)
 
     assert "MediaDatabase" not in module.__dict__
 
