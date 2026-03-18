@@ -10,6 +10,10 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+from tldw_Server_API.app.core.Slides.visual_style_generation import (
+    apply_visual_block_fallback,
+    build_visual_style_generation_prompt,
+)
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens
 
@@ -125,6 +129,7 @@ class SlidesGenerator:
         enable_chunking: bool,
         chunk_size_tokens: int | None,
         summary_tokens: int | None,
+        visual_style_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not source_text or not source_text.strip():
             raise SlidesGenerationInputError("source_text_required")
@@ -168,13 +173,18 @@ class SlidesGenerator:
         if title_hint:
             user_prompt = f"Title hint: {title_hint}\n\n" + user_prompt
 
+        system_prompt = _SYSTEM_PROMPT
+        style_prompt = build_visual_style_generation_prompt(visual_style_snapshot)
+        if style_prompt:
+            system_prompt = _SYSTEM_PROMPT + "\n\nStyle guidance:\n" + style_prompt
+
         llm_response = self._call_llm(
             provider=normalized_provider,
             model=model,
             api_key=api_key,
             temperature=temperature,
             max_tokens=max_tokens,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
         payload = self._parse_json(llm_response)
@@ -280,6 +290,7 @@ class SlidesGenerator:
             slide.setdefault("content", "")
             slide.setdefault("speaker_notes", None)
             slide.setdefault("metadata", {})
+            slide = apply_visual_block_fallback(slide)
             normalized_slides.append(slide)
         title = payload.get("title")
         if not isinstance(title, str) or not title.strip():

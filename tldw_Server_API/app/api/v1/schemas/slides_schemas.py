@@ -39,6 +39,8 @@ class PresentationBase(BaseModel):
     theme: str = "black"
     marp_theme: str | None = None
     template_id: str | None = None
+    visual_style_id: str | None = None
+    visual_style_scope: str | None = None
     settings: dict[str, Any] | None = None
     studio_data: dict[str, Any] | None = None
     slides: list[Slide] = Field(default_factory=list)
@@ -65,6 +67,8 @@ class PresentationPatchRequest(BaseModel):
     theme: str | None = None
     marp_theme: str | None = None
     template_id: str | None = None
+    visual_style_id: str | None = None
+    visual_style_scope: str | None = None
     settings: dict[str, Any] | None = None
     studio_data: dict[str, Any] | None = None
     slides: list[Slide] | None = None
@@ -81,6 +85,9 @@ class PresentationResponse(PresentationBase):
     """Presentation response model."""
 
     id: str
+    visual_style_name: str | None = None
+    visual_style_version: int | None = None
+    visual_style_snapshot: dict[str, Any] | None = None
     source_type: str | None = None
     source_ref: Any | None = None
     source_query: str | None = None
@@ -128,6 +135,50 @@ class SlidesTemplateListResponse(BaseModel):
     templates: list[SlidesTemplateResponse]
 
 
+class VisualStyleBase(BaseModel):
+    """Structured visual style payload fields."""
+
+    name: str
+    description: str | None = None
+    generation_rules: dict[str, Any] = Field(default_factory=dict)
+    artifact_preferences: list[str] = Field(default_factory=list)
+    appearance_defaults: dict[str, Any] = Field(default_factory=dict)
+    fallback_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class VisualStyleCreateRequest(VisualStyleBase):
+    """Request payload for creating a user visual style."""
+
+    pass
+
+
+class VisualStylePatchRequest(BaseModel):
+    """Request payload for patching a user visual style."""
+
+    name: str | None = None
+    description: str | None = None
+    generation_rules: dict[str, Any] | None = None
+    artifact_preferences: list[str] | None = None
+    appearance_defaults: dict[str, Any] | None = None
+    fallback_policy: dict[str, Any] | None = None
+
+
+class VisualStyleResponse(VisualStyleBase):
+    """Visual style response model for built-in and user presets."""
+
+    id: str
+    scope: str
+    version: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class VisualStyleListResponse(BaseModel):
+    """List response for visual styles."""
+
+    styles: list[VisualStyleResponse]
+
+
 class PresentationSummary(BaseModel):
     """Summary item for presentation listings."""
 
@@ -166,6 +217,8 @@ class SlideGenerationBase(BaseModel):
     theme: str | None = None
     marp_theme: str | None = None
     template_id: str | None = None
+    visual_style_id: str | None = None
+    visual_style_scope: str | None = None
     settings: dict[str, Any] | None = None
     custom_css: str | None = None
     max_source_tokens: int | None = Field(default=None, ge=1)

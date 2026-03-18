@@ -1,5 +1,5 @@
 import React from "react"
-import { render, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { PresentationStudioPage } from "../PresentationStudioPage"
@@ -18,7 +18,8 @@ const routerMocks = vi.hoisted(() => ({
 }))
 
 const clientMocks = vi.hoisted(() => ({
-  createPresentation: vi.fn()
+  createPresentation: vi.fn(),
+  listVisualStyles: vi.fn()
 }))
 
 vi.mock("@/hooks/useServerOnline", () => ({
@@ -38,8 +39,12 @@ vi.mock("react-router-dom", async () => {
 })
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
+  buildPresentationVisualStyleSnapshot: (style: Record<string, unknown>) => ({
+    ...style
+  }),
   tldwClient: {
-    createPresentation: (...args: unknown[]) => clientMocks.createPresentation(...args)
+    createPresentation: (...args: unknown[]) => clientMocks.createPresentation(...args),
+    listVisualStyles: (...args: unknown[]) => clientMocks.listVisualStyles(...args)
   }
 }))
 
@@ -48,6 +53,7 @@ describe("PresentationStudioPage create payload", () => {
     usePresentationStudioStore.getState().reset()
     routerMocks.navigate.mockReset()
     clientMocks.createPresentation.mockReset()
+    clientMocks.listVisualStyles.mockReset()
     onlineMocks.useServerOnline.mockReturnValue(true)
     capabilityMocks.useServerCapabilities.mockReturnValue({
       loading: false,
@@ -57,14 +63,37 @@ describe("PresentationStudioPage create payload", () => {
         hasPresentationRender: true
       }
     })
+    clientMocks.listVisualStyles.mockResolvedValue([
+      {
+        id: "minimal-academic",
+        name: "Minimal Academic",
+        scope: "builtin",
+        description: "Structured, restrained, study-first slides.",
+        generation_rules: {},
+        artifact_preferences: [],
+        appearance_defaults: { theme: "white" },
+        fallback_policy: {},
+        version: 1
+      }
+    ])
   })
 
-  it("sends explicit slide timing and transition defaults for new projects", async () => {
+  it("sends visual style selection and explicit slide defaults for new projects", async () => {
     clientMocks.createPresentation.mockResolvedValue({
       id: "presentation-1",
       title: "Untitled Presentation",
       description: null,
-      theme: "black",
+      theme: "white",
+      visual_style_id: "minimal-academic",
+      visual_style_scope: "builtin",
+      visual_style_name: "Minimal Academic",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "minimal-academic",
+        scope: "builtin",
+        name: "Minimal Academic",
+        appearance_defaults: { theme: "white" }
+      },
       slides: [
         {
           order: 0,
@@ -92,11 +121,18 @@ describe("PresentationStudioPage create payload", () => {
     render(<PresentationStudioPage mode="new" />)
 
     await waitFor(() => {
-      expect(clientMocks.createPresentation).toHaveBeenCalledTimes(1)
+      expect(clientMocks.listVisualStyles).toHaveBeenCalledTimes(1)
     })
 
+    fireEvent.click(await screen.findByTestId("presentation-studio-create-button"))
+
+    await waitFor(() => {
+      expect(clientMocks.createPresentation).toHaveBeenCalledTimes(1)
+    })
     expect(clientMocks.createPresentation).toHaveBeenCalledWith(
       expect.objectContaining({
+        visual_style_id: "minimal-academic",
+        visual_style_scope: "builtin",
         slides: [
           expect.objectContaining({
             metadata: {

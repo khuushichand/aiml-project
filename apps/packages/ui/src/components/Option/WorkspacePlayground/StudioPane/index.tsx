@@ -47,7 +47,7 @@ import {
 } from "antd"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useWorkspaceStore } from "@/store/workspace"
-import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { tldwClient, type VisualStyleRecord } from "@/services/tldw/TldwApiClient"
 import { tldwModels, type ModelInfo } from "@/services/tldw"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { generateQuiz } from "@/services/quizzes"
@@ -255,6 +255,36 @@ const SLIDES_EXPORT_FORMATS: { value: string; label: string; ext: string }[] = [
   { value: "json", label: "JSON", ext: "json" }
 ]
 
+const DEFAULT_SLIDES_VISUAL_STYLE_ID = "minimal-academic"
+
+const encodeSlidesVisualStyleValue = (styleId: string | null, styleScope: string | null): string =>
+  styleId && styleScope ? `${styleScope}::${styleId}` : ""
+
+const parseSlidesVisualStyleValue = (
+  value: string
+): { visualStyleId: string | null; visualStyleScope: string | null } => {
+  if (!value) {
+    return { visualStyleId: null, visualStyleScope: null }
+  }
+  const separatorIndex = value.indexOf("::")
+  if (separatorIndex === -1) {
+    return { visualStyleId: null, visualStyleScope: null }
+  }
+  const visualStyleScope = value.slice(0, separatorIndex).trim()
+  const visualStyleId = value.slice(separatorIndex + 2).trim()
+  if (!visualStyleScope || !visualStyleId) {
+    return { visualStyleId: null, visualStyleScope: null }
+  }
+  return { visualStyleId, visualStyleScope }
+}
+
+const getDefaultSlidesVisualStyleValue = (styles: VisualStyleRecord[]): string => {
+  const preferred =
+    styles.find((style) => style.id === DEFAULT_SLIDES_VISUAL_STYLE_ID && style.scope === "builtin") ||
+    styles[0]
+  return preferred ? encodeSlidesVisualStyleValue(preferred.id, preferred.scope) : ""
+}
+
 interface StudioPaneProps {
   /** Callback to hide/collapse the pane */
   onHide?: () => void
@@ -284,6 +314,15 @@ type ParsedQuizQuestion = {
   options: string[]
   answer: string
   explanation: string
+}
+
+type GeneratedFlashcardDraft = {
+  front: string
+  back: string
+  tags: string[]
+  notes: string
+  extra: string
+  modelType: "basic" | "basic_reverse" | "cloze"
 }
 
 type MarkdownTableData = {
@@ -903,6 +942,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [tldwVoices, setTldwVoices] = useState<TldwVoice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(false)
   const [previewingVoice, setPreviewingVoice] = useState(false)
+  const [slidesVisualStyles, setSlidesVisualStyles] = useState<VisualStyleRecord[]>([])
+  const [slidesVisualStylesLoading, setSlidesVisualStylesLoading] = useState(false)
+  const [slidesVisualStyleValue, setSlidesVisualStyleValue] = useState("")
   const [availableDecks, setAvailableDecks] = useState<Array<{ id: number; name: string }>>([])
   const [loadingDecks, setLoadingDecks] = useState(false)
   const [selectedFlashcardDeck, setSelectedFlashcardDeck] = useState<"auto" | number>("auto")
@@ -933,6 +975,23 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [outputListViewportHeight, setOutputListViewportHeight] = useState(320)
 
   const inferredTldwProviderKey = inferTldwProviderFromModel(audioSettings.model)
+  const selectedSlidesVisualStyle = React.useMemo(() => {
+    const { visualStyleId, visualStyleScope } = parseSlidesVisualStyleValue(
+      slidesVisualStyleValue
+    )
+    return (
+      slidesVisualStyles.find(
+        (style) => style.id === visualStyleId && style.scope === visualStyleScope
+      ) || null
+    )
+  }, [slidesVisualStyleValue, slidesVisualStyles])
+  const groupedSlidesVisualStyles = React.useMemo(
+    () => ({
+      builtin: slidesVisualStyles.filter((style) => style.scope === "builtin"),
+      user: slidesVisualStyles.filter((style) => style.scope !== "builtin")
+    }),
+    [slidesVisualStyles]
+  )
 
   // Fetch voices when provider changes to tldw
   useEffect(() => {
@@ -969,6 +1028,40 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       .finally(() => {
         if (cancelled) return
         setLoadingChatModels(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setSlidesVisualStylesLoading(true)
+    tldwClient
+      .listVisualStyles()
+      .then((styles) => {
+        if (cancelled) {
+          return
+        }
+        const nextStyles = Array.isArray(styles) ? styles : []
+        setSlidesVisualStyles(nextStyles)
+        setSlidesVisualStyleValue((currentValue) =>
+          currentValue || getDefaultSlidesVisualStyleValue(nextStyles)
+        )
+      })
+      .catch(() => {
+        if (cancelled) {
+          return
+        }
+        setSlidesVisualStyles([])
+        setSlidesVisualStyleValue("")
+      })
+      .finally(() => {
+        if (cancelled) {
+          return
+        }
+        setSlidesVisualStylesLoading(false)
       })
 
     return () => {
@@ -1748,7 +1841,14 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           )
           break
         case "slides":
-          result = await generateSlidesFromApi(mediaIds[0], activeAbort.signal)
+          const { visualStyleId, visualStyleScope } = parseSlidesVisualStyleValue(
+            slidesVisualStyleValue
+          )
+          result = await generateSlidesFromApi(mediaIds[0], {
+            abortSignal: activeAbort.signal,
+            visualStyleId,
+            visualStyleScope
+          })
           break
         case "data_table":
           result = await generateDataTable({
@@ -2631,6 +2731,76 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
             )}
           </p>
         )}
+
+        <div className="mt-4 rounded border border-border bg-surface2/30 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+                {t("playground:studio.slidesSettings", "Slides Settings")}
+              </p>
+              <p className="mt-1 text-xs text-text-muted">
+                {t(
+                  "playground:studio.slidesStyleHint",
+                  "Choose the presentation strategy used when generating Slides output."
+                )}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 space-y-2">
+            <label
+              className="block text-xs font-medium text-text-muted"
+              htmlFor="workspace-slides-visual-style"
+            >
+              {t("playground:studio.slidesVisualStyle", "Slides visual style")}
+            </label>
+            <select
+              id="workspace-slides-visual-style"
+              aria-label="Slides visual style"
+              value={slidesVisualStyleValue}
+              onChange={(event) => setSlidesVisualStyleValue(event.target.value)}
+              disabled={slidesVisualStylesLoading}
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text outline-none transition focus:border-primary/50 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <option value="">
+                {t(
+                  "playground:studio.noSlidesVisualStyle",
+                  "No visual style preset"
+                )}
+              </option>
+              {groupedSlidesVisualStyles.builtin.length > 0 && (
+                <optgroup label={t("playground:studio.builtinStyles", "Built-in styles")}>
+                  {groupedSlidesVisualStyles.builtin.map((style) => (
+                    <option
+                      key={`${style.scope}:${style.id}`}
+                      value={encodeSlidesVisualStyleValue(style.id, style.scope)}
+                    >
+                      {style.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {groupedSlidesVisualStyles.user.length > 0 && (
+                <optgroup label={t("playground:studio.customStyles", "Custom styles")}>
+                  {groupedSlidesVisualStyles.user.map((style) => (
+                    <option
+                      key={`${style.scope}:${style.id}`}
+                      value={encodeSlidesVisualStyleValue(style.id, style.scope)}
+                    >
+                      {style.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+            <p className="text-xs text-text-muted">
+              {selectedSlidesVisualStyle?.description ||
+                t(
+                  "playground:studio.slidesStyleFallback",
+                  "Slides fall back to the default presentation generator when no preset is selected."
+                )}
+            </p>
+          </div>
+        </div>
 
         {/* TTS Settings Panel */}
         <div className="mt-4">
@@ -3947,7 +4117,9 @@ async function generateFlashcards(
         : undefined
   })
 
-  const flashcards = (Array.isArray(generated.flashcards) ? generated.flashcards : [])
+  const flashcards: GeneratedFlashcardDraft[] = (
+    Array.isArray(generated.flashcards) ? generated.flashcards : []
+  )
     .map((card) => ({
       front: typeof card.front === "string" ? card.front.trim() : "",
       back: typeof card.back === "string" ? card.back.trim() : "",
@@ -4172,12 +4344,18 @@ Write in a conversational, easy-to-listen style. Do not include any stage direct
 
 async function generateSlidesFromApi(
   mediaId: number,
-  abortSignal?: AbortSignal
+  options?: {
+    abortSignal?: AbortSignal
+    visualStyleId?: string | null
+    visualStyleScope?: string | null
+  }
 ): Promise<GenerationResult> {
   try {
     // Use the Slides API to generate a real presentation
     const presentation = await tldwClient.generateSlidesFromMedia(mediaId, {
-      signal: abortSignal
+      signal: options?.abortSignal,
+      visualStyleId: options?.visualStyleId ?? undefined,
+      visualStyleScope: options?.visualStyleScope ?? undefined
     })
     const usage = extractUsageMetrics(presentation)
 
@@ -4211,7 +4389,7 @@ async function generateSlidesFromApi(
     }
     // Fallback to RAG-based generation if API fails
     console.error("Slides API failed, falling back to RAG:", error)
-    return generateSlidesFallback([mediaId], abortSignal)
+    return generateSlidesFallback([mediaId], options?.abortSignal)
   }
 }
 

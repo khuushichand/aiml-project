@@ -195,6 +195,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    listVisualStyles: vi.fn().mockResolvedValue([]),
     createChatCompletion: mockCreateChatCompletion,
     getMediaDetails: mockGetMediaDetails,
     exportPresentation: vi.fn(),

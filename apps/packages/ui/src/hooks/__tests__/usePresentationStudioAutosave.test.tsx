@@ -41,6 +41,16 @@ describe("usePresentationStudioAutosave", () => {
         title: "Deck",
         description: null,
         theme: "black",
+        visual_style_id: "minimal-academic",
+        visual_style_scope: "builtin",
+        visual_style_name: "Minimal Academic",
+        visual_style_version: 1,
+        visual_style_snapshot: {
+          id: "minimal-academic",
+          scope: "builtin",
+          name: "Minimal Academic",
+          appearance_defaults: { theme: "white" }
+        },
         slides: [
           {
             order: 0,
@@ -77,6 +87,16 @@ describe("usePresentationStudioAutosave", () => {
         title: "Deck",
         description: null,
         theme: "black",
+        visual_style_id: "minimal-academic",
+        visual_style_scope: "builtin",
+        visual_style_name: "Minimal Academic",
+        visual_style_version: 1,
+        visual_style_snapshot: {
+          id: "minimal-academic",
+          scope: "builtin",
+          name: "Minimal Academic",
+          appearance_defaults: { theme: "white" }
+        },
         slides: [
           {
             order: 0,
@@ -119,6 +139,16 @@ describe("usePresentationStudioAutosave", () => {
       title: "Deck",
       description: null,
       theme: "black",
+      visual_style_id: "minimal-academic",
+      visual_style_scope: "builtin",
+      visual_style_name: "Minimal Academic",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "minimal-academic",
+        scope: "builtin",
+        name: "Minimal Academic",
+        appearance_defaults: { theme: "white" }
+      },
       slides: [
         {
           order: 0,
@@ -169,6 +199,8 @@ describe("usePresentationStudioAutosave", () => {
     expect(clientMocks.getPresentation).toHaveBeenCalledWith("presentation-1")
     expect(clientMocks.patchPresentation.mock.calls[1][1]).toEqual(
       expect.objectContaining({
+        visual_style_id: "minimal-academic",
+        visual_style_scope: "builtin",
         slides: expect.arrayContaining([
           expect.objectContaining({
             speaker_notes: "Local narration edit"

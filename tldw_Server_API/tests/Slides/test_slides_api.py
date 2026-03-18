@@ -671,6 +671,82 @@ def test_slides_templates_list_and_get(slides_client, tmp_path, monkeypatch):
     assert get_resp.json()["name"] == "Template One"
 
 
+def test_slides_styles_list_returns_builtin_and_user_styles(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/styles",
+        json={
+            "name": "Exam Sprint",
+            "description": "Recall-first deck",
+            "generation_rules": {"exam_focus": True, "bullet_bias": "high"},
+            "artifact_preferences": ["stat_group"],
+            "appearance_defaults": {"theme": "white"},
+            "fallback_policy": {"mode": "key-points"},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    created_id = create_resp.json()["id"]
+
+    list_resp = slides_client.get("/api/v1/slides/styles")
+    assert list_resp.status_code == 200
+    styles = list_resp.json()["styles"]
+
+    assert any(item["scope"] == "builtin" and item["id"] == "timeline" for item in styles)
+    assert any(item["scope"] == "user" and item["id"] == created_id for item in styles)
+
+
+def test_slides_styles_crud_for_user_styles(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/styles",
+        json={
+            "name": "Exam Sprint",
+            "description": "Recall-first deck",
+            "generation_rules": {"exam_focus": True, "bullet_bias": "high"},
+            "artifact_preferences": ["stat_group"],
+            "appearance_defaults": {"theme": "white"},
+            "fallback_policy": {"mode": "key-points"},
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    created = create_resp.json()
+    style_id = created["id"]
+    assert created["scope"] == "user"
+    assert created["generation_rules"]["exam_focus"] is True
+
+    get_resp = slides_client.get(f"/api/v1/slides/styles/{style_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["name"] == "Exam Sprint"
+
+    patch_resp = slides_client.patch(
+        f"/api/v1/slides/styles/{style_id}",
+        json={
+            "name": "Exam Sprint Updated",
+            "generation_rules": {"exam_focus": True, "bullet_bias": "medium"},
+            "artifact_preferences": ["comparison_matrix"],
+        },
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    patched = patch_resp.json()
+    assert patched["name"] == "Exam Sprint Updated"
+    assert patched["generation_rules"]["bullet_bias"] == "medium"
+    assert patched["artifact_preferences"] == ["comparison_matrix"]
+
+    delete_resp = slides_client.delete(f"/api/v1/slides/styles/{style_id}")
+    assert delete_resp.status_code == 204
+
+    missing_resp = slides_client.get(f"/api/v1/slides/styles/{style_id}")
+    assert missing_resp.status_code == 404
+    assert missing_resp.json()["detail"] == "visual_style_not_found"
+
+
+def test_slides_styles_reject_builtin_mutation(slides_client):
+    patch_resp = slides_client.patch(
+        "/api/v1/slides/styles/timeline",
+        json={"name": "Rewritten Timeline"},
+    )
+    assert patch_resp.status_code == 403
+    assert patch_resp.json()["detail"] == "builtin_visual_style_read_only"
+
+
 def test_slides_create_with_template_defaults(slides_client, tmp_path, monkeypatch):
     templates_path = _write_templates(tmp_path)
     monkeypatch.setenv("SLIDES_TEMPLATES_PATH", str(templates_path))
@@ -688,6 +764,69 @@ def test_slides_create_with_template_defaults(slides_client, tmp_path, monkeypat
     assert data["template_id"] == "template-1"
     assert data["custom_css"] == ".reveal { font-size: 36px; }"
     assert data["slides"][0]["title"] == "Template Title"
+
+
+def test_slides_create_persists_visual_style_snapshot(slides_client):
+    resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "History Deck",
+            "visual_style_id": "timeline",
+            "visual_style_scope": "builtin",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    payload = resp.json()
+    assert payload["visual_style_id"] == "timeline"
+    assert payload["visual_style_scope"] == "builtin"
+    assert payload["visual_style_name"] == "Timeline"
+    assert payload["visual_style_version"] == 1
+    assert payload["visual_style_snapshot"]["id"] == "timeline"
+    assert payload["visual_style_snapshot"]["scope"] == "builtin"
+
+
+def test_slides_patch_updates_visual_style_snapshot(slides_client):
+    create_resp = slides_client.post(
+        "/api/v1/slides/presentations",
+        json={
+            "title": "History Deck",
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": "History",
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    presentation_id = create_resp.json()["id"]
+    patch_resp = slides_client.patch(
+        f"/api/v1/slides/presentations/{presentation_id}",
+        json={
+            "visual_style_id": "timeline",
+            "visual_style_scope": "builtin",
+        },
+        headers={"If-Match": create_resp.headers["ETag"]},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    payload = patch_resp.json()
+    assert payload["visual_style_id"] == "timeline"
+    assert payload["visual_style_scope"] == "builtin"
+    assert payload["visual_style_snapshot"]["id"] == "timeline"
 
 
 def test_slides_generate_with_template_defaults(slides_client, tmp_path, monkeypatch):
@@ -711,6 +850,28 @@ def test_slides_generate_with_template_defaults(slides_client, tmp_path, monkeyp
     assert data["marp_theme"] == "gaia"
     assert data["template_id"] == "template-1"
     assert data["custom_css"] == ".reveal { font-size: 36px; }"
+
+
+def test_slides_generate_with_visual_style_snapshot(slides_client, monkeypatch):
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Slides.slides_generator.perform_chat_api_call",
+        _build_llm_stub("Generated History Deck"),
+    )
+    resp = slides_client.post(
+        "/api/v1/slides/generate",
+        json={
+            "title_hint": "Generated History Deck",
+            "prompt": "Summarize key history milestones.",
+            "visual_style_id": "timeline",
+            "visual_style_scope": "builtin",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["visual_style_id"] == "timeline"
+    assert data["visual_style_scope"] == "builtin"
+    assert data["visual_style_snapshot"]["id"] == "timeline"
+    assert data["theme"] == "beige"
 
 
 def test_slides_reorder(slides_client):

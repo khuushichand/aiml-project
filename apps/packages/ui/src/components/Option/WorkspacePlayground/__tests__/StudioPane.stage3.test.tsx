@@ -7,6 +7,7 @@ const {
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
+  mockListVisualStyles,
   mockAddArtifact,
   mockUpdateArtifactStatus,
   mockRemoveArtifact,
@@ -35,6 +36,7 @@ const {
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
+  const listVisualStyles = vi.fn()
   const addArtifact = vi.fn()
   const updateArtifactStatus = vi.fn()
   const removeArtifact = vi.fn()
@@ -151,6 +153,7 @@ const {
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
+    mockListVisualStyles: listVisualStyles,
     mockAddArtifact: addArtifact,
     mockUpdateArtifactStatus: updateArtifactStatus,
     mockRemoveArtifact: removeArtifact,
@@ -238,6 +241,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    listVisualStyles: mockListVisualStyles,
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }
@@ -401,6 +405,30 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
       version: 1,
       created_at: "2026-02-18T00:00:00.000Z"
     })
+    mockListVisualStyles.mockResolvedValue([
+      {
+        id: "minimal-academic",
+        name: "Minimal Academic",
+        scope: "builtin",
+        description: "Structured, restrained, study-first slides.",
+        generation_rules: {},
+        artifact_preferences: [],
+        appearance_defaults: { theme: "white" },
+        fallback_policy: {},
+        version: 1
+      },
+      {
+        id: "timeline",
+        name: "Timeline",
+        scope: "builtin",
+        description: "Chronology-forward deck structure.",
+        generation_rules: {},
+        artifact_preferences: ["timeline"],
+        appearance_defaults: { theme: "beige" },
+        fallback_policy: {},
+        version: 1
+      }
+    ])
   })
 
   it("groups output buttons by category and surfaces description tooltips", async () => {
@@ -427,6 +455,27 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Audio Summary" }))
 
     expect(await screen.findByText("TTS Provider")).toBeInTheDocument()
+  })
+
+  it("passes the selected visual style into slides generation", async () => {
+    renderExpandedStudioPane()
+
+    const styleSelect = await screen.findByLabelText("Slides visual style")
+    fireEvent.change(styleSelect, {
+      target: { value: "builtin::timeline" }
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Slides" }))
+
+    await waitFor(() => {
+      expect(mockGenerateSlidesFromMedia).toHaveBeenCalledWith(
+        101,
+        expect.objectContaining({
+          visualStyleId: "timeline",
+          visualStyleScope: "builtin"
+        })
+      )
+    })
   })
 
   it("shows dynamic ETA text while generation is running", async () => {

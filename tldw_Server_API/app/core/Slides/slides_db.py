@@ -47,6 +47,11 @@ class PresentationRow:
     theme: str
     marp_theme: str | None
     template_id: str | None
+    visual_style_id: str | None
+    visual_style_scope: str | None
+    visual_style_name: str | None
+    visual_style_version: int | None
+    visual_style_snapshot: str | None
     settings: str | None
     studio_data: str | None
     slides: str
@@ -69,6 +74,16 @@ class PresentationVersionRow:
     payload_json: str
     created_at: str
     client_id: str
+
+
+@dataclass
+class VisualStyleRow:
+    id: str
+    name: str
+    scope: str
+    style_payload: str
+    created_at: str
+    updated_at: str
 
 
 class SlidesDatabase:
@@ -107,6 +122,11 @@ class SlidesDatabase:
                     theme TEXT DEFAULT 'black',
                     marp_theme TEXT,
                     template_id TEXT,
+                    visual_style_id TEXT,
+                    visual_style_scope TEXT,
+                    visual_style_name TEXT,
+                    visual_style_version INTEGER,
+                    visual_style_snapshot TEXT,
                     settings TEXT,
                     studio_data TEXT,
                     slides TEXT NOT NULL,
@@ -179,11 +199,25 @@ class SlidesDatabase:
                 CREATE INDEX IF NOT EXISTS idx_sync_log_ts ON sync_log(timestamp);
                 CREATE INDEX IF NOT EXISTS idx_sync_log_entity_uuid ON sync_log(entity_uuid);
                 CREATE INDEX IF NOT EXISTS idx_sync_log_client_id ON sync_log(client_id);
+
+                CREATE TABLE IF NOT EXISTS visual_styles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    style_payload TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_visual_styles_scope ON visual_styles(scope);
+                CREATE INDEX IF NOT EXISTS idx_visual_styles_name ON visual_styles(name);
                 """
             )
             self._ensure_marp_theme_column(conn)
             self._ensure_template_id_column(conn)
+            self._ensure_presentation_visual_style_columns(conn)
             self._ensure_studio_data_column(conn)
+            self._ensure_visual_styles_table(conn)
             conn.commit()
             self._schema_init_paths.add(self._db_path_str)
         except sqlite3.Error as exc:
@@ -267,6 +301,41 @@ class SlidesDatabase:
         conn.execute("ALTER TABLE presentations ADD COLUMN studio_data TEXT")
 
     @staticmethod
+    def _ensure_presentation_visual_style_columns(conn: sqlite3.Connection) -> None:
+        columns = {col["name"] for col in conn.execute("PRAGMA table_info(presentations)").fetchall()}
+        if "visual_style_id" not in columns:
+            conn.execute("ALTER TABLE presentations ADD COLUMN visual_style_id TEXT")
+        if "visual_style_scope" not in columns:
+            conn.execute("ALTER TABLE presentations ADD COLUMN visual_style_scope TEXT")
+        if "visual_style_name" not in columns:
+            conn.execute("ALTER TABLE presentations ADD COLUMN visual_style_name TEXT")
+        if "visual_style_version" not in columns:
+            conn.execute("ALTER TABLE presentations ADD COLUMN visual_style_version INTEGER")
+        if "visual_style_snapshot" not in columns:
+            conn.execute("ALTER TABLE presentations ADD COLUMN visual_style_snapshot TEXT")
+
+    @staticmethod
+    def _ensure_visual_styles_table(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS visual_styles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                style_payload TEXT NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_visual_styles_scope ON visual_styles(scope)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_visual_styles_name ON visual_styles(name)"
+        )
+
+    @staticmethod
     def _fetch_presentation_by_id(
         conn: sqlite3.Connection, presentation_id: str, include_deleted: bool
     ) -> PresentationRow:
@@ -288,6 +357,11 @@ class SlidesDatabase:
             "theme": row.theme,
             "marp_theme": row.marp_theme,
             "template_id": row.template_id,
+            "visual_style_id": row.visual_style_id,
+            "visual_style_scope": row.visual_style_scope,
+            "visual_style_name": row.visual_style_name,
+            "visual_style_version": row.visual_style_version,
+            "visual_style_snapshot": row.visual_style_snapshot,
             "settings": row.settings,
             "studio_data": row.studio_data,
             "slides": row.slides,
@@ -319,6 +393,119 @@ class SlidesDatabase:
             ),
         )
 
+    @staticmethod
+    def _normalize_visual_style_payload(style_payload: str) -> str:
+        if not style_payload:
+            raise InputError("style_payload is required")
+        try:
+            parsed = json.loads(style_payload)
+        except json.JSONDecodeError as exc:
+            raise InputError("style_payload must be valid JSON") from exc
+        return json.dumps(parsed, ensure_ascii=True, sort_keys=True)
+
+    @staticmethod
+    def _validate_visual_style_scope(scope: str) -> str:
+        if scope not in {"builtin", "user"}:
+            raise InputError("scope must be one of: builtin, user")
+        return scope
+
+    @staticmethod
+    def _fetch_visual_style_by_id(conn: sqlite3.Connection, style_id: str) -> VisualStyleRow:
+        row = conn.execute("SELECT * FROM visual_styles WHERE id = ?", (style_id,)).fetchone()
+        if not row:
+            raise KeyError("visual_style_not_found")
+        return VisualStyleRow(**dict(row))
+
+    def create_visual_style(
+        self,
+        *,
+        name: str,
+        scope: str,
+        style_payload: str,
+        style_id: str | None = None,
+    ) -> VisualStyleRow:
+        if not name:
+            raise InputError("name is required")
+        resolved_scope = self._validate_visual_style_scope(scope)
+        normalized_payload = self._normalize_visual_style_payload(style_payload)
+        resolved_style_id = style_id or str(uuid.uuid4())
+        now = self._utcnow_iso()
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO visual_styles (id, name, scope, style_payload, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        resolved_style_id,
+                        name,
+                        resolved_scope,
+                        normalized_payload,
+                        now,
+                        now,
+                    ),
+                )
+                return self._fetch_visual_style_by_id(conn, resolved_style_id)
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE" in str(exc).upper() or "PRIMARY" in str(exc).upper():
+                raise ConflictError(
+                    "visual style already exists",
+                    entity="visual_styles",
+                    identifier=resolved_style_id,
+                ) from exc
+            raise SlidesDatabaseError(f"Failed to create visual style: {exc}") from exc
+
+    def get_visual_style_by_id(self, style_id: str) -> VisualStyleRow:
+        conn = self.get_connection()
+        return self._fetch_visual_style_by_id(conn, style_id)
+
+    def list_visual_styles(self, *, limit: int, offset: int) -> tuple[list[VisualStyleRow], int]:
+        if limit < 1:
+            raise InputError("limit must be >= 1")
+        if offset < 0:
+            raise InputError("offset must be >= 0")
+        conn = self.get_connection()
+        rows = conn.execute(
+            """
+            SELECT * FROM visual_styles
+            ORDER BY updated_at DESC, created_at DESC, name ASC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+        count_row = conn.execute("SELECT COUNT(*) AS cnt FROM visual_styles").fetchone()
+        total = int(count_row["cnt"]) if count_row else 0
+        return [VisualStyleRow(**dict(row)) for row in rows], total
+
+    def update_visual_style(
+        self,
+        *,
+        style_id: str,
+        name: str,
+        style_payload: str,
+    ) -> VisualStyleRow:
+        if not name:
+            raise InputError("name is required")
+        normalized_payload = self._normalize_visual_style_payload(style_payload)
+        with self.transaction() as conn:
+            cur = conn.execute(
+                """
+                UPDATE visual_styles
+                SET name = ?, style_payload = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (name, normalized_payload, self._utcnow_iso(), style_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError("visual_style_not_found")
+            return self._fetch_visual_style_by_id(conn, style_id)
+
+    def delete_visual_style(self, style_id: str) -> bool:
+        with self.transaction() as conn:
+            cur = conn.execute("DELETE FROM visual_styles WHERE id = ?", (style_id,))
+            return cur.rowcount > 0
+
     def create_presentation(
         self,
         *,
@@ -330,6 +517,11 @@ class SlidesDatabase:
         settings: str | None,
         studio_data: str | None,
         template_id: str | None = None,
+        visual_style_id: str | None = None,
+        visual_style_scope: str | None = None,
+        visual_style_name: str | None = None,
+        visual_style_version: int | None = None,
+        visual_style_snapshot: str | None = None,
         slides: str,
         slides_text: str,
         source_type: str | None,
@@ -346,10 +538,12 @@ class SlidesDatabase:
                 conn.execute(
                     """
                     INSERT INTO presentations (
-                        id, title, description, theme, marp_theme, template_id, settings, studio_data, slides, slides_text,
+                        id, title, description, theme, marp_theme, template_id,
+                        visual_style_id, visual_style_scope, visual_style_name, visual_style_version, visual_style_snapshot,
+                        settings, studio_data, slides, slides_text,
                         source_type, source_ref, source_query, custom_css,
                         created_at, last_modified, deleted, client_id, version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
                     """,
                     (
                         pres_id,
@@ -358,6 +552,11 @@ class SlidesDatabase:
                         theme,
                         marp_theme,
                         template_id,
+                        visual_style_id,
+                        visual_style_scope,
+                        visual_style_name,
+                        visual_style_version,
+                        visual_style_snapshot,
                         settings,
                         studio_data,
                         slides,
@@ -468,6 +667,11 @@ class SlidesDatabase:
             "theme",
             "marp_theme",
             "template_id",
+            "visual_style_id",
+            "visual_style_scope",
+            "visual_style_name",
+            "visual_style_version",
+            "visual_style_snapshot",
             "settings",
             "studio_data",
             "slides",

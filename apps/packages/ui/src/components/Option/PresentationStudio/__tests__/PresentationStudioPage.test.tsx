@@ -19,7 +19,11 @@ const routerMocks = vi.hoisted(() => ({
 
 const clientMocks = vi.hoisted(() => ({
   createPresentation: vi.fn(),
-  getPresentation: vi.fn()
+  getPresentation: vi.fn(),
+  listVisualStyles: vi.fn(),
+  createVisualStyle: vi.fn(),
+  patchVisualStyle: vi.fn(),
+  deleteVisualStyle: vi.fn()
 }))
 
 vi.mock("@/hooks/useServerOnline", () => ({
@@ -39,11 +43,43 @@ vi.mock("react-router-dom", async () => {
 })
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
+  buildPresentationVisualStyleSnapshot: (style: Record<string, unknown>) => ({
+    ...style
+  }),
   tldwClient: {
     createPresentation: (...args: unknown[]) => clientMocks.createPresentation(...args),
-    getPresentation: (...args: unknown[]) => clientMocks.getPresentation(...args)
+    getPresentation: (...args: unknown[]) => clientMocks.getPresentation(...args),
+    listVisualStyles: (...args: unknown[]) => clientMocks.listVisualStyles(...args),
+    createVisualStyle: (...args: unknown[]) => clientMocks.createVisualStyle(...args),
+    patchVisualStyle: (...args: unknown[]) => clientMocks.patchVisualStyle(...args),
+    deleteVisualStyle: (...args: unknown[]) => clientMocks.deleteVisualStyle(...args)
   }
 }))
+
+const visualStyles = [
+  {
+    id: "minimal-academic",
+    name: "Minimal Academic",
+    scope: "builtin",
+    description: "Structured, restrained, study-first slides.",
+    generation_rules: {},
+    artifact_preferences: [],
+    appearance_defaults: { theme: "white" },
+    fallback_policy: {},
+    version: 1
+  },
+  {
+    id: "timeline",
+    name: "Timeline",
+    scope: "builtin",
+    description: "Chronology-forward deck structure.",
+    generation_rules: {},
+    artifact_preferences: ["timeline"],
+    appearance_defaults: { theme: "beige" },
+    fallback_policy: {},
+    version: 1
+  }
+]
 
 describe("PresentationStudioPage", () => {
   beforeEach(() => {
@@ -51,6 +87,10 @@ describe("PresentationStudioPage", () => {
     routerMocks.navigate.mockReset()
     clientMocks.createPresentation.mockReset()
     clientMocks.getPresentation.mockReset()
+    clientMocks.listVisualStyles.mockReset()
+    clientMocks.createVisualStyle.mockReset()
+    clientMocks.patchVisualStyle.mockReset()
+    clientMocks.deleteVisualStyle.mockReset()
     onlineMocks.useServerOnline.mockReturnValue(true)
     capabilityMocks.useServerCapabilities.mockReturnValue({
       loading: false,
@@ -60,14 +100,25 @@ describe("PresentationStudioPage", () => {
         hasPresentationRender: true
       }
     })
+    clientMocks.listVisualStyles.mockResolvedValue(visualStyles)
   })
 
-  it("creates a blank project and redirects to its detail route in new mode", async () => {
+  it("creates a blank project from the precreate form and redirects to its detail route", async () => {
     clientMocks.createPresentation.mockResolvedValue({
       id: "presentation-1",
       title: "Untitled Presentation",
       description: null,
-      theme: "black",
+      theme: "white",
+      visual_style_id: "minimal-academic",
+      visual_style_scope: "builtin",
+      visual_style_name: "Minimal Academic",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "minimal-academic",
+        scope: "builtin",
+        name: "Minimal Academic",
+        appearance_defaults: { theme: "white" }
+      },
       slides: [
         {
           order: 0,
@@ -95,12 +146,22 @@ describe("PresentationStudioPage", () => {
     render(<PresentationStudioPage mode="new" />)
 
     await waitFor(() => {
+      expect(clientMocks.listVisualStyles).toHaveBeenCalledTimes(1)
+    })
+    expect(
+      screen.getByText("Applies to future generated slides. Existing slides stay unchanged.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("presentation-studio-create-button"))
+
+    await waitFor(() => {
       expect(clientMocks.createPresentation).toHaveBeenCalledTimes(1)
     })
     expect(clientMocks.createPresentation).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Untitled Presentation",
-        theme: "black",
+        visual_style_id: "minimal-academic",
+        visual_style_scope: "builtin",
         studio_data: { origin: "blank", entry_surface: "webui_new" },
         slides: [
           expect.objectContaining({
@@ -136,6 +197,12 @@ describe("PresentationStudioPage", () => {
     )
 
     await waitFor(() => {
+      expect(clientMocks.listVisualStyles).toHaveBeenCalled()
+    })
+
+    fireEvent.click(await screen.findByTestId("presentation-studio-create-button"))
+
+    await waitFor(() => {
       expect(clientMocks.createPresentation).toHaveBeenCalledTimes(1)
     })
 
@@ -143,7 +210,17 @@ describe("PresentationStudioPage", () => {
       id: "presentation-strict",
       title: "Untitled Presentation",
       description: null,
-      theme: "black",
+      theme: "white",
+      visual_style_id: "minimal-academic",
+      visual_style_scope: "builtin",
+      visual_style_name: "Minimal Academic",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "minimal-academic",
+        scope: "builtin",
+        name: "Minimal Academic",
+        appearance_defaults: { theme: "white" }
+      },
       slides: [
         {
           order: 0,
@@ -184,6 +261,16 @@ describe("PresentationStudioPage", () => {
       title: "Loaded Presentation",
       description: null,
       theme: "black",
+      visual_style_id: "minimal-academic",
+      visual_style_scope: "builtin",
+      visual_style_name: "Minimal Academic",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "minimal-academic",
+        scope: "builtin",
+        name: "Minimal Academic",
+        appearance_defaults: { theme: "white" }
+      },
       slides: [
         {
           order: 0,
@@ -220,6 +307,255 @@ describe("PresentationStudioPage", () => {
       expect(screen.getByTestId("presentation-studio-slide-rail")).toBeInTheDocument()
     })
     expect(screen.queryByText("Loading presentation…")).not.toBeInTheDocument()
+    expect(
+      (screen.getByLabelText("Choose visual style") as HTMLSelectElement).value
+    ).toBe("builtin::minimal-academic")
+  })
+
+  it("updates the deck visual style preference on the detail page without mutating slides", async () => {
+    clientMocks.getPresentation.mockResolvedValue({
+      id: "presentation-style",
+      title: "Styled Deck",
+      description: null,
+      theme: "black",
+      visual_style_id: "minimal-academic",
+      visual_style_scope: "builtin",
+      visual_style_name: "Minimal Academic",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "minimal-academic",
+        scope: "builtin",
+        name: "Minimal Academic",
+        appearance_defaults: { theme: "white" }
+      },
+      slides: [
+        {
+          order: 0,
+          layout: "title",
+          title: "Loaded slide",
+          content: "",
+          speaker_notes: "",
+          metadata: {
+            studio: {
+              slideId: "slide-load",
+              audio: { status: "missing" },
+              image: { status: "missing" }
+            }
+          }
+        }
+      ],
+      studio_data: { origin: "blank" },
+      created_at: "2026-03-13T00:00:00Z",
+      last_modified: "2026-03-13T00:00:00Z",
+      deleted: false,
+      client_id: "1",
+      version: 1
+    })
+
+    render(<PresentationStudioPage mode="detail" projectId="presentation-style" />)
+
+    const styleSelect = await screen.findByLabelText("Choose visual style")
+    fireEvent.change(styleSelect, {
+      target: { value: "builtin::timeline" }
+    })
+
+    const state = usePresentationStudioStore.getState()
+    expect(state.visualStyleId).toBe("timeline")
+    expect(state.visualStyleScope).toBe("builtin")
+    expect(state.visualStyleName).toBe("Timeline")
+    expect(state.slides).toHaveLength(1)
+    expect(state.theme).toBe("black")
+  })
+
+  it("creates a custom visual style and selects it in new mode", async () => {
+    clientMocks.listVisualStyles
+      .mockResolvedValueOnce(visualStyles)
+      .mockResolvedValueOnce([
+        ...visualStyles,
+        {
+          id: "style-user-1",
+          name: "CGPSC Sprint",
+          scope: "user",
+          description: "Recall-heavy revision deck",
+          generation_rules: { exam_focus: "high" },
+          artifact_preferences: ["timeline", "comparison_matrix"],
+          appearance_defaults: { theme: "beige" },
+          fallback_policy: {},
+          version: 1
+        }
+      ])
+    clientMocks.createVisualStyle.mockResolvedValue({
+      id: "style-user-1",
+      name: "CGPSC Sprint",
+      scope: "user",
+      description: "Recall-heavy revision deck",
+      generation_rules: { exam_focus: "high" },
+      artifact_preferences: ["timeline", "comparison_matrix"],
+      appearance_defaults: { theme: "beige" },
+      fallback_policy: {},
+      version: 1
+    })
+
+    render(<PresentationStudioPage mode="new" />)
+
+    fireEvent.click(await screen.findByTestId("presentation-studio-new-custom-style"))
+    fireEvent.change(screen.getByLabelText("Custom style name"), {
+      target: { value: "CGPSC Sprint" }
+    })
+    fireEvent.change(screen.getByLabelText("Custom style description"), {
+      target: { value: "Recall-heavy revision deck" }
+    })
+    fireEvent.change(screen.getByLabelText("Default theme"), {
+      target: { value: "beige" }
+    })
+    fireEvent.change(screen.getByLabelText("Artifact preferences"), {
+      target: { value: "timeline, comparison_matrix" }
+    })
+    fireEvent.change(screen.getByLabelText("Generation rules JSON"), {
+      target: { value: '{"exam_focus":"high"}' }
+    })
+
+    fireEvent.click(screen.getByTestId("presentation-studio-save-custom-style"))
+
+    await waitFor(() => {
+      expect(clientMocks.createVisualStyle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "CGPSC Sprint",
+          description: "Recall-heavy revision deck",
+          artifact_preferences: ["timeline", "comparison_matrix"],
+          appearance_defaults: { theme: "beige" },
+          generation_rules: { exam_focus: "high" }
+        })
+      )
+    })
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Choose visual style") as HTMLSelectElement).value
+      ).toBe("user::style-user-1")
+    })
+  })
+
+  it("edits and deletes a selected custom visual style in detail mode", async () => {
+    clientMocks.getPresentation.mockResolvedValue({
+      id: "presentation-custom-style",
+      title: "Styled Deck",
+      description: null,
+      theme: "black",
+      visual_style_id: "style-user-1",
+      visual_style_scope: "user",
+      visual_style_name: "CGPSC Sprint",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "style-user-1",
+        scope: "user",
+        name: "CGPSC Sprint",
+        description: "Recall-heavy revision deck",
+        appearance_defaults: { theme: "beige" }
+      },
+      slides: [
+        {
+          order: 0,
+          layout: "title",
+          title: "Loaded slide",
+          content: "",
+          speaker_notes: "",
+          metadata: {
+            studio: {
+              slideId: "slide-load",
+              audio: { status: "missing" },
+              image: { status: "missing" }
+            }
+          }
+        }
+      ],
+      studio_data: { origin: "blank" },
+      created_at: "2026-03-13T00:00:00Z",
+      last_modified: "2026-03-13T00:00:00Z",
+      deleted: false,
+      client_id: "1",
+      version: 1
+    })
+    clientMocks.listVisualStyles
+      .mockResolvedValueOnce([
+        ...visualStyles,
+        {
+          id: "style-user-1",
+          name: "CGPSC Sprint",
+          scope: "user",
+          description: "Recall-heavy revision deck",
+          generation_rules: { exam_focus: "high" },
+          artifact_preferences: ["timeline"],
+          appearance_defaults: { theme: "beige" },
+          fallback_policy: {},
+          version: 1
+        }
+      ])
+      .mockResolvedValueOnce([
+        ...visualStyles,
+        {
+          id: "style-user-1",
+          name: "CGPSC Rapid Review",
+          scope: "user",
+          description: "Updated revision deck",
+          generation_rules: { exam_focus: "high" },
+          artifact_preferences: ["timeline"],
+          appearance_defaults: { theme: "moon" },
+          fallback_policy: {},
+          version: 2
+        }
+      ])
+      .mockResolvedValueOnce(visualStyles)
+    clientMocks.patchVisualStyle.mockResolvedValue({
+      id: "style-user-1",
+      name: "CGPSC Rapid Review",
+      scope: "user",
+      description: "Updated revision deck",
+      generation_rules: { exam_focus: "high" },
+      artifact_preferences: ["timeline"],
+      appearance_defaults: { theme: "moon" },
+      fallback_policy: {},
+      version: 2
+    })
+    clientMocks.deleteVisualStyle.mockResolvedValue({ ok: true })
+
+    render(<PresentationStudioPage mode="detail" projectId="presentation-custom-style" />)
+
+    fireEvent.click(await screen.findByTestId("presentation-studio-edit-custom-style"))
+    fireEvent.change(screen.getByLabelText("Custom style name"), {
+      target: { value: "CGPSC Rapid Review" }
+    })
+    fireEvent.change(screen.getByLabelText("Custom style description"), {
+      target: { value: "Updated revision deck" }
+    })
+    fireEvent.change(screen.getByLabelText("Default theme"), {
+      target: { value: "moon" }
+    })
+    fireEvent.click(screen.getByTestId("presentation-studio-save-custom-style"))
+
+    await waitFor(() => {
+      expect(clientMocks.patchVisualStyle).toHaveBeenCalledWith(
+        "style-user-1",
+        expect.objectContaining({
+          name: "CGPSC Rapid Review",
+          description: "Updated revision deck",
+          appearance_defaults: { theme: "moon" }
+        })
+      )
+    })
+    await waitFor(() => {
+      expect(usePresentationStudioStore.getState().visualStyleName).toBe(
+        "CGPSC Rapid Review"
+      )
+    })
+
+    fireEvent.click(screen.getByTestId("presentation-studio-delete-custom-style"))
+
+    await waitFor(() => {
+      expect(clientMocks.deleteVisualStyle).toHaveBeenCalledWith("style-user-1")
+    })
+    await waitFor(() => {
+      expect(usePresentationStudioStore.getState().visualStyleId).toBeNull()
+    })
   })
 
   it("shows stale audio and ready image badges for seeded slide media state", () => {

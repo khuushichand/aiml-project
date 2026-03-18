@@ -148,6 +148,37 @@ def test_export_markdown_includes_images():
     assert "![Logo](data:image/png;base64," in md
 
 
+def test_export_markdown_preserves_text_fallback_for_visual_blocks():
+    slides = [
+        {
+            "order": 0,
+            "layout": "content",
+            "title": "Timeline",
+            "content": "- 1776: Declaration - American independence declared",
+            "speaker_notes": None,
+            "metadata": {
+                "visual_blocks": [
+                    {
+                        "type": "timeline",
+                        "items": [
+                            {
+                                "label": "1776",
+                                "title": "Declaration",
+                                "description": "American independence declared",
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+    ]
+
+    md = export_presentation_markdown(title="Deck", slides=slides, theme="black")
+
+    assert "1776" in md
+    assert "American independence declared" in md
+
+
 def test_export_bundle_resolves_output_asset_ref(tmp_path, monkeypatch):
     assets_dir = _build_assets(tmp_path)
     monkeypatch.setattr(
