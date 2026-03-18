@@ -24,19 +24,18 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     persist_claims_if_applicable,
 )
 from tldw_Server_API.app.core.config import loaded_config_data, settings
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_media_database,
-)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    ConflictError,
-    DatabaseError,
-    InputError,
-    MediaDatabase,
     media_dedupe_url_candidates,
     normalize_media_dedupe_url,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    create_media_database,
     get_media_repository,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
+    ConflictError,
+    DatabaseError,
+    InputError,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
     upsert_transcript,

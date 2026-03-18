@@ -160,13 +160,6 @@ async def test_fetch_unvectorized_chunk_count_uses_factory(
 
     monkeypatch.setattr(
         ingestion_persistence,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("_fetch_unvectorized_chunk_count should not construct MediaDatabase directly")
-        ),
-    )
-    monkeypatch.setattr(
-        ingestion_persistence,
         "create_media_database",
         lambda client_id, *, db_path=None, **_kwargs: stub_db,
     )
@@ -289,13 +282,6 @@ async def test_persist_primary_av_item_invokes_chunk_consistency_check(
     monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
     monkeypatch.setattr(
         ingestion_persistence,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("persist_primary_av_item should not construct MediaDatabase directly")
-        ),
-    )
-    monkeypatch.setattr(
-        ingestion_persistence,
         "create_media_database",
         _fake_create_media_database,
     )
@@ -369,13 +355,6 @@ async def test_persist_primary_av_item_upserts_normalized_transcript_via_extract
         _fake_enforce,
     )
     monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
-    monkeypatch.setattr(
-        ingestion_persistence,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("persist_primary_av_item should not construct MediaDatabase directly")
-        ),
-    )
     monkeypatch.setattr(
         ingestion_persistence,
         "create_media_database",
@@ -492,15 +471,6 @@ async def test_persist_doc_item_and_children_routes_email_parent_and_child_throu
     monkeypatch.setattr(ingestion_persistence, "_is_email_native_persist_enabled", lambda: True)
     monkeypatch.setattr(
         ingestion_persistence,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError(
-                "persist_doc_item_and_children should not construct MediaDatabase directly"
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        ingestion_persistence,
         "create_media_database",
         _fake_create_media_database,
     )
@@ -586,15 +556,6 @@ async def test_persist_doc_item_and_children_routes_archive_children_through_med
     )
     monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
     monkeypatch.setattr(ingestion_persistence, "_is_email_native_persist_enabled", lambda: True)
-    monkeypatch.setattr(
-        ingestion_persistence,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError(
-                "persist_doc_item_and_children archive path should not construct MediaDatabase directly"
-            )
-        ),
-    )
     monkeypatch.setattr(
         ingestion_persistence,
         "create_media_database",

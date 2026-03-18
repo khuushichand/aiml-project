@@ -108,14 +108,6 @@ async def test_process_batch_media_non_hash_precheck_ignores_soft_deleted_rows(
     fake_db = _FakePrecheckDb(row=None)
     monkeypatch.setattr(
         ingestion_persistence,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("process_batch_media precheck should not construct MediaDatabase directly")
-        ),
-        raising=True,
-    )
-    monkeypatch.setattr(
-        ingestion_persistence,
         "create_media_database",
         lambda client_id, *, db_path=None, **_kwargs: fake_db,
         raising=True,
@@ -159,14 +151,6 @@ async def test_process_batch_media_precheck_closes_db_on_query_error(
     fake_db = _FakePrecheckDb(error=sqlite3.OperationalError("pre-check query failed"))
     monkeypatch.setattr(
         ingestion_persistence,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("process_batch_media precheck should not construct MediaDatabase directly")
-        ),
-        raising=True,
-    )
-    monkeypatch.setattr(
-        ingestion_persistence,
         "create_media_database",
         lambda client_id, *, db_path=None, **_kwargs: fake_db,
         raising=True,
@@ -204,14 +188,6 @@ async def test_process_batch_media_source_hash_precheck_uses_factory(
     _patch_audio_processing(monkeypatch)
 
     fake_db = _FakePrecheckDb(row=None, has_source_hash=True)
-    monkeypatch.setattr(
-        ingestion_persistence,
-        "MediaDatabase",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("source-hash precheck should not construct MediaDatabase directly")
-        ),
-        raising=True,
-    )
     monkeypatch.setattr(
         ingestion_persistence,
         "create_media_database",

@@ -72,6 +72,7 @@ from tldw_Server_API.app.core.TTS import tts_jobs_worker
 from tldw_Server_API.app.core.Workflows.adapters.knowledge import crud as knowledge_crud
 from tldw_Server_API.app.core.Workflows.adapters.media import ingest as workflow_media_ingest
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Books import Book_Processing_Lib
+from tldw_Server_API.app.core.Ingestion_Media_Processing import persistence as ingestion_persistence
 from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Lib
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki import Media_Wiki
 from tldw_Server_API.app.core.Data_Tables import jobs_worker as data_tables_jobs_worker
@@ -863,6 +864,28 @@ def test_sync_client_imports_db_errors_from_media_db_errors(monkeypatch):
     assert module.ConflictError is media_db_errors.ConflictError
     assert module.DatabaseError is media_db_errors.DatabaseError
     assert module.InputError is media_db_errors.InputError
+
+
+def test_claims_service_does_not_bind_media_database_from_shim(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    module = importlib.reload(claims_service)
+    assert module.managed_media_database is media_db_api.managed_media_database
+    assert "MediaDatabase" not in module.__dict__
+
+
+def test_persistence_imports_factory_and_db_errors_outside_shim(monkeypatch):
+    monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "ConflictError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
+    monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
+
+    module = importlib.reload(ingestion_persistence)
+
+    assert module.create_media_database is media_db_api.create_media_database
+    assert module.ConflictError is media_db_errors.ConflictError
+    assert module.DatabaseError is media_db_errors.DatabaseError
+    assert module.InputError is media_db_errors.InputError
+    assert "MediaDatabase" not in module.__dict__
 
 
 def test_admin_bundle_service_imports_media_schema_helper_from_runtime_factory():
