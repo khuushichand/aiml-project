@@ -122,7 +122,7 @@ Latest release:
 - Database migration:
     - Inspect: `python -m tldw_Server_API.app.core.DB_Management.migrate_db status`
     - Migrate: `python -m tldw_Server_API.app.core.DB_Management.migrate_db migrate`
-    - Optional: `--db-path /path/to/Media_DB_v2.db` if not using defaults
+    - Optional: `--db-path /path/to/media.db` if not using defaults
     - If migrating content to Postgres later, use the tools under `tldw_Server_API/app/core/DB_Management/` (e.g., migration_tools.py)
 - API changes:
     - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
