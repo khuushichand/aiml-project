@@ -6,12 +6,12 @@ import configparser
 import contextlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import Any, Callable
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend
-
-if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.media_class import (
+    load_media_database_cls,
+)
 
 
 BackendLoader = Callable[[], DatabaseBackend | None]
@@ -35,10 +35,8 @@ class MediaDbRuntimeConfig:
     backend_loader: BackendLoader
 
 
-def _load_media_database_cls() -> type["MediaDatabase"]:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    return MediaDatabase
+def _load_media_database_cls() -> type[Any]:
+    return load_media_database_cls()
 
 
 def create_media_database(
@@ -48,7 +46,7 @@ def create_media_database(
     backend: DatabaseBackend | None = None,
     config: configparser.ConfigParser | None = None,
     runtime: MediaDbRuntimeConfig,
-) -> "MediaDatabase":
+) -> Any:
     """Instantiate a MediaDatabase using runtime-scoped defaults."""
 
     media_database_cls = _load_media_database_cls()

@@ -1,5 +1,6 @@
 import configparser
 from contextlib import contextmanager
+import inspect
 
 import pytest
 
@@ -20,6 +21,10 @@ def _runtime_config(
         postgres_content_mode=postgres_content_mode,
         backend_loader=backend_loader or (lambda: None),
     )
+
+
+def test_runtime_factory_no_longer_mentions_media_db_v2_in_source():
+    assert "Media_DB_v2" not in inspect.getsource(runtime_factory)
 
 
 def test_create_media_database_sqlite_uses_default_path_and_no_backend(monkeypatch):
@@ -113,4 +118,3 @@ def test_validate_postgres_content_backend_uses_factory_validator(monkeypatch):
     assert StubMediaDatabase.instances
     assert StubMediaDatabase.instances[-1].checked_policies
     assert StubMediaDatabase.instances[-1].closed is True
-
