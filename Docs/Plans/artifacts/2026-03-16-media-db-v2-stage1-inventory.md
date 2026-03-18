@@ -7,7 +7,7 @@
 - Raw `MediaDatabase(...)` constructors in app code: 5
 - Operational `create_media_database(...)` call sites in app code: 12
 - Operational `managed_media_database(...)` call sites in app code: 35
-- `Media_DB_v2` references in app code: 77
+- `Media_DB_v2` references in app code: 76
 
 Notes:
 
@@ -123,6 +123,7 @@ Status:
 - `app/core/Claims_Extraction/ingestion_claims.py` no longer binds `MediaDatabase` from the shim just for claim-storage typing.
 - `app/core/RAG/rag_service/agentic_chunker.py` now creates its cached structure-index DB through `media_db.api.create_media_database(...)` instead of the shim constructor.
 - `app/core/RAG/rag_service/database_retrievers.py` now attaches media DB adapters through `media_db.api.create_media_database(...)` and `media_db.errors.DatabaseError` instead of importing those bindings from the shim.
+- `app/core/Utils/metadata_utils.py` now imports `DatabaseError` from `media_db.errors` inside its safe-metadata write helper instead of from the shim.
 - Remaining `Media_DB_v2` reduction work is now concentrated in boundary/owner modules rather than low-blast leaf consumers.
 
 ## Acute Issues Found During Inventory

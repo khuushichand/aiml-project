@@ -82,6 +82,7 @@ from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline
 from tldw_Server_API.app.services import ingestion_sources_worker
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import quizzes_module
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import slides_module
+from tldw_Server_API.app.core.Utils import metadata_utils
 from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib
 from tldw_Server_API.app.core.Watchlists import pipeline as watchlists_pipeline
 from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
@@ -798,6 +799,13 @@ def test_database_retrievers_import_media_db_factory_and_errors_outside_shim(mon
 
     assert module.create_media_database is media_db_api.create_media_database
     assert module.MediaDatabaseError is media_db_errors.DatabaseError
+
+
+def test_metadata_utils_imports_database_error_from_media_db_errors():
+    source = inspect.getsource(metadata_utils)
+
+    assert "core.DB_Management.Media_DB_v2" not in source
+    assert "core.DB_Management.media_db.errors" in source
 
 
 def test_workflow_media_ingest_imports_managed_media_database_from_media_db_api():

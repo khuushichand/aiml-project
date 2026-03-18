@@ -106,7 +106,7 @@ def update_version_safe_metadata_in_transaction(
     from tldw_Server_API.app.core.DB_Management.backends.base import (  # noqa: WPS433
         BackendType,
     )
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # noqa: WPS433
+    from tldw_Server_API.app.core.DB_Management.media_db.errors import (  # noqa: WPS433
         DatabaseError,
     )
 
