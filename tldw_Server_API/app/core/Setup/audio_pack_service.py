@@ -53,7 +53,7 @@ def get_audio_pack_root() -> Path:
     """Return the setup-managed directory used for offline audio pack manifests."""
     root = CONFIG_ROOT / AUDIO_PACKS_DIRNAME
     root.mkdir(parents=True, exist_ok=True)
-    return root
+    return root.resolve()
 
 
 def normalize_audio_pack_name(pack_name: str) -> str:
@@ -68,7 +68,13 @@ def normalize_audio_pack_name(pack_name: str) -> str:
 
 def resolve_audio_pack_path(pack_name: str) -> Path:
     """Resolve a managed pack filename into the setup-controlled audio pack directory."""
-    return get_audio_pack_root() / normalize_audio_pack_name(pack_name)
+    root = get_audio_pack_root()
+    candidate = (root / normalize_audio_pack_name(pack_name)).resolve()
+    if candidate.parent != root:
+        raise ValueError(
+            "Audio pack names must be plain JSON filenames inside the managed audio_packs directory."
+        )
+    return candidate
 
 
 def _display_audio_pack_path(pack_name: str) -> str:

@@ -126,6 +126,18 @@ def test_resolve_audio_pack_path_anchors_to_managed_directory(tmp_path, monkeypa
     assert get_audio_pack_root() == tmp_path / "Config_Files" / "audio_packs"
 
 
+def test_resolve_audio_pack_path_returns_resolved_managed_path(tmp_path, monkeypatch):
+    config_root = tmp_path / "nested" / ".." / "Config_Files"
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Setup.audio_pack_service.CONFIG_ROOT",
+        config_root,
+    )
+
+    resolved = resolve_audio_pack_path("bundle-pack.json")
+
+    assert resolved == (tmp_path / "Config_Files" / "audio_packs" / "bundle-pack.json").resolve()
+
+
 @pytest.mark.parametrize("pack_name", ["../bundle.json", "nested/bundle.json", "nested\\bundle.json", ".json"])
 def test_resolve_audio_pack_path_rejects_non_filename_inputs(pack_name):
     with pytest.raises(ValueError, match="Audio pack names must"):
