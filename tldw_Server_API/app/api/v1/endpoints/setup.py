@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -52,6 +54,7 @@ from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.services.auth_service import mark_user_verified
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
+_AUDIO_BUNDLE_LOOKUP_DETAIL = "Audio bundle or resource profile not found."
 
 
 async def require_admin_and_system_configure(
@@ -73,6 +76,38 @@ async def require_admin_and_system_configure(
     principal = await role_checker(principal)
     principal = await perm_checker(principal)
     return principal
+
+
+def _audio_pack_compatibility(machine_profile: audio_profile_service.MachineProfile) -> dict[str, str]:
+    """Project machine-profile data into the portable manifest compatibility shape."""
+    return {
+        "platform": machine_profile.platform,
+        "arch": machine_profile.arch,
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+    }
+
+
+def _normalize_audio_pack_path(pack_path: str) -> Path:
+    """Normalize a local pack path while rejecting parent traversal segments."""
+    candidate = Path(pack_path).expanduser()
+    if any(part == ".." for part in candidate.parts):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Audio pack path must not contain parent directory traversal.",
+        )
+    if not candidate.name or candidate.suffix.lower() != ".json":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Audio pack path must point to a JSON file.",
+        )
+    try:
+        return candidate.resolve(strict=False)
+    except OSError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid audio pack path.") from exc
+
+
+def _raise_audio_bundle_lookup_not_found(exc: KeyError) -> None:
+    raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_AUDIO_BUNDLE_LOOKUP_DETAIL) from exc
 
 
 @router.get("/status", openapi_extra={"security": []}, response_model=SetupStatusResponse)
@@ -211,7 +246,7 @@ async def provision_audio_bundle(
             safe_rerun=payload.safe_rerun,
         )
     except KeyError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        _raise_audio_bundle_lookup_not_found(exc)
 
 
 @router.post("/audio/verify", openapi_extra={"security": []}, response_model=AudioBundleOperationResponse)
@@ -231,7 +266,7 @@ async def verify_audio_bundle(
             resource_profile=payload.resource_profile,
         )
     except KeyError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        _raise_audio_bundle_lookup_not_found(exc)
 
 
 @router.post("/audio/packs/export", openapi_extra={"security": []}, response_model=AudioPackExportResponse)
@@ -245,18 +280,15 @@ async def export_audio_pack(
     if not status_snapshot["enabled"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
 
+    pack_path = _normalize_audio_pack_path(payload.pack_path) if payload.pack_path else None
     readiness = audio_readiness_store.get_audio_readiness_store().load()
     machine_profile = audio_profile_service.detect_machine_profile()
-    compatibility = (
-        machine_profile.model_dump()
-        if hasattr(machine_profile, "model_dump")
-        else dict(machine_profile)
-    )
+    compatibility = _audio_pack_compatibility(machine_profile)
 
     try:
-        if payload.pack_path:
+        if pack_path:
             manifest = audio_pack_service.write_audio_pack_manifest(
-                pack_path=payload.pack_path,
+                pack_path=pack_path,
                 bundle_id=payload.bundle_id,
                 resource_profile=payload.resource_profile,
                 installed_assets=readiness.get("installed_asset_manifests"),
@@ -270,12 +302,12 @@ async def export_audio_pack(
                 compatibility=compatibility,
             )
     except KeyError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        _raise_audio_bundle_lookup_not_found(exc)
 
     return {
         "success": True,
         "manifest": manifest,
-        "pack_path": payload.pack_path,
+        "pack_path": str(pack_path) if pack_path else None,
     }
 
 
@@ -290,23 +322,20 @@ async def import_audio_pack(
     if not status_snapshot["enabled"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
 
+    pack_path = _normalize_audio_pack_path(payload.pack_path)
     machine_profile = audio_profile_service.detect_machine_profile()
-    compatibility = (
-        machine_profile.model_dump()
-        if hasattr(machine_profile, "model_dump")
-        else dict(machine_profile)
-    )
+    compatibility = _audio_pack_compatibility(machine_profile)
     readiness_store = audio_readiness_store.get_audio_readiness_store()
 
     try:
         result = audio_pack_service.register_imported_audio_pack(
-            payload.pack_path,
+            pack_path,
             readiness_store=readiness_store,
             machine_profile=compatibility,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Audio pack not found: {payload.pack_path}") from exc
-    except json.JSONDecodeError as exc:  # noqa: F821
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Audio pack not found: {pack_path}") from exc
+    except json.JSONDecodeError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Audio pack manifest is not valid JSON.") from exc
 
     return result

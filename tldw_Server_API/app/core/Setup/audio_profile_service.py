@@ -74,11 +74,11 @@ def detect_machine_profile() -> MachineProfile:
         platform=system_name,
         arch=machine_arch,
         apple_silicon=system_name == "darwin" and machine_arch in {"arm64", "aarch64"},
-        cuda_available=install_manager._cuda_available(),  # noqa: SLF001
+        cuda_available=install_manager.cuda_available(),
         ffmpeg_available=bool(shutil.which("ffmpeg")),
         espeak_available=espeak_present,
         free_disk_gb=free_disk_gb,
-        network_available_for_downloads=not force_offline and install_manager._downloads_allowed(),  # noqa: SLF001
+        network_available_for_downloads=not force_offline and install_manager.downloads_allowed(),
     )
 
 

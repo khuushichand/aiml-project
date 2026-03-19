@@ -121,3 +121,25 @@ def test_audio_provision_endpoint_offloads_bundle_execution(monkeypatch, mocker)
             {"resource_profile": "balanced", "safe_rerun": True},
         )
     ]
+
+
+def test_audio_provision_endpoint_masks_bundle_lookup_details(mocker):
+    mocker.patch.object(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        return_value={"enabled": True, "needs_setup": True},
+    )
+    mocker.patch.object(
+        setup_endpoint.install_manager,
+        "execute_audio_bundle",
+        side_effect=KeyError("catalog internals"),
+    )
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/audio/provision",
+            json={"bundle_id": "cpu_local", "resource_profile": "balanced"},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Audio bundle or resource profile not found."

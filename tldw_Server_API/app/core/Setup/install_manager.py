@@ -287,6 +287,11 @@ def _cuda_available() -> bool:
     except Exception:
         return False
 
+
+def cuda_available() -> bool:
+    """Public wrapper for setup GPU capability checks."""
+    return _cuda_available()
+
 class InstallationStatus:
     """Persist installation progress to a status file."""
 
@@ -353,6 +358,11 @@ def _downloads_allowed() -> bool:
     if not flag:
         return True
     return flag.strip().lower() not in {'1', 'true', 'yes', 'y', 'on'}
+
+
+def downloads_allowed() -> bool:
+    """Public wrapper for setup download-policy checks."""
+    return _downloads_allowed()
 
 
 def _ensure_downloads_allowed(target: str) -> None:
