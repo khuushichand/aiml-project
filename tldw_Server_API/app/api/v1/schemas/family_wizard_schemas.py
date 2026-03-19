@@ -5,12 +5,21 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 WizardHouseholdMode = Literal["family", "institutional"]
 WizardRelationshipType = Literal["parent", "legal_guardian", "institutional"]
 WizardMemberRole = Literal["guardian", "dependent", "caregiver"]
+WizardAccountMode = Literal["existing_account", "invite_new"]
+WizardProvisioningStatus = Literal[
+    "not_started",
+    "invite_ready",
+    "sent",
+    "accepted",
+    "expired",
+    "failed",
+]
 WizardActivationStatus = Literal[
     "draft",
     "invites_pending",
@@ -19,6 +28,13 @@ WizardActivationStatus = Literal[
     "needs_attention",
 ]
 WizardPlanStatus = Literal["queued", "active", "failed"]
+WizardRelationshipDraftStatus = Literal[
+    "pending",
+    "pending_provisioning",
+    "active",
+    "declined",
+    "revoked",
+]
 
 
 class HouseholdDraftCreate(BaseModel):
@@ -56,6 +72,8 @@ class HouseholdMemberDraftCreate(BaseModel):
     user_id: str | None = None
     email: str | None = None
     invite_required: bool = True
+    account_mode: WizardAccountMode = "existing_account"
+    provisioning_status: WizardProvisioningStatus = "not_started"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -67,6 +85,8 @@ class HouseholdMemberDraftResponse(BaseModel):
     user_id: str | None = None
     email: str | None = None
     invite_required: bool
+    account_mode: WizardAccountMode = "existing_account"
+    provisioning_status: WizardProvisioningStatus = "not_started"
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
@@ -87,7 +107,7 @@ class RelationshipDraftResponse(BaseModel):
     dependent_member_draft_id: str
     relationship_type: WizardRelationshipType
     dependent_visible: bool
-    status: Literal["pending", "active", "declined", "revoked"]
+    status: WizardRelationshipDraftStatus
     relationship_id: str | None = None
     created_at: str
     updated_at: str
@@ -95,16 +115,24 @@ class RelationshipDraftResponse(BaseModel):
 
 
 class GuardrailPlanDraftCreate(BaseModel):
-    dependent_user_id: str = Field(..., min_length=1)
+    dependent_member_draft_id: str | None = Field(None, min_length=1)
+    dependent_user_id: str | None = Field(None, min_length=1)
     relationship_draft_id: str = Field(..., min_length=1)
     template_id: str = Field(..., min_length=1)
     overrides: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_dependent_reference(self) -> "GuardrailPlanDraftCreate":
+        if not self.dependent_member_draft_id and not self.dependent_user_id:
+            raise ValueError("Either dependent_member_draft_id or dependent_user_id is required")
+        return self
 
 
 class GuardrailPlanDraftResponse(BaseModel):
     id: str
     household_draft_id: str
-    dependent_user_id: str
+    dependent_member_draft_id: str
+    dependent_user_id: str | None = None
     relationship_draft_id: str
     template_id: str
     overrides: dict[str, Any] = Field(default_factory=dict)
@@ -117,8 +145,9 @@ class GuardrailPlanDraftResponse(BaseModel):
 
 
 class ActivationSummaryItem(BaseModel):
-    dependent_user_id: str
-    relationship_status: Literal["pending", "active", "declined", "revoked"]
+    dependent_member_draft_id: str
+    dependent_user_id: str | None = None
+    relationship_status: WizardRelationshipDraftStatus
     plan_status: WizardPlanStatus
     message: str | None = None
 

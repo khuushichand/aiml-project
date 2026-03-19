@@ -7,6 +7,7 @@ from tldw_Server_API.app.api.v1.schemas.family_wizard_schemas import (
     ActivationSummaryResponse,
     GuardrailPlanDraftCreate,
     HouseholdDraftCreate,
+    HouseholdMemberDraftCreate,
 )
 
 
@@ -35,3 +36,18 @@ def test_activation_summary_response_tracks_counts() -> None:
 
     assert summary.status == "invites_pending"
     assert summary.pending_count == 2
+
+
+def test_household_member_draft_supports_invite_first_dependents() -> None:
+    payload = HouseholdMemberDraftCreate(
+        role="dependent",
+        display_name="Alex",
+        email="alex@example.com",
+        invite_required=True,
+        account_mode="invite_new",
+        provisioning_status="not_started",
+    )
+
+    assert payload.user_id is None
+    assert payload.account_mode == "invite_new"
+    assert payload.provisioning_status == "not_started"

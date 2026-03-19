@@ -54,6 +54,8 @@ def _member_from_row(row: dict) -> HouseholdMemberDraftResponse:
         user_id=row["user_id"],
         email=row["email"],
         invite_required=bool(row["invite_required"]),
+        account_mode=row.get("account_mode", "existing_account"),
+        provisioning_status=row.get("provisioning_status", "not_started"),
         metadata=row.get("metadata") or {},
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -79,6 +81,7 @@ def _plan_from_row(row: dict) -> GuardrailPlanDraftResponse:
     return GuardrailPlanDraftResponse(
         id=row["id"],
         household_draft_id=row["household_draft_id"],
+        dependent_member_draft_id=row["dependent_member_draft_id"],
         dependent_user_id=row["dependent_user_id"],
         relationship_draft_id=row["relationship_draft_id"],
         template_id=row["template_id"],
@@ -205,6 +208,8 @@ def add_household_member_draft(
         user_id=body.user_id,
         email=body.email,
         invite_required=body.invite_required,
+        account_mode=body.account_mode,
+        provisioning_status=body.provisioning_status,
         metadata=body.metadata,
     )
     member = db.get_household_member_draft(member_id)
@@ -256,11 +261,6 @@ def save_relationship_mapping(
         raise HTTPException(status_code=400, detail="Guardian member draft must have guardian role")
     if dependent_member["role"] != "dependent":
         raise HTTPException(status_code=400, detail="Dependent member draft must have dependent role")
-    if not guardian_member["user_id"] or not dependent_member["user_id"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Both guardian and dependent must have user_id before mapping",
-        )
     authenticated_user_id = _user_id(user)
     if guardian_member["user_id"] != authenticated_user_id:
         raise HTTPException(
@@ -269,24 +269,35 @@ def save_relationship_mapping(
         )
 
     try:
-        relationship = db.create_relationship(
-            guardian_user_id=authenticated_user_id,
-            dependent_user_id=dependent_member["user_id"],
-            relationship_type=body.relationship_type,
-            dependent_visible=body.dependent_visible,
-        )
-        relationship_draft_id = db.create_relationship_draft(
-            household_draft_id=draft_id,
-            guardian_member_draft_id=body.guardian_member_draft_id,
-            dependent_member_draft_id=body.dependent_member_draft_id,
-            relationship_type=body.relationship_type,
-            dependent_visible=body.dependent_visible,
-        )
-        db.link_relationship_draft(
-            relationship_draft_id=relationship_draft_id,
-            relationship_id=relationship.id,
-            status=relationship.status,
-        )
+        dependent_user_id = (dependent_member.get("user_id") or "").strip()
+        if dependent_user_id:
+            relationship = db.create_relationship(
+                guardian_user_id=authenticated_user_id,
+                dependent_user_id=dependent_user_id,
+                relationship_type=body.relationship_type,
+                dependent_visible=body.dependent_visible,
+            )
+            relationship_draft_id = db.create_relationship_draft(
+                household_draft_id=draft_id,
+                guardian_member_draft_id=body.guardian_member_draft_id,
+                dependent_member_draft_id=body.dependent_member_draft_id,
+                relationship_type=body.relationship_type,
+                dependent_visible=body.dependent_visible,
+            )
+            db.link_relationship_draft(
+                relationship_draft_id=relationship_draft_id,
+                relationship_id=relationship.id,
+                status=relationship.status,
+            )
+        else:
+            relationship_draft_id = db.create_relationship_draft(
+                household_draft_id=draft_id,
+                guardian_member_draft_id=body.guardian_member_draft_id,
+                dependent_member_draft_id=body.dependent_member_draft_id,
+                relationship_type=body.relationship_type,
+                dependent_visible=body.dependent_visible,
+                status="pending_provisioning",
+            )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -315,14 +326,16 @@ def save_guardrail_plan(
     dependent_member = db.get_household_member_draft(relationship_draft["dependent_member_draft_id"])
     if not dependent_member or dependent_member["household_draft_id"] != draft_id:
         raise HTTPException(status_code=404, detail="Dependent member draft not found")
-    dependent_user_id = (dependent_member.get("user_id") or "").strip()
-    if not dependent_user_id:
+    dependent_member_draft_id = relationship_draft["dependent_member_draft_id"]
+    requested_member_draft_id = (body.dependent_member_draft_id or "").strip()
+    if requested_member_draft_id and requested_member_draft_id != dependent_member_draft_id:
         raise HTTPException(
             status_code=400,
-            detail="Dependent member draft must include user_id before saving a guardrail plan",
+            detail="Plan dependent_member_draft_id must match the dependent member on the relationship draft",
         )
-    requested_dependent_user_id = body.dependent_user_id.strip()
-    if requested_dependent_user_id != dependent_user_id:
+    dependent_user_id = (dependent_member.get("user_id") or "").strip() or None
+    requested_dependent_user_id = (body.dependent_user_id or "").strip()
+    if requested_dependent_user_id and dependent_user_id and requested_dependent_user_id != dependent_user_id:
         raise HTTPException(
             status_code=400,
             detail="Plan dependent_user_id must match the dependent user_id on the relationship draft",
@@ -330,8 +343,9 @@ def save_guardrail_plan(
 
     plan_id = db.create_guardrail_plan_draft(
         household_draft_id=draft_id,
-        dependent_user_id=dependent_user_id,
         relationship_draft_id=body.relationship_draft_id,
+        dependent_member_draft_id=dependent_member_draft_id,
+        dependent_user_id=dependent_user_id,
         template_id=body.template_id,
         overrides=body.overrides,
     )
@@ -367,6 +381,7 @@ def get_activation_summary(
         message = "Queued until acceptance" if plan["status"] == "queued" else None
         items.append(
             ActivationSummaryItem(
+                dependent_member_draft_id=plan["dependent_member_draft_id"],
                 dependent_user_id=plan["dependent_user_id"],
                 relationship_status=relationship_status,
                 plan_status=plan["status"],

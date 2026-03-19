@@ -106,3 +106,36 @@ def test_loads_json_or_default_logs_parse_warnings(
     assert draft is not None
     assert draft["metadata"] is None
     assert warning_messages
+
+
+def test_create_household_member_invite_and_list_drafts(guardian_db: GuardianDB) -> None:
+    draft_id = guardian_db.create_household_draft(
+        owner_user_id="guardian-1",
+        mode="family",
+        name="Home",
+    )
+    member_id = guardian_db.add_household_member_draft(
+        household_draft_id=draft_id,
+        role="dependent",
+        display_name="Alex",
+        email="alex@example.com",
+        invite_required=True,
+        account_mode="invite_new",
+        provisioning_status="not_started",
+    )
+
+    invite_id = guardian_db.create_household_member_invite(
+        household_draft_id=draft_id,
+        member_draft_id=member_id,
+        delivery_channel="email",
+        delivery_target="alex@example.com",
+    )
+
+    invite = guardian_db.get_household_member_invite(invite_id)
+    drafts = guardian_db.list_household_drafts("guardian-1")
+
+    assert invite is not None
+    assert invite["status"] == "ready"
+    assert invite["delivery_channel"] == "email"
+    assert drafts
+    assert drafts[0]["id"] == draft_id
