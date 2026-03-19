@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -133,6 +134,16 @@ def test_setup_ui_script_avoids_stale_audio_readiness_and_retry_loops():
     source = response.text
     assert 'const readiness = getSelectedAudioReadiness();' in source
     assert 'getSelectedAudioReadiness() || state.audio.readiness' not in source
+    assert 'if (!readiness.selected_bundle_id) {' in source
+    assert 'const readinessProfile = readiness.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;' in source
     assert 'state.audio.readinessError = error.message || String(error);' in source
     assert 'state.audio.readinessLoaded = true;' in source
     assert 'Retry readiness check' in source
+
+
+def test_setup_ui_html_marks_install_errors_as_alerts():
+    template = (
+        Path(__file__).resolve().parents[2] / 'app' / 'Setup_UI' / 'setup.html'
+    ).read_text(encoding='utf-8')
+
+    assert 'id="installStatusErrors" class="install-status-errors" role="alert" aria-live="assertive"' in template

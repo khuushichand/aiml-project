@@ -380,6 +380,17 @@ def test_mark_media_embeddings_complete_is_best_effort(monkeypatch):
     jobs_worker._mark_media_embeddings_complete(user_id="user-1", media_id=1)
 
 
+def test_mark_media_embeddings_complete_tolerates_database_open_failures(monkeypatch):
+    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
+    monkeypatch.setattr(
+        jobs_worker,
+        "create_media_database",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("db open failed")),
+    )
+
+    jobs_worker._mark_media_embeddings_complete(user_id="user-1", media_id=1)
+
+
 def test_mark_media_embeddings_error_is_best_effort(monkeypatch):
     fake_db = SimpleNamespace(
         mark_embeddings_error=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")),
@@ -388,6 +399,17 @@ def test_mark_media_embeddings_error_is_best_effort(monkeypatch):
 
     monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
     monkeypatch.setattr(jobs_worker, "create_media_database", lambda **_: fake_db)
+
+    jobs_worker._mark_media_embeddings_error(user_id="user-1", media_id=1, error_message="boom")
+
+
+def test_mark_media_embeddings_error_tolerates_database_open_failures(monkeypatch):
+    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
+    monkeypatch.setattr(
+        jobs_worker,
+        "create_media_database",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("db open failed")),
+    )
 
     jobs_worker._mark_media_embeddings_error(user_id="user-1", media_id=1, error_message="boom")
 

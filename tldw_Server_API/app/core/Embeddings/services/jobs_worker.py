@@ -202,9 +202,10 @@ def _should_track_media_state(job_type: str | None, payload: dict[str, Any]) -> 
 
 
 def _mark_media_embeddings_complete(*, user_id: str, media_id: int) -> None:
-    db_path = get_user_media_db_path(user_id)
-    db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
+    db = None
     try:
+        db_path = get_user_media_db_path(user_id)
+        db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
         mark_media_as_processed(db_instance=db, media_id=media_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -214,14 +215,16 @@ def _mark_media_embeddings_complete(*, user_id: str, media_id: int) -> None:
             exc,
         )
     finally:
-        with contextlib.suppress(Exception):
-            db.close_connection()
+        if db is not None:
+            with contextlib.suppress(Exception):
+                db.close_connection()
 
 
 def _mark_media_embeddings_error(*, user_id: str, media_id: int, error_message: str) -> None:
-    db_path = get_user_media_db_path(user_id)
-    db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
+    db = None
     try:
+        db_path = get_user_media_db_path(user_id)
+        db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
         db.mark_embeddings_error(media_id, error_message)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -231,8 +234,9 @@ def _mark_media_embeddings_error(*, user_id: str, media_id: int, error_message: 
             exc,
         )
     finally:
-        with contextlib.suppress(Exception):
-            db.close_connection()
+        if db is not None:
+            with contextlib.suppress(Exception):
+                db.close_connection()
 
 
 def _update_root_progress(

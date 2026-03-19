@@ -1016,17 +1016,17 @@
     if (!readiness) {
       return null;
     }
-    if (!state.audio.selectedBundleId || !readiness.selected_bundle_id) {
+    if (!state.audio.selectedBundleId) {
       return readiness;
+    }
+    if (!readiness.selected_bundle_id) {
+      return null;
     }
     if (readiness.selected_bundle_id !== state.audio.selectedBundleId) {
       return null;
     }
-    if (
-      state.audio.selectedResourceProfile
-      && readiness.selected_resource_profile
-      && readiness.selected_resource_profile !== state.audio.selectedResourceProfile
-    ) {
+    const readinessProfile = readiness.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+    if (state.audio.selectedResourceProfile && readinessProfile !== state.audio.selectedResourceProfile) {
       return null;
     }
     return readiness;

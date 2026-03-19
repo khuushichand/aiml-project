@@ -334,7 +334,7 @@ async def import_audio_pack(
             machine_profile=compatibility,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Audio pack not found: {pack_path}") from exc
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Audio pack not found.") from exc
     except json.JSONDecodeError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Audio pack manifest is not valid JSON.") from exc
 

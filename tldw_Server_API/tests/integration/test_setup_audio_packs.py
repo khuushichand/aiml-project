@@ -170,6 +170,25 @@ def test_setup_audio_pack_import_rejects_parent_directory_traversal(mocker):
     assert response.json()["detail"] == "Audio pack path must not contain parent directory traversal."
 
 
+def test_setup_audio_pack_import_masks_missing_path_details(mocker, tmp_path):
+    pack_path = tmp_path / "missing_pack.json"
+    mocker.patch.object(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        return_value={"enabled": True, "needs_setup": True},
+    )
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/audio/packs/import",
+            json={"pack_path": str(pack_path)},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Audio pack not found."
+    assert str(pack_path) not in response.text
+
+
 def test_setup_audio_pack_export_masks_bundle_lookup_details(mocker):
     mocker.patch.object(
         setup_endpoint.setup_manager,

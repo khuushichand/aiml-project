@@ -5941,7 +5941,7 @@ elif _MINIMAL_TEST_APP:
     try:
         app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
     except _IMPORT_EXCEPTIONS as _setup_min_err:
-        logger.debug(f"Skipping setup router in minimal test app: {_setup_min_err}")
+        logger.debug("Skipping setup router in minimal test app: {}", _setup_min_err)
     try:
         from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
 

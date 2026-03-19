@@ -270,6 +270,7 @@ class SlidesGenerator:
         chunk_size_tokens: int | None,
         summary_tokens: int | None,
     ) -> str:
+        """Reduce oversized source text into a prompt-sized summary before slide generation."""
         chunk_size = chunk_size_tokens or 1000
         mode = str(settings.get("TOKEN_ESTIMATOR_MODE") or "whitespace").lower()
         if mode == "char_approx":

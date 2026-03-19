@@ -318,4 +318,24 @@ async def collect_setup_stt_health(
     """Collect STT health without going through the HTTP routing layer."""
 
     request = _build_internal_health_request("/api/v1/audio/transcriptions/health")
-    return await get_stt_health(request, model=model, warm=warm)
+    try:
+        return await get_stt_health(request, model=model, warm=warm)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        message = detail.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raw_error = detail.get("error")
+            message = raw_error if isinstance(raw_error, str) else None
+        if not isinstance(message, str) or not message.strip():
+            message = "Failed to collect STT health."
+        return {
+            "provider": None,
+            "alias": model,
+            "model": model,
+            "available": False,
+            "usable": False,
+            "on_demand": False,
+            "message": message,
+            "error": detail,
+            "status_code": exc.status_code,
+        }
