@@ -8,6 +8,8 @@ and this project adheres to Some kind of Versioning
 
 ## [Unreleased]
 
+> Backfill note: every item in this section documents scope that is already merged on `main` via PR #910. These bullets are changelog backfill only and do not mean the same code has already been forward-ported into `dev`.
+
 ### Changed
 
 - Backfilled the `dev` changelog for the `main`-merged PR #910 knowledge/workspace beta readiness audit so the merged review-remediation scope stays visible before those code paths are forward-ported into `dev`.
