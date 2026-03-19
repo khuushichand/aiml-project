@@ -12,6 +12,7 @@ def test_action_exposes_required_outputs() -> None:
         "backend_changed",
         "frontend_changed",
         "tldw_frontend_changed",
+        "family_guardrails_changed",
         "admin_ui_changed",
         "e2e_changed",
         "security_relevant_changed",

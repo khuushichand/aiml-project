@@ -202,24 +202,25 @@ const setWizardClientConfig = async (page: Page) => {
   })
 }
 
-const dismissBlockingDiagnosticsModalIfPresent = async (page: Page) => {
-  const dismissButton = page.getByRole("button", { name: "Dismiss" }).last()
-  try {
-    await dismissButton.waitFor({ state: "visible", timeout: 1500 })
-    await dismissButton.click({ force: true })
-  } catch {
-    // No diagnostics modal is present for this run.
+const assertWizardDiagnostics = async (
+  diagnostics: {
+    requestFailures: Array<{ url: string; errorText: string }>
   }
+) => {
+  await assertNoCriticalErrors(diagnostics as Parameters<typeof assertNoCriticalErrors>[0])
+  expect(
+    diagnostics.requestFailures.filter((failure) =>
+      failure.url.includes("/api/v1/config/docs-info")
+    )
+  ).toEqual([])
 }
 
 const gotoWizard = async (page: Page) => {
   await setWizardClientConfig(page)
   await page.goto("/settings/family-guardrails")
-  await dismissBlockingDiagnosticsModalIfPresent(page)
 }
 
 const advanceToDependentsStep = async (page: Page, dependentCount = 1) => {
-  await dismissBlockingDiagnosticsModalIfPresent(page)
   await page.getByRole("spinbutton", { name: /Dependents to set up/i }).fill(String(dependentCount))
   await page.getByRole("button", { name: /Save & Continue/i }).click()
   await expect(page.getByRole("heading", { name: "Add Guardians" })).toBeVisible()
@@ -230,7 +231,6 @@ const advanceToDependentsStep = async (page: Page, dependentCount = 1) => {
 }
 
 const resumeLatestDraft = async (page: Page) => {
-  await dismissBlockingDiagnosticsModalIfPresent(page)
   await expect(page.getByText("Resume saved household")).toBeVisible()
   await page.getByRole("button", { name: "Resume latest draft" }).click()
 }
@@ -277,6 +277,19 @@ const mockFamilyWizardApi = async (
     dependent: 0
   }
   const memberAccountModeById = new Map<string, AccountMode>()
+
+  await page.route("**/api/v1/config/docs-info", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        openapi_url: "/openapi.json",
+        docs_url: "/docs",
+        redoc_url: "/redoc",
+        capabilities: {}
+      })
+    })
+  })
 
   await page.route("**/api/v1/guardian/wizard/**", async (route, request) => {
     const method = request.method()
@@ -595,7 +608,7 @@ test.describe("Family Guardrails Wizard Workflow", () => {
     ).toBeVisible()
     await expect(authedPage.getByText("Resume saved household")).toHaveCount(0)
 
-    await assertNoCriticalErrors(diagnostics)
+    await assertWizardDiagnostics(diagnostics)
   })
 
   test("loads a saved household through the explicit resume flow", async ({
@@ -632,7 +645,7 @@ test.describe("Family Guardrails Wizard Workflow", () => {
       authedPage.getByRole("textbox", { name: "Dependent 1 user ID" })
     ).toHaveValue("alex-kid")
 
-    await assertNoCriticalErrors(diagnostics)
+    await assertWizardDiagnostics(diagnostics)
   })
 
   test("supports invite-new dependents without a user ID and persists member-draft keyed plans", async ({
@@ -685,7 +698,7 @@ test.describe("Family Guardrails Wizard Workflow", () => {
     )
     expect(requestLog.planBodies[0]).not.toHaveProperty("dependent_user_id")
 
-    await assertNoCriticalErrors(diagnostics)
+    await assertWizardDiagnostics(diagnostics)
   })
 
   test("uses real bulk and per-row resend actions from the tracker", async ({
@@ -754,7 +767,7 @@ test.describe("Family Guardrails Wizard Workflow", () => {
       member_draft_ids: ["member-dependent-1"]
     })
 
-    await assertNoCriticalErrors(diagnostics)
+    await assertWizardDiagnostics(diagnostics)
   })
 
   test("shows first-class tracker blockers and create or reissue invite actions", async ({
@@ -837,7 +850,7 @@ test.describe("Family Guardrails Wizard Workflow", () => {
     expect(requestLog.reissueInviteIds).toEqual(["invite-expired-1"])
     expect(requestLog.provisionMemberIds).toEqual(["member-dependent-2"])
 
-    await assertNoCriticalErrors(diagnostics)
+    await assertWizardDiagnostics(diagnostics)
   })
 
   test("routes tracker review-template actions back into template customization", async ({
@@ -898,7 +911,7 @@ test.describe("Family Guardrails Wizard Workflow", () => {
     ).toBeVisible()
     await expect(authedPage.getByText("Reviewing template for Sam.")).toBeVisible()
 
-    await assertNoCriticalErrors(diagnostics)
+    await assertWizardDiagnostics(diagnostics)
   })
 
   test("routes tracker fix-mapping actions back into dependent editing", async ({
@@ -951,6 +964,6 @@ test.describe("Family Guardrails Wizard Workflow", () => {
       authedPage.getByRole("textbox", { name: "Dependent 1 user ID" })
     ).toHaveValue("alex-kid")
 
-    await assertNoCriticalErrors(diagnostics)
+    await assertWizardDiagnostics(diagnostics)
   })
 })
