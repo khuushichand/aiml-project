@@ -43,11 +43,20 @@ def _load_yaml_directory(path: Path) -> list[dict[str, Any]]:
     return documents
 
 
-def load_governance_pack_fixture(name_or_path: str | Path) -> GovernancePack:
-    """Load a governance-pack fixture directory by fixture name or explicit path."""
-    candidate_path = Path(name_or_path)
-    pack_path = candidate_path if candidate_path.exists() else _fixture_root() / str(name_or_path)
-
+def load_governance_pack_directory(
+    pack_path: str | Path,
+    *,
+    source_type: str = "local_path",
+    source_location: str | None = None,
+    source_ref_requested: str | None = None,
+    source_subpath: str | None = None,
+    source_commit_resolved: str | None = None,
+    pack_content_digest: str | None = None,
+    source_verified: bool | None = None,
+    source_verification_mode: str | None = None,
+) -> GovernancePack:
+    """Load a governance-pack directory from an explicit filesystem path."""
+    pack_path = Path(pack_path)
     manifest = GovernancePackManifest(**_load_yaml_file(pack_path / "manifest.yaml"))
     raw_profiles = _load_yaml_directory(pack_path / "profiles")
     raw_approvals = _load_yaml_directory(pack_path / "approvals")
@@ -57,6 +66,14 @@ def load_governance_pack_fixture(name_or_path: str | Path) -> GovernancePack:
     return GovernancePack(
         source_path=pack_path,
         manifest=manifest,
+        source_type=source_type,
+        source_location=source_location or str(pack_path.resolve()),
+        source_ref_requested=source_ref_requested,
+        source_subpath=source_subpath,
+        source_commit_resolved=source_commit_resolved,
+        pack_content_digest=pack_content_digest,
+        source_verified=source_verified,
+        source_verification_mode=source_verification_mode,
         profiles=[CapabilityProfile(**item) for item in raw_profiles],
         approvals=[ApprovalTemplate(**item) for item in raw_approvals],
         personas=[PersonaTemplate(**item) for item in raw_personas],
@@ -66,3 +83,10 @@ def load_governance_pack_fixture(name_or_path: str | Path) -> GovernancePack:
         raw_personas=raw_personas,
         raw_assignments=raw_assignments,
     )
+
+
+def load_governance_pack_fixture(name_or_path: str | Path) -> GovernancePack:
+    """Load a governance-pack fixture directory by fixture name or explicit path."""
+    candidate_path = Path(name_or_path)
+    pack_path = candidate_path if candidate_path.exists() else _fixture_root() / str(name_or_path)
+    return load_governance_pack_directory(pack_path)

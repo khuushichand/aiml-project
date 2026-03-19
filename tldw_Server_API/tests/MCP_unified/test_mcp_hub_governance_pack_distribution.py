@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Any
 
 import pytest
@@ -25,6 +27,78 @@ async def _make_repo(tmp_path: Path, monkeypatch: Any):
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
     return repo
+
+
+def _fixture_pack_path() -> Path:
+    return (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "governance_packs"
+        / "minimal_researcher_pack"
+    )
+
+
+def _init_git_pack_repo(tmp_path: Path, *, subpath: str = "packs/researcher") -> tuple[str, str]:
+    repo_root = tmp_path / "git-pack"
+    repo_root.mkdir()
+    pack_root = repo_root / subpath
+    shutil.copytree(_fixture_pack_path(), pack_root)
+    subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "config", "user.email", "codex@example.com"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Codex"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=repo_root, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Add governance pack fixture"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(["git", "tag", "v1.0.0"], cwd=repo_root, check=True, capture_output=True, text=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return repo_root.as_uri(), commit
+
+
+class _FakeGitTrustService:
+    def __init__(
+        self,
+        *,
+        canonical_repository: str = "github.com/example/researcher-pack",
+        verification_required: bool = False,
+        trusted_git_key_fingerprints: list[str] | None = None,
+    ) -> None:
+        self.canonical_repository = canonical_repository
+        self.verification_required = verification_required
+        self.trusted_git_key_fingerprints = list(trusted_git_key_fingerprints or [])
+        self.calls: list[dict[str, str]] = []
+
+    async def evaluate_git_source(self, repo_url: str, *, ref_kind: str) -> dict[str, Any]:
+        self.calls.append({"repo_url": repo_url, "ref_kind": ref_kind})
+        return {
+            "allowed": True,
+            "reason": None,
+            "canonical_repository": self.canonical_repository,
+            "verification_required": self.verification_required,
+            "trusted_git_key_fingerprints": list(self.trusted_git_key_fingerprints),
+        }
 
 
 @pytest.mark.asyncio
@@ -140,3 +214,294 @@ async def test_governance_pack_trust_policy_persists_as_deployment_wide_config(
     stored = await repo.get_governance_pack_trust_policy()
     assert stored["policy_document"]["allowed_local_roots"] == ["/srv/packs"]
     assert stored["updated_by"] == 11
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_resolves_allowed_local_pack_and_digest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    trust_service = McpHubGovernancePackTrustService(repo=repo)
+    allowed_root = tmp_path / "allowed"
+    pack_path = allowed_root / "researcher-pack"
+    allowed_root.mkdir()
+    shutil.copytree(_fixture_pack_path(), pack_path)
+    await trust_service.update_policy(
+        {
+            "allow_local_path_sources": True,
+            "allowed_local_roots": [str(allowed_root)],
+        },
+        actor_id=5,
+    )
+
+    service = McpHubGovernancePackDistributionService(trust_service=trust_service)
+    resolved = await service.resolve_local_path(str(pack_path))
+
+    assert resolved.manifest.pack_id == "researcher-pack"
+    assert resolved.source_type == "local_path"
+    assert resolved.source_location == str(pack_path.resolve())
+    assert resolved.pack_content_digest
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_rejects_local_pack_outside_allowlist(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    trust_service = McpHubGovernancePackTrustService(repo=repo)
+    allowed_root = tmp_path / "allowed"
+    outside_root = tmp_path / "outside"
+    allowed_root.mkdir()
+    outside_root.mkdir()
+    pack_path = outside_root / "researcher-pack"
+    shutil.copytree(_fixture_pack_path(), pack_path)
+    await trust_service.update_policy(
+        {
+            "allow_local_path_sources": True,
+            "allowed_local_roots": [str(allowed_root)],
+        },
+        actor_id=5,
+    )
+
+    service = McpHubGovernancePackDistributionService(trust_service=trust_service)
+    with pytest.raises(ValueError, match="path_not_allowed"):
+        await service.resolve_local_path(str(pack_path))
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_resolves_git_source_to_exact_commit_and_digest(
+    tmp_path: Path,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    repo_url, commit = _init_git_pack_repo(tmp_path)
+    trust_service = _FakeGitTrustService()
+    service = McpHubGovernancePackDistributionService(trust_service=trust_service)
+
+    resolved = await service.resolve_git_source(
+        repo_url,
+        ref="v1.0.0",
+        ref_kind="tag",
+        subpath="packs/researcher",
+    )
+
+    assert resolved.manifest.pack_id == "researcher-pack"
+    assert resolved.source_type == "git"
+    assert resolved.source_location == "github.com/example/researcher-pack"
+    assert resolved.source_ref_requested == "v1.0.0"
+    assert resolved.source_subpath == "packs/researcher"
+    assert resolved.source_commit_resolved == commit
+    assert resolved.source_path is None
+    assert resolved.pack_content_digest
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_uses_canonicalized_repo_for_trust_matching(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    trust_service = McpHubGovernancePackTrustService(repo=repo)
+    await trust_service.update_policy(
+        {
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/researcher-pack"],
+            "allowed_git_ref_kinds": ["tag"],
+        },
+        actor_id=7,
+    )
+
+    checkout_root = tmp_path / "checkout"
+    shutil.copytree(_fixture_pack_path(), checkout_root)
+    service = McpHubGovernancePackDistributionService(trust_service=trust_service)
+
+    async def _fake_checkout(*args: Any, **kwargs: Any) -> str:
+        requested_checkout_root = Path(kwargs["checkout_root"])
+        shutil.copytree(checkout_root, requested_checkout_root)
+        return "abc123"
+
+    monkeypatch.setattr(service, "_checkout_git_source", _fake_checkout)
+
+    resolved = await service.resolve_git_source(
+        "git@github.com:example/researcher-pack.git",
+        ref="v1.0.0",
+        ref_kind="tag",
+        subpath=None,
+    )
+
+    assert resolved.source_location == "github.com/example/researcher-pack"
+    assert resolved.source_commit_resolved == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_rejects_git_subpath_escape(
+    tmp_path: Path,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    repo_url, _commit = _init_git_pack_repo(tmp_path)
+    service = McpHubGovernancePackDistributionService(trust_service=_FakeGitTrustService())
+
+    with pytest.raises(ValueError, match="subpath"):
+        await service.resolve_git_source(
+            repo_url,
+            ref="v1.0.0",
+            ref_kind="tag",
+            subpath="../escape",
+        )
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_rejects_git_symlink_subpath_escape(
+    tmp_path: Path,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    repo_url, _commit = _init_git_pack_repo(tmp_path)
+    repo_root = Path(repo_url.removeprefix("file://"))
+    link_parent = repo_root / "packs"
+    link_parent.mkdir(exist_ok=True)
+    (link_parent / "escape").symlink_to("../../outside-pack")
+    subprocess.run(["git", "add", "."], cwd=repo_root, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Add symlink escape"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    service = McpHubGovernancePackDistributionService(trust_service=_FakeGitTrustService())
+    with pytest.raises(ValueError, match="repository root"):
+        await service.resolve_git_source(
+            repo_url,
+            ref=None,
+            ref_kind="branch",
+            subpath="packs/escape",
+        )
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_rejects_git_urls_with_embedded_credentials() -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    service = McpHubGovernancePackDistributionService(trust_service=_FakeGitTrustService())
+
+    with pytest.raises(ValueError, match="credentials"):
+        await service.resolve_git_source(
+            "https://token@example@example.com/researcher-pack.git",
+            ref="main",
+            ref_kind="branch",
+            subpath=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_requires_git_signature_verification_when_configured(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    repo_url, _commit = _init_git_pack_repo(tmp_path)
+    trust_service = _FakeGitTrustService(verification_required=True)
+    service = McpHubGovernancePackDistributionService(trust_service=trust_service)
+
+    async def _fake_verify(*args: Any, **kwargs: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(service, "_verify_git_revision", _fake_verify)
+
+    with pytest.raises(ValueError, match="verification"):
+        await service.resolve_git_source(
+            repo_url,
+            ref="v1.0.0",
+            ref_kind="tag",
+            subpath="packs/researcher",
+        )
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_passes_trusted_key_fingerprints_to_verifier(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    repo_url, commit = _init_git_pack_repo(tmp_path)
+    trust_service = _FakeGitTrustService(
+        verification_required=True,
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+    service = McpHubGovernancePackDistributionService(trust_service=trust_service)
+
+    async def _fake_verify(*args: Any, **kwargs: Any) -> bool:
+        assert kwargs["trusted_git_key_fingerprints"] == ["ABCD1234"]
+        return True
+
+    monkeypatch.setattr(service, "_verify_git_revision", _fake_verify)
+
+    resolved = await service.resolve_git_source(
+        repo_url,
+        ref="v1.0.0",
+        ref_kind="tag",
+        subpath="packs/researcher",
+    )
+
+    assert resolved.source_commit_resolved == commit
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_rejects_option_like_git_refs(
+    tmp_path: Path,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    repo_url, _commit = _init_git_pack_repo(tmp_path)
+    service = McpHubGovernancePackDistributionService(trust_service=_FakeGitTrustService())
+
+    with pytest.raises(ValueError, match="must not start"):
+        await service.resolve_git_source(
+            repo_url,
+            ref="--help",
+            ref_kind="tag",
+            subpath="packs/researcher",
+        )

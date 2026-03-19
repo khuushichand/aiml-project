@@ -151,6 +151,7 @@ class McpHubGovernancePackTrustService:
                 "reason": "git_source_disabled",
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
+                "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
             }
         if host not in set(policy["allowed_git_hosts"]):
             return {
@@ -158,6 +159,7 @@ class McpHubGovernancePackTrustService:
                 "reason": "host_not_allowed",
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
+                "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
             }
         if canonical_repository not in set(policy["allowed_git_repositories"]):
             return {
@@ -165,6 +167,7 @@ class McpHubGovernancePackTrustService:
                 "reason": "repository_not_allowed",
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
+                "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
             }
         if normalized_ref_kind not in set(policy["allowed_git_ref_kinds"]):
             return {
@@ -172,10 +175,12 @@ class McpHubGovernancePackTrustService:
                 "reason": "ref_kind_not_allowed",
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
+                "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
             }
         return {
             "allowed": True,
             "reason": None,
             "canonical_repository": canonical_repository,
             "verification_required": bool(policy["require_git_signature_verification"]),
+            "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
         }
