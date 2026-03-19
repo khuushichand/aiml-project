@@ -1,3 +1,5 @@
+"""Trust-policy storage and evaluation for governance-pack source resolution."""
+
 from __future__ import annotations
 
 import os

@@ -1,5 +1,8 @@
+"""Distribution helpers for trusted governance-pack sources."""
+
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -140,6 +143,45 @@ class McpHubGovernancePackDistributionService:
             "personas": [dict(item) for item in pack.raw_personas],
             "assignments": [dict(item) for item in pack.raw_assignments],
         }
+
+    @staticmethod
+    def _load_local_pack_sync(*, resolved_path: Path) -> GovernancePack:
+        """Load a governance pack from an already-authorized local path."""
+        pack = load_governance_pack_directory(
+            resolved_path,
+            source_type="local_path",
+            source_location=str(resolved_path.resolve()),
+        )
+        pack.pack_content_digest = _pack_content_digest(pack)
+        return pack
+
+    @staticmethod
+    def _load_git_pack_sync(
+        *,
+        pack_root: Path,
+        repo_url: str,
+        ref: str | None,
+        ref_kind: str,
+        subpath: str | None,
+        commit: str,
+        verified: bool | None,
+        verification_required: bool,
+    ) -> GovernancePack:
+        """Load a governance pack from a checked-out Git worktree."""
+        pack = load_governance_pack_directory(
+            pack_root,
+            source_type="git",
+            source_location=str(repo_url).strip(),
+            source_ref_requested=ref,
+            source_ref_kind=ref_kind,
+            source_subpath=subpath,
+            source_commit_resolved=commit,
+            source_verified=verified,
+            source_verification_mode="git_signature" if verification_required else None,
+        )
+        pack.source_path = None
+        pack.pack_content_digest = _pack_content_digest(pack)
+        return pack
 
     async def _persist_prepared_candidate(
         self,
@@ -310,7 +352,7 @@ class McpHubGovernancePackDistributionService:
             "pack_content_digest": candidate_pack.pack_content_digest,
         }
 
-    async def _checkout_git_source(
+    def _checkout_git_source_sync(
         self,
         *,
         repo_url: str,
@@ -345,7 +387,24 @@ class McpHubGovernancePackDistributionService:
         ).stdout.strip()
         return commit
 
-    async def _verify_git_revision(
+    async def _checkout_git_source(
+        self,
+        *,
+        repo_url: str,
+        ref: str | None,
+        ref_kind: str,
+        checkout_root: Path,
+    ) -> str:
+        """Clone and check out a trusted Git source, returning the resolved commit."""
+        return await asyncio.to_thread(
+            self._checkout_git_source_sync,
+            repo_url=repo_url,
+            ref=ref,
+            ref_kind=ref_kind,
+            checkout_root=checkout_root,
+        )
+
+    def _verify_git_revision_sync(
         self,
         *,
         checkout_root: Path,
@@ -383,19 +442,35 @@ class McpHubGovernancePackDistributionService:
         )
         return bool(observed & trusted_fingerprints)
 
+    async def _verify_git_revision(
+        self,
+        *,
+        checkout_root: Path,
+        ref: str | None,
+        ref_kind: str,
+        commit: str,
+        trusted_git_key_fingerprints: list[str] | None = None,
+    ) -> bool:
+        """Verify the checked-out Git revision and optionally enforce trusted fingerprints."""
+        return await asyncio.to_thread(
+            self._verify_git_revision_sync,
+            checkout_root=checkout_root,
+            ref=ref,
+            ref_kind=ref_kind,
+            commit=commit,
+            trusted_git_key_fingerprints=trusted_git_key_fingerprints,
+        )
+
     async def resolve_local_path(self, path: str) -> GovernancePack:
         """Resolve a governance pack from a trusted local filesystem path."""
         decision = await self.trust_service.evaluate_local_path(path)
         if not bool(decision.get("allowed")):
             raise ValueError(str(decision.get("reason") or "local_path_not_allowed"))
         resolved_path = Path(str(decision.get("resolved_path") or path))
-        pack = load_governance_pack_directory(
-            resolved_path,
-            source_type="local_path",
-            source_location=str(resolved_path.resolve()),
+        return await asyncio.to_thread(
+            self._load_local_pack_sync,
+            resolved_path=resolved_path,
         )
-        pack.pack_content_digest = _pack_content_digest(pack)
-        return pack
 
     async def resolve_git_source(
         self,
@@ -435,20 +510,17 @@ class McpHubGovernancePackDistributionService:
                 if not verified:
                     raise ValueError("Git source verification failed")
             pack_root = _resolve_pack_root(checkout_root, normalized_subpath)
-            pack = load_governance_pack_directory(
-                pack_root,
-                source_type="git",
-                source_location=str(repo_url).strip(),
-                source_ref_requested=normalized_ref,
-                source_ref_kind=ref_kind,
-                source_subpath=normalized_subpath,
-                source_commit_resolved=commit,
-                source_verified=verified,
-                source_verification_mode="git_signature" if verification_required else None,
+            return await asyncio.to_thread(
+                self._load_git_pack_sync,
+                pack_root=pack_root,
+                repo_url=repo_url,
+                ref=normalized_ref,
+                ref_kind=ref_kind,
+                subpath=normalized_subpath,
+                commit=commit,
+                verified=verified,
+                verification_required=verification_required,
             )
-            pack.source_path = None
-            pack.pack_content_digest = _pack_content_digest(pack)
-            return pack
 
     async def prepare_source_candidate(
         self,

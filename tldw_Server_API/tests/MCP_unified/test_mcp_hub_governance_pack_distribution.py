@@ -252,6 +252,48 @@ async def test_distribution_service_resolves_allowed_local_pack_and_digest(
 
 
 @pytest.mark.asyncio
+async def test_distribution_service_resolve_local_path_uses_thread_offload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services import mcp_hub_governance_pack_distribution_service as distribution_module
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    trust_service = McpHubGovernancePackTrustService(repo=repo)
+    allowed_root = tmp_path / "allowed"
+    pack_path = allowed_root / "researcher-pack"
+    allowed_root.mkdir()
+    shutil.copytree(_fixture_pack_path(), pack_path)
+    await trust_service.update_policy(
+        {
+            "allow_local_path_sources": True,
+            "allowed_local_roots": [str(allowed_root)],
+        },
+        actor_id=5,
+    )
+
+    service = McpHubGovernancePackDistributionService(trust_service=trust_service)
+    calls: list[str] = []
+
+    async def _fake_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        calls.append(getattr(func, "__name__", "<anonymous>"))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(distribution_module.asyncio, "to_thread", _fake_to_thread)
+
+    resolved = await service.resolve_local_path(str(pack_path))
+
+    assert resolved.manifest.pack_id == "researcher-pack"
+    assert calls == ["_load_local_pack_sync"]
+
+
+@pytest.mark.asyncio
 async def test_distribution_service_rejects_local_pack_outside_allowlist(
     tmp_path: Path,
     monkeypatch,
@@ -312,6 +354,97 @@ async def test_distribution_service_resolves_git_source_to_exact_commit_and_dige
     assert resolved.source_commit_resolved == commit
     assert resolved.source_path is None
     assert resolved.pack_content_digest
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_checkout_git_source_uses_thread_offload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services import mcp_hub_governance_pack_distribution_service as distribution_module
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    service = McpHubGovernancePackDistributionService(trust_service=_FakeGitTrustService())
+    calls: list[str] = []
+
+    async def _fake_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        calls.append(getattr(func, "__name__", "<anonymous>"))
+        return func(*args, **kwargs)
+
+    def _fake_checkout_sync(
+        *,
+        repo_url: str,
+        ref: str | None,
+        ref_kind: str,
+        checkout_root: Path,
+    ) -> str:
+        assert repo_url == "https://example.com/researcher-pack.git"
+        assert ref == "main"
+        assert ref_kind == "branch"
+        assert checkout_root == tmp_path / "checkout"
+        return "abc123"
+
+    monkeypatch.setattr(distribution_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(service, "_checkout_git_source_sync", _fake_checkout_sync)
+
+    commit = await service._checkout_git_source(
+        repo_url="https://example.com/researcher-pack.git",
+        ref="main",
+        ref_kind="branch",
+        checkout_root=tmp_path / "checkout",
+    )
+
+    assert commit == "abc123"
+    assert calls == ["_fake_checkout_sync"]
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_verify_git_revision_uses_thread_offload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services import mcp_hub_governance_pack_distribution_service as distribution_module
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    service = McpHubGovernancePackDistributionService(trust_service=_FakeGitTrustService())
+    calls: list[str] = []
+
+    async def _fake_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        calls.append(getattr(func, "__name__", "<anonymous>"))
+        return func(*args, **kwargs)
+
+    def _fake_verify_sync(
+        *,
+        checkout_root: Path,
+        ref: str | None,
+        ref_kind: str,
+        commit: str,
+        trusted_git_key_fingerprints: list[str] | None = None,
+    ) -> bool:
+        assert checkout_root == tmp_path / "checkout"
+        assert ref == "v1.0.0"
+        assert ref_kind == "tag"
+        assert commit == "abc123"
+        assert trusted_git_key_fingerprints == ["ABCD1234"]
+        return True
+
+    monkeypatch.setattr(distribution_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(service, "_verify_git_revision_sync", _fake_verify_sync)
+
+    verified = await service._verify_git_revision(
+        checkout_root=tmp_path / "checkout",
+        ref="v1.0.0",
+        ref_kind="tag",
+        commit="abc123",
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+
+    assert verified is True
+    assert calls == ["_fake_verify_sync"]
 
 
 @pytest.mark.asyncio

@@ -224,6 +224,8 @@ class McpHubRepo:
                 "mcp_external_server_slot_secrets",
                 "mcp_governance_pack_objects",
                 "mcp_governance_packs",
+                "mcp_governance_pack_source_candidates",
+                "mcp_governance_pack_trust_policy",
                 "mcp_path_scope_objects",
                 "mcp_permission_profiles",
                 "mcp_policy_assignments",
@@ -872,6 +874,7 @@ class McpHubRepo:
         fetched_by: int | None = None,
         conn: Any | None = None,
     ) -> dict[str, Any]:
+        """Persist a prepared governance-pack source candidate for later import or upgrade."""
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         source_fetched_ts = source_fetched_at or now
@@ -934,6 +937,7 @@ class McpHubRepo:
         *,
         conn: Any | None = None,
     ) -> dict[str, Any] | None:
+        """Load a prepared governance-pack source candidate by id."""
         query = """
             SELECT id, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                    source_commit_resolved, pack_content_digest, pack_document_json, source_verified,
@@ -949,6 +953,7 @@ class McpHubRepo:
         return self._normalize_governance_pack_source_candidate_row(self._row_to_dict(row) if row else None)
 
     async def list_governance_pack_source_candidates(self) -> list[dict[str, Any]]:
+        """List prepared governance-pack source candidates in creation order."""
         rows = await self.db_pool.fetchall(
             """
             SELECT id, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
@@ -964,6 +969,7 @@ class McpHubRepo:
         ]
 
     async def get_governance_pack_trust_policy(self) -> dict[str, Any]:
+        """Return the deployment-wide governance-pack trust policy row."""
         row = await self.db_pool.fetchone(
             """
             SELECT id, policy_document_json, updated_by, updated_at
@@ -987,6 +993,7 @@ class McpHubRepo:
         actor_id: int | None,
         conn: Any | None = None,
     ) -> dict[str, Any]:
+        """Insert or replace the deployment-wide governance-pack trust policy."""
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         query = """
