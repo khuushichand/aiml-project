@@ -1,10 +1,9 @@
-from contextlib import contextmanager
-
 import pytest
 
 from tldw_Server_API.app.core.DB_Management import DB_Manager
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, QueryResult
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.session import MediaDbSession
 
 
 def test_add_media_with_keywords_requires_db_instance():
@@ -71,6 +70,165 @@ def test_add_media_and_paginated_files_success():
     assert total_items >= 1
     assert page == 1
     assert isinstance(rows, list)
+
+
+def test_get_paginated_files_accepts_request_scoped_media_db_session():
+
+    db = _make_memory_db(client_id="unit-db-manager-session")
+    DB_Manager.add_media_with_keywords(
+        db_instance=db,
+        title="Doc Session",
+        media_type="text",
+        content="session content",
+        keywords=["tag-session"],
+    )
+    session = MediaDbSession(
+        db_path=":memory:",
+        client_id="unit-db-manager-session",
+        database=db,
+    )
+
+    rows, total_pages, page, total_items = DB_Manager.get_paginated_files(
+        db_instance=session,
+        page=1,
+        results_per_page=10,
+    )
+
+    assert total_items >= 1
+    assert total_pages >= 1
+    assert page == 1
+    assert isinstance(rows, list)
+
+
+def test_add_media_with_keywords_uses_media_repository_for_media_db_sessions(monkeypatch):
+
+    class _MediaDb:
+        backend = object()
+
+    class _FakeRepo:
+        def __init__(self):
+            self.calls = []
+
+        def add_media_with_keywords(self, **kwargs):
+            self.calls.append(kwargs)
+            return 33, "repo-uuid", "stored"
+
+    fake_repo = _FakeRepo()
+    media_db = _MediaDb()
+
+    monkeypatch.setattr(DB_Manager, "get_media_repository", lambda db: fake_repo, raising=False)
+    def _fake_require_db_instance(args, kwargs, func_name):
+        kwargs.pop("db_instance", None)
+        return media_db
+
+    monkeypatch.setattr(DB_Manager, "_require_db_instance", _fake_require_db_instance, raising=False)
+
+    result = DB_Manager.add_media_with_keywords(
+        db_instance=media_db,
+        title="Repo Routed",
+        media_type="text",
+        content="body",
+        keywords=["k1"],
+    )
+
+    assert result == (33, "repo-uuid", "stored")
+    assert fake_repo.calls == [
+        {
+            "title": "Repo Routed",
+            "media_type": "text",
+            "content": "body",
+            "keywords": ["k1"],
+        }
+    ]
+
+
+def test_add_media_with_keywords_routes_wrapper_objects_through_repository_factory(monkeypatch):
+
+    class _WrapperDb:
+        pass
+
+    class _FakeRepo:
+        def __init__(self):
+            self.calls = []
+
+        def add_media_with_keywords(self, **kwargs):
+            self.calls.append(kwargs)
+            return 34, "repo-uuid", "stored"
+
+    fake_repo = _FakeRepo()
+    wrapper_db = _WrapperDb()
+
+    monkeypatch.setattr(DB_Manager, "get_media_repository", lambda db: fake_repo, raising=False)
+
+    def _fake_require_db_instance(args, kwargs, func_name):
+        kwargs.pop("db_instance", None)
+        return wrapper_db
+
+    monkeypatch.setattr(DB_Manager, "_require_db_instance", _fake_require_db_instance, raising=False)
+
+    result = DB_Manager.add_media_with_keywords(
+        db_instance=wrapper_db,
+        title="Wrapper Routed",
+        media_type="text",
+        content="body",
+        keywords=["k2"],
+    )
+
+    assert result == (34, "repo-uuid", "stored")
+    assert fake_repo.calls == [
+        {
+            "title": "Wrapper Routed",
+            "media_type": "text",
+            "content": "body",
+            "keywords": ["k2"],
+        }
+    ]
+
+
+def test_create_media_database_delegates_to_runtime_factory(monkeypatch, tmp_path):
+    captured = {}
+    default_db_path = str(tmp_path / "default-media.db")
+
+    def _fake_runtime_create_media_database(client_id, **kwargs):
+        captured["client_id"] = client_id
+        captured.update(kwargs)
+        return "db-instance"
+
+    monkeypatch.setattr(
+        DB_Manager,
+        "runtime_create_media_database",
+        _fake_runtime_create_media_database,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "_POSTGRES_CONTENT_MODE",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "_ensure_content_backend_loaded",
+        lambda: "backend-sentinel",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "single_user_db_path",
+        default_db_path,
+        raising=False,
+    )
+
+    result = DB_Manager.create_media_database(
+        "client-9",
+        config=DB_Manager.single_user_config,
+    )
+
+    assert result == "db-instance"
+    assert captured["client_id"] == "client-9"
+    assert captured["runtime"].default_db_path == default_db_path
+    assert captured["runtime"].postgres_content_mode is True
+    assert captured["config"] is DB_Manager.single_user_config
 
 
 def test_update_keywords_for_media_success():
@@ -180,54 +338,73 @@ def test_document_version_wrappers_postgres_mode(force_postgres):
     assert latest.get("content") == "v2 content"
 
 
-def test_validate_postgres_content_backend_uses_queryresult_first(monkeypatch):
+def test_full_media_detail_wrappers_return_expected_shapes():
 
-    expected_version = MediaDatabase._CURRENT_SCHEMA_VERSION
+    db = _make_memory_db()
+    mid, _, _ = DB_Manager.add_media_with_keywords(
+        db_instance=db,
+        title="Doc Detail",
+        media_type="text",
+        content="detail content",
+        keywords=["alpha", "beta"],
+        prompt="detail-prompt",
+        analysis_content="detail-analysis",
+    )
+
+    details = DB_Manager.get_full_media_details(
+        db_instance=db,
+        media_id=mid,
+        include_content=True,
+    )
+    assert details is not None
+    assert details["media"]["id"] == mid
+    assert details["latest_version"]["content"] == "detail content"
+    assert set(details["keywords"]) == {"alpha", "beta"}
+
+    rich = DB_Manager.get_full_media_details_rich(
+        db_instance=db,
+        media_id=mid,
+        include_content=True,
+        include_versions=True,
+    )
+    assert rich is not None
+    assert rich["media_id"] == mid
+    assert rich["content"]["text"] == "detail content"
+    assert set(rich["keywords"]) == {"alpha", "beta"}
+    assert rich["processing"]["prompt"] == "detail-prompt"
+    assert rich["processing"]["analysis"] == "detail-analysis"
+    assert "chunking_status" in rich["processing"]
+    assert "vector_processing_status" in rich["processing"]
+    assert rich["versions"]
+
+
+def test_validate_postgres_content_backend_delegates_to_runtime_factory(monkeypatch):
+    captured = {}
 
     class StubBackend:
         backend_type = BackendType.POSTGRESQL
 
-        def __init__(self):
-
-            self.queries = []
-
-        @contextmanager
-        def transaction(self):
-            yield object()
-
-        def execute(self, query, params=None, connection=None):
-
-            self.queries.append(query)
-            if "schema_version" in query:
-                return QueryResult(rows=[{"version": expected_version}], rowcount=1)
-            return QueryResult(rows=[{"ok": 1}], rowcount=1)
-
-    class StubMediaDatabase:
-        _CURRENT_SCHEMA_VERSION = expected_version
-        instances = []
-
-        def __init__(self, *args, **kwargs):
-
-            self.backend = kwargs.get("backend")
-            self.checked_policies = []
-            self.__class__.instances.append(self)
-
-        def _postgres_policy_exists(self, conn, table, policy):
-
-            self.checked_policies.append((table, policy))
-            return True
-
-        def close_connection(self):
-
-            pass
+    def _fake_runtime_validate_postgres_content_backend(
+        *,
+        get_content_backend_instance,
+        runtime,
+    ):
+        captured["backend"] = get_content_backend_instance()
+        captured["runtime"] = runtime
 
     stub_backend = StubBackend()
     monkeypatch.setattr(DB_Manager, "_CONTENT_DB_BACKEND", stub_backend, raising=False)
     monkeypatch.setattr(DB_Manager, "_POSTGRES_CONTENT_MODE", True, raising=False)
-    monkeypatch.setattr(DB_Manager, "MediaDatabase", StubMediaDatabase, raising=False)
+    monkeypatch.setattr(
+        DB_Manager,
+        "runtime_validate_postgres_content_backend",
+        _fake_runtime_validate_postgres_content_backend,
+        raising=False,
+    )
 
     DB_Manager.validate_postgres_content_backend()
 
-    assert any("schema_version" in q for q in stub_backend.queries)
-    assert StubMediaDatabase.instances
-    assert StubMediaDatabase.instances[-1].checked_policies
+    assert captured["backend"] is stub_backend
+    assert captured["runtime"].default_db_path == str(DB_Manager.single_user_db_path)
+    assert captured["runtime"].default_config is DB_Manager.single_user_config
+    assert captured["runtime"].postgres_content_mode is True

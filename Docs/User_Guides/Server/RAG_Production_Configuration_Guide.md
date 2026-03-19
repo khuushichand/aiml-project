@@ -66,7 +66,7 @@ The RAG module uses SQLite by default with optimized settings:
 # config.txt
 [Database]
 database_path = /path/to/secure/location/Databases/
-media_db_name = user_databases/<user_id>/Media_DB_v2.db
+media_db_name = user_databases/<user_id>/<content-db>.db
 rag_audit_db = rag_audit.db
 
 # Connection pool settings
@@ -75,6 +75,8 @@ connection_pool_min = 2
 connection_pool_max = 10
 connection_timeout = 5.0
 ```
+
+Replace `<content-db>.db` with your configured per-user content DB filename.
 
 ### 2. PostgreSQL Configuration (Optional)
 
@@ -365,7 +367,7 @@ BACKUP_DIR="/backup/tldw"
 DATE=$(date +%Y%m%d_%H%M%S)
 
 # Backup SQLite databases
-sqlite3 /var/lib/tldw/user_databases/<user_id>/Media_DB_v2.db ".backup $BACKUP_DIR/media_$DATE.db"
+sqlite3 /var/lib/tldw/user_databases/<user_id>/<content-db>.db ".backup $BACKUP_DIR/media_$DATE.db"
 sqlite3 /var/lib/tldw/databases/rag_audit.db ".backup $BACKUP_DIR/audit_$DATE.db"
 
 # Compress and encrypt
@@ -374,6 +376,8 @@ tar -czf - $BACKUP_DIR/*_$DATE.db | openssl enc -aes-256-cbc -salt -out $BACKUP_
 # Clean up old backups (keep 30 days)
 find $BACKUP_DIR -name "*.enc" -mtime +30 -delete
 ```
+
+Replace `<content-db>.db` with your configured per-user content DB filename.
 
 ### 2. Configuration Backup
 

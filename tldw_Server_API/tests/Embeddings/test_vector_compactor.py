@@ -2,6 +2,7 @@ import os
 import sys
 import types
 import asyncio
+from contextlib import contextmanager
 import pytest
 from pathlib import Path
 
@@ -82,3 +83,58 @@ def test_compact_once_deletes_vectors(monkeypatch):
         if {"media_id": "7"} in getattr(c2, "deleted", []):
             seen.append(7)
     assert 5 in seen and 7 in seen
+
+
+@pytest.mark.unit
+def test_get_media_ids_marked_deleted_uses_managed_media_database(monkeypatch):
+    class _Cursor:
+        def fetchall(self):
+            return [(5,), (7,)]
+
+    class _Db:
+        def __init__(self) -> None:
+            self.closed = False
+            self.queries: list[str] = []
+
+        def execute_query(self, sql):
+            self.queries.append(sql)
+            return _Cursor()
+
+        def close_connection(self) -> None:
+            self.closed = True
+
+    db = _Db()
+    managed_calls: list[dict[str, object]] = []
+
+    @contextmanager
+    def _fake_managed_media_database(client_id, *, initialize=True, **kwargs):
+        managed_calls.append(
+            {
+                "client_id": client_id,
+                "initialize": initialize,
+                "kwargs": kwargs,
+            }
+        )
+        try:
+            yield db
+        finally:
+            db.close_connection()
+
+    monkeypatch.setattr(vc, "managed_media_database", _fake_managed_media_database, raising=False)
+    monkeypatch.setattr(
+        vc,
+        "create_media_database",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
+    )
+
+    result = asyncio.run(vc._get_media_ids_marked_deleted("/tmp/vector-compactor.db"))
+
+    assert result == [5, 7]
+    assert db.closed is True
+    assert db.queries == ["SELECT id FROM Media WHERE deleted = 1"]
+    assert len(managed_calls) == 1
+    assert managed_calls[0]["client_id"] == "embeddings_vector_compactor"
+    assert managed_calls[0]["initialize"] is False
+    assert managed_calls[0]["kwargs"]["db_path"] == "/tmp/vector-compactor.db"
+    assert "suppress_close_exceptions" in managed_calls[0]["kwargs"]

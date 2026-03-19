@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
+from tldw_Server_API.app.core.Chunking import template_initialization as template_init
 from tldw_Server_API.app.core.Chunking.template_initialization import (
     load_builtin_templates,
     initialize_chunking_templates,
@@ -303,6 +304,150 @@ class TestTemplateInitialization:
         assert academic is not None
         assert academic["is_builtin"] is True
         assert "research" in academic["tags"]
+
+    def test_initialize_chunking_templates_uses_managed_media_database_for_owned_db(self, monkeypatch, tmp_path):
+        events = []
+        db_path = str(tmp_path / "chunking-templates.db")
+
+        class FakeDb:
+            def seed_builtin_templates(self, templates):
+                events.append(("seed", templates))
+                return len(templates)
+
+        class FakeManagedDbContext:
+            def __init__(self, **kwargs):
+                events.append(("managed", kwargs))
+
+            def __enter__(self):
+                events.append("enter")
+                return FakeDb()
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+                return False
+
+        monkeypatch.setattr(
+            template_init,
+            "load_builtin_templates",
+            lambda: [{"name": "built-in", "template": {"name": "built-in"}}],
+        )
+        monkeypatch.setattr(
+            template_init,
+            "managed_media_database",
+            lambda client_id, **kwargs: FakeManagedDbContext(client_id=client_id, **kwargs),
+        )
+
+        count = template_init.initialize_chunking_templates(
+            db_path=db_path,
+            client_id="template-test",
+        )
+
+        assert count == 1
+        assert events == [
+            ("managed", {"client_id": "template-test", "db_path": db_path, "initialize": False}),
+            "enter",
+            ("seed", [{"name": "built-in", "template": {"name": "built-in"}}]),
+            "exit",
+        ]
+
+    def test_update_builtin_templates_uses_managed_media_database_for_owned_db(self, monkeypatch, tmp_path):
+        events = []
+        db_path = str(tmp_path / "chunking-templates.db")
+
+        class FakeDb:
+            def get_chunking_template(self, name):
+                events.append(("get", name))
+                return {
+                    "name": name,
+                    "is_builtin": True,
+                    "template_json": json.dumps({"name": name, "version": 1}),
+                }
+
+            def update_chunking_template(self, **kwargs):
+                events.append(("update", kwargs["name"]))
+                return True
+
+        class FakeManagedDbContext:
+            def __init__(self, **kwargs):
+                events.append(("managed", kwargs))
+
+            def __enter__(self):
+                events.append("enter")
+                return FakeDb()
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+                return False
+
+        monkeypatch.setattr(
+            template_init,
+            "load_builtin_templates",
+            lambda: [
+                {
+                    "name": "built-in",
+                    "description": "desc",
+                    "tags": ["x"],
+                    "template": {"name": "built-in", "version": 2},
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            template_init,
+            "managed_media_database",
+            lambda client_id, **kwargs: FakeManagedDbContext(client_id=client_id, **kwargs),
+        )
+
+        count = template_init.update_builtin_templates(
+            db_path=db_path,
+            client_id="template-test",
+        )
+
+        assert count == 1
+        assert events == [
+            ("managed", {"client_id": "template-test", "db_path": db_path, "initialize": False}),
+            "enter",
+            ("get", "built-in"),
+            ("update", "built-in"),
+            "exit",
+        ]
+
+    def test_ensure_templates_initialized_uses_managed_media_database_for_existing_check(self, monkeypatch, tmp_path):
+        events = []
+        db_path = str(tmp_path / "chunking-templates.db")
+
+        class FakeDb:
+            def list_chunking_templates(self, **kwargs):
+                events.append(("list", kwargs))
+                return [{"name": "built-in"}]
+
+        class FakeManagedDbContext:
+            def __init__(self, **kwargs):
+                events.append(("managed", kwargs))
+
+            def __enter__(self):
+                events.append("enter")
+                return FakeDb()
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+                return False
+
+        monkeypatch.setattr(template_init, "initialize_chunking_templates", lambda **_kwargs: 0)
+        monkeypatch.setattr(
+            template_init,
+            "managed_media_database",
+            lambda client_id, **kwargs: FakeManagedDbContext(client_id=client_id, **kwargs),
+        )
+
+        result = template_init.ensure_templates_initialized(db_path=db_path)
+
+        assert result is True
+        assert events == [
+            ("managed", {"client_id": "system", "db_path": db_path, "initialize": False}),
+            "enter",
+            ("list", {"include_builtin": True, "include_custom": False}),
+            "exit",
+        ]
 
 
 # API Endpoint Tests

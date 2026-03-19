@@ -36,12 +36,15 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_full_media_details_rich2,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
-    MediaDatabase,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
     check_media_exists,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version,
 )
 from tldw_Server_API.app.core.Utils.metadata_utils import (
@@ -106,7 +109,7 @@ async def list_versions(
         ge=1,
         description="Page number",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[VersionDetailResponse]:
     """
     List active versions for an active media item.
@@ -230,7 +233,7 @@ async def get_version(
         True,
         description="Include full content in response",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> VersionDetailResponse:
     """
     Get details of a specific active version for an active media item.
@@ -332,7 +335,7 @@ async def create_version(
     media_id: int,
     request_body: VersionCreateRequest,
     request: Request,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> MediaDetailResponse:
     """
@@ -452,7 +455,7 @@ async def create_version(
 async def delete_version(
     media_id: int = Path(..., description="The ID of the media item"),
     version_number: int = Path(..., description="The version number"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> Response:
     """
     Soft delete a specific active version for an active media item.
@@ -572,7 +575,7 @@ async def delete_version(
 async def rollback_version(
     media_id: int,
     request_body: VersionRollbackRequest,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> MediaDetailResponse:
     """
     Roll back an active media item to a specified previous version.
@@ -692,7 +695,7 @@ async def rollback_version(
 async def patch_metadata(
     media_id: int = Path(..., description="The ID of the media item"),
     body: MetadataPatchRequest = Body(...),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> MediaDetailResponse:
     """
     Update safe_metadata on the latest active version or create a new version.
@@ -805,7 +808,7 @@ async def put_version_metadata(
     media_id: int = Path(..., description="The ID of the media item"),
     version_number: int = Path(..., description="The version number"),
     body: MetadataPatchRequest = Body(...),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> MediaDetailResponse:
     """
     Set or merge safe_metadata JSON on a specific active version.
@@ -908,7 +911,7 @@ async def put_version_metadata(
 async def create_or_update_version_advanced(
     media_id: int,
     body: AdvancedVersionUpsertRequest,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> MediaDetailResponse:
     """
     Convenience endpoint to create a new version or update latest metadata.

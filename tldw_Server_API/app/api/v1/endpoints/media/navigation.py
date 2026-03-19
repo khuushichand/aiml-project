@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 from collections import defaultdict
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from loguru import logger
@@ -33,11 +33,12 @@ from tldw_Server_API.app.api.v1.schemas.media_navigation_schemas import (
 )
 from tldw_Server_API.app.api.v1.utils.cache import cache_response, get_cached_response
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
-    get_document_version,
-    get_media_transcripts,
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
+    get_media_transcripts,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    get_document_version,
 )
 from tldw_Server_API.app.core.Storage import get_storage_backend
 from tldw_Server_API.app.core.Storage.storage_interface import StorageError
@@ -108,6 +109,26 @@ _ITALIC_STOPWORDS = {
 }
 
 
+class MediaNavigationDb(Protocol):
+    """Structural contract for DB sessions used by navigation helpers."""
+
+    backend_type: Any
+
+    def execute_query(self, query: str, params: Any = None) -> Any:
+        """Execute a SQL query against the backing content store."""
+
+    def get_media_by_id(
+        self,
+        media_id: int,
+        include_deleted: bool = False,
+        include_trash: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a media record by id."""
+
+    def get_media_file(self, media_id: int, file_type: str) -> dict[str, Any] | None:
+        """Fetch a stored media file record."""
+
+
 def _to_int(value: Any) -> int | None:
     try:
         if value is None:
@@ -126,7 +147,7 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def _is_postgres_backend(db: MediaDatabase) -> bool:
+def _is_postgres_backend(db: MediaNavigationDb) -> bool:
     backend_type = str(getattr(db, "backend_type", "")).lower()
     return "postgres" in backend_type
 
@@ -467,7 +488,7 @@ def _filter_navigation_nodes(
 
 async def _extract_pdf_outline_nodes(
     media_id: int,
-    db: MediaDatabase,
+    db: MediaNavigationDb,
     media: dict[str, Any],
 ) -> list[dict[str, Any]]:
     media_type = str(media.get("type") or "").strip().lower()
@@ -564,7 +585,7 @@ async def _extract_pdf_outline_nodes(
 
 def _extract_document_structure_nodes(
     media_id: int,
-    db: MediaDatabase,
+    db: MediaNavigationDb,
 ) -> list[dict[str, Any]]:
     bool_false = False if _is_postgres_backend(db) else 0
     query = """
@@ -816,7 +837,7 @@ def _build_transcript_node_title(segment: dict[str, Any], ordinal: int) -> str:
 
 def _extract_transcript_segment_nodes(
     media_id: int,
-    db: MediaDatabase,
+    db: MediaNavigationDb,
     media: dict[str, Any],
 ) -> list[dict[str, Any]]:
     media_type = str(media.get("type") or "").strip().lower()
@@ -877,7 +898,7 @@ def _chunk_path_to_node_id(path_parts: tuple[str, ...]) -> str:
 
 def _extract_chunk_metadata_nodes(
     media_id: int,
-    db: MediaDatabase,
+    db: MediaNavigationDb,
 ) -> list[dict[str, Any]]:
     bool_false = False if _is_postgres_backend(db) else 0
     query = """
@@ -1013,7 +1034,7 @@ def _extract_generated_heading_nodes(content: str) -> list[dict[str, Any]]:
 
 def _extract_generated_toc_nodes(
     media_id: int,
-    db: MediaDatabase,
+    db: MediaNavigationDb,
     media: dict[str, Any],
 ) -> list[dict[str, Any]]:
     media_type = str(media.get("type") or "").strip().lower()
@@ -1189,7 +1210,7 @@ def _extract_generated_chunk_nodes(content: str) -> list[dict[str, Any]]:
 
 def _extract_generated_fallback_nodes(
     media_id: int,
-    db: MediaDatabase,
+    db: MediaNavigationDb,
     media: dict[str, Any],
 ) -> list[dict[str, Any]]:
     content = _get_media_text(media_id=media_id, media=media, db=db)
@@ -1204,7 +1225,7 @@ def _extract_generated_fallback_nodes(
 
 async def _select_source_nodes(
     media_id: int,
-    db: MediaDatabase,
+    db: MediaNavigationDb,
     media: dict[str, Any],
     include_generated_fallback: bool,
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -1250,7 +1271,7 @@ def _find_navigation_node(nodes: list[MediaNavigationNode], node_id: str) -> Med
     return None
 
 
-def _get_media_text(media_id: int, media: dict[str, Any], db: MediaDatabase) -> str:
+def _get_media_text(media_id: int, media: dict[str, Any], db: MediaNavigationDb) -> str:
     try:
         latest_doc = get_document_version(
             db_instance=db,
@@ -1296,7 +1317,7 @@ def _derive_content_span(
     node: MediaNavigationNode,
     all_nodes: list[MediaNavigationNode],
     media: dict[str, Any],
-    db: MediaDatabase,
+    db: MediaNavigationDb,
     media_id: int,
     content_length: int,
 ) -> tuple[int, int] | None:
@@ -1492,7 +1513,7 @@ def _build_navigation_content_cache_key(
 async def get_media_navigation(
     media_id: int = Path(..., description="The ID of the media item"),
     params: MediaNavigationQueryParams = Depends(),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaNavigationDb = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> MediaNavigationResponse:
     """Return normalized chapter/section navigation for a media item."""
@@ -1578,7 +1599,7 @@ async def get_media_navigation_content(
     media_id: int = Path(..., description="The ID of the media item"),
     node_id: str = Path(..., min_length=1, description="Navigation node ID"),
     params: MediaNavigationContentQueryParams = Depends(),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: MediaNavigationDb = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> MediaNavigationContentResponse:
     """Return content payload for a selected navigation node."""

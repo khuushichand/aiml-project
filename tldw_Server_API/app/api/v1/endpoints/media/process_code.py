@@ -14,7 +14,6 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_code_deps import get_process_code_form
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessCodeForm
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.code_utils import (
     chunk_code_lines,
     detect_code_language,
@@ -46,7 +45,7 @@ router = APIRouter()
     dependencies=[Depends(guard_storage_quota)],
 )
 async def process_code_endpoint(
-    db: MediaDatabase = Depends(get_media_db_for_user),  # Parity with legacy signature
+    db: Any = Depends(get_media_db_for_user),  # Parity with legacy signature; unused
     form_data: ProcessCodeForm = Depends(get_process_code_form),
     files: list[UploadFile] | None = File(
         None,

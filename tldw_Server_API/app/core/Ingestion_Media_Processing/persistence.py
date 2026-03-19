@@ -24,13 +24,21 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     persist_claims_if_applicable,
 )
 from tldw_Server_API.app.core.config import loaded_config_data, settings
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
+    media_dedupe_url_candidates,
+    normalize_media_dedupe_url,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    create_media_database,
+    get_media_repository,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
-    MediaDatabase,
-    media_dedupe_url_candidates,
-    normalize_media_dedupe_url,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
+    upsert_transcript,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
@@ -97,6 +105,26 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
         return int(default)
+
+
+def _resolve_media_writer(db_instance: Any) -> Any:
+    return get_media_repository(db_instance)
+
+
+def _with_media_db_session(
+    *,
+    db_path: str,
+    client_id: str,
+    operation: Callable[[MediaDatabase], Any],
+) -> Any:
+    worker_db = create_media_database(
+        client_id,
+        db_path=db_path,
+    )
+    try:
+        return operation(worker_db)
+    finally:
+        worker_db.close_connection()
 
 
 def _build_ingestion_budget_headers(
@@ -1005,15 +1033,16 @@ async def _fetch_unvectorized_chunk_count(
         return None
 
     def _count_worker() -> int | None:
-        worker_db: MediaDatabase | None = None
         try:
-            worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-            return worker_db.get_unvectorized_chunk_count(media_id_int)
+            return _with_media_db_session(
+                db_path=db_path,
+                client_id=client_id,
+                operation=lambda worker_db: worker_db.get_unvectorized_chunk_count(
+                    media_id_int
+                ),
+            )
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             return None
-        finally:
-            if worker_db is not None:
-                worker_db.close_connection()
 
     try:
         return await loop.run_in_executor(None, _count_worker)
@@ -3087,13 +3116,13 @@ async def persist_primary_av_item(
         }
 
         def _db_worker() -> Any:
-            worker_db: MediaDatabase | None = None
-            try:
-                worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                return worker_db.add_media_with_keywords(**db_add_kwargs)
-            finally:
-                if worker_db is not None:
-                    worker_db.close_connection()
+            return _with_media_db_session(
+                db_path=db_path,
+                client_id=client_id,
+                operation=lambda worker_db: _resolve_media_writer(
+                    worker_db
+                ).add_media_with_keywords(**db_add_kwargs),
+            )
 
         media_id_result, media_uuid_result, db_message_result = await loop.run_in_executor(
             None,
@@ -3133,12 +3162,6 @@ async def persist_primary_av_item(
                 and transcription_model_used
                 and content_for_db
             ):
-                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # type: ignore
-                    MediaDatabase as _MediaDBForStt,
-                )
-                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-                    upsert_transcript,
-                )
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
                     to_normalized_stt_artifact,
                 )
@@ -3163,16 +3186,16 @@ async def persist_primary_av_item(
                 serialized_artifact = json.dumps(artifact, default=str)
 
                 def _upsert_worker() -> None:
-                    db = _MediaDBForStt(db_path=db_path, client_id=client_id)
-                    try:
-                        upsert_transcript(
+                    _with_media_db_session(
+                        db_path=db_path,
+                        client_id=client_id,
+                        operation=lambda db: upsert_transcript(
                             db_instance=db,
                             media_id=int(media_id_result),
                             transcription=serialized_artifact,
                             whisper_model=artifact["metadata"]["model"],
-                        )
-                    finally:
-                        db.close_connection()
+                        ),
+                    )
 
                 await loop.run_in_executor(None, _upsert_worker)
                 # Attach normalized artifact to the process_result for callers
@@ -3442,11 +3465,11 @@ async def process_batch_media(
                     column="m.url",
                 )
                 if source_hash and not is_url:
-                    temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
-                    try:
+                    def _source_hash_precheck(db: MediaDatabase) -> Any:
+                        nonlocal source_hash_column_available
                         if source_hash_column_available is None:
                             source_hash_column_available = _media_has_source_hash_column(
-                                temp_db_for_check
+                                db
                             )
                         if source_hash_column_available:
                             pre_check_query_template = """
@@ -3459,8 +3482,10 @@ async def process_batch_media(
                                   AND deleted = 0
                                 LIMIT 1
                             """
-                            pre_check_query = pre_check_query_template.format_map(locals())  # nosec B608
-                            cursor = temp_db_for_check.execute_query(
+                            pre_check_query = pre_check_query_template.format(
+                                url_clause=url_clause
+                            )  # nosec B608
+                            cursor = db.execute_query(
                                 pre_check_query,
                                 (*url_params, model_for_check, source_hash),
                             )
@@ -3478,9 +3503,11 @@ async def process_batch_media(
                                       AND dv.safe_metadata LIKE ?
                                     LIMIT 1
                                 """
-                                pre_check_query = pre_check_query_template.format_map(locals())  # nosec B608
+                                pre_check_query = pre_check_query_template.format(
+                                    url_clause_alias=url_clause_alias
+                                )  # nosec B608
                                 hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
-                                cursor = temp_db_for_check.execute_query(
+                                cursor = db.execute_query(
                                     pre_check_query,
                                     (*url_params_alias, model_for_check, hash_fragment),
                                 )
@@ -3498,15 +3525,22 @@ async def process_batch_media(
                                   AND dv.safe_metadata LIKE ?
                                 LIMIT 1
                             """
-                            pre_check_query = pre_check_query_template.format_map(locals())  # nosec B608
+                            pre_check_query = pre_check_query_template.format(
+                                url_clause_alias=url_clause_alias
+                            )  # nosec B608
                             hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
-                            cursor = temp_db_for_check.execute_query(
+                            cursor = db.execute_query(
                                 pre_check_query,
                                 (*url_params_alias, model_for_check, hash_fragment),
                             )
                             existing_record = cursor.fetchone()
-                    finally:
-                        temp_db_for_check.close_connection()
+                        return existing_record
+
+                    existing_record = _with_media_db_session(
+                        db_path=db_path,
+                        client_id=client_id,
+                        operation=_source_hash_precheck,
+                    )
 
                     if existing_record:
                         existing_id = existing_record["id"]
@@ -3528,8 +3562,7 @@ async def process_batch_media(
                         "Local file pre-check skipped (no source hash available)."
                     )
                 else:
-                    temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
-                    try:
+                    def _url_precheck(db: MediaDatabase) -> Any:
                         pre_check_query_template = """
                                           SELECT id
                                           FROM Media
@@ -3538,14 +3571,20 @@ async def process_batch_media(
                                             AND is_trash = 0
                                             AND deleted = 0
                                           """
-                        pre_check_query = pre_check_query_template.format_map(locals())  # nosec B608
-                        cursor = temp_db_for_check.execute_query(
+                        pre_check_query = pre_check_query_template.format(
+                            url_clause=url_clause
+                        )  # nosec B608
+                        cursor = db.execute_query(
                             pre_check_query,
                             (*url_params, model_for_check),
                         )
-                        existing_record = cursor.fetchone()
-                    finally:
-                        temp_db_for_check.close_connection()
+                        return cursor.fetchone()
+
+                    existing_record = _with_media_db_session(
+                        db_path=db_path,
+                        client_id=client_id,
+                        operation=_url_precheck,
+                    )
 
                     if existing_record:
                         existing_id = existing_record["id"]
@@ -5040,10 +5079,9 @@ async def persist_doc_item_and_children(
             }
 
             def _db_worker() -> Any:
-                worker_db: MediaDatabase | None = None
-                try:
-                    worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                    media_id_local, media_uuid_local, db_message_local = worker_db.add_media_with_keywords(
+                def _persist_document(worker_db: MediaDatabase) -> Any:
+                    media_writer = _resolve_media_writer(worker_db)
+                    media_id_local, media_uuid_local, db_message_local = media_writer.add_media_with_keywords(
                         **db_add_kwargs
                     )
                     email_graph_local: dict[str, Any] | None = None
@@ -5090,9 +5128,12 @@ async def persist_doc_item_and_children(
                         db_message_local,
                         email_graph_local,
                     )
-                finally:
-                    if worker_db is not None:
-                        worker_db.close_connection()
+
+                return _with_media_db_session(
+                    db_path=db_path,
+                    client_id=client_id,
+                    operation=_persist_document,
+                )
 
             db_worker_result = await loop.run_in_executor(  # type: ignore[arg-type]
                 None,
@@ -5289,13 +5330,9 @@ async def persist_doc_item_and_children(
                                         client_id_local: str = client_id,
                                         db_path_local: str = db_path,
                                     ) -> Any:
-                                        worker_db: MediaDatabase | None = None
-                                        try:
-                                            worker_db = MediaDatabase(
-                                                db_path=db_path_local,
-                                                client_id=client_id_local,
-                                            )
-                                            child_id_local, child_uuid_local, child_msg_local = worker_db.add_media_with_keywords(
+                                        def _persist_child(worker_db: MediaDatabase) -> Any:
+                                            media_writer = _resolve_media_writer(worker_db)
+                                            child_id_local, child_uuid_local, child_msg_local = media_writer.add_media_with_keywords(
                                                 url=_normalize_dedupe_url_for_db(child_url),
                                                 title=child_title,
                                                 media_type=media_type_local,
@@ -5349,9 +5386,12 @@ async def persist_doc_item_and_children(
                                                         outcome="skipped_flag",
                                                     )
                                             return child_id_local, child_uuid_local, child_msg_local
-                                        finally:
-                                            if worker_db is not None:
-                                                worker_db.close_connection()
+
+                                        return _with_media_db_session(
+                                            db_path=db_path_local,
+                                            client_id=client_id_local,
+                                            operation=_persist_child,
+                                        )
 
                                     (
                                         child_id,
@@ -5582,13 +5622,9 @@ async def persist_doc_item_and_children(
                                     db_path_local: str = db_path,
                                     client_id_local: str = client_id,
                                 ) -> Any:
-                                    worker_db: MediaDatabase | None = None
-                                    try:
-                                        worker_db = MediaDatabase(
-                                            db_path=db_path_local,
-                                            client_id=client_id_local,
-                                        )
-                                        child_id_local, child_uuid_local, child_msg_local = worker_db.add_media_with_keywords(
+                                    def _persist_archive_child(worker_db: MediaDatabase) -> Any:
+                                        media_writer = _resolve_media_writer(worker_db)
+                                        child_id_local, child_uuid_local, child_msg_local = media_writer.add_media_with_keywords(
                                             url=_normalize_dedupe_url_for_db(child_url_local),
                                             title=child_title_local,
                                             media_type=media_type_local,
@@ -5642,9 +5678,12 @@ async def persist_doc_item_and_children(
                                                     outcome="skipped_flag",
                                                 )
                                         return child_id_local, child_uuid_local, child_msg_local
-                                    finally:
-                                        if worker_db is not None:
-                                            worker_db.close_connection()
+
+                                    return _with_media_db_session(
+                                        db_path=db_path_local,
+                                        client_id=client_id_local,
+                                        operation=_persist_archive_child,
+                                    )
 
                                 (
                                     child_id,

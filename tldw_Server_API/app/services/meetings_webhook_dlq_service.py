@@ -52,7 +52,7 @@ def _next_attempt_iso(delay_seconds: int) -> str:
 
 
 def discover_meetings_db_targets() -> list[tuple[Path, str]]:
-    """Discover candidate per-user Media_DB_v2 paths for meeting dispatch processing."""
+    """Discover candidate per-user media DB paths for meeting dispatch processing."""
     targets: list[tuple[Path, str]] = []
     try:
         single_user_id = str(DatabasePaths.get_single_user_id())

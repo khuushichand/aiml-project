@@ -5,7 +5,7 @@
 ## What this guide covers
 This guide configures the AuthNZ user database on PostgreSQL for multi-user mode.
 For robust multi-user setups, PostgreSQL is the default and recommended backend.
-It does not move content databases (Media_DB_v2, ChaChaNotes, Workflows) to Postgres.
+It does not move per-user content, notes, or workflow databases to Postgres automatically.
 Those remain per-user SQLite under `Databases/user_databases/<user_id>` unless you enable Postgres Content Mode.
 
 See `Docs/Deployment/Postgres_Migration_Guide.md` if you want to migrate content databases to Postgres.

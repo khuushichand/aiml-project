@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -14,7 +15,6 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import WebScrapingRequest
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.web_scraping_service import (
     process_web_scraping_task,
 )
@@ -31,7 +31,7 @@ router = APIRouter()
 )
 async def process_web_scraping_endpoint(
     payload: WebScrapingRequest,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """

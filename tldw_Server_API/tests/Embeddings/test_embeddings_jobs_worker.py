@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import contextmanager
 
 import pytest
 
@@ -36,6 +37,60 @@ async def test_embeddings_worker_retryable_backoff_from_result(monkeypatch):
 
     assert excinfo.value.retryable is True
     assert getattr(excinfo.value, "backoff_seconds", None) == 12
+
+
+def test_load_media_content_uses_managed_media_database(monkeypatch):
+    class _Db:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def get_media_by_id(self, media_id):
+            assert media_id == 42
+            return {"id": media_id, "content": "hello embeddings", "title": "Doc"}
+
+        def close_connection(self) -> None:
+            self.closed = True
+
+    db = _Db()
+    managed_calls: list[dict[str, object]] = []
+
+    @contextmanager
+    def _fake_managed_media_database(client_id, *, initialize=True, **kwargs):
+        managed_calls.append(
+            {
+                "client_id": client_id,
+                "initialize": initialize,
+                "kwargs": kwargs,
+            }
+        )
+        try:
+            yield db
+        finally:
+            db.close_connection()
+
+    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda user_id: f"/tmp/{user_id}.db")
+    monkeypatch.setattr(jobs_worker, "managed_media_database", _fake_managed_media_database, raising=False)
+    monkeypatch.setattr(
+        jobs_worker,
+        "create_media_database",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
+    )
+
+    result = jobs_worker._load_media_content(42, "user-42")
+
+    assert result == {
+        "media_item": {"id": 42, "content": "hello embeddings", "title": "Doc"},
+        "content": {"id": 42, "content": "hello embeddings", "title": "Doc"},
+    }
+    assert db.closed is True
+    assert managed_calls == [
+        {
+            "client_id": "embeddings_jobs_worker",
+            "initialize": False,
+            "kwargs": {"db_path": "/tmp/user-42.db"},
+        }
+    ]
 
 
 @pytest.mark.asyncio

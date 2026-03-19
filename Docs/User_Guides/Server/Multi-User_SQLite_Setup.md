@@ -31,7 +31,7 @@ Databases/
   users.db
   user_databases/
     <user_id>/
-      Media_DB_v2.db
+      <content-db>.db
       ChaChaNotes.db
       Personalization.db
       prompts_user_dbs/
@@ -52,6 +52,7 @@ Databases/
 Notes:
 - `USER_DB_BASE_DIR` defaults to `Databases/user_databases`.
 - The directory and DB files are created lazily on first access.
+- Replace `<content-db>.db` with your configured per-user content DB filename.
 
 ## Configuration (Recommended for Dev)
 

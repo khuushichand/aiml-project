@@ -36,6 +36,7 @@ import {
   Zap,
   Sparkles,
   ListTodo,
+  Users,
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
@@ -224,6 +225,8 @@ const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 const OptionSetup = lazy(() => import("./option-setup"))
 const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
 const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
+const OptionSharedWithMe = lazy(() => import("./option-shared-with-me"))
+const OptionPublicShare = lazy(() => import("./option-public-share"))
 // OptionChat is eagerly imported above
 
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
@@ -429,6 +432,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "settings:chatbooksNav",
       icon: BookText,
       order: 4
+    }
+  },
+  {
+    kind: "options",
+    path: "/shared",
+    element: <OptionSharedWithMe />,
+    nav: {
+      group: "knowledge",
+      labelToken: "settings:sharedWithMe",
+      icon: Users,
+      order: 4.5
     }
   },
   {
@@ -667,6 +681,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 3
     }
   },
+  { kind: "options", path: "/share/:token", element: <OptionPublicShare /> },
   { kind: "options", path: "/knowledge", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/knowledge/thread/:threadId", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/knowledge/shared/:shareToken", element: <OptionKnowledgeWorkspace /> },

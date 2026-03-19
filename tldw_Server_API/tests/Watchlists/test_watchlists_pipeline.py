@@ -1,9 +1,11 @@
 import json
 import time
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tldw_Server_API.app.core.Watchlists import pipeline
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.Personalization_DB import PersonalizationDB
@@ -88,6 +90,90 @@ async def test_pipeline_happy_path_test_mode():
     assert run.status == "succeeded"
     stats = json.loads(run.stats_json or "{}") if run.stats_json else {}
     assert stats.get("items_found", 0) >= 3
+
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_managed_media_database_when_persisting(monkeypatch):
+    user_id = 782
+    db = WatchlistsDatabase.for_user(user_id)
+
+    rss = db.create_source(
+        name="Feed",
+        url="https://example.com/feed.xml",
+        source_type="rss",
+        active=True,
+        settings_json=json.dumps({"limit": 1}),
+        tags=["news"],
+        group_ids=[],
+    )
+
+    job = db.create_job(
+        name="Persisted Feed Job",
+        description=None,
+        scope_json=json.dumps({"sources": [rss.id]}),
+        schedule_expr=None,
+        schedule_timezone="UTC",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=json.dumps({"persist_to_media_db": True}),
+    )
+
+    class _MediaDb:
+        backend = object()
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close_connection(self) -> None:
+            self.closed = True
+
+    class _FakeRepo:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def add_media_with_keywords(self, **kwargs):
+            self.calls.append(kwargs)
+            return 82, "watchlist-media-uuid", "stored"
+
+    media_db = _MediaDb()
+    fake_repo = _FakeRepo()
+    managed_calls: list[dict[str, object]] = []
+
+    @contextmanager
+    def _fake_managed_media_database(client_id, *, initialize=True, **kwargs):
+        managed_calls.append(
+            {
+                "client_id": client_id,
+                "initialize": initialize,
+                "kwargs": kwargs,
+            }
+        )
+        try:
+            yield media_db
+        finally:
+            media_db.close_connection()
+
+    monkeypatch.setattr(pipeline, "managed_media_database", _fake_managed_media_database, raising=False)
+    monkeypatch.setattr(
+        pipeline,
+        "create_media_database",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
+    )
+    monkeypatch.setattr(pipeline, "get_media_repository", lambda db: fake_repo, raising=False)
+
+    result = await run_watchlist_job(user_id, job.id)
+
+    assert result["items_ingested"] >= 1
+    assert media_db.closed is True
+    assert len(fake_repo.calls) >= 1
+    assert len(managed_calls) == 1
+    assert managed_calls[0]["client_id"] == str(user_id)
+    assert managed_calls[0]["initialize"] is True
+    assert managed_calls[0]["kwargs"]["db_path"] == str(DatabasePaths.get_media_db_path(user_id))
+    assert "suppress_close_exceptions" in managed_calls[0]["kwargs"]
 
 
 @pytest.mark.asyncio

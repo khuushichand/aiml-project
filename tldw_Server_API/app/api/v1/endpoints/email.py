@@ -12,10 +12,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError,
     InputError,
-    MediaDatabase,
 )
 from tldw_Server_API.app.core.External_Sources.connectors_service import (
     create_import_job,
@@ -88,7 +87,7 @@ def _derive_sync_state(sync_state: dict[str, Any] | None) -> str:
 async def list_email_sources(
     db=Depends(get_db_transaction),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     _ensure_email_source_sync_enabled()
     user_id = _get_user_id(principal)
@@ -218,7 +217,7 @@ async def search_email_messages(
     ),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Run Stage-1 email operator search."""
 
@@ -261,7 +260,7 @@ async def search_email_messages(
 )
 async def get_email_message_detail(
     email_message_id: int = Path(..., ge=1, description="Normalized email message id"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Fetch participants, labels, attachments, and source/media links for one message."""
 

@@ -463,8 +463,12 @@ async def test_worker_drive_recursive_traversal(monkeypatch):
         def add_media_with_keywords(self, *, url, title, media_type, content, keywords, overwrite=False):
             self.records.append((url, title, content))
             return 1, "uuid", "ok"
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     # Policy defaults in env (allow txt)
     os.environ.setdefault("ORG_CONNECTORS_ALLOWED_EXPORT_FORMATS", "md,txt,pdf")
@@ -555,8 +559,12 @@ async def test_worker_drive_non_recursive_paginates(monkeypatch):
         def add_media_with_keywords(self, *, url, title, media_type, content, keywords, overwrite=False):
             self.records.append((url, title, content))
             return 1, "uuid", "ok"
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(jm, jid=1, lease_id="L", worker_id="W", source_id=99, user_id=42)
@@ -638,8 +646,12 @@ async def test_worker_skips_record_on_ingest_failure(monkeypatch):
             pass
         def add_media_with_keywords(self, *, url, title, media_type, content, keywords, overwrite=False):
             raise RuntimeError("ingest failed")
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FailMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FailMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(jm, jid=1, lease_id="L", worker_id="W", source_id=99, user_id=42)
@@ -777,9 +789,12 @@ async def test_worker_gmail_initial_backfill_upserts_email_graph(monkeypatch):
             self.upsert_calls.append(kwargs)
             return {"email_message_id": 1}
 
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(jm, jid=1, lease_id="L", worker_id="W", source_id=99, user_id=42)
@@ -989,9 +1004,12 @@ async def test_worker_gmail_incremental_sync_advances_cursor_and_processes_only_
         def upsert_email_message_graph(self, **kwargs):
             return {"email_message_id": 1}
 
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm_first = FakeJM()
     FakeGmailConn.run_number = 0
@@ -1250,9 +1268,12 @@ async def test_worker_gmail_invalid_cursor_uses_bounded_replay_and_recovers(monk
         def upsert_email_message_graph(self, **kwargs):
             return {"email_message_id": 1}
 
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(
@@ -1484,9 +1505,12 @@ async def test_worker_gmail_invalid_cursor_escalates_full_backfill_required(monk
         def upsert_email_message_graph(self, **kwargs):
             raise AssertionError("No replay items means no upsert writes")
 
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(
@@ -1737,9 +1761,12 @@ async def test_worker_gmail_incremental_applies_label_and_state_deltas_without_f
         def upsert_email_message_graph(self, **kwargs):
             raise AssertionError("delta-only updates should not upsert full message graph")
 
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(
@@ -1915,9 +1942,12 @@ async def test_worker_gmail_backoff_skips_run_when_retry_window_active(monkeypat
         def mark_email_sync_run_failed(self, *, provider, source_key, tenant_id=None, error_state=None):
             return {}
 
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(
@@ -2070,9 +2100,12 @@ async def test_worker_gmail_retry_budget_exhausted_skips_run(monkeypatch):
         def mark_email_sync_run_failed(self, *, provider, source_key, tenant_id=None, error_state=None):
             return {}
 
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(
@@ -2320,9 +2353,12 @@ async def test_worker_gmail_large_fixture_backfill_handles_edge_cases(monkeypatc
             self.upsert_calls.append(kwargs)
             return {"email_message_id": len(self.upsert_calls)}
 
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
-
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+    monkeypatch.setattr(
+        worker,
+        "create_media_database",
+        lambda client_id, db_path=None: _FakeMDB(client_id, db_path=db_path),
+        raising=False,
+    )
 
     jm = FakeJM()
     await worker._process_import_job(

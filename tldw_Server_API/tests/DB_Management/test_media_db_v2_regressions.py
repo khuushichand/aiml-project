@@ -8,11 +8,13 @@ import pytest
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
-    fetch_keywords_for_media,
     get_document_version,
     create_automated_backup,
     create_incremental_backup,
     rotate_backups,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+    fetch_keywords_for_media,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Media_Update_lib import (
     process_media_update,

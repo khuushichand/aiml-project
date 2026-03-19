@@ -12,6 +12,9 @@ Tests cover:
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_files_repository import (
+    MediaFilesRepository,
+)
 
 
 @pytest.fixture
@@ -257,6 +260,81 @@ class TestSoftDeleteMediaFile:
         record = db.get_media_file(media_id, "original", include_deleted=True)
         assert record is not None
         assert record["deleted"] == 1
+
+
+class TestMediaFilesRepository:
+    @pytest.mark.unit
+    def test_repository_lists_active_files(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        repo.insert(media_id=media_id, file_type="original", storage_path="repo/original.pdf")
+        repo.insert(media_id=media_id, file_type="thumbnail", storage_path="repo/thumb.png")
+
+        assert repo.has_original_file(media_id) is True
+        assert len(repo.list_for_media(media_id)) == 2
+
+    @pytest.mark.unit
+    def test_repository_soft_delete_hides_file(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        repo.insert(media_id=media_id, file_type="original", storage_path="repo/original.pdf")
+        record = repo.get_for_media(media_id, "original")
+
+        repo.soft_delete(record["id"])
+
+        assert repo.get_for_media(media_id, "original") is None
+        assert repo.get_for_media(media_id, "original", include_deleted=True)["deleted"] == 1
+
+    @pytest.mark.unit
+    def test_repository_insert_logs_dict_payloads(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        file_uuid = repo.insert(
+            media_id=media_id,
+            file_type="original",
+            storage_path="repo/original.pdf",
+        )
+
+        log_entry = next(
+            entry
+            for entry in db.get_sync_log_entries()
+            if entry["entity"] == "MediaFiles" and entry["entity_uuid"] == file_uuid
+        )
+
+        assert log_entry["operation"] == "create"
+        assert log_entry["payload"]["media_id"] == media_id
+        assert log_entry["payload"]["storage_path"] == "repo/original.pdf"
+
+    @pytest.mark.unit
+    def test_repository_hard_delete_logs_non_empty_entity_uuid(self, db_with_media):
+        db, media_id = db_with_media
+        repo = MediaFilesRepository.from_legacy_db(db)
+
+        first_uuid = repo.insert(
+            media_id=media_id,
+            file_type="original",
+            storage_path="repo/original.pdf",
+        )
+        second_uuid = repo.insert(
+            media_id=media_id,
+            file_type="thumbnail",
+            storage_path="repo/thumb.png",
+        )
+
+        initial_change_count = len(db.get_sync_log_entries())
+        repo.soft_delete_for_media(media_id, hard_delete=True)
+        delete_entries = db.get_sync_log_entries(since_change_id=initial_change_count)
+
+        delete_file_uuids = {
+            entry["entity_uuid"]
+            for entry in delete_entries
+            if entry["entity"] == "MediaFiles" and entry["operation"] == "delete"
+        }
+
+        assert delete_file_uuids == {first_uuid, second_uuid}
 
     @pytest.mark.unit
     def test_soft_delete_increments_version(self, db_with_media):

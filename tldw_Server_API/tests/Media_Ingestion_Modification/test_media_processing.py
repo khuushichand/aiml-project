@@ -33,7 +33,8 @@ try:
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User, _single_user_instance
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.core.config import settings
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_document_version
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+    from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import get_document_version
 except ImportError as e:
     raise ImportError(f"Could not locate the FastAPI app instance or dependencies: {e}")
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ChunkMethod, MediaType, PdfEngine

@@ -51,7 +51,8 @@ from playwright.sync_api import sync_playwright
 from tqdm import tqdm
 
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database, ingest_article_to_db
+from tldw_Server_API.app.core.DB_Management.DB_Manager import ingest_article_to_db
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.http_client import afetch
 from tldw_Server_API.app.core.http_client import fetch as http_fetch
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -1645,7 +1646,7 @@ def _run_with_retries(
                 return None, exc, attempts
             delay_s = (base_delay_ms / 1000.0) * (2 ** attempts)
             if jitter_ms:
-                delay_s += random.uniform(0.0, jitter_ms / 1000.0)
+                delay_s += random.uniform(0.0, jitter_ms / 1000.0)  # nosec B311
             attempts += 1
             with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
                 increment_counter(
@@ -1676,7 +1677,7 @@ def _apply_llm_delay(provider: str, delay_ms: float, jitter_ms: float) -> None:
     if last_call is not None:
         remaining = (delay_ms / 1000.0) - (now - last_call)
         if remaining > 0.0:
-            jitter = random.uniform(0.0, jitter_ms / 1000.0) if jitter_ms > 0.0 else 0.0
+            jitter = random.uniform(0.0, jitter_ms / 1000.0) if jitter_ms > 0.0 else 0.0  # nosec B311
             time.sleep(remaining + jitter)
     with _LLM_PROVIDER_LAST_CALL_LOCK:
         _LLM_PROVIDER_LAST_CALL[provider] = time.time()
@@ -3257,20 +3258,23 @@ async def async_scrape_and_no_summarize_then_ingest(url, keywords, custom_articl
         ingestion_date = datetime.now().strftime('%Y-%m-%d')
 
         # Step 2: Ingest the article into the database
-        db_instance = create_media_database(client_id="article_extractor")
-        # Ensure keywords list
-        kw_list = [kw.strip() for kw in str(keywords).split(',')] if isinstance(keywords, str) else (keywords or [])
-        ingestion_result = ingest_article_to_db(
-            db_instance=db_instance,
-            url=url,
-            title=title,
-            author=author,
-            content=content,
-            keywords=kw_list,
-            ingestion_date=ingestion_date,
-            custom_prompt=None,
-            summary=None,
-        )
+        with managed_media_database(
+            client_id="article_extractor",
+            initialize=False,
+        ) as db_instance:
+            # Ensure keywords list
+            kw_list = [kw.strip() for kw in str(keywords).split(',')] if isinstance(keywords, str) else (keywords or [])
+            ingestion_result = ingest_article_to_db(
+                db_instance=db_instance,
+                url=url,
+                title=title,
+                author=author,
+                content=content,
+                keywords=kw_list,
+                ingestion_date=ingestion_date,
+                custom_prompt=None,
+                summary=None,
+            )
         log_counter("article_ingested", labels={"success": str(ingestion_result).lower(), "url": url})
 
         # When displaying content, we might want to strip metadata
@@ -4149,7 +4153,7 @@ async def recursive_scrape(
                         progress_callback(f"Scraping page {pages_scraped + 1}/{max_pages}: {current_url}")
 
                     try:
-                        await asyncio.sleep(random.uniform(delay * 0.8, delay * 1.2))
+                        await asyncio.sleep(random.uniform(delay * 0.8, delay * 1.2))  # nosec B311
 
                         article_data = await scrape_article_async(context, current_url)
 

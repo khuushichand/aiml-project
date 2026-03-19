@@ -140,7 +140,7 @@ Troubleshooting:
   `dest` matches the ingested Media title. The default title is the file stem
   from the corpus folder. For URL ingestion, use stable titles or adjust the
   manifest to match what the Media DB stores.
-- Multi-user mode: pass `--media-db /path/to/Media_DB_v2.db` instead of `--user-id`.
+- Multi-user mode: pass `--media-db /path/to/<content-db>.db` instead of `--user-id`. Replace `<content-db>.db` with your configured per-user content DB filename.
 
 ## 7) Evaluation Hooks (Optional)
 

@@ -22,7 +22,6 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessDocumentsForm
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -70,7 +69,7 @@ ALLOWED_DOC_EXTENSIONS = [
     dependencies=[Depends(guard_storage_quota)],
 )
 async def process_documents_endpoint(
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     form_data: ProcessDocumentsForm = Depends(get_process_documents_form),
     files: list[UploadFile] | None = File(
         None,
