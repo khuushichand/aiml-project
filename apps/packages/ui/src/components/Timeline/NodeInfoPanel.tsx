@@ -6,6 +6,7 @@
  */
 
 import React, { useMemo } from 'react'
+import DOMPurify from 'dompurify'
 import { Button, Typography, Tag, Tooltip, Space, Divider } from 'antd'
 import {
   CloseOutlined,
@@ -226,7 +227,7 @@ export const NodeInfoPanel: React.FC = () => {
         {highlightedContent ? (
           <div
             className="text-sm leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: highlightedContent }}
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightedContent) }}
           />
         ) : (
           <Paragraph

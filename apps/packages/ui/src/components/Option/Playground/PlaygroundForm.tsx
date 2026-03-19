@@ -2840,12 +2840,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }, [droppedFiles, onInputChange])
 
-  const handleDisconnectedFocus = () => {
+  const handleDisconnectedFocus = React.useCallback(() => {
     if (!isConnectionReady && !hasShownConnectBanner) {
       setShowConnectBanner(true)
       setHasShownConnectBanner(true)
     }
-  }
+  }, [hasShownConnectBanner, isConnectionReady])
 
   // --- ComposerTextarea callback handlers (extracted from inline JSX) ---
   const handleCompositionStart = React.useCallback(() => {
@@ -5150,6 +5150,16 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       })
       setImageGenerateModalOpen(false)
       textAreaFocus()
+    } catch (error: any) {
+      notificationApi.error({
+        message: t("error", { defaultValue: "Error" }),
+        description:
+          error?.message ||
+          t(
+            "playground:imageGeneration.generateFailed",
+            "Image generation request failed."
+          )
+      })
     } finally {
       setImageGenerateSubmitting(false)
     }

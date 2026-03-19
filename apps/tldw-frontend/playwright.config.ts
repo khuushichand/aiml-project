@@ -4,6 +4,11 @@ const rawBaseUrl = process.env.TLDW_WEB_URL || 'http://localhost:8080';
 const baseURL = rawBaseUrl.replace('127.0.0.1', 'localhost');
 const webCommand = process.env.TLDW_WEB_CMD || 'bun run dev -- -p 8080';
 const shouldAutoStart = process.env.TLDW_WEB_AUTOSTART !== 'false';
+const webServerEnv = Object.fromEntries(
+  Object.entries(process.env).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string'
+  )
+);
 
 export default defineConfig({
   timeout: 60_000,
@@ -20,6 +25,7 @@ export default defineConfig({
   webServer: shouldAutoStart
     ? {
         command: webCommand,
+        env: webServerEnv,
         url: baseURL,
         reuseExistingServer: true,
         timeout: 120_000,

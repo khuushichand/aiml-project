@@ -194,6 +194,8 @@ const NotesManagerPage: React.FC = () => {
   const [isDirty, setIsDirty] = React.useState(false)
   const [backlinkConversationId, setBacklinkConversationId] = React.useState<string | null>(null)
   const [conversationLabelById, setConversationLabelById] = React.useState<Record<string, string>>({})
+  const conversationLabelByIdRef = React.useRef<Record<string, string>>({})
+  conversationLabelByIdRef.current = conversationLabelById
   const [backlinkMessageId, setBacklinkMessageId] = React.useState<string | null>(null)
   const [openingLinkedChat, setOpeningLinkedChat] = React.useState(false)
   const [graphModalOpen, setGraphModalOpen] = React.useState(false)
@@ -1386,7 +1388,7 @@ const NotesManagerPage: React.FC = () => {
     async (conversationIds: string[]) => {
       const pending = conversationIds.filter((conversationId) => {
         if (!conversationId) return false
-        if (conversationLabelById[conversationId]) return false
+        if (conversationLabelByIdRef.current[conversationId]) return false
         if (pendingConversationLabelRequestsRef.current.has(conversationId)) return false
         return true
       })
@@ -1422,7 +1424,7 @@ const NotesManagerPage: React.FC = () => {
         )
       }
     },
-    [conversationLabelById]
+    []
   )
 
   const { data: notesTitleSettings } = useQuery({
@@ -2458,7 +2460,7 @@ const NotesManagerPage: React.FC = () => {
     [confirmDanger, manualLinkDeletingEdgeId, message]
   )
 
-  const isVersionConflictError = (error: any) => {
+  const isVersionConflictError = React.useCallback((error: any) => {
     const msg = String(error?.message || '')
     const lower = msg.toLowerCase()
     const status = error?.status ?? error?.response?.status
@@ -2468,9 +2470,9 @@ const NotesManagerPage: React.FC = () => {
       lower.includes('expected_version') ||
       lower.includes('version mismatch')
     )
-  }
+  }, [])
 
-  const handleVersionConflict = (noteId?: string | number | null) => {
+  const handleVersionConflict = React.useCallback((noteId?: string | number | null) => {
     message.error({
       content: (
         <span
@@ -2499,7 +2501,7 @@ const NotesManagerPage: React.FC = () => {
       ),
       duration: 6
     })
-  }
+  }, [message])
 
   const loadMonitoringNoticeForSavedNote = React.useCallback(
     async (
@@ -3150,7 +3152,7 @@ const NotesManagerPage: React.FC = () => {
 
       message.success('Note deleted')
     },
-    [bgRequest, loadDetail, lookupDeletedNoteVersion, message, refetch]
+    [loadDetail, lookupDeletedNoteVersion, message, refetch]
   )
 
   const countInboundDeleteReferences = React.useCallback(async (noteId: string) => {
@@ -4232,17 +4234,6 @@ const NotesManagerPage: React.FC = () => {
   }, [])
 
   React.useEffect(() => {
-    if (
-      listMode === 'active' &&
-      (queryInput.trim().length > 0 ||
-        effectiveKeywordTokens.length > 0 ||
-        selectedNotebookId != null)
-    ) {
-      return
-    }
-  }, [effectiveKeywordTokens.length, listMode, queryInput, selectedNotebookId])
-
-  React.useEffect(() => {
     if (queryInput === query) return
     if (typeof window === 'undefined') {
       setQuery(queryInput)
@@ -4664,11 +4655,16 @@ const NotesManagerPage: React.FC = () => {
     if (!Array.isArray(data)) return
     if (selectedId != null) return
 
+    let cancelled = false
     ;(async () => {
       await handleSelectNote(pendingNoteId)
+      if (cancelled) return
       setPendingNoteId(null)
       void clearSetting(LAST_NOTE_ID_SETTING)
     })()
+    return () => {
+      cancelled = true
+    }
   }, [data, handleSelectNote, isOnline, listMode, pendingNoteId, selectedId])
 
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false)

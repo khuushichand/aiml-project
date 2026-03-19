@@ -359,6 +359,7 @@ The following env vars are retained as **deprecated compatibility knobs** during
 - `PUBLIC_PASSWORD_RESET_PATH`: Public hosted path for password reset completion (default `/auth/reset-password`).
 - `PUBLIC_EMAIL_VERIFICATION_PATH`: Public hosted path for email verification completion (default `/auth/verify-email`).
 - `PUBLIC_MAGIC_LINK_PATH`: Public hosted path for magic-link sign-in completion (default `/auth/magic-link`).
+- Hosted SaaS profile: expect `AUTH_MODE=multi_user`, PostgreSQL `DATABASE_URL`, `tldw_production=true`, and `PUBLIC_WEB_BASE_URL=https://<public-app-origin>`.
 - `REDIS_URL`: Optional Redis URL for sessions (`redis://` or `rediss://`).
 - `ENABLE_REGISTRATION`: Enable user registration (`true|false`).
 - `REQUIRE_REGISTRATION_CODE`: Require code to register (`true|false`).
@@ -382,6 +383,12 @@ The following env vars are retained as **deprecated compatibility knobs** during
 - `SECURITY_ALERT_BACKOFF_SECONDS`: Cooldown applied after a sink fails before retrying (default `30`).
 - `SHOW_API_KEY_ON_STARTUP`: In single-user mode, show API key once at startup (`true|false`). Avoid in production.
 - `REDIS_ENABLED`: Boolean hint used in logs/metrics reporting.
+
+## Billing
+- `BILLING_ALLOWED_REDIRECT_HOSTS`: Comma-separated exact or wildcard host allowlist for checkout success, cancel, and billing portal return URLs.
+- `BILLING_REDIRECT_ALLOWLIST_REQUIRED`: Require `BILLING_ALLOWED_REDIRECT_HOSTS` to be set before billing redirects are accepted (`true|false`).
+- `BILLING_REDIRECT_REQUIRE_HTTPS`: Reject non-HTTPS billing redirect URLs when enabled (`true|false`).
+- Hosted SaaS profile: set `BILLING_REDIRECT_ALLOWLIST_REQUIRED=true`, `BILLING_REDIRECT_REQUIRE_HTTPS=true`, and include the `PUBLIC_WEB_BASE_URL` host in `BILLING_ALLOWED_REDIRECT_HOSTS`.
 
 Config file support (optional):
 - Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `public_web_base_url`, `public_password_reset_path`, `public_email_verification_path`, `public_magic_link_path`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).

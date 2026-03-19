@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { bgRequest } from "@/services/background-proxy"
+import type { AllowedPath } from "@/services/tldw/openapi-guard"
 
 export type MediaNavigationFormat = "auto" | "plain" | "markdown" | "html"
 export type MediaNavigationTargetType =
@@ -73,8 +74,8 @@ export const useMediaNavigation = (
       const query = `include_generated_fallback=${includeGeneratedFallback ? "true" : "false"}`
       const path = `/api/v1/media/${encodeURIComponent(String(mediaId))}/navigation?${query}`
       return await bgRequest<MediaNavigationResponse>({
-        path: path as any,
-        method: "GET" as any
+        path: path as AllowedPath,
+        method: "GET"
       })
     }
   })
@@ -114,8 +115,8 @@ export const useMediaSectionContent = (
       const encodedNodeId = encodeURIComponent(String(nodeId || ""))
       const path = `/api/v1/media/${encodeURIComponent(String(mediaId))}/navigation/${encodedNodeId}/content?${query}`
       return await bgRequest<MediaNavigationContentResponse>({
-        path: path as any,
-        method: "GET" as any
+        path: path as AllowedPath,
+        method: "GET"
       })
     }
   })

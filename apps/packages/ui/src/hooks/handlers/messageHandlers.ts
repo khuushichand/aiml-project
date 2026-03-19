@@ -293,7 +293,6 @@ export const createBranchMessage = ({
       }
       return newBranch.history.id
     } catch (e) {
-      console.log("[branch] local branch failed", e)
       return null
     }
   }
@@ -357,7 +356,6 @@ export const createBranchMessage = ({
       }
       return newHistory.id
     } catch (e) {
-      console.log("[branch] local snapshot branch failed", e)
       return null
     }
   }
@@ -393,7 +391,7 @@ export const createBranchMessage = ({
               resolvedState
           )
         } catch (e) {
-          console.log("[branch] server metadata fetch failed", e)
+          // server metadata fetch failed; continue with resolved defaults
         }
 
         const originalTitle =
@@ -508,7 +506,7 @@ export const createBranchMessage = ({
 
         return newChatId
       } catch (e) {
-        console.log("[branch] server branch failed", e)
+        // server branch failed; attempt local fallback
         if (serverOnly) {
           notification.error({
             message: "Branch failed",

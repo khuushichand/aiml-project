@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import DOMPurify from "dompurify"
 import {
   Button,
   Drawer,
@@ -731,7 +732,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
             className="prose prose-sm dark:prose-invert max-w-none"
           >
             {currentItem?.clean_html ? (
-              <div dangerouslySetInnerHTML={{ __html: currentItem.clean_html }} />
+              <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(currentItem.clean_html, { USE_PROFILES: { html: true } }) }} />
             ) : currentItem?.text ? (
               <pre className="whitespace-pre-wrap text-sm text-text">
                 {currentItem.text}

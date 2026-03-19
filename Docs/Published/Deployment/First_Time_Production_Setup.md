@@ -10,9 +10,10 @@ Related documents
 - Postgres migration: `Docs/Deployment/Postgres_Migration_Guide.md`
 - Sidecar workers (systemd/launchd): `Docs/Deployment/Sidecar_Workers.md`
 - Metrics and Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
+- Hosted SaaS launch profile: `Docs/Published/Deployment/Hosted_SaaS_Profile.md`
 - Environment variables reference: `Env_Vars.md`
 - General installation (local/dev): `Docs/Getting_Started/README.md`
-- Production hardening checklist: `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`
+- Production hardening checklist: `Docs/User_Guides/Server/Production_Hardening_Checklist.md`
 
 ## 1) Prerequisites
 
@@ -37,6 +38,7 @@ Security preflight
 - Want the fastest secure start, one host? Choose Docker Compose (recommended).
 - Need package-managed services and systemd? Use bare-metal + Nginx.
 - Expect multiple users/teams? Prefer Postgres and reverse proxy TLS from day one.
+- Need the hosted self-serve SaaS launch surface? Treat `Docs/Published/Deployment/Hosted_SaaS_Profile.md` as the canonical profile instead of assembling settings ad hoc from the self-host guides.
 
 ## 3) Option A - Docker Compose (recommended)
 
@@ -51,6 +53,7 @@ Production guidance for Compose deployments:
 - Terminate TLS at your reverse proxy and forward to `app:8000`.
 - Ensure WebSocket upgrade support for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
 - Configure `ALLOWED_ORIGINS` explicitly for your public domain(s).
+- For the hosted SaaS launch profile, lock `PUBLIC_WEB_BASE_URL` and billing redirect allowlists to the public app origin.
 
 ## 4) Option B - Bare-Metal (systemd + Nginx)
 
@@ -79,6 +82,13 @@ Reference implementations:
 - `ALLOWED_ORIGINS`: Comma-separated or JSON array of trusted origins.
 - `tldw_production`: `true` in production to mask secrets and enable production guards.
 - Provider keys: e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.
+
+Hosted SaaS additions:
+
+- Set `PUBLIC_WEB_BASE_URL` to the public web origin used in auth emails.
+- Require billing redirect hardening with `BILLING_REDIRECT_ALLOWLIST_REQUIRED=true`, `BILLING_REDIRECT_REQUIRE_HTTPS=true`, and `BILLING_ALLOWED_REDIRECT_HOSTS=<public-host>`.
+- Use `AUTH_MODE=multi_user` plus PostgreSQL. Hosted SaaS should not run on SQLite.
+- Prefer same-origin frontend and API deployment so hosted auth can stay on the server side.
 
 See `Env_Vars.md` for the complete list and `Docs/AuthNZ/AUTHNZ_DATABASE_CONFIG.md` for AuthNZ DB details.
 

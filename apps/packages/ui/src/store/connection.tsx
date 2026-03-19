@@ -453,12 +453,10 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
   state: initialState,
 
   async checkOnce() {
-    console.log('[CONN_DEBUG] checkOnce called')
     const prev = get().state
 
     // Avoid overlapping checks
     if (prev.isChecking) {
-      console.log('[CONN_DEBUG] checkOnce skipped - already checking')
       return
     }
 
@@ -467,7 +465,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     const persistedServerUrl = await getPersistedServerUrl()
     const forceUnconfigured = await getForceUnconfiguredFlag()
     const bypass = await getOfflineBypassFlag()
-    console.log('[CONN_DEBUG] flags loaded', { persistedFirstRun, persistedServerUrl, forceUnconfigured, bypass })
 
     const currentState =
       !prev.hasCompletedFirstRun && persistedFirstRun
@@ -571,12 +568,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     try {
       let cfg = await tldwClient.getConfig()
       let serverUrl = cfg?.serverUrl ?? null
-      console.log('[CONN_DEBUG] tldwClient.getConfig result', {
-        hasConfig: !!cfg,
-        serverUrl: cfg?.serverUrl,
-        authMode: cfg?.authMode,
-        hasApiKey: !!cfg?.apiKey
-      })
 
       if (!serverUrl) {
         try {
@@ -651,7 +642,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       }
 
       await tldwClient.initialize()
-      console.log('[CONN_DEBUG] tldwClient initialized, starting health check')
 
       // Request health via background for detailed status codes.
       // Health endpoints may require auth; apiSend injects headers based
@@ -660,11 +650,9 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         (!cfg.apiKey &&
           !cfg.accessToken &&
           cfg.authMode !== "multi-user")
-      console.log('[CONN_DEBUG] health check noAuth', { noAuthForHealth, hasApiKey: !!cfg?.apiKey, authMode: cfg?.authMode })
 
       const healthPromise = (async () => {
         try {
-          console.log('[CONN_DEBUG] calling apiSend for health')
           const resp = await apiSend({
             path: HEALTH_LIVENESS_PATH,
             method: 'GET',
@@ -675,10 +663,8 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             // health should run with auth.
             noAuth: noAuthForHealth
           })
-          console.log('[CONN_DEBUG] apiSend health response', { ok: resp?.ok, status: resp?.status, error: resp?.error })
           return { ok: Boolean(resp?.ok), status: Number(resp?.status) || 0, error: resp?.ok ? null : (resp?.error || null) }
         } catch (e) {
-          console.log('[CONN_DEBUG] apiSend health exception', { error: String(e) })
           return { ok: false, status: 0, error: (e as Error)?.message || 'Network error' }
         }
       })()
@@ -688,7 +674,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           setTimeout(() => resolve({ ok: false, status: 0, error: 'timeout' }), CONNECTION_TIMEOUT_MS)
         )
       ])
-      console.log('[CONN_DEBUG] health check result', { ok: healthResult.ok, status: healthResult.status, error: healthResult.error })
 
       const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(serverUrl)
       if (
@@ -697,18 +682,10 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         isNetworkTransportFailure(healthResult.error) &&
         fallbackServerUrl
       ) {
-        console.log("[CONN_DEBUG] attempting stale-host recovery probe", {
-          from: serverUrl,
-          to: fallbackServerUrl
-        })
         const probeOk = await probeServerLiveness(
           fallbackServerUrl,
           Math.min(5_000, CONNECTION_TIMEOUT_MS)
         )
-        console.log("[CONN_DEBUG] stale-host recovery probe result", {
-          serverUrl: fallbackServerUrl,
-          ok: probeOk
-        })
         if (probeOk) {
           await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
           serverUrl = fallbackServerUrl
@@ -731,11 +708,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             status: Number(fallbackResp?.status) || 0,
             error: fallbackResp?.ok ? null : (fallbackResp?.error || null)
           }
-          console.log("[CONN_DEBUG] stale-host recovery health result", {
-            ok: healthResult.ok,
-            status: healthResult.status,
-            error: healthResult.error
-          })
         }
       }
 
@@ -756,7 +728,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
       if (ok && shouldRefreshKnowledge) {
         try {
-          console.log('[CONN_DEBUG] starting RAG health check')
           // Add timeout to RAG health check to prevent hanging
           // Increased from 5s to 15s to avoid false "offline" status when RAG is slow but working
           const ragPromise = tldwClient.ragHealth()
@@ -764,7 +735,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             setTimeout(() => resolve(null), 15000)
           )
           const rag = await Promise.race([ragPromise, ragTimeout])
-          console.log('[CONN_DEBUG] RAG health result', { hasResult: !!rag, timedOut: rag === null })
           if (rag !== null) {
             knowledgeStatus = deriveKnowledgeStatusFromHealth(rag)
           } else {
@@ -776,7 +746,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             knowledgeError = "no-index"
           }
         } catch (e) {
-          console.log('[CONN_DEBUG] RAG health error', { error: String(e) })
           knowledgeStatus = "offline"
           knowledgeLastCheckedAt = Date.now()
           knowledgeError = (e as Error)?.message ?? "unknown-error"
@@ -830,13 +799,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         return
       }
 
-      console.log('[CONN_DEBUG] about to set final state', {
-        ok,
-        phase: ok ? 'CONNECTED' : 'ERROR',
-        serverUrl,
-        knowledgeStatus,
-        errorKind
-      })
       set({
         state: {
           ...currentState,
@@ -861,7 +823,6 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           checksSinceConfigChange: nextChecksSinceConfigChange
         }
       })
-      console.log('[CONN_DEBUG] state updated, new state:', get().state.phase, get().state.isConnected)
     } catch (error) {
       const fallbackError =
         maybeAnnotateCorsMismatchError({

@@ -3400,6 +3400,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     creatorFilter,
     debouncedSearchTerm,
     filterTags,
+    favoritesOnly,
     folderFilterId,
     hasConversationsOnly,
     matchAllTags
@@ -5438,24 +5439,26 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     const exportedCharacters: any[] = []
     let failCount = 0
 
-    for (const char of selectedChars) {
-      try {
-        const exported = await tldwClient.exportCharacter(
-          String(char.id || char.slug || char.name),
-          { format: 'v3' }
-        )
-        exportedCharacters.push(exported)
-      } catch {
-        failCount++
+    try {
+      for (const char of selectedChars) {
+        try {
+          const exported = await tldwClient.exportCharacter(
+            String(char.id || char.slug || char.name),
+            { format: 'v3' }
+          )
+          exportedCharacters.push(exported)
+        } catch {
+          failCount++
+        }
       }
-    }
 
-    if (exportedCharacters.length > 0) {
-      // Use the new export utility
-      exportCharactersToJSON(exportedCharacters)
+      if (exportedCharacters.length > 0) {
+        // Use the new export utility
+        exportCharactersToJSON(exportedCharacters)
+      }
+    } finally {
+      setBulkOperationLoading(false)
     }
-
-    setBulkOperationLoading(false)
 
     if (failCount === 0) {
       notification.success({

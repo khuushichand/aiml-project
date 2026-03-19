@@ -684,6 +684,8 @@ const SidepanelPersona = ({
   const activeTabRef = React.useRef<PersonaGardenTabKey>("live")
   const resolvedApprovalFadeTimerRef = React.useRef<number | null>(null)
   const approvalHighlightPhaseTimerRef = React.useRef<number | null>(null)
+  const handleIncomingPayloadRef = React.useRef<(payload: any) => void>(() => {})
+  const liveVoiceControllerRef = React.useRef<any>(null)
 
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
@@ -1392,6 +1394,7 @@ const SidepanelPersona = ({
     resolvedDefaults: resolvedLivePersonaVoiceDefaults,
     canUseServerStt: Boolean(capabilities?.hasAudio)
   })
+  liveVoiceControllerRef.current = liveVoiceController
 
   React.useEffect(() => {
     liveVoiceAnalyticsSnapshotRef.current = {
@@ -2136,13 +2139,17 @@ const SidepanelPersona = ({
     },
     [
       appendLog,
+      clearResolvedApprovalFadeTimer,
       consumeSetupHandoffAction,
+      emitSetupAnalyticsEvent,
       liveVoiceController,
       personaSetupWizard.currentStep,
       personaSetupWizard.isSetupRequired,
+      resolvedApprovalSnapshot,
       sessionId,
     ]
   )
+  handleIncomingPayloadRef.current = handleIncomingPayload
 
   const applyPersonaStatePayload = React.useCallback((payload: PersonaStateDocsResponse) => {
     const nextSoulMd = String(payload?.soul_md ?? "")
@@ -2488,7 +2495,7 @@ const SidepanelPersona = ({
       ws.onmessage = (event) => {
         if (typeof event.data !== "string") {
           if (event.data instanceof ArrayBuffer) {
-            liveVoiceController.handleBinaryPayload(event.data)
+            liveVoiceControllerRef.current?.handleBinaryPayload(event.data)
             return
           }
           appendLog("notice", "Received binary persona stream payload")
@@ -2496,7 +2503,7 @@ const SidepanelPersona = ({
         }
         try {
           const payload = JSON.parse(event.data)
-          handleIncomingPayload(payload)
+          handleIncomingPayloadRef.current(payload)
         } catch {
           appendLog("notice", event.data)
         }
@@ -2536,8 +2543,6 @@ const SidepanelPersona = ({
     connected,
     connecting,
     disconnect,
-    handleIncomingPayload,
-    liveVoiceController,
     isCompanionMode,
     loadPersonaStateDocs,
     applySessionPreferences,
