@@ -115,6 +115,20 @@ def test_boundary_checker_exists() -> None:
     )
 
 
+def test_public_curated_tree_does_not_ship_hosted_deployment_docs() -> None:
+    hosted_docs = [
+        Path("Docs/Published/Deployment/Hosted_SaaS_Profile.md"),
+        Path("Docs/Published/Deployment/Hosted_Staging_Runbook.md"),
+        Path("Docs/Published/Deployment/Hosted_Production_Runbook.md"),
+    ]
+
+    for path in hosted_docs:
+        _require(
+            not path.exists(),
+            f"expected hosted doc to be absent from public tree: {path}",
+        )
+
+
 def test_mkdocs_workflow_runs_boundary_checker() -> None:
     workflow = Path(".github/workflows/mkdocs.yml").read_text(encoding="utf-8")
 
