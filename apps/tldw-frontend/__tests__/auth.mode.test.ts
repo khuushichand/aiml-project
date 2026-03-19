@@ -4,10 +4,12 @@ import { clearRuntimeAuth, setRuntimeApiBearer, setRuntimeApiKey } from '@web/li
 
 const originalApiKey = process.env.NEXT_PUBLIC_X_API_KEY;
 const originalBearer = process.env.NEXT_PUBLIC_API_BEARER;
+const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE;
 
 const clearEnv = () => {
   delete process.env.NEXT_PUBLIC_X_API_KEY;
   delete process.env.NEXT_PUBLIC_API_BEARER;
+  delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE;
 };
 
 const restoreEnv = () => {
@@ -20,6 +22,11 @@ const restoreEnv = () => {
     delete process.env.NEXT_PUBLIC_API_BEARER;
   } else {
     process.env.NEXT_PUBLIC_API_BEARER = originalBearer;
+  }
+  if (originalDeploymentMode === undefined) {
+    delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE;
+  } else {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode;
   }
 };
 
@@ -49,6 +56,12 @@ describe('getAuthMode', () => {
   it('returns jwt when access_token is present', () => {
     localStorage.setItem('access_token', 'token');
     expect(getAuthMode()).toBe('jwt');
+  });
+
+  it('ignores localStorage JWT state in hosted mode', () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = 'hosted';
+    localStorage.setItem('access_token', 'token');
+    expect(getAuthMode()).toBe('none');
   });
 
   it('prefers jwt when access_token and stored x_api_key are both present', () => {

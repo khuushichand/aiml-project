@@ -10,6 +10,7 @@ import { tldwRequest } from "@/services/tldw/request-core"
 import { appendPathQuery } from "@/services/tldw/path-utils"
 import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
 import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 import {
   DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
   normalizeDefaultCharacterPreferenceId
@@ -1246,12 +1247,24 @@ export class TldwApiClient {
 
   private async ensureConfigForRequest(requireAuth: boolean): Promise<TldwConfig> {
     const cfg = (await this.getConfig()) || null
-    if (!cfg || !cfg.serverUrl) {
+    const hostedMode = isHostedTldwDeployment()
+    if ((!cfg || !cfg.serverUrl) && !hostedMode) {
       const msg =
         "tldw server is not configured. Open Settings → tldw server in the extension and set the server URL and API key."
       // eslint-disable-next-line no-console
       console.warn(msg)
       throw new Error(msg)
+    }
+
+    if (hostedMode) {
+      return {
+        serverUrl: String(cfg?.serverUrl || ""),
+        apiKey: cfg?.apiKey,
+        accessToken: cfg?.accessToken,
+        refreshToken: cfg?.refreshToken,
+        orgId: cfg?.orgId,
+        authMode: cfg?.authMode || "multi-user"
+      }
     }
 
     if (!requireAuth) {
@@ -1393,7 +1406,10 @@ export class TldwApiClient {
     }
 
     const config = this.config
-    const nextBaseUrl = (config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
+    const hostedMode = isHostedTldwDeployment()
+    const nextBaseUrl = hostedMode
+      ? String(config?.serverUrl || "").replace(/\/$/, "")
+      : (config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
     if (this.baseUrl && this.baseUrl !== nextBaseUrl) {
       this.openApiPathSet = null
       this.openApiPathSetPromise = null
@@ -1406,12 +1422,12 @@ export class TldwApiClient {
       "Content-Type": "application/json"
     }
 
-    if (config?.authMode === "single-user" && config.apiKey) {
+    if (!hostedMode && config?.authMode === "single-user" && config.apiKey) {
       const key = String(config.apiKey || "").trim()
       if (key) {
         this.headers["X-API-KEY"] = key
       }
-    } else if (config?.authMode === "multi-user" && config.accessToken) {
+    } else if (!hostedMode && config?.authMode === "multi-user" && config.accessToken) {
       this.headers["Authorization"] = `Bearer ${config.accessToken}`
     }
     if (config?.orgId) {

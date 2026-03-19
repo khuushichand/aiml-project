@@ -1,6 +1,7 @@
 import { tldwClient } from "./TldwApiClient"
 import { bgRequest } from "@/services/background-proxy"
 import { emitSplashAfterLoginSuccess } from "@/services/splash-events"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 export interface LoginCredentials {
   username: string
@@ -36,6 +37,10 @@ export class TldwAuthService {
   constructor() {
   }
 
+  private isHostedMode(): boolean {
+    return isHostedTldwDeployment()
+  }
+
   private async ensureOrgId(): Promise<void> {
     try {
       const orgs = await bgRequest<OrgListResponse>({
@@ -48,7 +53,27 @@ export class TldwAuthService {
         return
       }
     } catch {
-      // ignore and try create below
+      // ignore and continue to hosted fallback or self-host create below
+    }
+
+    if (this.isHostedMode()) {
+      try {
+        const profile = await tldwClient.getCurrentUserProfile({
+          includeRaw: true
+        })
+        const activeOrgId = Number(
+          profile?.active_org_id ??
+          profile?.org_id ??
+          profile?.raw?.active_org_id ??
+          0
+        )
+        if (Number.isFinite(activeOrgId) && activeOrgId > 0) {
+          await tldwClient.updateConfig({ orgId: activeOrgId })
+        }
+      } catch {
+        // best-effort only
+      }
+      return
     }
 
     try {
@@ -70,8 +95,9 @@ export class TldwAuthService {
    * Login for multi-user mode
    */
   async login(credentials: LoginCredentials): Promise<TokenResponse> {
+    const hostedMode = this.isHostedMode()
     const config = await tldwClient.getConfig()
-    if (!config) {
+    if (!config && !hostedMode) {
       throw new Error('tldw server not configured')
     }
 
@@ -80,7 +106,7 @@ export class TldwAuthService {
     formData.append('password', credentials.password)
 
     const response = await bgRequest<any>({
-      path: '/api/v1/auth/login',
+      path: hostedMode ? '/api/auth/login' : '/api/v1/auth/login',
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formData.toString(),
@@ -88,17 +114,15 @@ export class TldwAuthService {
     })
     const tokens = response as TokenResponse
     
-    // Update config with tokens
     await tldwClient.updateConfig({
       authMode: 'multi-user',
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token
+      accessToken: hostedMode ? undefined : tokens.access_token,
+      refreshToken: hostedMode ? undefined : tokens.refresh_token
     })
 
     await this.ensureOrgId()
 
-    // Set up auto-refresh if expires_in is provided
-    if (tokens.expires_in) {
+    if (!hostedMode && tokens.expires_in) {
       this.setupTokenRefresh(tokens.expires_in)
     }
 
@@ -110,12 +134,13 @@ export class TldwAuthService {
    * Request a magic link sign-in email
    */
   async requestMagicLink(email: string): Promise<void> {
+    const hostedMode = this.isHostedMode()
     const config = await tldwClient.getConfig()
-    if (!config) {
+    if (!config && !hostedMode) {
       throw new Error('tldw server not configured')
     }
     await bgRequest<any>({
-      path: '/api/v1/auth/magic-link/request',
+      path: hostedMode ? '/api/auth/magic-link/request' : '/api/v1/auth/magic-link/request',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: { email },
@@ -127,13 +152,14 @@ export class TldwAuthService {
    * Verify a magic link token and sign in
    */
   async verifyMagicLink(token: string): Promise<TokenResponse> {
+    const hostedMode = this.isHostedMode()
     const config = await tldwClient.getConfig()
-    if (!config) {
+    if (!config && !hostedMode) {
       throw new Error('tldw server not configured')
     }
 
     const tokens = await bgRequest<TokenResponse>({
-      path: '/api/v1/auth/magic-link/verify',
+      path: hostedMode ? '/api/auth/magic-link/verify' : '/api/v1/auth/magic-link/verify',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: { token },
@@ -142,13 +168,13 @@ export class TldwAuthService {
 
     await tldwClient.updateConfig({
       authMode: 'multi-user',
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token
+      accessToken: hostedMode ? undefined : tokens.access_token,
+      refreshToken: hostedMode ? undefined : tokens.refresh_token
     })
 
     await this.ensureOrgId()
 
-    if (tokens.expires_in) {
+    if (!hostedMode && tokens.expires_in) {
       this.setupTokenRefresh(tokens.expires_in)
     }
 
@@ -165,9 +191,11 @@ export class TldwAuthService {
       return
     }
 
-    // Try to logout on server
     try {
-      await bgRequest<any>({ path: '/api/v1/auth/logout', method: 'POST' })
+      await bgRequest<any>({
+        path: this.isHostedMode() ? '/api/auth/logout' : '/api/v1/auth/logout',
+        method: 'POST'
+      })
     } catch (error) {
       console.error('Server logout failed:', error)
     }
@@ -218,9 +246,25 @@ export class TldwAuthService {
    * Get current user information
    */
   async getCurrentUser(): Promise<UserInfo> {
+    const hostedMode = this.isHostedMode()
     const config = await tldwClient.getConfig()
-    if (!config) {
+    if (!config && !hostedMode) {
       throw new Error('tldw server not configured')
+    }
+
+    if (hostedMode) {
+      const session = await bgRequest<{
+        authenticated?: boolean
+        user?: UserInfo
+      }>({
+        path: '/api/auth/session',
+        method: 'GET',
+        noAuth: true
+      })
+      if (!session?.authenticated || !session.user) {
+        throw new Error('Not authenticated')
+      }
+      return session.user
     }
 
     const me = await bgRequest<UserInfo>({ path: '/api/v1/auth/me', method: 'GET' })
@@ -231,14 +275,15 @@ export class TldwAuthService {
    * Register a new user (if registration is enabled)
    */
   async register(username: string, password: string, email?: string, registrationCode?: string): Promise<any> {
+    const hostedMode = this.isHostedMode()
     const config = await tldwClient.getConfig()
-    if (!config) {
+    if (!config && !hostedMode) {
       throw new Error('tldw server not configured')
     }
 
     try {
       const data = await bgRequest<any>({
-        path: '/api/v1/auth/register',
+        path: hostedMode ? '/api/auth/register' : '/api/v1/auth/register',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: { username, password, email, registration_code: registrationCode },
@@ -327,6 +372,10 @@ export class TldwAuthService {
       return false
     }
 
+    if (this.isHostedMode()) {
+      return config.authMode === 'multi-user'
+    }
+
     if (config.authMode === 'single-user') {
       return !!config.apiKey
     } else if (config.authMode === 'multi-user') {
@@ -344,6 +393,13 @@ export class TldwAuthService {
     const headers: HeadersInit = {}
 
     if (!config) {
+      return headers
+    }
+
+    if (this.isHostedMode()) {
+      if (config.orgId) {
+        headers['X-TLDW-Org-Id'] = String(config.orgId)
+      }
       return headers
     }
 

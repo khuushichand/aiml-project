@@ -55,9 +55,12 @@ const getStoredApiBearer = (): string | null => {
 
 const hasStoredApiKey = (): boolean => !!getStoredApiKey();
 const hasStoredApiBearer = (): boolean => !!getStoredApiBearer();
+const isHostedMode = (): boolean =>
+  String(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE || "").trim().toLowerCase() === "hosted";
 
 const hasJwtToken = (): boolean => {
   if (typeof window === 'undefined') return false;
+  if (isHostedMode()) return false;
   return !!localStorage.getItem('access_token');
 };
 
