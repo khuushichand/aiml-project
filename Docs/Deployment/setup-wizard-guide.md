@@ -2,145 +2,183 @@
 
 ## Overview
 
-The tldw_server setup wizard runs automatically on first launch when no admin account exists. It walks you through creating the initial admin user and confirming essential settings.
+`/setup` is the operator-facing first-run workflow for `tldw_server`.
+It now covers both configuration review and curated audio provisioning, so the default path is:
 
-**URL:** `http://localhost:8000/setup`
+1. Start the server
+2. Open `http://127.0.0.1:8000/setup`
+3. Save any required config changes
+4. Accept or change the recommended audio bundle
+5. Provision, verify, and review the audio readiness report
+6. Mark setup complete
 
-The server redirects to this page if setup has not been completed. Once an admin account is created, the wizard is disabled and the endpoint returns 404.
+Use this guide when you want the shortest supported path to a working local or hybrid speech stack without hand-picking every STT/TTS provider.
 
-## Prerequisites
+## Before You Start
 
-Before starting the server for the first time, ensure:
+Make sure the machine can run the installer and any local speech backends you want:
 
-1. **Python environment** is set up: `pip install -e .`
-2. **FFmpeg** is installed (required for audio/video processing)
-3. **Environment file** exists: copy the example and edit it:
+1. Activate the project environment and install the project:
+   ```bash
+   source .venv/bin/activate
+   pip install -e .
+   ```
+2. Copy the environment template if you have not done it yet:
    ```bash
    cp tldw_Server_API/Config_Files/.env.example tldw_Server_API/Config_Files/.env
    ```
+3. Install FFmpeg:
+   - macOS: `brew install ffmpeg`
+   - Ubuntu/Debian: `sudo apt-get install -y ffmpeg`
+4. If you want local Kokoro TTS, install eSpeak NG as well:
+   - macOS: `brew install espeak-ng`
+   - Ubuntu/Debian: `sudo apt-get install -y espeak-ng`
 
-### Required Environment Variables
+## Recommended Flow
 
-Set these in `.env` before first run:
+1. Start the API server:
+   ```bash
+   source .venv/bin/activate
+   python -m uvicorn tldw_Server_API.app.main:app --reload
+   ```
+2. Open `http://127.0.0.1:8000/setup`.
+3. Work through the guided questions so the setup UI can highlight the sections that matter for your deployment.
+4. In the audio stage:
+   - review the detected machine profile
+   - accept the recommended bundle and profile, or choose a different curated bundle
+   - click `Provision recommended bundle` or `Provision selected bundle`
+   - complete any guided prerequisites the report calls out
+   - click `Run verification`
+   - inspect `View readiness report`
+5. Save config changes, then click `Mark Setup Complete`.
 
-| Variable | Purpose | Example |
-|----------|---------|---------|
-| `AUTH_MODE` | Authentication mode | `single_user` or `multi_user` |
-| `SINGLE_USER_API_KEY` | API key (single-user mode only) | Any strong random string |
-| `SECRET_KEY` | JWT signing key (multi-user mode) | `openssl rand -hex 32` |
-| `DATABASE_URL` | AuthNZ database location | `sqlite:///./Databases/users.db` |
+The setup UI tracks audio separately from global setup completion. You can safely rerun audio provisioning or verification without reopening the whole first-run flow.
 
-### Optional Variables
+## Curated Audio Bundles
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `CORS_ORIGINS` | Allowed CORS origins | `*` |
-| `LOG_LEVEL` | Logging verbosity | `INFO` |
+_Generated from `Helper_Scripts/generate_audio_bundle_docs.py` and the setup bundle catalog._
 
-## What the Wizard Does
+| Bundle ID | Label | Profiles | Offline runtime after provisioning | Offline pack compatibility | Default STT | Default TTS | Automatic steps | Guided prerequisites |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro | Install CPU-local Python dependencies, Download CPU-local speech model assets | Install FFmpeg, Install eSpeak NG |
+| `apple_silicon_local` | Apple Silicon Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro | Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets | Install FFmpeg, Install eSpeak NG |
+| `nvidia_local` | NVIDIA Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [medium] | kokoro | Install NVIDIA local Python dependencies, Download NVIDIA speech model assets | Install FFmpeg, Install eSpeak NG |
+| `hosted_plus_local_backup` | Hosted With Local Backup | Balanced | No | v1 manifest import only | faster_whisper [small] | kokoro | Install hybrid Python dependencies, Download local fallback speech model assets | Install FFmpeg, Install eSpeak NG |
 
-1. **Checks for existing admin** -- if one exists, the wizard is skipped
-2. **Presents a form** to create the first admin account (username, email, password)
-3. **Initializes the AuthNZ database** schema if not already present
-4. **Creates the admin user** with full privileges
-5. **Redirects to the API docs** (`/docs`) on success
+### `cpu_local`
 
-## Running the Wizard
+- Label: CPU Local
+- Resource profiles: Light, Balanced, Performance
+- Offline runtime after provisioning: Yes
+- Offline pack compatibility: v1 manifest import + model portability
+- Default STT: faster_whisper [small]
+- Default TTS: kokoro
+- Automatic steps: Install CPU-local Python dependencies, Download CPU-local speech model assets
+- Guided prerequisites: Install FFmpeg, Install eSpeak NG
+
+| Profile | Resource class | Estimated disk | STT plan | TTS plan |
+| --- | --- | --- | --- | --- |
+| Light | low | 1.0 GB | faster_whisper [tiny] | kokoro |
+| Balanced | medium | 2.0 GB | faster_whisper [small] | kokoro |
+| Performance | high | 4.5 GB | faster_whisper [medium] | kokoro |
+
+### `apple_silicon_local`
+
+- Label: Apple Silicon Local
+- Resource profiles: Light, Balanced, Performance
+- Offline runtime after provisioning: Yes
+- Offline pack compatibility: v1 manifest import + model portability
+- Default STT: faster_whisper [small]
+- Default TTS: kokoro
+- Automatic steps: Install Apple Silicon Python dependencies, Download Apple Silicon speech model assets
+- Guided prerequisites: Install FFmpeg, Install eSpeak NG
+
+| Profile | Resource class | Estimated disk | STT plan | TTS plan |
+| --- | --- | --- | --- | --- |
+| Light | low | 1.0 GB | faster_whisper [tiny] | kokoro |
+| Balanced | medium | 2.0 GB | faster_whisper [small] | kokoro |
+| Performance | high | 4.0 GB | faster_whisper [medium] | kokoro |
+
+### `nvidia_local`
+
+- Label: NVIDIA Local
+- Resource profiles: Light, Balanced, Performance
+- Offline runtime after provisioning: Yes
+- Offline pack compatibility: v1 manifest import + model portability
+- Default STT: faster_whisper [medium]
+- Default TTS: kokoro
+- Automatic steps: Install NVIDIA local Python dependencies, Download NVIDIA speech model assets
+- Guided prerequisites: Install FFmpeg, Install eSpeak NG
+
+| Profile | Resource class | Estimated disk | STT plan | TTS plan |
+| --- | --- | --- | --- | --- |
+| Light | low | 2.0 GB | faster_whisper [small] | kokoro |
+| Balanced | medium | 4.0 GB | faster_whisper [medium] | kokoro |
+| Performance | high | 8.0 GB | faster_whisper [large-v3] | kokoro |
+
+### `hosted_plus_local_backup`
+
+- Label: Hosted With Local Backup
+- Resource profiles: Balanced
+- Offline runtime after provisioning: No
+- Offline pack compatibility: v1 manifest import only
+- Default STT: faster_whisper [small]
+- Default TTS: kokoro
+- Automatic steps: Install hybrid Python dependencies, Download local fallback speech model assets
+- Guided prerequisites: Install FFmpeg, Install eSpeak NG
+
+| Profile | Resource class | Estimated disk | STT plan | TTS plan |
+| --- | --- | --- | --- | --- |
+| Balanced | medium | 2.5 GB | faster_whisper [small] | kokoro |
+
+## Provisioning Modes
+
+- `Online provisioning`: `/setup` installs Python dependencies, downloads model assets, and verifies the selected bundle/profile on the current machine.
+- `Offline pack import`: the setup audio pack import endpoint validates a manifest stored under `Config_Files/audio_packs/` against local platform, arch, and Python compatibility, then registers the imported pack in the readiness report.
+- `Offline pack` v1 scope: manifest + model portability only. It does not install Python dependencies or OS prerequisites on the target machine.
+
+## Verification After Provisioning
+
+The bundle stage is only considered healthy after verification succeeds. Use these checkpoints:
+
+- In `/setup`, click `Run verification` and confirm the readiness report reaches `ready` or `ready_with_warnings`.
+- Review guided prerequisite items if the report is `partial` or `failed`.
+- Keep a note of the selected bundle id if you plan to reproduce the same setup on another machine.
+
+For API-level verification after the setup UI completes:
 
 ```bash
-# Start the server
-python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
-
-# Open in browser
-open http://localhost:8000/setup
+curl -s http://127.0.0.1:8000/api/v1/audio/voices/catalog \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" | jq
 ```
-
-In Docker, the wizard is available at the same path on whatever port you mapped.
-
-## Post-Setup Configuration
-
-After the admin account is created, configure the remaining settings.
-
-### LLM Providers
-
-Edit `tldw_Server_API/Config_Files/config.txt` or set environment variables:
-
-**OpenAI:**
-```
-[API_Keys]
-openai_api_key = sk-...
-```
-Or: `export OPENAI_API_KEY=sk-...`
-
-**Anthropic:**
-```
-[API_Keys]
-anthropic_api_key = sk-ant-...
-```
-Or: `export ANTHROPIC_API_KEY=sk-ant-...`
-
-**Local LLMs (Ollama, llama.cpp, etc.):**
-```
-[Local-API]
-local_llm_api_ip = http://localhost:11434
-```
-
-No API key is needed for most local providers. Set the base URL to wherever the model server listens.
-
-### Embedding Providers
-
-Configure in `config.txt` under `[Embeddings]`:
-```
-embedding_provider = openai
-embedding_model = text-embedding-3-small
-```
-
-Or use a local provider:
-```
-embedding_provider = local
-embedding_model = all-MiniLM-L6-v2
-```
-
-### Storage
-
-Default database paths work out of the box. To use PostgreSQL for AuthNZ:
-```
-DATABASE_URL=postgresql://user:pass@localhost:5432/tldw_auth
-```
-
-See `Docs/Deployment/Postgres_Migration_Guide.md` for full migration steps.
-
-### SMTP (Optional)
-
-For password reset emails in multi-user mode, configure SMTP in `.env`:
-```
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_USER=noreply@example.com
-SMTP_PASSWORD=...
-SMTP_FROM=noreply@example.com
-```
-
-## Quick Verification
-
-After setup, confirm the server is working:
 
 ```bash
-# Health check
-curl http://localhost:8000/api/v1/health
+curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "file=@sample.wav" \
+  -F "model=whisper-1"
+```
 
-# List providers (single-user mode)
-curl -H "X-API-Key: YOUR_KEY" http://localhost:8000/api/v1/llm/providers
-
-# Interactive API docs
-open http://localhost:8000/docs
+```bash
+curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "kokoro",
+        "voice": "af_bella",
+        "input": "Setup verification complete",
+        "response_format": "mp3"
+      }' \
+  --output setup-check.mp3
 ```
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Setup page not appearing | Check if admin already exists; check `AUTH_MODE` is set |
-| "Database locked" on setup | Stop other processes accessing the DB; ensure write permissions on `Databases/` |
-| Can't reach `/setup` in Docker | Verify port mapping in `docker-compose.yml` |
-| Setup completes but can't log in | In single-user mode, use `X-API-Key` header; in multi-user mode, use `/api/v1/auth/login` |
+| Problem | What to check |
+| --- | --- |
+| No audio recommendation appears | Make sure `/setup` can reach `/api/v1/setup/audio/recommendations`; reload the page and inspect the setup message panel. |
+| Provisioning returns `partial` | Guided prerequisites are still missing. Install FFmpeg and/or eSpeak NG, then run `Safe rerun` and `Run verification`. |
+| Verification returns `failed` | Check the readiness report for remediation items such as missing FFmpeg, missing eSpeak NG, or an unusable STT/TTS path. |
+| Offline pack import is rejected | Re-export the pack from a machine with the same platform, arch, and Python minor version. v1 imports validate compatibility but do not install missing Python dependencies. |
+| `/setup` redirects away immediately | The global setup flow is already marked complete. Re-enable the first-time setup flag if you need the guided UI again. |
+| Local speech is required offline later | Prefer `cpu_local`, `apple_silicon_local`, or `nvidia_local` instead of `hosted_plus_local_backup`. |

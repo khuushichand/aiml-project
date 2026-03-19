@@ -96,6 +96,31 @@ const WORKSPACE_CONFLICT_FIELD_LABELS: Record<string, string> = {
   audioSettings: "audio settings"
 }
 
+const normalizeVectorProcessingStatus = (
+  value: unknown
+): "completed" | "pending" | "failed" | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value >= 1) return "completed"
+    if (value < 0) return "failed"
+    return "pending"
+  }
+  if (typeof value !== "string") {
+    return null
+  }
+  const lowered = value.trim().toLowerCase()
+  if (!lowered) return null
+  if (["1", "true", "complete", "completed", "done", "success"].includes(lowered)) {
+    return "completed"
+  }
+  if (["-1", "false", "failed", "error"].includes(lowered)) {
+    return "failed"
+  }
+  if (["0", "pending", "queued", "in_progress", "in-progress"].includes(lowered)) {
+    return "pending"
+  }
+  return null
+}
+
 type WorkspaceTabKey = "sources" | "chat" | "studio"
 
 type WorkspaceNoteKeywordLike =
@@ -460,6 +485,27 @@ const isMediaLikelyReadyForRag = (detail: unknown): boolean => {
   const candidate = detail as Record<string, unknown>
   const content = candidate.content as Record<string, unknown> | undefined
   const processing = candidate.processing as Record<string, unknown> | undefined
+  const vectorStatusCandidates = [
+    candidate.vector_processing,
+    candidate.vector_processing_status,
+    processing?.vector_processing,
+    processing?.vector_processing_status
+  ]
+  let sawIncompleteVectorStatus = false
+
+  for (const statusCandidate of vectorStatusCandidates) {
+    const normalizedStatus = normalizeVectorProcessingStatus(statusCandidate)
+    if (normalizedStatus === "completed") {
+      return true
+    }
+    if (normalizedStatus === "pending" || normalizedStatus === "failed") {
+      sawIncompleteVectorStatus = true
+    }
+  }
+
+  if (sawIncompleteVectorStatus) {
+    return false
+  }
 
   const contentText =
     typeof content?.text === "string" ? content.text.trim() : ""
@@ -1253,6 +1299,13 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const handleSearchInputKeyDown = (
     event: React.KeyboardEvent<HTMLInputElement>
   ) => {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      closeGlobalSearch()
+      return
+    }
+
     if (event.key === "ArrowDown") {
       event.preventDefault()
       if (globalSearchResults.length === 0) return

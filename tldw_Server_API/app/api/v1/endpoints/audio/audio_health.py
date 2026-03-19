@@ -27,6 +27,20 @@ router = APIRouter(
 )
 
 
+def _build_internal_health_request(path: str) -> Request:
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "client": ("127.0.0.1", 0),
+        "server": ("127.0.0.1", 8000),
+        "scheme": "http",
+    }
+    return Request(scope)
+
+
 def _serialize_tts_caps_for_health(tts_service: TTSServiceV2, caps: Any) -> Any:
     if caps is None:
         return None
@@ -195,6 +209,40 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
         return {"status": "error", **payload, "timestamp": datetime.utcnow().isoformat()}
 
 
+async def collect_setup_tts_health() -> dict[str, Any]:
+    """Collect TTS health without going through the HTTP routing layer."""
+
+    request = _build_internal_health_request("/api/v1/audio/health")
+    try:
+        tts_service = await get_tts_service()
+        return await get_tts_health(request, tts_service)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        message = detail.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raw_error = detail.get("error")
+            message = raw_error if isinstance(raw_error, str) else None
+        if not isinstance(message, str) or not message.strip():
+            message = "TTS health check failed"
+        return {
+            "status": "error",
+            "providers": {"total": 0, "available": 0, "details": {}},
+            "message": message,
+            "error": detail,
+            "status_code": exc.status_code,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("TTS setup health collection failed")
+        request_id = ensure_request_id(request)
+        payload = _http_error_detail("TTS health check failed", request_id, exc=exc)
+        return {
+            "status": "error",
+            "providers": {"total": 0, "available": 0, "details": {}},
+            **payload,
+            "status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        }
+
+
 @router.get("/transcriptions/health", summary="Check STT transcription model health")
 async def get_stt_health(
     request: Request,
@@ -286,3 +334,34 @@ async def get_stt_health(
         health["warm"] = warm_info
 
     return health
+
+
+async def collect_setup_stt_health(
+    model: Optional[str] = None,
+    *,
+    warm: bool = False,
+) -> dict[str, Any]:
+    """Collect STT health without going through the HTTP routing layer."""
+
+    request = _build_internal_health_request("/api/v1/audio/transcriptions/health")
+    try:
+        return await get_stt_health(request, model=model, warm=warm)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        message = detail.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raw_error = detail.get("error")
+            message = raw_error if isinstance(raw_error, str) else None
+        if not isinstance(message, str) or not message.strip():
+            message = "Failed to collect STT health."
+        return {
+            "provider": None,
+            "alias": model,
+            "model": model,
+            "available": False,
+            "usable": False,
+            "on_demand": False,
+            "message": message,
+            "error": detail,
+            "status_code": exc.status_code,
+        }

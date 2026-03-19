@@ -21,7 +21,7 @@ export type ScopeSnapshot = {
 
 export type PinnedSourceFilters = {
   mediaIds: number[]
-  noteIds: number[]
+  noteIds: string[]
 }
 
 // Retrieved document with citation info

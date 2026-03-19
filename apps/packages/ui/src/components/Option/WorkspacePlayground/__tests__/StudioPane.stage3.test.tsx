@@ -643,6 +643,59 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     expect(container.querySelector("[data-testid='studio-options-accordion']")).toBeTruthy()
   })
 
+  it("disables retrieval-oriented RAG controls when summary is the active output type", async () => {
+    renderExpandedStudioPane()
+
+    await waitFor(() => {
+      expect(mockGetChatModels).toHaveBeenCalled()
+    })
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Summary" }))
+
+    expect(
+      screen.getByText(
+        "Summary uses the workspace summary prompt and selected source content directly. Retrieval settings below do not apply."
+      )
+    ).toBeInTheDocument()
+
+    const searchModeLabel = screen.getByText("Search Mode")
+    const searchModeInput = searchModeLabel.parentElement?.querySelector(
+      "input[role='combobox']"
+    ) as HTMLInputElement | null
+    expect(searchModeInput).toBeTruthy()
+    if (!searchModeInput) {
+      throw new Error("Expected Search Mode combobox to be rendered")
+    }
+    expect(searchModeInput).toBeDisabled()
+
+    const enableGenerationRow = screen.getByText("Enable generation").closest("div")
+    const generationSwitch = enableGenerationRow?.querySelector(
+      "button[role='switch']"
+    ) as HTMLButtonElement | null
+    expect(generationSwitch).toBeTruthy()
+    expect(generationSwitch).toBeDisabled()
+
+    const enableCitationsRow = screen.getByText("Enable citations").closest("div")
+    const citationsSwitch = enableCitationsRow?.querySelector(
+      "button[role='switch']"
+    ) as HTMLButtonElement | null
+    expect(citationsSwitch).toBeTruthy()
+    expect(citationsSwitch).toBeDisabled()
+
+    const rerankingRow = screen.getByText("Enable reranking").closest("div")
+    const rerankingSwitch = rerankingRow?.querySelector(
+      "button[role='switch']"
+    ) as HTMLButtonElement | null
+    expect(rerankingSwitch).toBeTruthy()
+    expect(rerankingSwitch).toBeDisabled()
+
+    fireEvent.click(searchModeInput)
+    expect(mockSetRagSearchMode).not.toHaveBeenCalled()
+    expect(mockSetRagEnableGeneration).not.toHaveBeenCalled()
+    expect(mockSetRagEnableCitations).not.toHaveBeenCalled()
+    expect(mockSetRagAdvancedOptions).not.toHaveBeenCalled()
+  })
+
   it("ensures icon-only action buttons include aria-labels", () => {
     workspaceStoreState.generatedArtifacts = [
       {

@@ -11,6 +11,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens
 
 
@@ -102,6 +103,33 @@ def _chunk_by_chars(text: str, chunk_size: int) -> list[str]:
     return chunks
 
 
+def _extract_test_mode_points(source_text: str, limit: int = 6) -> list[str]:
+    """Return deterministic bullet candidates from the source text for test-mode slides."""
+    points: list[str] = []
+    for raw_line in source_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        candidate = line.lstrip("-*• ").strip()
+        if candidate:
+            points.append(candidate)
+        if len(points) >= limit:
+            break
+    if points:
+        return points
+
+    compact = re.sub(r"\s+", " ", source_text).strip()
+    if not compact:
+        return ["No source details were provided."]
+
+    sentences = [
+        chunk.strip()
+        for chunk in re.split(r"(?<=[.!?])\s+", compact)
+        if chunk.strip()
+    ]
+    return sentences[:limit] or [compact[:160]]
+
+
 class SlidesGenerator:
     def __init__(
         self,
@@ -152,6 +180,12 @@ class SlidesGenerator:
                 actual_chars=actual_chars,
             )
 
+        if is_test_mode():
+            return self._build_test_mode_payload(
+                source_text=source_text,
+                title_hint=title_hint,
+            )
+
         prepared_text = source_text
         if enable_chunking:
             prepared_text = self._chunk_and_summarize(
@@ -181,6 +215,50 @@ class SlidesGenerator:
         normalized = self._normalize_payload(payload, title_hint)
         return normalized
 
+    def _build_test_mode_payload(
+        self,
+        *,
+        source_text: str,
+        title_hint: str | None,
+    ) -> dict[str, Any]:
+        """Build a deterministic slide deck payload without calling an external model."""
+        title = (title_hint or "Test Mode Presentation").strip() or "Test Mode Presentation"
+        points = _extract_test_mode_points(source_text)
+        overview_points = points[:3] or ["Source content captured for slides generation."]
+        takeaway_points = points[3:6] or points[:2] or [
+            "Review the source content for more detail."
+        ]
+
+        return {
+            "title": title,
+            "slides": [
+                {
+                    "order": 0,
+                    "layout": "title",
+                    "title": title,
+                    "content": "",
+                    "speaker_notes": None,
+                    "metadata": {},
+                },
+                {
+                    "order": 1,
+                    "layout": "content",
+                    "title": "Overview",
+                    "content": "\n".join(f"- {point}" for point in overview_points),
+                    "speaker_notes": "Deterministic slide generated in test mode.",
+                    "metadata": {},
+                },
+                {
+                    "order": 2,
+                    "layout": "content",
+                    "title": "Key Takeaways",
+                    "content": "\n".join(f"- {point}" for point in takeaway_points),
+                    "speaker_notes": "Use the live provider flow outside test mode for final content.",
+                    "metadata": {},
+                },
+            ],
+        }
+
     def _chunk_and_summarize(
         self,
         *,
@@ -192,6 +270,7 @@ class SlidesGenerator:
         chunk_size_tokens: int | None,
         summary_tokens: int | None,
     ) -> str:
+        """Reduce oversized source text into a prompt-sized summary before slide generation."""
         chunk_size = chunk_size_tokens or 1000
         mode = str(settings.get("TOKEN_ESTIMATOR_MODE") or "whitespace").lower()
         if mode == "char_approx":

@@ -17110,6 +17110,8 @@ def get_full_media_details_rich(
             "safe_metadata": safe_metadata,
             "model": media.get("transcription_model"),
             "timestamp_option": media.get("timestamp_option"),
+            "chunking_status": media.get("chunking_status"),
+            "vector_processing_status": media.get("vector_processing"),
         },
         "content": {
             "metadata": content_meta,
@@ -18396,13 +18398,11 @@ def get_unprocessed_media(db_instance: MediaDatabase) -> list[dict]:
 
 def mark_media_as_processed(db_instance: MediaDatabase, media_id: int):
     """
-    Marks a media item's vector processing status as complete (`vector_processing = 1`).
+    Marks a media item's embeddings state as complete.
 
-    Important: This function ONLY updates the `vector_processing` flag. It DOES NOT
-    update the `last_modified` timestamp, increment the sync `version`, or log a
-    sync event. It's intended for internal state tracking after a potentially long
-    vector processing task, assuming a separate mechanism handles the main media
-    updates and sync logging if content/vectors were added.
+    The Media table enforces versioned updates through sync triggers, so this helper
+    must advance `version`, refresh `last_modified`, clear stale embeddings error
+    state in `chunking_status`, and emit a sync event alongside the status flip.
 
     Args:
         db_instance (MediaDatabase): An initialized Database instance.
@@ -18416,9 +18416,41 @@ def mark_media_as_processed(db_instance: MediaDatabase, media_id: int):
         raise TypeError("db_instance required.")  # noqa: TRY003
     logger.debug(f"Marking media {media_id} vector_processing=1 on DB '{db_instance.db_path_str}'.")
     try:
-        cursor = db_instance.execute_query("UPDATE Media SET vector_processing = 1 WHERE id = ? AND deleted = 0", (media_id,), commit=True)
-        if cursor.rowcount == 0:
-            logger.warning(f"Attempted mark media {media_id} processed, but not found/deleted.")
+        with db_instance.transaction() as conn:
+            row = db_instance._fetchone_with_connection(
+                conn,
+                "SELECT uuid, version FROM Media WHERE id = ? AND deleted = 0 AND is_trash = 0",
+                (media_id,),
+            )
+            if not row:
+                logger.warning(f"Attempted mark media {media_id} processed, but not found/inactive.")
+                return
+
+            media_uuid = row["uuid"]
+            current_version = row["version"]
+            next_version = current_version + 1
+            now = db_instance._get_current_utc_timestamp_str()
+            payload = {
+                "last_modified": now,
+                "chunking_status": "completed",
+                "vector_processing": 1,
+            }
+
+            cursor = db_instance._execute_with_connection(
+                conn,
+                (
+                    "UPDATE Media SET last_modified = ?, version = ?, client_id = ?, chunking_status = ?, "
+                    "vector_processing = ? "
+                    "WHERE id = ? AND version = ?"
+                ),
+                (now, next_version, db_instance.client_id, "completed", 1, media_id, current_version),
+            )
+            if cursor.rowcount == 0:
+                raise ConflictError("Media", media_id)  # noqa: TRY301
+
+            db_instance._log_sync_event(conn, "Media", media_uuid, "update", next_version, payload)
+    except ConflictError:
+        raise
     except (DatabaseError, sqlite3.Error) as e:
         logger.exception(f"Error marking media {media_id} processed '{db_instance.db_path_str}'")
         raise DatabaseError(f"Failed mark media {media_id} processed") from e  # noqa: TRY003

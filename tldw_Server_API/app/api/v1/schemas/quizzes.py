@@ -279,6 +279,7 @@ class QuizGenerateRequest(BaseModel):
     difficulty: str = Field("mixed", description="easy, medium, hard, mixed")
     focus_topics: Optional[list[str]] = None
     model: Optional[str] = None
+    api_provider: Optional[str] = None
     workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
 
     @model_validator(mode="after")

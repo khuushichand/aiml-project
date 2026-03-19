@@ -8,6 +8,7 @@ type WorkspaceSeedSource = {
   mediaId: number
   title: string
   type?: "pdf" | "video" | "audio" | "website" | "document" | "text"
+  status?: "processing" | "ready" | "error"
   url?: string
 }
 
@@ -19,6 +20,8 @@ export class WorkspacePlaygroundPage {
   readonly chatPanel: Locator
   readonly studioPanel: Locator
   readonly globalSearchModal: Locator
+  readonly globalSearchInput: Locator
+  readonly commandPalette: Locator
   readonly addSourceModal: Locator
 
   constructor(page: Page) {
@@ -28,10 +31,11 @@ export class WorkspacePlaygroundPage {
     this.sourcesPanel = page.locator("#workspace-sources-panel")
     this.chatPanel = page.locator("#workspace-main-content")
     this.studioPanel = page.locator("#workspace-studio-panel")
-    this.globalSearchModal = page
-      .getByRole("dialog")
-      .filter({ hasText: /search workspace/i })
-      .first()
+    this.globalSearchModal = page.getByRole("dialog", { name: /search workspace/i }).first()
+    this.globalSearchInput = this.globalSearchModal.getByPlaceholder(
+      /search sources, chat, and notes/i
+    )
+    this.commandPalette = page.getByRole("dialog", { name: /command palette/i }).first()
     this.addSourceModal = page
       .getByRole("dialog")
       .filter({ hasText: /add sources/i })
@@ -47,9 +51,40 @@ export class WorkspacePlaygroundPage {
     })
   }
 
+  private async waitForModalBackdropsToClear(): Promise<void> {
+    await expect(
+      this.page.locator(
+        "div.fixed.inset-0.z-50.bg-black\\/50:visible, div.fixed.inset-0.z-50.backdrop-blur-sm:visible, .ant-modal-mask:visible"
+      )
+    ).toHaveCount(0, { timeout: 10_000 })
+  }
+
+  private async closeCommandPaletteIfOpen(): Promise<void> {
+    if (!(await this.commandPalette.isVisible().catch(() => false))) {
+      return
+    }
+
+    const input = this.commandPalette.getByPlaceholder(/type a command or search/i)
+    if (await input.isVisible().catch(() => false)) {
+      await input.click()
+      await input.press("Escape")
+    } else {
+      await this.page.keyboard.press("Escape")
+    }
+    await expect(this.commandPalette).toBeHidden({ timeout: 10_000 })
+  }
+
   private async clickWhenActionable(locator: Locator): Promise<void> {
     await expect(locator).toBeVisible({ timeout: 10_000 })
-    await locator.click({ trial: true })
+    await this.disableNextJsPortalPointerInterception()
+    await this.waitForModalBackdropsToClear()
+    try {
+      await locator.click({ trial: true, timeout: 3_000 })
+    } catch {
+      await this.disableNextJsPortalPointerInterception()
+      await this.waitForModalBackdropsToClear()
+      await locator.click({ trial: true, timeout: 3_000 })
+    }
     await locator.click()
   }
 
@@ -70,23 +105,27 @@ export class WorkspacePlaygroundPage {
   async openGlobalSearchWithShortcut(): Promise<void> {
     await this.page.locator("body").click()
     await this.page.keyboard.press("Control+k")
-    if (!(await this.globalSearchModal.isVisible().catch(() => false))) {
+    if (!(await this.globalSearchInput.isVisible().catch(() => false))) {
+      await expect(this.globalSearchModal).toBeVisible({ timeout: 2_000 }).catch(() => {})
+    }
+    if (!(await this.globalSearchInput.isVisible().catch(() => false))) {
       await this.page.keyboard.press("Meta+k")
     }
     await expect(this.globalSearchModal).toBeVisible({ timeout: 10_000 })
+    await expect(this.globalSearchInput).toBeVisible({ timeout: 10_000 })
+    await this.closeCommandPaletteIfOpen()
   }
 
   async closeGlobalSearchWithEscape(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    const closeButton = this.globalSearchModal
-      .locator("button.ant-modal-close")
-      .first()
-    if (await closeButton.isVisible().catch(() => false)) {
-      await closeButton.click({ force: true })
-    } else {
-      await this.page.keyboard.press("Escape")
+    if (await this.globalSearchInput.isVisible().catch(() => false)) {
+      await this.globalSearchInput.click()
+      await expect(this.globalSearchInput).toBeFocused({ timeout: 10_000 })
+      await this.globalSearchInput.press("Escape")
     }
     await expect(this.globalSearchModal).toBeHidden({ timeout: 10_000 })
+    await this.closeCommandPaletteIfOpen()
+    await this.waitForModalBackdropsToClear()
   }
 
   async hideSourcesPane(): Promise<void> {
@@ -141,6 +180,7 @@ export class WorkspacePlaygroundPage {
       await this.page.keyboard.press("Escape")
     }
     await expect(this.addSourceModal).toBeHidden({ timeout: 10_000 })
+    await this.waitForModalBackdropsToClear()
   }
 
   async seedSources(sources: WorkspaceSeedSource[]): Promise<void> {
@@ -163,7 +203,7 @@ export class WorkspacePlaygroundPage {
                     | "document"
                     | "text"
                   url: string
-                  status: "ready"
+                  status: "processing" | "ready" | "error"
                 }>
               ) => void
             }
@@ -182,7 +222,7 @@ export class WorkspacePlaygroundPage {
           title: source.title,
           type: source.type || "document",
           url: source.url || `https://example.com/source-${source.mediaId}`,
-          status: "ready"
+          status: source.status || "ready"
         }))
       )
     }, sources)

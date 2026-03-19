@@ -84,6 +84,16 @@ class MediaProcessingDetail(BaseModel):
     safe_metadata: Optional[dict[str, Any]] = Field(None, description="Safe metadata JSON associated with the latest document version (if available).")
     model: Optional[str] = Field(None, description="The transcription model used (if applicable).", json_schema_extra={"example": "whisper-large-v3"})
     timestamp_option: Optional[bool] = Field(None, description="Whether timestamps were requested/generated during transcription.", json_schema_extra={"example": True})
+    chunking_status: Optional[str] = Field(
+        None,
+        description="Chunking lifecycle status for the media item.",
+        json_schema_extra={"example": "completed"},
+    )
+    vector_processing_status: Optional[int] = Field(
+        None,
+        description="Vector indexing lifecycle status for the media item (-1 failed, 0 pending, 1 completed).",
+        json_schema_extra={"example": 1},
+    )
 
 class MediaContentDetail(BaseModel):
     """Details about the extracted content of the media."""
@@ -136,7 +146,9 @@ class MediaDetailResponse(BaseModel):
                     "prompt": "Summarize the main topics discussed.",
                     "analysis": "The podcast covers new AI advancements and their implications.",
                     "model": "deepdml/faster-distil-whisper-large-v3.5",
-                    "timestamp_option": True
+                    "timestamp_option": True,
+                    "chunking_status": "completed",
+                    "vector_processing_status": 1,
                 },
                 "content": {
                     "metadata": {"episode": 5, "guests": ["Alice", "Bob"]},

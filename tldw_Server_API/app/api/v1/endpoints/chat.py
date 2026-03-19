@@ -651,6 +651,79 @@ def _extract_latest_user_turn_text(messages: list[Any]) -> str:
     return ""
 
 
+def _build_test_mode_mermaid_response() -> str:
+    """Return deterministic Mermaid content for workspace-style mind map prompts."""
+    return (
+        "mindmap\n"
+        "  root((Research Workspace))\n"
+        "    Governance\n"
+        "      Review Board\n"
+        "      Escalation Paths\n"
+        "    Evidence Review\n"
+        "      Citations\n"
+        "      Freshness Checks\n"
+        "    Delivery\n"
+        "      Milestones\n"
+        "      Rollout Plan\n"
+    )
+
+
+def _build_test_mode_markdown_table_response(user_text: str) -> str:
+    """Return deterministic markdown table content for workspace table prompts."""
+    source_hint = "Program Alpha"
+    if "beta" in user_text.lower():
+        source_hint = "Program Alpha and Program Beta"
+    return (
+        "| Topic | Detail | Source |\n"
+        "| --- | --- | --- |\n"
+        f"| Governance | Review board, named owners, and escalation paths | {source_hint} |\n"
+        f"| Evidence | Citations, contradiction checks, and freshness reviews | {source_hint} |\n"
+        f"| Delivery | Milestones, staged rollout checkpoints, and operator training | {source_hint} |\n"
+    )
+
+
+def _get_message_role(message: Any) -> Any:
+    """Return message role for dict and object payloads."""
+    if isinstance(message, dict):
+        return message.get("role")
+    return getattr(message, "role", None)
+
+
+def _get_message_content(message: Any) -> Any:
+    """Return message content for dict and object payloads."""
+    if isinstance(message, dict):
+        return message.get("content")
+    return getattr(message, "content", None)
+
+
+def _build_test_mode_chat_response(
+    messages_payload: list[Any],
+    *,
+    system_message: str | None = None,
+) -> str:
+    """Return deterministic content for test-mode mock provider calls."""
+    system_parts: list[str] = []
+    if isinstance(system_message, str) and system_message.strip():
+        system_parts.append(system_message.strip())
+    system_parts.extend(
+        _extract_text_from_message_content(_get_message_content(msg))
+        for msg in messages_payload
+        if _get_message_role(msg) == "system"
+    )
+    system_text = "\n".join(part for part in system_parts if part).lower()
+    user_text = _extract_latest_user_turn_text(messages_payload)
+
+    if "mermaid mindmap syntax" in system_text or "mind map generator" in system_text:
+        return _build_test_mode_mermaid_response()
+
+    if "markdown table" in system_text and "pipe delimiters" in system_text:
+        return _build_test_mode_markdown_table_response(user_text)
+
+    if user_text:
+        return f"Mock response: {user_text}"
+    return "Mock response from test mode"
+
+
 def _normalize_string_list(value: Any) -> list[str]:
     """Normalize mixed payload list/string values into list[str]."""
     if value is None:
@@ -3321,19 +3394,14 @@ async def create_chat_completion(
                 and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
             )
 
-            def _build_mock_response(messages_payload: list[dict[str, Any]]) -> str:
-                for msg in reversed(messages_payload):
-                    if isinstance(msg, dict) and msg.get("role") == "user":
-                        content = msg.get("content")
-                        if isinstance(content, str) and content.strip():
-                            return f"Mock response: {content.strip()}"
-                return "Mock response from test mode"
-
             def _mock_chat_call(**kwargs):
                 messages_payload = kwargs.get("messages_payload") or []
                 streaming_flag = bool(kwargs.get("streaming"))
                 model_name = kwargs.get("model") or request_data.model or "mock-model"
-                content = _build_mock_response(messages_payload)
+                content = _build_test_mode_chat_response(
+                    messages_payload,
+                    system_message=kwargs.get("system_message"),
+                )
 
                 if streaming_flag:
                     chunk_text = content

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from loguru import logger
-from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -16,36 +20,41 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_roles,
 )
 from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
+from tldw_Server_API.app.api.v1.schemas.setup_schemas import (
+    AssistantQuestion,
+    AudioBundleOperationResponse,
+    AudioBundleProvisionRequest,
+    AudioBundleVerificationRequest,
+    AudioPackExportRequest,
+    AudioPackExportResponse,
+    AudioPackImportRequest,
+    AudioPackImportResponse,
+    AudioReadinessResetResponse,
+    AudioRecommendationsResponse,
+    ConfigUpdates,
+    SetupAssistantResponse,
+    SetupCompleteRequest,
+    SetupCompleteResponse,
+    SetupConfigUpdateResponse,
+    SetupInstallStatusResponse,
+    SetupResetResponse,
+    SetupStatusResponse,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Setup import install_manager, setup_manager
+from tldw_Server_API.app.core.Setup import audio_pack_service
+from tldw_Server_API.app.core.Setup import audio_profile_service
+from tldw_Server_API.app.core.Setup import audio_readiness_store
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    get_audio_bundle_catalog,
+)
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
-from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.services.auth_service import mark_user_verified
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
-
-
-class ConfigUpdates(BaseModel):
-    updates: dict[str, dict[str, Any]] = Field(
-        ..., description="Mapping of section -> key/value pairs to persist in config.txt"
-    )
-
-
-class SetupCompleteRequest(BaseModel):
-    disable_first_time_setup: bool | None = Field(
-        False,
-        description="If true, flips enable_first_time_setup to false so the screen stays hidden",
-    )
-    install_plan: InstallPlan | None = Field(
-        None,
-        description="Backend installation instructions to execute after setup completes.",
-    )
-
-
-class AssistantQuestion(BaseModel):
-    question: str = Field(..., min_length=1, description="Natural language question for the setup assistant")
+_AUDIO_BUNDLE_LOOKUP_DETAIL = "Audio bundle or resource profile not found."
 
 
 async def require_admin_and_system_configure(
@@ -69,8 +78,29 @@ async def require_admin_and_system_configure(
     return principal
 
 
-@router.get("/status", openapi_extra={"security": []})
-async def get_setup_status(_guard: None = Depends(require_local_setup_access)) -> dict[str, Any]:
+def _audio_pack_compatibility(machine_profile: audio_profile_service.MachineProfile) -> dict[str, str]:
+    """Project machine-profile data into the portable manifest compatibility shape."""
+    return {
+        "platform": machine_profile.platform,
+        "arch": machine_profile.arch,
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+    }
+
+
+def _normalize_audio_pack_name(pack_name: str) -> str:
+    """Normalize a managed audio pack filename before resolving it under the setup pack directory."""
+    try:
+        return audio_pack_service.normalize_audio_pack_name(pack_name)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def _raise_audio_bundle_lookup_not_found(exc: KeyError) -> None:
+    raise HTTPException(status.HTTP_404_NOT_FOUND, detail=_AUDIO_BUNDLE_LOOKUP_DETAIL) from exc
+
+
+@router.get("/status", openapi_extra={"security": []}, response_model=SetupStatusResponse)
+async def get_setup_status(_guard: None = Depends(require_local_setup_access)) -> SetupStatusResponse:
     """Return setup availability and placeholder diagnostics."""
     return setup_manager.get_status_snapshot()
 
@@ -91,8 +121,12 @@ async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -
     return setup_manager.get_config_snapshot()
 
 
-@router.get("/install-status", openapi_extra={"security": []})
-async def get_install_status(_guard: None = Depends(require_local_setup_access)) -> dict[str, Any]:
+@router.get(
+    "/install-status",
+    openapi_extra={"security": []},
+    response_model=SetupInstallStatusResponse,
+)
+async def get_install_status(_guard: None = Depends(require_local_setup_access)) -> SetupInstallStatusResponse:
     """Return the current installation plan progress if available."""
 
     status_snapshot = setup_manager.get_status_snapshot()
@@ -101,16 +135,216 @@ async def get_install_status(_guard: None = Depends(require_local_setup_access))
 
     install_status = install_manager.get_install_status_snapshot()
     if not install_status:
-        return {"status": "idle"}
+        return JSONResponse({"status": "idle"})
 
-    return install_status
+    return JSONResponse(install_status)
 
 
-@router.post("/config", openapi_extra={"security": []})
+@router.get("/audio/recommendations", openapi_extra={"security": []}, response_model=AudioRecommendationsResponse)
+async def get_audio_recommendations(
+    prefer_offline_runtime: bool = True,
+    allow_hosted_fallbacks: bool = True,
+    _guard: None = Depends(require_local_setup_access),
+) -> AudioRecommendationsResponse:
+    """Return machine profile information and ranked audio setup bundle recommendations."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    machine_profile = audio_profile_service.detect_machine_profile()
+    recommendations = audio_profile_service.recommend_audio_bundles(
+        machine_profile,
+        prefer_offline_runtime=prefer_offline_runtime,
+        allow_hosted_fallbacks=allow_hosted_fallbacks,
+    )
+    catalog = get_audio_bundle_catalog()
+    bundle_lookup = {
+        bundle.bundle_id: bundle.model_dump() if hasattr(bundle, "model_dump") else dict(bundle)
+        for bundle in catalog.bundles
+    }
+    for recommendation in recommendations.get("recommendations", []):
+        bundle_id = recommendation.get("bundle_id")
+        if bundle_id in bundle_lookup:
+            recommendation["bundle"] = bundle_lookup[bundle_id]
+            resource_profile = recommendation.get("resource_profile")
+            if resource_profile:
+                recommendation["profile"] = bundle_lookup[bundle_id].get("resource_profiles", {}).get(resource_profile)
+    for excluded_bundle in recommendations.get("excluded", []):
+        bundle_id = excluded_bundle.get("bundle_id")
+        if bundle_id in bundle_lookup:
+            excluded_bundle["bundle"] = bundle_lookup[bundle_id]
+
+    return {
+        "machine_profile": (
+            machine_profile.model_dump()
+            if hasattr(machine_profile, "model_dump")
+            else dict(machine_profile)
+        ),
+        "catalog": list(bundle_lookup.values()),
+        **recommendations,
+    }
+
+
+@router.get("/audio/readiness", openapi_extra={"security": []}, response_model=audio_readiness_store.AudioReadinessRecord)
+async def get_audio_readiness(
+    _guard: None = Depends(require_local_setup_access),
+) -> audio_readiness_store.AudioReadinessRecord:
+    """Return the persisted setup audio readiness snapshot."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    return audio_readiness_store.get_audio_readiness_store().load()
+
+
+@router.post("/audio/readiness/reset", openapi_extra={"security": []}, response_model=AudioReadinessResetResponse)
+async def reset_audio_readiness(
+    _guard: None = Depends(require_local_setup_access),
+) -> AudioReadinessResetResponse:
+    """Reset the persisted setup audio readiness snapshot."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    readiness = audio_readiness_store.get_audio_readiness_store().reset()
+    return {
+        "success": True,
+        "audio_readiness": readiness,
+    }
+
+
+@router.post("/audio/provision", openapi_extra={"security": []}, response_model=AudioBundleOperationResponse)
+async def provision_audio_bundle(
+    payload: AudioBundleProvisionRequest,
+    _guard: None = Depends(require_local_setup_access),
+) -> AudioBundleOperationResponse:
+    """Expand and provision a curated audio bundle."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    try:
+        return await asyncio.to_thread(
+            install_manager.execute_audio_bundle,
+            payload.bundle_id,
+            resource_profile=payload.resource_profile,
+            safe_rerun=payload.safe_rerun,
+        )
+    except KeyError as exc:
+        _raise_audio_bundle_lookup_not_found(exc)
+
+
+@router.post("/audio/verify", openapi_extra={"security": []}, response_model=AudioBundleOperationResponse)
+async def verify_audio_bundle(
+    payload: AudioBundleVerificationRequest,
+    _guard: None = Depends(require_local_setup_access),
+) -> AudioBundleOperationResponse:
+    """Verify the primary STT/TTS paths for a curated audio bundle."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    try:
+        return await install_manager.verify_audio_bundle_async(
+            payload.bundle_id,
+            resource_profile=payload.resource_profile,
+        )
+    except KeyError as exc:
+        _raise_audio_bundle_lookup_not_found(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Audio bundle verification failed via setup endpoint")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify audio bundle.",
+        ) from exc
+
+
+@router.post("/audio/packs/export", openapi_extra={"security": []}, response_model=AudioPackExportResponse)
+async def export_audio_pack(
+    payload: AudioPackExportRequest,
+    _guard: None = Depends(require_local_setup_access),
+) -> AudioPackExportResponse:
+    """Export a v1 audio bundle pack manifest for the selected bundle/profile."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    pack_name = _normalize_audio_pack_name(payload.pack_name) if payload.pack_name else None
+    readiness = audio_readiness_store.get_audio_readiness_store().load()
+    machine_profile = audio_profile_service.detect_machine_profile()
+    compatibility = _audio_pack_compatibility(machine_profile)
+
+    try:
+        if pack_name:
+            manifest = audio_pack_service.write_audio_pack_manifest(
+                pack_name=pack_name,
+                bundle_id=payload.bundle_id,
+                resource_profile=payload.resource_profile,
+                installed_assets=readiness.get("installed_asset_manifests"),
+                compatibility=compatibility,
+            )
+        else:
+            manifest = audio_pack_service.build_audio_pack_manifest(
+                bundle_id=payload.bundle_id,
+                resource_profile=payload.resource_profile,
+                installed_assets=readiness.get("installed_asset_manifests"),
+                compatibility=compatibility,
+            )
+    except KeyError as exc:
+        _raise_audio_bundle_lookup_not_found(exc)
+
+    return {
+        "success": True,
+        "manifest": manifest,
+        "pack_path": str(Path(audio_pack_service.AUDIO_PACKS_DIRNAME) / pack_name) if pack_name else None,
+    }
+
+
+@router.post("/audio/packs/import", openapi_extra={"security": []}, response_model=AudioPackImportResponse)
+async def import_audio_pack(
+    payload: AudioPackImportRequest,
+    _guard: None = Depends(require_local_setup_access),
+) -> AudioPackImportResponse:
+    """Validate and register a v1 audio bundle pack manifest."""
+
+    status_snapshot = setup_manager.get_status_snapshot()
+    if not status_snapshot["enabled"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+    pack_name = _normalize_audio_pack_name(payload.pack_name)
+    machine_profile = audio_profile_service.detect_machine_profile()
+    compatibility = _audio_pack_compatibility(machine_profile)
+    machine_profile_payload = (
+        machine_profile.model_dump() if hasattr(machine_profile, "model_dump") else dict(machine_profile)
+    )
+    readiness_store = audio_readiness_store.get_audio_readiness_store()
+
+    try:
+        result = audio_pack_service.register_imported_audio_pack(
+            pack_name,
+            readiness_store=readiness_store,
+            machine_profile=machine_profile_payload,
+            python_version=compatibility["python_version"],
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Audio pack not found.") from exc
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Audio pack manifest is not valid JSON.") from exc
+
+    return result
+
+
+@router.post("/config", openapi_extra={"security": []}, response_model=SetupConfigUpdateResponse)
 async def update_setup_config(
     payload: ConfigUpdates,
     _guard: None = Depends(require_local_setup_access),
-) -> dict[str, Any]:
+) -> SetupConfigUpdateResponse:
     """Persist configuration updates coming from the setup UI."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -129,17 +363,23 @@ async def update_setup_config(
             "backup_path": str(backup_path) if backup_path else None,
             "requires_restart": True,
         }
+    except ValueError as exc:
+        logger.exception("Setup config validation failed via setup endpoint")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to write configuration via setup endpoint")
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist setup configuration.",
+        ) from exc
 
 
-@router.post("/complete", openapi_extra={"security": []})
+@router.post("/complete", openapi_extra={"security": []}, response_model=SetupCompleteResponse)
 async def mark_setup_complete(
     payload: SetupCompleteRequest,
     background_tasks: BackgroundTasks,
     _guard: None = Depends(require_local_setup_access),
-) -> dict[str, Any]:
+) -> SetupCompleteResponse:
     """Mark the setup workflow as complete and optionally disable future prompts."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -167,11 +407,11 @@ async def mark_setup_complete(
     }
 
 
-@router.post("/assistant", openapi_extra={"security": []})
+@router.post("/assistant", openapi_extra={"security": []}, response_model=SetupAssistantResponse)
 async def ask_setup_assistant(
     payload: AssistantQuestion,
     _guard: None = Depends(require_local_setup_access),
-) -> dict[str, Any]:
+) -> SetupAssistantResponse:
     """Provide contextual help for setup questions using local configuration knowledge."""
     try:
         return setup_manager.answer_setup_question(payload.question)
@@ -187,10 +427,11 @@ async def ask_setup_assistant(
         "Admin-only recovery endpoint to re-enable the guided setup flow by setting "
         "enable_first_time_setup=true and setup_completed=false. Requires server restart."
     ),
+    response_model=SetupResetResponse,
 )
 async def reset_setup_flags(
     _principal: AuthPrincipal = Depends(require_admin_and_system_configure),  # noqa: B008
-) -> dict[str, Any]:
+) -> SetupResetResponse:
     """Admin-only: reset first-time setup flags for recovery.
 
     Sets `enable_first_time_setup = true` and `setup_completed = false` in config.txt.
@@ -199,7 +440,10 @@ async def reset_setup_flags(
         setup_manager.reset_setup_flags()
     except Exception as exc:
         logger.exception("Failed to reset setup flags")
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reset setup flags.",
+        ) from exc
 
     return {
         "success": True,

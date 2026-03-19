@@ -58,9 +58,14 @@ _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
 
 def _user_embedding_config() -> dict[str, Any]:
     cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
-    user_db_base_dir = settings.get("USER_DB_BASE_DIR")
-    if not user_db_base_dir:
+    try:
         user_db_base_dir = str(DatabasePaths.get_user_db_base_dir())
+    except Exception as exc:
+        logger.warning(
+            "Falling back to USER_DB_BASE_DIR setting after user DB base resolution failed: {}",
+            exc,
+        )
+        user_db_base_dir = settings.get("USER_DB_BASE_DIR")
     cfg["USER_DB_BASE_DIR"] = user_db_base_dir
     return cfg
 
@@ -395,6 +400,20 @@ async def generate_embeddings_for_media(
                 "chunks_processed": 0,
             }
 
+        def _chunk_type_for_metadata(chunk: dict[str, Any]) -> str:
+            chunk_metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+            raw_chunk_type = (
+                chunk.get("chunk_type")
+                or chunk_metadata.get("chunk_type")
+                or chunk_metadata.get("paragraph_kind")
+                or chunk_metadata.get("type")
+                or chunk_metadata.get("kind")
+            )
+            try:
+                return Chunker.normalize_chunk_type(raw_chunk_type) or "text"
+            except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+                return "text"
+
         def _validate_embeddings_result(embeddings, expected_count: int) -> Optional[str]:
             if not embeddings:
                 return "Embedding service returned no embeddings"
@@ -446,6 +465,7 @@ async def generate_embeddings_for_media(
                     "chunk_index": chunk["index"],
                     "chunk_start": chunk["start"],
                     "chunk_end": chunk["end"],
+                    "chunk_type": _chunk_type_for_metadata(chunk),
                     "title": media_content["media_item"].get("title", ""),
                     "author": media_content["media_item"].get("author", ""),
                     "embedding_model": embedding_model,
@@ -525,6 +545,7 @@ async def generate_embeddings_for_media(
                         "chunk_index": chunk["index"],
                         "chunk_start": chunk["start"],
                         "chunk_end": chunk["end"],
+                        "chunk_type": _chunk_type_for_metadata(chunk),
                         "title": media_content["media_item"].get("title", ""),
                         "author": media_content["media_item"].get("author", ""),
                         "embedding_model": FALLBACK_EMBEDDING_MODEL,

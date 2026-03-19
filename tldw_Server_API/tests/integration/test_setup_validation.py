@@ -47,3 +47,22 @@ def test_update_config_type_validation_boolean(mocker):
         resp = client.post('/api/v1/setup/config', json=payload)
     assert resp.status_code == 400
     assert 'Invalid boolean' in resp.text
+
+
+def test_update_config_masks_internal_errors(mocker):
+    mocker.patch.object(
+        setup_endpoint.setup_manager,
+        'get_status_snapshot',
+        return_value={'enabled': True, 'needs_setup': True},
+    )
+    mocker.patch.object(
+        setup_endpoint.setup_manager,
+        'update_config',
+        side_effect=RuntimeError('db blew up at /tmp/secret-config'),
+    )
+
+    with _make_client() as client:
+        resp = client.post('/api/v1/setup/config', json={'updates': {'Setup': {'setup_completed': 'true'}}})
+
+    assert resp.status_code == 500
+    assert resp.json() == {'detail': 'Failed to persist setup configuration.'}

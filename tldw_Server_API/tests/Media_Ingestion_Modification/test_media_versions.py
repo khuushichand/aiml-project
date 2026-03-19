@@ -18,7 +18,8 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.main import app as fastapi_app_instance, app
 # Import specific DB functions used directly in tests/fixtures
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase
+    MediaDatabase,
+    mark_media_as_processed,
     )
 # Import the utility for temporary DB if it's defined elsewhere
 from tldw_Server_API.tests.test_utils import temp_db
@@ -798,6 +799,58 @@ class TestMediaListDetailEndpoints:
         assert "versions" in data # Check if versions are included in detail view
         assert isinstance(data["versions"], list)
         assert len(data["versions"]) >= 1 # Should have at least the initial version
+
+    def test_get_media_item_exposes_chunking_and_vector_processing_status(self):
+
+        """Detail responses should expose retrieval readiness state for workspace clients."""
+        doc_id = self.media_ids["document"]
+        response = self.client.get(f"/api/v1/media/{doc_id}")
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "chunking_status" in data["processing"]
+        assert "vector_processing_status" in data["processing"]
+
+    def test_mark_media_as_processed_advances_version_and_ready_state(self):
+
+        """Embedding-ready updates must satisfy sync triggers and surface in detail responses."""
+        doc_id = self.media_ids["document"]
+        before = self.db.execute_query(
+            "SELECT version, vector_processing FROM Media WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+
+        mark_media_as_processed(self.db, doc_id)
+
+        after = self.db.execute_query(
+            "SELECT version, vector_processing FROM Media WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        assert after["vector_processing"] == 1
+        assert after["version"] == before["version"] + 1
+
+        response = self.client.get(f"/api/v1/media/{doc_id}")
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["processing"]["vector_processing_status"] == 1
+
+    def test_mark_media_as_processed_clears_stale_embeddings_error_status(self):
+
+        """Successful embeddings retries should clear prior embeddings_error state."""
+        doc_id = self.media_ids["document"]
+        self.db.mark_embeddings_error(doc_id, "stale failure")
+        before = self.db.execute_query(
+            "SELECT version, vector_processing, chunking_status FROM Media WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+
+        mark_media_as_processed(self.db, doc_id)
+
+        after = self.db.execute_query(
+            "SELECT version, vector_processing, chunking_status FROM Media WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        assert after["vector_processing"] == 1
+        assert after["chunking_status"] == "completed"
+        assert after["version"] == before["version"] + 1
 
     def test_get_media_item_video(self):
 

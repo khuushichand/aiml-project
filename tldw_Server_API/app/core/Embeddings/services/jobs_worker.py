@@ -31,6 +31,7 @@ Usage (legacy only):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -46,7 +47,11 @@ from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (
     generate_embeddings_for_media,
 )
 from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.Chunking import Chunker
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_media_database,
+    mark_media_as_processed,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
@@ -120,6 +125,13 @@ def _coerce_bool(value: Any) -> bool:
     return is_truthy(str(value).strip().lower())
 
 
+def _normalize_chunk_type(value: Any) -> str | None:
+    try:
+        return Chunker.normalize_chunk_type(value)
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
 def _root_job_uuid(payload: dict[str, Any]) -> str | None:
     root = payload.get("root_job_uuid") or payload.get("parent_job_uuid")
     if root is None:
@@ -155,29 +167,76 @@ def _update_root_job(
 def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
     db_path = get_user_media_db_path(user_id)
     db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
-
-    media_item = db.get_media_by_id(media_id)
-    if not media_item:
-        raise EmbeddingsJobError(f"Media item {media_id} not found", retryable=False)
-
     try:
-        if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version
+        media_item = db.get_media_by_id(media_id)
+        if not media_item:
+            raise EmbeddingsJobError(f"Media item {media_id} not found", retryable=False)
 
-            latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
-            if latest and latest.get("content"):
-                media_item = dict(media_item)
-                media_item["content"] = latest["content"]
-    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
-        logger.warning(f"Failed to load fallback document content for media {media_id}: {exc}")
+        try:
+            if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
+                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version
 
-    if not media_item:
-        raise EmbeddingsJobError(f"No content found for media item {media_id}", retryable=False)
+                latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
+                if latest and latest.get("content"):
+                    media_item = dict(media_item)
+                    media_item["content"] = latest["content"]
+        except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Failed to load fallback document content for media {media_id}: {exc}")
 
-    return {
-        "media_item": media_item,
-        "content": media_item,
-    }
+        if not media_item:
+            raise EmbeddingsJobError(f"No content found for media item {media_id}", retryable=False)
+
+        return {
+            "media_item": media_item,
+            "content": media_item,
+        }
+    finally:
+        with contextlib.suppress(Exception):
+            db.close_connection()
+
+
+def _should_track_media_state(job_type: str | None, payload: dict[str, Any]) -> bool:
+    if job_type != _CONTENT_JOB_TYPE:
+        return True
+    return not (payload.get("collection_name") or payload.get("document_id"))
+
+
+def _mark_media_embeddings_complete(*, user_id: str, media_id: int) -> None:
+    db = None
+    try:
+        db_path = get_user_media_db_path(user_id)
+        db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
+        mark_media_as_processed(db_instance=db, media_id=media_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to mark media {} embeddings complete for user {}: {}",
+            media_id,
+            user_id,
+            exc,
+        )
+    finally:
+        if db is not None:
+            with contextlib.suppress(Exception):
+                db.close_connection()
+
+
+def _mark_media_embeddings_error(*, user_id: str, media_id: int, error_message: str) -> None:
+    db = None
+    try:
+        db_path = get_user_media_db_path(user_id)
+        db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
+        db.mark_embeddings_error(media_id, error_message)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to mark media {} embeddings error for user {}: {}",
+            media_id,
+            user_id,
+            exc,
+        )
+    finally:
+        if db is not None:
+            with contextlib.suppress(Exception):
+                db.close_connection()
 
 
 def _update_root_progress(
@@ -288,9 +347,10 @@ def _config_version(
 
 def _embedding_config_for_user() -> dict[str, Any]:
     cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
-    user_db_base_dir = settings.get("USER_DB_BASE_DIR")
-    if not user_db_base_dir:
+    try:
         user_db_base_dir = str(DatabasePaths.get_user_db_base_dir())
+    except Exception:
+        user_db_base_dir = settings.get("USER_DB_BASE_DIR")
     cfg["USER_DB_BASE_DIR"] = user_db_base_dir
     return cfg
 
@@ -638,11 +698,20 @@ async def _handle_storage_job(
         if text is None:
             raise EmbeddingsJobError("Chunk payload missing text for storage stage", retryable=False)
         chunk_texts.append(text)
+        chunk_metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+        raw_chunk_type = (
+            chunk.get("chunk_type")
+            or chunk_metadata.get("chunk_type")
+            or chunk_metadata.get("paragraph_kind")
+            or chunk_metadata.get("type")
+            or chunk_metadata.get("kind")
+        )
         metadata = {
             "media_id": str(media_id),
             "chunk_index": chunk.get("index", idx),
             "chunk_start": chunk.get("start"),
             "chunk_end": chunk.get("end"),
+            "chunk_type": _normalize_chunk_type(raw_chunk_type) or "text",
             "title": media_content["media_item"].get("title", ""),
             "author": media_content["media_item"].get("author", ""),
             "embedding_model": embedding_model,
@@ -769,7 +838,6 @@ async def _handle_content_job(
         "embedding_model": embedding_model,
         "embedding_provider": embedding_provider,
     }
-    _update_root_job(root_uuid, status="completed", result=payload_result)
     return payload_result
 
 
@@ -905,7 +973,6 @@ async def _handle_custom_content_job(
         "embedding_model": embedding_model,
         "embedding_provider": embedding_provider,
     }
-    _update_root_job(root_uuid, status="completed", result=result)
     return result
 
 
@@ -947,7 +1014,7 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
 
     try:
         if job_type == _CONTENT_JOB_TYPE:
-            return await _handle_content_job(
+            result = await _handle_content_job(
                 job,
                 payload,
                 media_id=media_id,
@@ -958,6 +1025,10 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
                 chunk_overlap=chunk_overlap,
                 root_uuid=root_uuid,
             )
+            _update_root_job(root_uuid, status="completed", result=result)
+            if _should_track_media_state(job_type, payload):
+                _mark_media_embeddings_complete(user_id=user_id, media_id=media_id)
+            return result
 
         if job_type == _EMBEDDINGS_CHUNKING_JOB_TYPE:
             result, skip = await _handle_chunking_job(
@@ -978,6 +1049,8 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
                     "total_chunks": 0,
                 }
                 _update_root_job(root_uuid, status="completed", result=payload_result)
+                if _should_track_media_state(job_type, payload):
+                    _mark_media_embeddings_complete(user_id=user_id, media_id=media_id)
                 return result
             _enqueue_stage_job(
                 job=job,
@@ -1038,6 +1111,8 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
                 root_uuid=root_uuid,
             )
             _update_root_job(root_uuid, status="completed", result=result)
+            if _should_track_media_state(job_type, payload):
+                _mark_media_embeddings_complete(user_id=user_id, media_id=media_id)
             return result
 
         raise EmbeddingsJobError(
@@ -1047,9 +1122,21 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
     except EmbeddingsJobError as exc:
         if not getattr(exc, "retryable", False):
             _update_root_job(root_uuid, status="failed", error=str(exc))
+            if _should_track_media_state(job_type, payload):
+                _mark_media_embeddings_error(
+                    user_id=user_id,
+                    media_id=media_id,
+                    error_message=str(exc),
+                )
         raise
     except Exception as exc:
         _update_root_job(root_uuid, status="failed", error=str(exc))
+        if _should_track_media_state(job_type, payload):
+            _mark_media_embeddings_error(
+                user_id=user_id,
+                media_id=media_id,
+                error_message=str(exc),
+            )
         raise
 
 

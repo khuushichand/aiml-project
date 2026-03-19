@@ -322,6 +322,23 @@ function parseCitations(answer: string, results: RagResult[]): CitationRef[] {
   }))
 }
 
+function normalizeAnswerText(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  return value.trim().length > 0 ? value : null
+}
+
+function normalizeNoteFilterIds(values: unknown): string[] {
+  if (!Array.isArray(values)) return []
+  const normalizedValues = values.map((candidate) => {
+    if (typeof candidate === "string") return candidate
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return String(Math.trunc(candidate))
+    }
+    return null
+  })
+  return mergeStringFilters(normalizedValues)
+}
+
 function normalizeMessageRole(role: unknown): KnowledgeQAMessage["role"] {
   const normalized = String(role ?? "").toLowerCase()
   if (normalized === "assistant" || normalized === "user" || normalized === "system") {
@@ -360,7 +377,7 @@ function normalizeMessagesWithContext(
       return {
         id,
         conversationId: threadId,
-        role: normalizeMessageRole(candidate.role),
+        role: normalizeMessageRole(candidate.role ?? candidate.sender),
         content,
         timestamp:
           typeof timestampCandidate === "string"
@@ -457,16 +474,9 @@ function deriveThreadHydrationState(messages: KnowledgeQAMessage[]): {
 
   const ragContext = latestAssistantMessage.ragContext
   const results = mapRagContextDocumentsToResults(ragContext?.retrieved_documents)
-  const answerCandidate =
-    typeof ragContext?.generated_answer === "string" &&
-    ragContext.generated_answer.trim().length > 0
-      ? ragContext.generated_answer
-      : latestAssistantMessage.content
-
   const answer =
-    typeof answerCandidate === "string" && answerCandidate.trim().length > 0
-      ? answerCandidate
-      : null
+    normalizeAnswerText(ragContext?.generated_answer) ??
+    normalizeAnswerText(latestAssistantMessage.content)
   const citations = answer ? parseCitations(answer, results) : []
   const queryFromContext =
     typeof ragContext?.search_query === "string" &&
@@ -494,7 +504,9 @@ function extractRagResponse(response: any): {
   const results: RagResult[] =
     response?.results || response?.documents || response?.docs || []
   const answer =
-    response?.generated_answer || response?.answer || response?.response || null
+    normalizeAnswerText(response?.generated_answer) ??
+    normalizeAnswerText(response?.answer) ??
+    normalizeAnswerText(response?.response)
   const expandedQueries = Array.isArray(response?.expanded_queries)
     ? response.expanded_queries.filter(
         (value: unknown): value is string =>
@@ -1130,6 +1142,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       ...DEFAULT_RAG_SETTINGS,
       ...(storedSettings || {}),
       ...KNOWLEDGE_QA_SETTINGS_OVERRIDES,
+      include_note_ids: normalizeNoteFilterIds(storedSettings?.include_note_ids),
       enable_web_fallback:
         typeof storedSettings?.enable_web_fallback === "boolean"
           ? storedSettings.enable_web_fallback
@@ -1485,7 +1498,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           overrideSettings.include_media_ids,
           state.pinnedSourceFilters.mediaIds
         ),
-        include_note_ids: mergeNumberFilters(
+        include_note_ids: mergeStringFilters(
           state.settings.include_note_ids,
           overrideSettings.include_note_ids,
           state.pinnedSourceFilters.noteIds
@@ -1563,15 +1576,15 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
                   type: "SET_SEARCH_DETAILS",
                   payload: resolvedSearchDetails,
                 })
-                const partialCitations =
-                  streamAnswer.length > 0
-                    ? parseCitations(streamAnswer, streamResults)
-                    : []
+                const partialAnswer = normalizeAnswerText(streamAnswer)
+                const partialCitations = partialAnswer
+                  ? parseCitations(partialAnswer, streamResults)
+                  : []
                 dispatch({
                   type: "SET_PARTIAL_RESULTS",
                   payload: {
                     results: streamResults,
-                    answer: streamAnswer || null,
+                    answer: partialAnswer,
                     citations: partialCitations,
                   },
                 })
@@ -1585,12 +1598,15 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
                   typeof event?.text === "string" ? event.text : ""
                 if (!deltaText) continue
                 streamAnswer += deltaText
+                const partialAnswer = normalizeAnswerText(streamAnswer)
                 dispatch({
                   type: "SET_PARTIAL_RESULTS",
                   payload: {
                     results: streamResults,
-                    answer: streamAnswer,
-                    citations: parseCitations(streamAnswer, streamResults),
+                    answer: partialAnswer,
+                    citations: partialAnswer
+                      ? parseCitations(partialAnswer, streamResults)
+                      : [],
                   },
                 })
                 receivedStreamEvent = true
@@ -1608,7 +1624,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
             if (receivedStreamEvent) {
               results = streamResults
-              answer = streamAnswer || null
+              answer = normalizeAnswerText(streamAnswer)
               usedStreaming = true
               resolvedSearchDetails = buildSearchDetailsFromStreaming(
                 streamResults,
@@ -2292,7 +2308,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const setPinnedSourceFilters = useCallback((filters: PinnedSourceFilters) => {
     const normalized: PinnedSourceFilters = {
       mediaIds: mergeNumberFilters(filters.mediaIds),
-      noteIds: mergeNumberFilters(filters.noteIds),
+      noteIds: mergeStringFilters(filters.noteIds),
     }
     dispatch({ type: "SET_PINNED_SOURCE_FILTERS", payload: normalized })
   }, [])

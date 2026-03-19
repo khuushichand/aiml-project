@@ -27,6 +27,7 @@ import { appendSystemPromptSuffix } from "@/utils/output-formatting-guide"
 
 const RAG_STRING_ARRAY_KEYS = new Set([
   "sources",
+  "include_note_ids",
   "expansion_strategies",
   "chunk_type_filter",
   "content_policy_types",
@@ -34,7 +35,7 @@ const RAG_STRING_ARRAY_KEYS = new Set([
   "html_allowed_attrs",
   "batch_queries"
 ])
-const RAG_NUMBER_ARRAY_KEYS = new Set(["include_media_ids", "include_note_ids"])
+const RAG_NUMBER_ARRAY_KEYS = new Set(["include_media_ids"])
 const RAG_NULLABLE_STRING_KEYS = new Set([
   "generation_model",
   "generation_provider",
@@ -87,6 +88,28 @@ const sanitizeRagAdvancedOptions = (options?: Record<string, unknown>) => {
 
     if (RAG_STRING_ARRAY_KEYS.has(key)) {
       if (!Array.isArray(value)) continue
+      if (key === "include_note_ids") {
+        if (
+          value.length > 0 &&
+          value.every(
+            (entry) => typeof entry === "number" && Number.isFinite(entry)
+          )
+        ) {
+          sanitized[key] = value
+          continue
+        }
+
+        const normalizedLegacyIds = normalizeStringArray(
+          value.map((entry) =>
+            typeof entry === "number" && Number.isFinite(entry)
+              ? String(entry)
+              : entry
+          )
+        )
+        if (!normalizedLegacyIds) continue
+        sanitized[key] = normalizedLegacyIds
+        continue
+      }
       const normalized = normalizeStringArray(value)
       if (!normalized) continue
       sanitized[key] = normalized
@@ -418,4 +441,8 @@ export const ragMode = async (
     signal,
     params
   )
+}
+
+export const __testing__ = {
+  sanitizeRagAdvancedOptions
 }

@@ -2407,7 +2407,10 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: "/api/v1/admin/storage-quotas/summary", method: "GET" })
   }
 
-  async createChatCompletion(request: ChatCompletionRequest): Promise<Response> {
+  async createChatCompletion(
+    request: ChatCompletionRequest,
+    options?: { signal?: AbortSignal }
+  ): Promise<Response> {
     // Non-stream request via background
     captureChatRequestDebugSnapshot({
       endpoint: "/api/v1/chat/completions",
@@ -2415,7 +2418,13 @@ export class TldwApiClient {
       mode: "non-stream",
       body: request
     })
-    const res = await bgRequest<Response>({ path: '/api/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: request })
+    const res = await bgRequest<Response>({
+      path: '/api/v1/chat/completions',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: request,
+      abortSignal: options?.signal
+    })
     // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
     // For simplicity, return a minimal object with json() and text()
     const data = res as any

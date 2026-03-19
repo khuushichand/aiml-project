@@ -273,19 +273,30 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
           ? shareLink.share_path.trim()
           : `/knowledge/shared/${encodeURIComponent(String(shareLink?.token || ""))}`
       const shareUrl = `${window.location.origin}${sharePath}`
-      await navigator.clipboard.writeText(shareUrl)
-      setActiveShareLink({
+      const nextActiveShareLink = {
         id: String(shareLink.share_id),
         sharePath,
         expiresAt: String(shareLink.expires_at),
-      })
-      setShareLinkCopied(true)
-      message.open({
-        type: "success",
-        content: "Share link copied.",
-        duration: 3,
-      })
-      setTimeout(() => setShareLinkCopied(false), 2000)
+      }
+      setActiveShareLink(nextActiveShareLink)
+
+      try {
+        await navigator.clipboard.writeText(shareUrl)
+        setShareLinkCopied(true)
+        message.open({
+          type: "success",
+          content: "Share link copied.",
+          duration: 3,
+        })
+        setTimeout(() => setShareLinkCopied(false), 2000)
+      } catch (clipboardError) {
+        message.open({
+          type: "error",
+          content: "Unable to copy share link, but the link remains active.",
+          duration: 4,
+        })
+        console.error("Share link copy failed:", clipboardError)
+      }
     } catch (error) {
       message.open({
         type: "error",

@@ -27,6 +27,7 @@ import {
 import { useWorkspaceStore } from "@/store/workspace"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { inferUploadMediaTypeFromFile } from "@/services/tldw/media-routing"
 import type {
   AddSourceTab,
   WorkspaceSourceStatus,
@@ -53,6 +54,15 @@ const DEFAULT_ADD_SOURCE_TAB_ORDER: AddSourceTab[] = [
   "paste",
   "search"
 ]
+const WORKSPACE_RAG_INGEST_FIELDS = {
+  perform_chunking: "true",
+  generate_embeddings: "true",
+  embedding_dispatch_mode: "background"
+} as const
+const WORKSPACE_UPLOAD_INGEST_FIELDS = {
+  overwrite: "false",
+  ...WORKSPACE_RAG_INGEST_FIELDS
+} as const
 
 let existingMediaCache: { items: any[]; totalCount: number; cachedAt: number } | null =
   null
@@ -349,9 +359,10 @@ const UploadTab: React.FC<{
       }))
 
       try {
+        const uploadMediaType = inferUploadMediaTypeFromFile(file.name, file.type)
         const response = await tldwClient.uploadMedia(file, {
-          overwrite: "false",
-          perform_chunking: "true"
+          media_type: uploadMediaType,
+          ...WORKSPACE_UPLOAD_INGEST_FIELDS
         })
         const added = extractMediaFromAddResponse(response)
 
@@ -647,7 +658,9 @@ const UrlTab: React.FC<{
     try {
       if (inputMode === "single") {
         // Use the media/add endpoint with URL
-        const response = await tldwClient.addMedia(singleUrl)
+        const response = await tldwClient.addMedia(singleUrl, {
+          ...WORKSPACE_RAG_INGEST_FIELDS
+        })
         const added = extractMediaFromAddResponse(response)
         const source = buildSourceFromUrlResponse(singleUrl, added)
 
@@ -670,7 +683,9 @@ const UrlTab: React.FC<{
 
       for (const rawUrl of batchUrlList) {
         try {
-          const response = await tldwClient.addMedia(rawUrl)
+          const response = await tldwClient.addMedia(rawUrl, {
+            ...WORKSPACE_RAG_INGEST_FIELDS
+          })
           const added = extractMediaFromAddResponse(response)
           const source = buildSourceFromUrlResponse(rawUrl, added)
           if (!source) {
@@ -865,10 +880,11 @@ const PasteTab: React.FC<{
         type: "text/plain"
       })
 
+      const uploadMediaType = inferUploadMediaTypeFromFile(file.name, file.type)
       const response = await tldwClient.uploadMedia(file, {
+        media_type: uploadMediaType,
         title: title || "Pasted Text",
-        overwrite: "false",
-        perform_chunking: "true"
+        ...WORKSPACE_UPLOAD_INGEST_FIELDS
       })
       const added = extractMediaFromAddResponse(response)
 
@@ -1028,7 +1044,9 @@ const SearchTab: React.FC<{
     for (const result of selectedUrls) {
       const resultUrl = getResultUrl(result as Record<string, unknown>) || "unknown url"
       try {
-        const response = await tldwClient.addMedia(resultUrl)
+        const response = await tldwClient.addMedia(resultUrl, {
+          ...WORKSPACE_RAG_INGEST_FIELDS
+        })
         const added = extractMediaFromAddResponse(response)
         if (added.mediaId != null) {
           addedSources.push({

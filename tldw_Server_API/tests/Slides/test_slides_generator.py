@@ -84,3 +84,30 @@ def test_generate_handles_invalid_json():
             chunk_size_tokens=None,
             summary_tokens=None,
         )
+
+
+def test_generate_uses_deterministic_test_mode_payload(monkeypatch):
+    monkeypatch.setenv("TLDW_TEST_MODE", "1")
+
+    def failing_llm_call(**kwargs):
+        raise AssertionError("LLM call should be bypassed in test mode")
+
+    generator = SlidesGenerator(llm_call=failing_llm_call)
+    result = generator.generate_from_text(
+        source_text="First key point.\nSecond key point.\nThird key point.",
+        title_hint="Test Mode Deck",
+        provider="openai",
+        model=None,
+        api_key=None,
+        temperature=None,
+        max_tokens=None,
+        max_source_tokens=None,
+        max_source_chars=None,
+        enable_chunking=False,
+        chunk_size_tokens=None,
+        summary_tokens=None,
+    )
+
+    assert result["title"] == "Test Mode Deck"
+    assert len(result["slides"]) >= 2
+    assert result["slides"][0]["title"] == "Test Mode Deck"

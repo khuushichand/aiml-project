@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.services.quiz_source_resolver import resolve_quiz_sources
 
 DEFAULT_QUESTION_TYPES = ["multiple_choice", "true_false", "fill_blank"]
@@ -398,12 +399,109 @@ def _build_source_contract(selected_sources: Sequence[dict[str, str]]) -> str:
     return f"- Allowed sources for source_citations.source_type/source_id: {source_refs}"
 
 
+def _truncate_quiz_evidence(text: str, limit: int = 120) -> str:
+    """Collapse evidence text to a stable, citation-friendly excerpt."""
+    normalized = " ".join(str(text or "").split()).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 1].rstrip()}…"
+
+
+def _build_test_mode_questions(
+    *,
+    evidence: Sequence[dict[str, Any]],
+    normalized_sources: Sequence[dict[str, str]],
+    num_questions: int,
+    question_types: Sequence[Any] | None,
+) -> list[dict[str, Any]]:
+    """Build deterministic quiz questions that preserve evidence provenance in test mode."""
+    normalized_types = _coerce_question_types(question_types)
+    total_questions = max(1, num_questions)
+    questions: list[dict[str, Any]] = []
+
+    for index in range(total_questions):
+        source = normalized_sources[index % len(normalized_sources)]
+        evidence_item = evidence[index % len(evidence)] if evidence else {}
+        citation_source_type = str(evidence_item.get("source_type") or source["source_type"]).strip()
+        citation_source_id = str(evidence_item.get("source_id") or source["source_id"]).strip()
+        excerpt = _truncate_quiz_evidence(
+            str(
+                evidence_item.get("text")
+                or f"Study point from {citation_source_type}:{citation_source_id}."
+            )
+        )
+        citation = {
+            "source_type": citation_source_type,
+            "source_id": citation_source_id,
+            "label": f"Source {index + 1}",
+            "quote": excerpt,
+        }
+        question_type = normalized_types[index % len(normalized_types)]
+
+        if question_type == "multiple_choice":
+            questions.append(
+                {
+                    "question_type": "multiple_choice",
+                    "question_text": (
+                        f"Which statement is directly supported by "
+                        f"{citation_source_type}:{citation_source_id}?"
+                    ),
+                    "options": [
+                        excerpt,
+                        "A conflicting claim with no evidence.",
+                        "An empty workspace selection.",
+                        "A discarded draft artifact.",
+                    ],
+                    "correct_answer": 0,
+                    "explanation": "The first option quotes the selected source evidence.",
+                    "hint": "Look for the excerpt copied from the selected source.",
+                    "hint_penalty_points": 0,
+                    "source_citations": [citation],
+                    "points": 1,
+                }
+            )
+            continue
+
+        if question_type == "true_false":
+            questions.append(
+                {
+                    "question_type": "true_false",
+                    "question_text": f"True or false: {excerpt}",
+                    "options": None,
+                    "correct_answer": "true",
+                    "explanation": "The statement is taken directly from the selected source evidence.",
+                    "hint": "This test-mode prompt quotes the source text verbatim.",
+                    "hint_penalty_points": 0,
+                    "source_citations": [citation],
+                    "points": 1,
+                }
+            )
+            continue
+
+        questions.append(
+            {
+                "question_type": "fill_blank",
+                "question_text": f"Fill in the blank: ___ {excerpt}",
+                "options": None,
+                "correct_answer": "Review",
+                "explanation": "Deterministic fill-in placeholder for test-mode coverage.",
+                "hint": "The missing word is a generic study cue.",
+                "hint_penalty_points": 0,
+                "source_citations": [citation],
+                "points": 1,
+            }
+        )
+
+    return questions
+
+
 async def _call_quiz_generation_llm(
     *,
     prompt: str,
     model: str | None = None,
+    api_provider: str | None = None,
 ) -> Any:
-    provider = (DEFAULT_LLM_PROVIDER or "openai").strip().lower()
+    provider = (api_provider or DEFAULT_LLM_PROVIDER or "openai").strip().lower()
     api_key, _debug = resolve_provider_api_key(provider, prefer_module_keys_in_tests=True)
     if provider_requires_api_key(provider) and not api_key:
         raise ValueError(f"Provider '{provider}' requires an API key.")
@@ -532,6 +630,7 @@ async def generate_quiz_from_sources(
     difficulty: str = "mixed",
     focus_topics: list[str] | None = None,
     model: str | None = None,
+    api_provider: str | None = None,
     workspace_tag: str | None = None,
 ) -> dict[str, Any]:
     """Generate a quiz from mixed sources (media, notes, flashcard decks/cards)."""
@@ -542,13 +641,40 @@ async def generate_quiz_from_sources(
         db=db,
         media_db=media_db,
     )
-    content = _build_content_from_evidence(evidence)
 
     normalized_types = _coerce_question_types(question_types)
     focus_instruction = ""
     if focus_topics:
         focus_instruction = f"- Focus on these topics: {', '.join(t for t in focus_topics if t)}"
     source_contract = _build_source_contract(normalized_sources)
+    primary_media_id = _resolve_primary_media_id(normalized_sources)
+    quiz_title, quiz_description = await asyncio.to_thread(
+        _resolve_generated_quiz_metadata,
+        media_db=media_db,
+        normalized_sources=normalized_sources,
+        primary_media_id=primary_media_id,
+    )
+
+    if is_test_mode():
+        questions = _build_test_mode_questions(
+            evidence=evidence,
+            normalized_sources=normalized_sources,
+            num_questions=num_questions,
+            question_types=normalized_types,
+        )
+        _validate_strict_provenance(questions, normalized_sources)
+        return await asyncio.to_thread(
+            _persist_generated_quiz,
+            db=db,
+            normalized_sources=normalized_sources,
+            questions=questions,
+            quiz_title=quiz_title,
+            quiz_description=quiz_description,
+            primary_media_id=primary_media_id,
+            workspace_tag=workspace_tag,
+        )
+
+    content = _build_content_from_evidence(evidence)
 
     prompt = QUIZ_GENERATION_PROMPT.format(
         num_questions=num_questions,
@@ -559,7 +685,10 @@ async def generate_quiz_from_sources(
         source_contract=source_contract,
     )
 
-    raw_response = await _call_quiz_generation_llm(prompt=prompt, model=model)
+    llm_kwargs: dict[str, Any] = {"prompt": prompt, "model": model}
+    if api_provider:
+        llm_kwargs["api_provider"] = api_provider
+    raw_response = await _call_quiz_generation_llm(**llm_kwargs)
     content_text = extract_response_content(raw_response)
     payload = _extract_json_payload(content_text if content_text is not None else raw_response)
     raw_questions = payload.get("questions") if isinstance(payload, dict) else payload
@@ -578,13 +707,6 @@ async def generate_quiz_from_sources(
         raise ValueError("No valid questions generated")
     _validate_strict_provenance(questions, normalized_sources)
 
-    primary_media_id = _resolve_primary_media_id(normalized_sources)
-    quiz_title, quiz_description = await asyncio.to_thread(
-        _resolve_generated_quiz_metadata,
-        media_db=media_db,
-        normalized_sources=normalized_sources,
-        primary_media_id=primary_media_id,
-    )
     return await asyncio.to_thread(
         _persist_generated_quiz,
         db=db,
@@ -607,6 +729,7 @@ async def generate_quiz_from_media(
     difficulty: str = "mixed",
     focus_topics: list[str] | None = None,
     model: str | None = None,
+    api_provider: str | None = None,
     workspace_tag: str | None = None,
 ) -> dict[str, Any]:
     """Backward-compatible wrapper for legacy media-only generation requests."""
@@ -619,5 +742,6 @@ async def generate_quiz_from_media(
         difficulty=difficulty,
         focus_topics=focus_topics,
         model=model,
+        api_provider=api_provider,
         workspace_tag=workspace_tag,
     )
