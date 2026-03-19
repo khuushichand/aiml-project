@@ -10,6 +10,7 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
+from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_documents_form,
@@ -65,6 +66,7 @@ ALLOWED_DOC_EXTENSIONS = [
     "/process-documents",
     summary="Extract, chunk, analyse Documents (NO DB Persistence)",
     tags=["Media Processing (No DB)"],
+    dependencies=[Depends(guard_storage_quota)],
 )
 async def process_documents_endpoint(
     db: Any = Depends(get_media_db_for_user),

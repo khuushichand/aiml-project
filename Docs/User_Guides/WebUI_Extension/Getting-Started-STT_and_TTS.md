@@ -12,10 +12,44 @@ See design doc: [`Docs/Design/STT_TTS_Audio_API_Design.md`](../../Design/STT_TTS
 
 ## TL;DR Choices
 
+- Best first-run path after install: `/setup` -> accept the recommended audio bundle -> provision -> run verification.
 - Fastest TTS (hosted): OpenAI TTS — requires `OPENAI_API_KEY`.
 - Local TTS (offline): Kokoro ONNX — requires model files + eSpeak library.
 - Local STT (offline): faster-whisper — requires FFmpeg; optional GPU.
 - Advanced STT (optional): NeMo Parakeet/Canary, Qwen2Audio — larger setup, GPU recommended.
+
+## Recommended Setup Path - Use `/setup` Audio Bundles First
+
+For new installs, prefer the guided `/setup` flow over hand-picking providers.
+The setup UI now detects local hardware, recommends a curated audio bundle, provisions it, and gives you a verification + readiness report before you start making STT/TTS API calls.
+
+Recommended operator flow:
+
+1. Start the server and open `http://127.0.0.1:8000/setup`
+2. Save any required config changes
+3. In the audio stage, click `Provision recommended bundle`
+4. Complete any guided prerequisites called out in the report
+5. Click `Run verification`
+6. Use the API examples below only after the readiness report reaches `ready` or `ready_with_warnings`
+
+Current curated bundle matrix (generated from `Helper_Scripts/generate_audio_bundle_docs.py`):
+
+| Bundle ID | Label | Profiles | Offline runtime after provisioning | Offline pack compatibility | Default STT | Default TTS |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro |
+| `apple_silicon_local` | Apple Silicon Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro |
+| `nvidia_local` | NVIDIA Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [medium] | kokoro |
+| `hosted_plus_local_backup` | Hosted With Local Backup | Balanced | No | v1 manifest import only | faster_whisper [small] | kokoro |
+
+Resource profile guidance:
+- `Light`: lowest disk and memory footprint; best when you need a conservative local install.
+- `Balanced`: the default for most machines and the safest recommendation when hardware signals are incomplete.
+- `Performance`: larger local footprint; only pick it when disk headroom and acceleration are clearly available.
+
+Offline pack guidance:
+- `Online provisioning` is still the default. It installs Python dependencies, downloads models, and verifies the current machine.
+- `Offline pack import` is now available through the setup audio pack import endpoint for manifest + model portability.
+- `Offline pack` v1 does not install Python dependencies or OS prerequisites on the target machine. It validates compatibility and registers the imported pack in the readiness report.
 
 ## Prerequisites
 

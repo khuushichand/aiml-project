@@ -3,7 +3,11 @@ import React from "react"
 import { Badge } from "@/components/ui/primitives/Badge"
 import { PresentationStudioStatusBadge } from "./PresentationStudioStatusBadge"
 import { describeSlideReadiness } from "./presentationStudioReadiness"
-import { usePresentationStudioStore } from "@/store/presentation-studio"
+import {
+  type PresentationStudioTimingMode,
+  type PresentationStudioTransition,
+  usePresentationStudioStore
+} from "@/store/presentation-studio"
 
 const transitionOptions = [
   { value: "fade", label: "Fade" },
@@ -116,7 +120,8 @@ export const SlideEditorPane: React.FC = () => {
                     updateSlide(slide.metadata.studio.slideId, {
                       metadata: {
                         studio: {
-                          transition: event.target.value
+                          transition:
+                            event.target.value as PresentationStudioTransition
                         }
                       }
                     })
@@ -140,7 +145,8 @@ export const SlideEditorPane: React.FC = () => {
                     updateSlide(slide.metadata.studio.slideId, {
                       metadata: {
                         studio: {
-                          timing_mode: event.target.value
+                          timing_mode:
+                            event.target.value as PresentationStudioTimingMode
                         }
                       }
                     })

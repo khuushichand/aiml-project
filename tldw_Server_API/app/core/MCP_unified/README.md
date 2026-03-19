@@ -57,6 +57,21 @@
 ## Overview
 A secure, production-ready Model Context Protocol implementation that consolidates MCP v1 and v2 with enterprise-grade features.
 
+## Managed External Credential Brokering
+
+Managed external MCP servers now follow a brokered runtime model instead of static secret hydration.
+
+- Runtime registry payloads stay auth-neutral. Managed server configs are loaded with `auth.mode=none`, and durable headers/env are not baked into adapter config.
+- Effective policy and MCP Hub credential bindings are resolved at call time.
+- Managed secret refs and legacy encrypted slot secrets are translated into transient execution headers/env only for the active tool call.
+- Transport adapters must not persist brokered secret values in long-lived state, config snapshots, telemetry, or logs.
+
+Current enterprise support matrix for this path:
+
+- OIDC-backed AuthNZ federation is the supported identity source in phase 1.
+- Local encrypted secret refs (`local_encrypted_v1`) are the first managed backend.
+- Brokered credentials are applied per execution for managed websocket and stdio external MCP servers.
+
 ## ✅ What's Been Built
 
 ### Core Components

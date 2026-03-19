@@ -11,6 +11,7 @@ describe("chat width cross-surface guard", () => {
     const playgroundChatSource = readSource("../PlaygroundChat.tsx")
     const playgroundFormSource = readSource("../PlaygroundForm.tsx")
     const messageSource = readSource("../../../Common/Playground/Message.tsx")
+    const messageContentSource = readSource("../../../Common/Playground/MessageContent.tsx")
     const userMessageSource = readSource(
       "../../../Common/Playground/PlaygroundUserMessage.tsx"
     )
@@ -21,18 +22,20 @@ describe("chat width cross-surface guard", () => {
       "../../../../../../../tldw-frontend/extension/routes/sidepanel-chat.tsx"
     )
 
+    const combinedMessageSource = messageSource + messageContentSource
+
     expect(playgroundSource).toContain("max-w-[64rem]")
     expect(playgroundChatSource).toContain("w-full max-w-5xl md:px-4 mb-4 space-y-2")
     expect(playgroundFormSource).toContain("max-w-[64rem]")
-    expect(messageSource).toContain("max-w-5xl")
-    const messageInsetMatches = messageSource.match(
+    expect(combinedMessageSource).toContain("max-w-5xl")
+    const messageInsetMatches = combinedMessageSource.match(
       /max-w-\[calc\(100%-1\.75rem\)\]/g
     )
     expect(messageInsetMatches?.length ?? 0).toBeGreaterThanOrEqual(3)
-    expect(messageSource).toContain(
+    expect(combinedMessageSource).toContain(
       '"prose break-words text-message dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark max-w-none"'
     )
-    expect(messageSource).toContain(
+    expect(combinedMessageSource).toContain(
       "prose max-w-none dark:prose-invert whitespace-pre-line"
     )
     expect(userMessageSource).toContain("max-w-5xl")

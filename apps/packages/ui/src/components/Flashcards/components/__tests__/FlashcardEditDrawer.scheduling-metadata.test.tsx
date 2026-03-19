@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 import { FlashcardEditDrawer } from "../FlashcardEditDrawer"
 import { FLASHCARDS_DRAWER_WIDTH_PX } from "../../constants"
 import type { Flashcard } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 
 dayjs.extend(relativeTime)
 
@@ -85,6 +86,7 @@ describe("FlashcardEditDrawer scheduling metadata panel", () => {
       interval_days: 7,
       repetitions: 4,
       lapses: 2,
+      queue_state: "review",
       due_at: dueAt,
       last_reviewed_at: lastReviewedAt,
       last_modified: null,
@@ -109,7 +111,9 @@ describe("FlashcardEditDrawer scheduling metadata panel", () => {
             description: null,
             deleted: false,
             client_id: "1",
-            version: 1
+            version: 1,
+            scheduler_type: "sm2_plus",
+            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
           }
         ]}
       />

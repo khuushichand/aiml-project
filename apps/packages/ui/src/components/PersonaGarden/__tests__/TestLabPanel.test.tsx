@@ -42,6 +42,14 @@ const analytics = {
     fallback_rate: 25,
     avg_response_time_ms: 180
   },
+  live_voice: {
+    total_committed_turns: 8,
+    vad_auto_commit_count: 5,
+    manual_commit_count: 3,
+    vad_auto_rate: 63,
+    manual_commit_rate: 38,
+    degraded_session_count: 1
+  },
   commands: [
     {
       command_id: "cmd-alert",

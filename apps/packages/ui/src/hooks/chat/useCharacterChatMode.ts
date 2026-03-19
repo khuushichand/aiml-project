@@ -316,6 +316,9 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
       streamingTimer = null;
     };
 
+    const abortCancelStreamingUpdate = () => cancelStreamingUpdate();
+    signal.addEventListener("abort", abortCancelStreamingUpdate);
+
     try {
       if (!resolvedModel) {
         notification.error({
@@ -1038,6 +1041,7 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
     } finally {
       discardCurrentTurnOnAbortRef.current = false;
       cancelStreamingUpdate();
+      signal.removeEventListener("abort", abortCancelStreamingUpdate);
       if (inactivityTimer) clearTimeout(inactivityTimer);
       setAbortController(null);
     }

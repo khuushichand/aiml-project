@@ -2480,6 +2480,7 @@ async def add_media_orchestrate(
                     db_path=db_path_for_workers,
                     client_id=client_id_for_workers,
                     temp_dir=temp_dir_path,
+                    user_id=int(current_user.id) if str(getattr(current_user, "id", "")).isdigit() else None,
                 )
                 results.extend(batch_results)
             else:
@@ -3315,6 +3316,7 @@ async def process_batch_media(
     db_path: str,
     client_id: str,
     temp_dir: FilePath,
+    user_id: int | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """
@@ -3764,6 +3766,7 @@ async def process_batch_media(
                     False,
                 ),
                 "keep_original": getattr(form_data, "keep_original_file", False),
+                "user_id": user_id,
                 "cancel_check": cancel_check,
             }
             if attach_chunk_options:
@@ -3840,6 +3843,7 @@ async def process_batch_media(
                 "keep_original": getattr(form_data, "keep_original_file", False),
                 "custom_title": getattr(form_data, "title", None),
                 "author": getattr(form_data, "author", None),
+                "user_id": user_id,
                 "cancel_check": cancel_check,
             }
             if attach_chunk_options:

@@ -194,13 +194,19 @@ const normalizeSettings = (value?: Partial<RagSettings>) => ({
   ...(value || {})
 })
 
-const parseIdList = (value: string) =>
+const parseNumericIdList = (value: string) =>
   value
     .split(",")
     .map((item) => Number(item.trim()))
     .filter((num) => Number.isFinite(num) && num > 0)
 
-const stringifyIdList = (value: number[]) => value.join(", ")
+const parseStringIdList = (value: string) =>
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+const stringifyIdList = (value: Array<string | number>) => value.join(", ")
 
 const parseBatchQueries = (value: string) =>
   value
@@ -2585,7 +2591,7 @@ export const RagSearchBar: React.FC<Props> = ({
                       t("sidepanel:rag.includeMediaIds", "Include media IDs"),
                       stringifyIdList(draftSettings.include_media_ids),
                       (next) =>
-                        updateSetting("include_media_ids", parseIdList(next)),
+                        updateSetting("include_media_ids", parseNumericIdList(next)),
                       {
                         placeholder: "1, 2, 3"
                       }
@@ -2598,7 +2604,7 @@ export const RagSearchBar: React.FC<Props> = ({
                       t("sidepanel:rag.includeNoteIds", "Include note IDs"),
                       stringifyIdList(draftSettings.include_note_ids),
                       (next) =>
-                        updateSetting("include_note_ids", parseIdList(next)),
+                        updateSetting("include_note_ids", parseStringIdList(next)),
                       {
                         placeholder: "10, 11, 12"
                       }

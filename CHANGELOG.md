@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 
+## [0.1.28] 2026-03-15
+
+### Added
+
+- Profile-aware curated audio bundles in `/setup`, with `light`, `balanced`, and `performance` resource tiers for the local hardware families and conservative recommendation scoring across bundle/profile pairs.
+- A v1 setup audio pack service for manifest export/import, including selection identity capture, checksum validation, and compatibility checks for platform, architecture, and Python minor version.
+- Setup readiness persistence for imported audio packs so pack metadata, compatibility status, and asset manifests are visible alongside the selected bundle/profile state.
+
+### Changed
+
+- The `/setup` audio UI now recommends both a hardware bundle and a resource profile, shows profile-specific disk/tier metadata, and sends `resource_profile` through provisioning and verification flows.
+- Audio bundle documentation and speech onboarding guides now describe per-profile footprints and the distinction between online provisioning and v1 offline-pack import.
+
+### Fixed
+
+- Safe rerun and verification flows now stay aligned with the selected bundle/profile identity instead of treating every bundle as a single undifferentiated install target.
+- Setup documentation no longer implies a fully offline dependency installer; the v1 offline-pack path is documented as manifest-and-model portability only.
+
+
+## [0.1.27] 2026-03-15
+
+### Added
+
+- Bundle-first audio setup provisioning in `/setup` with a curated audio bundle catalog for `cpu_local`, `apple_local`, `nvidia_local`, and `hosted_plus_local_backup`, plus backend coverage for bundle selection and expansion.
+- Hardware-aware audio bundle recommendations driven by detected setup machine profile data, with new setup APIs for recommendation retrieval and bundle provisioning.
+- A persisted `audio_readiness` state model and setup endpoints for readiness inspection and reset so audio provisioning status no longer depends on the global setup completion flag.
+- End-to-end audio verification and readiness classification for primary STT/TTS paths, including setup-facing health collection, remediation reporting, and integration coverage for recommendation, readiness, provisioning, and verification flows.
+- A generator-backed audio bundle documentation path via `Helper_Scripts/generate_audio_bundle_docs.py`, along with design and implementation plan docs for the bundle rollout.
+
+### Changed
+
+- The `/setup` audio experience now defaults to curated bundle selection instead of exposing provider-level STT/TTS choices first, with detected hardware, prerequisite visibility, provisioning progress, safe rerun, verification, and readiness-report UX.
+- Setup and speech onboarding guides were rewritten around the new bundle-first flow, including clearer separation between online provisioning, pre-seeded offline provisioning, and offline runtime after provisioning.
+
+### Fixed
+
+- Setup audio completion is now classified by real verification outcomes (`ready`, `ready_with_warnings`, `partial`, `failed`) instead of treating install completion as proof that the speech stack is usable.
+- Final setup-scope verification and security checks were tightened for the touched installer paths, including Bandit-clean subprocess annotations and docs/test alignment for the new audio bundle workflow.
+
+
 ## [0.1.26] 2026-03-15
 
 ### Consolidated Release Summary (Merged PRs #790-#897)

@@ -21,6 +21,7 @@ from typing import Any, Literal, Mapping, Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Body,
     Depends,
     HTTPException,
@@ -34,6 +35,9 @@ from loguru import logger
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.llm_routing_deps import (
+    get_request_routing_decision_store,
+)
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
@@ -67,6 +71,10 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     DEFAULT_LLM_PROVIDER,
 )
 from tldw_Server_API.app.api.v1.utils.deprecation import build_deprecation_headers
+from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    apply_llm_provider_overrides_to_listing,
+    get_override_model_priority,
+)
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
@@ -117,6 +125,7 @@ from tldw_Server_API.app.core.Persona.exemplar_prompt_assembly import (
 from tldw_Server_API.app.core.Chat.chat_service import (
     is_model_known_for_provider,
     perform_chat_api_call,
+    perform_chat_api_call_async,
     resolve_provider_and_model,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
@@ -125,6 +134,21 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.LLM_Calls.routing import (
+    InMemoryRoutingDecisionStore,
+    RouterRequest,
+    RoutingPolicy,
+    RoutingUsageContext,
+    build_provider_order_for_routing,
+    flatten_provider_listing_for_routing,
+    log_model_router_usage,
+    resolve_routing_policy,
+    route_model,
+    select_llm_router_choice,
+)
+from tldw_Server_API.app.core.LLM_Calls.routing.candidate_pool import (
+    build_candidate_pool,
+)
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
 
@@ -132,6 +156,8 @@ from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_pr
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.Utils.common import parse_boolean
 from tldw_Server_API.app.core.config import load_and_log_configs
+
+from .llm_providers import get_configured_providers
 
 _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS = (
     ChatAPIError,
@@ -235,6 +261,225 @@ def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> st
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Placeholder replacement failed: {}", exc)
         return text
+
+
+def _extract_character_latest_user_turn_text(
+    messages: list[dict[str, Any]],
+    *,
+    appended_user_message: str | None = None,
+) -> str:
+    """Return the latest user turn text for auto-routing decisions."""
+    if isinstance(appended_user_message, str) and appended_user_message.strip():
+        return appended_user_message.strip()
+
+    for message in reversed(messages or []):
+        if str(message.get("role") or "").strip().lower() != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for part in content:
+                if not isinstance(part, Mapping):
+                    continue
+                if str(part.get("type") or "").strip().lower() != "text":
+                    continue
+                text = str(part.get("text") or "").strip()
+                if text:
+                    text_parts.append(text)
+            if text_parts:
+                return "\n".join(text_parts)
+    return ""
+
+
+def _character_request_uses_vision_input(messages: list[dict[str, Any]]) -> bool:
+    """Return True when the completion payload includes image parts."""
+    for message in messages or []:
+        content = message.get("content")
+        if isinstance(content, dict):
+            content = [content]
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, Mapping):
+                continue
+            if str(part.get("type") or "").strip().lower() == "image_url":
+                return True
+    return False
+
+
+def _extract_character_routing_requested_capabilities(
+    *,
+    body: CharacterChatCompletionV2Request,
+    formatted_messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Derive hard routing capability filters from a character-chat request."""
+    return {
+        "tools": bool(body.tools),
+        "vision": _character_request_uses_vision_input(formatted_messages),
+        "json_mode": False,
+        "reasoning": False,
+    }
+
+
+async def _select_auto_character_llm_router_choice(
+    *,
+    router_request: RouterRequest,
+    policy: RoutingPolicy,
+    candidates: list[dict[str, Any]],
+    provider_listing: dict[str, Any],
+    current_user: User | None,
+) -> tuple[dict[str, str] | None, dict[str, Any]]:
+    """Select a concrete router-model choice for character-chat auto routing."""
+
+    def _fallback_resolver(name: str) -> Optional[str]:
+        try:
+            from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
+
+            return get_api_keys().get(name)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    user_id_int: Optional[int] = None
+    if hasattr(current_user, "id_int"):
+        user_id_int = current_user.id_int
+    elif hasattr(current_user, "id"):
+        with contextlib.suppress(TypeError, ValueError):
+            user_id_int = int(current_user.id)
+
+    async def _execute_router_call(router_model, router_messages):
+        byok_resolution = await resolve_byok_credentials(
+            router_model.provider,
+            user_id=user_id_int,
+            fallback_resolver=_fallback_resolver,
+        )
+        try:
+            return await perform_chat_api_call_async(
+                api_endpoint=router_model.provider,
+                messages_payload=router_messages,
+                api_key=byok_resolution.api_key,
+                model=router_model.model,
+                max_tokens=64,
+                streaming=False,
+                user_identifier=str(getattr(current_user, "id", "auto-router")),
+                app_config=byok_resolution.app_config,
+            )
+        finally:
+            await byok_resolution.touch_last_used()
+
+    async def _log_router_usage(router_model, usage, latency_ms):
+        try:
+            await log_model_router_usage(
+                context=RoutingUsageContext(
+                    surface="character_chat",
+                    endpoint="POST:/api/v1/chats/{chat_id}/complete-v2",
+                    user_id=user_id_int,
+                    conversation_id=router_request.scope,
+                ),
+                provider=router_model.provider,
+                model=router_model.model,
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                total_tokens=usage["total_tokens"],
+                latency_ms=latency_ms,
+                estimated=usage["total_tokens"] == 0,
+            )
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Auto character-chat router usage logging skipped: {}", exc)
+
+    try:
+        return await select_llm_router_choice(
+            router_request=router_request,
+            policy=policy,
+            candidates=candidates,
+            provider_listing=provider_listing,
+            execute_router_call=_execute_router_call,
+            log_router_usage=_log_router_usage,
+        )
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Auto character-chat LLM router call failed: {}", exc)
+        return None, {"error": type(exc).__name__}
+
+
+async def _resolve_auto_character_chat_routing_decision(
+    *,
+    chat_id: str,
+    body: CharacterChatCompletionV2Request,
+    raw_provider: str | None,
+    formatted_messages: list[dict[str, Any]],
+    sticky_store: InMemoryRoutingDecisionStore,
+    current_user: User | None,
+) -> tuple[Any | None, dict[str, Any]]:
+    """Resolve `model='auto'` into a canonical provider/model pair for character chat."""
+    provider_listing = apply_llm_provider_overrides_to_listing(get_configured_providers())
+    default_provider = str(
+        provider_listing.get("default_provider") or _get_default_provider()
+    ).strip().lower() or _get_default_provider()
+    policy = resolve_routing_policy(
+        request_model=str(body.model or ""),
+        explicit_provider=raw_provider,
+        routing_override=body.routing,
+        server_default_provider=default_provider,
+    )
+    requested_capabilities = _extract_character_routing_requested_capabilities(
+        body=body,
+        formatted_messages=formatted_messages,
+    )
+    candidates = build_candidate_pool(
+        boundary_mode=policy.boundary_mode,
+        pinned_provider=policy.pinned_provider,
+        server_default_provider=policy.server_default_provider,
+        requested_capabilities=requested_capabilities,
+        catalog=flatten_provider_listing_for_routing(provider_listing),
+    )
+    router_request = RouterRequest(
+        model="auto",
+        surface="character_chat",
+        latest_user_turn=_extract_character_latest_user_turn_text(
+            formatted_messages,
+            appended_user_message=body.append_user_message,
+        ),
+        scope=chat_id,
+        requested_capabilities=requested_capabilities,
+        routing_context={
+            "stream": bool(body.stream),
+            "include_character_context": bool(body.include_character_context),
+            "directed_character_id": body.directed_character_id,
+        },
+    )
+    llm_router_choice, llm_router_debug = await _select_auto_character_llm_router_choice(
+        router_request=router_request,
+        policy=policy,
+        candidates=candidates,
+        provider_listing=provider_listing,
+        current_user=current_user,
+    )
+    decision = route_model(
+        request=router_request,
+        policy=policy,
+        candidates=candidates,
+        sticky_store=sticky_store,
+        llm_router_choice=llm_router_choice,
+        provider_order=build_provider_order_for_routing(
+            provider_listing,
+            objective=policy.objective,
+            priority_resolver=get_override_model_priority,
+        ),
+    )
+    return decision, {
+        "policy": {
+            "boundary_mode": policy.boundary_mode,
+            "pinned_provider": policy.pinned_provider,
+            "server_default_provider": policy.server_default_provider,
+            "objective": policy.objective,
+            "mode": policy.mode,
+            "strategy": policy.strategy,
+            "failure_mode": policy.failure_mode,
+        },
+        "candidate_count": len(candidates),
+        "llm_router": llm_router_debug,
+    }
 
 def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
     """
@@ -1592,6 +1837,186 @@ def _inject_author_note_from_settings(
     return _insert_author_note_message(messages, author_note_message, position)
 
 
+# ---------------------------------------------------------------------------
+# Cross-session character memory injection
+# ---------------------------------------------------------------------------
+
+_TOKEN_BUDGET_CHARACTER_MEMORY = 300  # approximate token cap for injected memory block
+
+
+def _inject_character_memory_from_db(
+    messages: list[dict[str, Any]],
+    db: Any,
+    user_id: str,
+    character_id: str,
+    char_name: str,
+    user_name: str,
+    token_budget: int = _TOKEN_BUDGET_CHARACTER_MEMORY,
+) -> list[dict[str, Any]]:
+    """Inject cross-session character memories as a system message.
+
+    Queries ``persona_memory_entries`` for this user+character, groups by
+    category, and appends a structured block after author note injection.
+    Truncates to *token_budget* (approximate: 1 token ~ 4 chars).
+    """
+    from tldw_Server_API.app.api.v1.endpoints.character_memory import _persona_id_for_character
+
+    persona_id = _persona_id_for_character(character_id)
+    try:
+        rows = db.list_persona_memory_entries(
+            user_id=user_id,
+            persona_id=persona_id,
+            include_archived=False,
+            include_deleted=False,
+            limit=200,
+        )
+    except Exception as exc:
+        logger.debug("Character memory injection skipped (DB error): {}", exc)
+        return messages
+
+    if not rows:
+        return messages
+
+    # Sort by salience DESC, then last_modified DESC
+    rows.sort(key=lambda r: (float(r.get("salience", 0)), r.get("last_modified", "")), reverse=True)
+
+    # Group by category
+    categories: dict[str, list[str]] = {}
+    for row in rows:
+        cat = row.get("memory_type", "manual")
+        content = row.get("content", "").strip()
+        if content:
+            categories.setdefault(cat, []).append(content)
+
+    # Build text block
+    category_labels = {
+        "fact": "Facts",
+        "relationship": "Relationship",
+        "event": "Events",
+        "preference": "Preferences",
+        "manual": "Notes",
+    }
+    lines: list[str] = [f"Character memory about {user_name}:"]
+    char_budget = token_budget * 4  # approximate chars
+    total_chars = len(lines[0])
+
+    for cat, label in category_labels.items():
+        entries = categories.get(cat)
+        if not entries:
+            continue
+        header = f"[{label}]"
+        lines.append(header)
+        total_chars += len(header) + 1
+        for entry in entries:
+            line = f"- {entry}"
+            if total_chars + len(line) + 1 > char_budget:
+                break
+            lines.append(line)
+            total_chars += len(line) + 1
+        if total_chars >= char_budget:
+            break
+
+    if len(lines) <= 1:
+        return messages
+
+    memory_block = "\n".join(lines)
+    memory_message = {"role": "system", "content": memory_block}
+    return [*messages, memory_message]
+
+
+# In-memory counters for extraction trigger (avoids extra DB write per message)
+_extraction_message_counters: dict[str, int] = {}
+
+
+def _maybe_trigger_character_memory_extraction(
+    *,
+    background_tasks: Any,
+    db: Any,
+    chat_id: str,
+    settings_row: Any,
+    conversation: dict[str, Any],
+    character_id: str,
+    char_name: str,
+    user_id: str,
+) -> None:
+    """Check extraction settings and trigger background extraction if threshold met."""
+    if background_tasks is None:
+        return
+
+    settings = {}
+    if isinstance(settings_row, dict):
+        settings = settings_row.get("settings", {}) or {}
+    extraction_cfg = settings.get("characterMemoryExtraction")
+    if not isinstance(extraction_cfg, dict) or not extraction_cfg.get("enabled"):
+        return
+
+    interval = int(extraction_cfg.get("intervalMessages", 10))
+    if interval < 1:
+        interval = 10
+
+    counter_key = f"{user_id}:{chat_id}"
+    count = _extraction_message_counters.get(counter_key, 0) + 1
+    _extraction_message_counters[counter_key] = count
+
+    if count < interval:
+        return
+
+    # Reset counter and trigger
+    _extraction_message_counters[counter_key] = 0
+    user_name = conversation.get("user_name", "User")
+    provider = extraction_cfg.get("provider") or "openai"
+    model = extraction_cfg.get("model")
+
+    def _run_extraction() -> None:
+        from tldw_Server_API.app.api.v1.endpoints.character_memory import (
+            get_or_create_character_persona_profile,
+            _persona_id_for_character,
+        )
+        from tldw_Server_API.app.core.Character_Chat.modules.character_memory_extraction import (
+            extract_character_memories,
+        )
+
+        try:
+            persona_id = get_or_create_character_persona_profile(db, character_id, char_name, user_id)
+            existing = db.list_persona_memory_entries(
+                user_id=user_id, persona_id=persona_id, include_archived=True, include_deleted=False, limit=1000,
+            )
+            messages = db.get_messages_for_conversation(chat_id, limit=50, offset=0) or []
+            messages = [m for m in messages if not m.get("deleted")]
+            if not messages:
+                return
+
+            extraction = extract_character_memories(
+                messages=messages,
+                char_name=char_name,
+                user_name=user_name,
+                existing_memories=existing,
+                api_endpoint=provider,
+                model=model,
+            )
+            for mem in extraction.unique:
+                try:
+                    db.add_persona_memory_entry({
+                        "persona_id": persona_id,
+                        "user_id": user_id,
+                        "memory_type": mem["category"],
+                        "content": mem["content"],
+                        "salience": mem["salience"],
+                        "source_conversation_id": chat_id,
+                    })
+                except Exception as exc:
+                    logger.debug("Failed to persist auto-extracted memory: {}", exc)
+            if extraction.unique:
+                logger.info(
+                    "Auto-extracted {} character memories for chat {} (char={})",
+                    len(extraction.unique), chat_id, char_name,
+                )
+        except Exception as exc:
+            logger.warning("Background character memory extraction failed: {}", exc)
+
+    background_tasks.add_task(_run_extraction)
+
+
 def _coerce_truthy_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -2804,6 +3229,14 @@ async def prepare_chat_completion(
             char_name=char_label,
             user_name=user_name,
         )
+        formatted = _inject_character_memory_from_db(
+            formatted,
+            db=db,
+            user_id=str(current_user.id),
+            character_id=str(turn_context.get("active_character_id") or conversation.get("character_id", "")),
+            char_name=char_label,
+            user_name=user_name,
+        )
         formatted, steering_conflict = _inject_message_steering_instruction(
             formatted,
             continue_as_user=body.continue_as_user,
@@ -3081,6 +3514,14 @@ async def prompt_assembly_preview(
             char_name=char_name,
             user_name=user_name,
         )
+        formatted = _inject_character_memory_from_db(
+            formatted,
+            db=db,
+            user_id=str(current_user.id),
+            character_id=str(turn_context.get("active_character_id") or conversation.get("character_id", "")),
+            char_name=char_name,
+            user_name=user_name,
+        )
 
         continue_flag, impersonate_flag, narrate_flag, steering_conflict = (
             _resolve_message_steering_flags(
@@ -3264,7 +3705,9 @@ async def character_chat_completion(
     chat_id: str = Path(..., description="Chat session ID"),
     body: CharacterChatCompletionV2Request = None,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    current_user: User = Depends(get_request_user)
+    routing_decision_store: InMemoryRoutingDecisionStore = Depends(get_request_routing_decision_store),
+    current_user: User = Depends(get_request_user),
+    background_tasks: BackgroundTasks = None,
 ):
     """Perform a character chat completion using configured providers and persist results optionally.
 
@@ -3420,6 +3863,14 @@ async def character_chat_completion(
             char_name=char_label,
             user_name=user_name,
         )
+        formatted = _inject_character_memory_from_db(
+            formatted,
+            db=db,
+            user_id=str(current_user.id),
+            character_id=str(turn_context.get("active_character_id") or conversation.get("character_id", "")),
+            char_name=char_label,
+            user_name=user_name,
+        )
         formatted, steering_conflict = _inject_message_steering_instruction(
             formatted,
             continue_as_user=body.continue_as_user,
@@ -3471,7 +3922,9 @@ async def character_chat_completion(
 
         # Determine provider/model with shared normalization and safe defaults.
         default_provider = _get_default_provider().strip()
-        explicit_model_requested = bool(str(body.model or "").strip())
+        raw_model_input = str(body.model or "").strip()
+        auto_model_requested = raw_model_input.lower() == "auto"
+        explicit_model_requested = bool(raw_model_input) and not auto_model_requested
         strict_model_selection = _should_enforce_char_chat_strict_model_selection()
         raw_provider = (
             body.provider
@@ -3489,6 +3942,38 @@ async def character_chat_completion(
 
         provider = (raw_provider or default_provider).strip()
         model = raw_model or "local-test"
+        routing_decision = None
+        if auto_model_requested:
+            routing_decision, routing_debug = await _resolve_auto_character_chat_routing_decision(
+            chat_id=chat_id,
+            body=body,
+            raw_provider=raw_provider,
+            formatted_messages=formatted,
+            sticky_store=routing_decision_store,
+            current_user=current_user,
+        )
+            if routing_decision is None:
+                candidate_count = int((routing_debug or {}).get("candidate_count") or 0)
+                if candidate_count > 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "error_code": "auto_routing_failed",
+                            "message": (
+                                "Auto-routing failed and the current routing policy did not allow "
+                                "deterministic fallback."
+                            ),
+                            "routing": routing_debug or {},
+                        },
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error_code": "auto_routing_no_candidates",
+                        "message": "No eligible models matched the current auto-routing constraints.",
+                        "routing": routing_debug,
+                    },
+                )
         try:
             resolution_req = _ProviderModelResolutionRequest(raw_provider, raw_model)
             (
@@ -3501,12 +3986,20 @@ async def character_chat_completion(
                 request_data=resolution_req,
                 metrics_default_provider=default_provider,
                 normalize_default_provider=default_provider,
+                routing_decision=routing_decision,
             )
             provider = (selected_provider or provider).strip()
             model = (selected_model or model).strip()
             logger.debug("Character provider/model resolution: {}", provider_debug)
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Character provider/model normalization fallback: {}", exc)
+            logger.exception("Character provider/model resolution failed")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error_code": "provider_model_resolution_failed",
+                    "message": "Failed to resolve provider and model for character chat completion.",
+                },
+            ) from exc
 
         if strict_model_selection and explicit_model_requested:
             availability = is_model_known_for_provider(provider, model)
@@ -4023,6 +4516,18 @@ async def character_chat_completion(
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Non-fatal: failed to persist assistant metadata: {exc}")
             saved = True
+
+            # --- Character memory extraction trigger (opt-in) ---
+            _maybe_trigger_character_memory_extraction(
+                background_tasks=background_tasks,
+                db=db,
+                chat_id=chat_id,
+                settings_row=settings_row,
+                conversation=conversation,
+                character_id=str(active_character_id or conversation.get("character_id", "")),
+                char_name=char_label,
+                user_id=str(current_user.id),
+            )
 
         return CharacterChatCompletionV2Response(
             chat_id=chat_id,

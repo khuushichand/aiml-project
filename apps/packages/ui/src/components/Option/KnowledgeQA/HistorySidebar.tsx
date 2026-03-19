@@ -88,9 +88,18 @@ function HistorySkeleton() {
 
 const EXPAND_HINT_SEEN_KEY = "knowledge_qa_history_expand_hint_seen"
 
+function safePersistExpandHintSeen(): void {
+  try {
+    localStorage.setItem(EXPAND_HINT_SEEN_KEY, "1")
+  } catch {
+    // Ignore localStorage failures in private mode.
+  }
+}
+
 export function HistorySidebar({ className }: HistorySidebarProps) {
   const {
     searchHistory,
+    historyHydrated,
     currentThreadId,
     historySidebarOpen,
     setHistorySidebarOpen,
@@ -103,22 +112,10 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
 
   const message = useAntdMessage()
 
-  // Initial loading state for better UX feedback
-  const [isInitialLoad, setIsInitialLoad] = useState(true)
   const [historyFilter, setHistoryFilter] = useState("")
   const [showExpandHint, setShowExpandHint] = useState(false)
   const isMobile = useMobile()
-
-  // Clear initial load state after brief delay or when history is available
-  useEffect(() => {
-    if (searchHistory.length > 0) {
-      setIsInitialLoad(false)
-    } else {
-      // Show skeleton briefly even if empty to indicate loading attempt
-      const timer = setTimeout(() => setIsInitialLoad(false), 500)
-      return () => clearTimeout(timer)
-    }
-  }, [searchHistory])
+  const isInitialLoad = !historyHydrated && searchHistory.length === 0
 
   useEffect(() => {
     if (isMobile || historySidebarOpen) {
@@ -132,7 +129,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
       setShowExpandHint(true)
       const timer = window.setTimeout(() => {
         setShowExpandHint(false)
-        localStorage.setItem(EXPAND_HINT_SEEN_KEY, "1")
+        safePersistExpandHintSeen()
       }, 5000)
       return () => window.clearTimeout(timer)
     } catch {
@@ -158,11 +155,7 @@ export function HistorySidebar({ className }: HistorySidebarProps) {
   const handleExpandSidebar = useCallback(() => {
     setHistorySidebarOpen(true)
     setShowExpandHint(false)
-    try {
-      localStorage.setItem(EXPAND_HINT_SEEN_KEY, "1")
-    } catch {
-      // Ignore localStorage failures in private mode.
-    }
+    safePersistExpandHintSeen()
   }, [setHistorySidebarOpen])
 
   const handleExportAll = useCallback(() => {

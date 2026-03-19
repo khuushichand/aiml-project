@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { FlashcardEditDrawer } from "../FlashcardEditDrawer"
 import type { Flashcard } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -75,6 +76,7 @@ const sampleCard: Flashcard = {
   interval_days: 0,
   repetitions: 0,
   lapses: 0,
+  queue_state: "new",
   due_at: null,
   last_reviewed_at: null,
   last_modified: null,
@@ -106,7 +108,9 @@ describe("FlashcardEditDrawer save handling", () => {
             description: null,
             deleted: false,
             client_id: "1",
-            version: 1
+            version: 1,
+            scheduler_type: "sm2_plus",
+            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
           }
         ]}
       />
@@ -149,7 +153,9 @@ describe("FlashcardEditDrawer save handling", () => {
             description: null,
             deleted: false,
             client_id: "1",
-            version: 1
+            version: 1,
+            scheduler_type: "sm2_plus",
+            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
           }
         ]}
       />
@@ -188,7 +194,9 @@ describe("FlashcardEditDrawer save handling", () => {
             description: null,
             deleted: false,
             client_id: "1",
-            version: 1
+            version: 1,
+            scheduler_type: "sm2_plus",
+            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
           }
         ]}
       />

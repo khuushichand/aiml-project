@@ -15,13 +15,15 @@ type FollowUpInputProps = {
 const MAX_FOLLOW_UP_LENGTH = 20000
 
 export function FollowUpInput({ className }: FollowUpInputProps) {
-  const { askFollowUp, isSearching, createNewThread, results, answer } =
+  const { askFollowUp, isSearching, startNewTopic, results, answer } =
     useKnowledgeQA()
   const isMobile = useMobile()
   const [input, setInput] = useState("")
+  const [pendingAction, setPendingAction] = useState<"followup" | "new-topic" | null>(null)
   const shouldShow = isSearching || results.length > 0 || Boolean(answer)
   const isQueuedState = isSearching && results.length === 0 && !answer
   const useStickyMobileLayout = isMobile
+  const controlsDisabled = isSearching || pendingAction !== null
   const showCharacterCount = input.length >= Math.floor(MAX_FOLLOW_UP_LENGTH * 0.8)
   const hitCharacterLimit = input.length >= MAX_FOLLOW_UP_LENGTH
 
@@ -29,18 +31,30 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
     async (e: React.FormEvent) => {
       e.preventDefault()
       const trimmed = input.trim()
-      if (!trimmed || isSearching) return
+      if (!trimmed || controlsDisabled) return
 
-      await askFollowUp(trimmed)
-      setInput("")
+      setPendingAction("followup")
+      try {
+        await askFollowUp(trimmed)
+        setInput("")
+      } finally {
+        setPendingAction(null)
+      }
     },
-    [input, isSearching, askFollowUp]
+    [askFollowUp, controlsDisabled, input]
   )
 
   const handleNewTopic = useCallback(async () => {
-    await createNewThread()
-    setInput("")
-  }, [createNewThread])
+    if (controlsDisabled) return
+
+    setPendingAction("new-topic")
+    try {
+      await startNewTopic()
+      setInput("")
+    } finally {
+      setPendingAction(null)
+    }
+  }, [controlsDisabled, startNewTopic])
 
   if (!shouldShow) {
     return null
@@ -70,6 +84,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             type="button"
             onClick={handleNewTopic}
             aria-label="Start new topic"
+            disabled={controlsDisabled}
             className="flex items-center gap-1.5 h-10 px-3 rounded-lg border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             title="Start new topic"
           >
@@ -89,7 +104,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
                   : "Ask a follow-up question..."
               }
               aria-label="Ask a follow-up question"
-              disabled={isSearching}
+              disabled={controlsDisabled}
               maxLength={MAX_FOLLOW_UP_LENGTH}
               className={cn(
                 "w-full pl-4 pr-12 py-3",
@@ -97,14 +112,14 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
                 "focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent",
                 "placeholder:text-text-subtle",
                 "transition-all duration-200",
-                isSearching && "opacity-75 cursor-not-allowed"
+                controlsDisabled && "opacity-75 cursor-not-allowed"
               )}
             />
 
             {/* Submit button */}
             <button
               type="submit"
-              disabled={!input.trim() || isSearching}
+              disabled={!input.trim() || controlsDisabled}
               className={cn(
                 "absolute right-2 top-1/2 -translate-y-1/2",
                 "p-2 rounded-md",
@@ -114,7 +129,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
                 "hover:bg-primaryStrong"
               )}
             >
-              {isSearching ? (
+              {controlsDisabled ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <SendHorizontal className="w-4 h-4" />

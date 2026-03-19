@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react"
+import { useCallback, useEffect, useMemo, useRef } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useSelectedModel } from "@/hooks/chat/useSelectedModel"
 import {
@@ -131,15 +131,15 @@ export const useQuickChat = () => {
           stream: true
         }
 
-        let fullContent = ""
+        const chunks: string[] = []
 
         // Stream the response
         for await (const chunk of quickChatService.streamMessage(
           chatHistory,
           options
         )) {
-          fullContent += chunk
-          updateLastMessage(fullContent)
+          chunks.push(chunk)
+          updateLastMessage(chunks.join(""))
         }
       } catch (error) {
         // Check if it's an abort error
@@ -195,6 +195,17 @@ export const useQuickChat = () => {
     cancelStream()
     setIsOpen(false)
   }, [cancelStream, setIsOpen])
+
+  // Abort in-flight streams on unmount to prevent state updates on unmounted component
+  useEffect(() => {
+    return () => {
+      quickChatService.cancelStream()
+      if (ragControllerRef.current) {
+        ragControllerRef.current.abort()
+        ragControllerRef.current = null
+      }
+    }
+  }, [])
 
   return {
     messages,

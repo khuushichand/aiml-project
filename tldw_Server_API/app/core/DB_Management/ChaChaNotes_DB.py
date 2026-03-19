@@ -11226,6 +11226,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, tuple(params))
         return [self._persona_memory_row_to_dict(row) for row in cursor.fetchall() if row]
 
+    def get_persona_memory_entry_by_id(
+        self,
+        *,
+        entry_id: str,
+        user_id: str,
+        persona_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a single persona memory entry by ID, owned by user."""
+        clauses = ["id = ?", "user_id = ?"]
+        params: list[Any] = [entry_id, user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        query = f"SELECT * FROM persona_memory_entries WHERE {' AND '.join(clauses)}"  # nosec B608
+        cursor = self.execute_query(query, tuple(params))
+        return self._persona_memory_row_to_dict(cursor.fetchone())
+
+    def count_persona_memory_entries(
+        self,
+        *,
+        user_id: str,
+        persona_id: str | None = None,
+        memory_type: str | None = None,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> int:
+        """Count persona memory entries matching the given filters."""
+        clauses = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        if memory_type is not None:
+            clauses.append("memory_type = ?")
+            params.append(str(memory_type).strip())
+        if not include_archived:
+            clauses.append("archived = 0")
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        query = f"SELECT COUNT(*) FROM persona_memory_entries WHERE {' AND '.join(clauses)}"  # nosec B608
+        cursor = self.execute_query(query, tuple(params))
+        row = cursor.fetchone()
+        return row[0] if row else 0
+
     def set_persona_memory_archived(
         self,
         *,
@@ -11266,6 +11313,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         allowed_fields = {
             "content",
+            "memory_type",
             "salience",
             "source_conversation_id",
             "scope_snapshot_id",
@@ -11286,6 +11334,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     raise InputError("content cannot be empty.")  # noqa: TRY003
                 params.append(content)
                 set_parts.append("content = ?")
+            elif key == "memory_type":
+                mt = str(value or "").strip()
+                if not mt:
+                    raise InputError("memory_type cannot be empty.")  # noqa: TRY003
+                params.append(mt)
+                set_parts.append("memory_type = ?")
             elif key == "salience":
                 try:
                     params.append(float(value))

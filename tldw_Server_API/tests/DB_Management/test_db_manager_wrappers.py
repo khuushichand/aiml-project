@@ -373,6 +373,8 @@ def test_full_media_detail_wrappers_return_expected_shapes():
     assert set(rich["keywords"]) == {"alpha", "beta"}
     assert rich["processing"]["prompt"] == "detail-prompt"
     assert rich["processing"]["analysis"] == "detail-analysis"
+    assert "chunking_status" in rich["processing"]
+    assert "vector_processing_status" in rich["processing"]
     assert rich["versions"]
 
 

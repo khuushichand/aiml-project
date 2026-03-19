@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { createPortal } from "react-dom"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import {
   Search,
@@ -28,6 +28,7 @@ import {
 } from "@/hooks/useKeyboardShortcuts"
 import { useShortcutConfig } from "@/hooks/keyboard/useShortcutConfig"
 import type { KeyboardShortcut as ConfiguredKeyboardShortcut } from "@/hooks/keyboard/useKeyboardShortcuts"
+import { WORKSPACE_PLAYGROUND_PATH } from "@/routes/route-paths"
 import { searchSettings, type SettingDefinition } from "@/data/settings-index"
 import { cn } from "@/libs/utils"
 
@@ -100,9 +101,11 @@ export function CommandPalette({
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const location = useLocation()
   const navigate = useNavigate()
   const { t } = useTranslation(["common", "settings"])
   const isSidepanel = scope === "sidepanel"
+  const shortcutEnabled = location.pathname !== WORKSPACE_PLAYGROUND_PATH
   const { shortcuts: configuredShortcuts } = useShortcutConfig()
 
   // Register ⌘K shortcut to open
@@ -111,6 +114,7 @@ export function CommandPalette({
     modifiers: ["meta"],
     action: () => setOpen(true),
     description: "Open command palette",
+    enabled: shortcutEnabled,
     allowInInput: false,
   })
 

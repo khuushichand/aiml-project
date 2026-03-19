@@ -1,4 +1,5 @@
 import wave
+from types import SimpleNamespace
 
 import pytest
 
@@ -160,3 +161,68 @@ def test_process_audio_files_url_post_download_validation_rejected(monkeypatch, 
     assert "downloaded file failed validation" in str(
         result["results"][0].get("error", "")
     ).lower()
+
+
+@pytest.mark.unit
+def test_process_audio_files_url_rejects_when_downloaded_file_exceeds_quota(monkeypatch, tmp_path):
+    downloaded_wav = tmp_path / "session_ab12cd34.wav"
+    with wave.open(str(downloaded_wav), "wb") as wave_file:
+        wave_file.setnchannels(1)
+        wave_file.setsampwidth(2)
+        wave_file.setframerate(8000)
+        wave_file.writeframes(b"\x00\x00" * 16)
+
+    monkeypatch.setattr(
+        audio_files,
+        "download_audio_file",
+        lambda *args, **kwargs: str(downloaded_wav),
+    )
+    monkeypatch.setattr(
+        audio_files,
+        "check_transcription_model_status",
+        lambda _model_name: {
+            "available": True,
+            "message": "ok",
+            "model": "base",
+        },
+    )
+
+    class _RejectingQuotaService:
+        async def check_quota(self, user_id: int, new_bytes: int, raise_on_exceed: bool = False):
+            assert user_id == 42
+            assert new_bytes == downloaded_wav.stat().st_size
+            return False, {
+                "current_usage_mb": 10,
+                "new_size_mb": 1,
+                "quota_mb": 10,
+                "available_mb": 0,
+            }
+
+    fake_quota_module = SimpleNamespace(
+        get_storage_quota_service=lambda: _RejectingQuotaService()
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "tldw_Server_API.app.services.storage_quota_service",
+        fake_quota_module,
+    )
+
+    def _unexpected_stt(**_kwargs):
+        raise AssertionError("speech_to_text should not run when quota is exceeded")
+
+    monkeypatch.setattr(audio_files, "speech_to_text", _unexpected_stt)
+
+    result = audio_files.process_audio_files(
+        inputs=["https://example.com/audio.wav"],
+        transcription_model="base",
+        transcription_language="en",
+        perform_chunking=False,
+        perform_analysis=False,
+        temp_dir=str(tmp_path),
+        user_id=42,
+    )
+
+    assert result["processed_count"] == 0
+    assert result["errors_count"] == 1
+    assert result["results"][0]["status"] == "Error"
+    assert "storage quota exceeded" in str(result["results"][0].get("error", "")).lower()

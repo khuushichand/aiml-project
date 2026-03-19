@@ -56,6 +56,7 @@ class JWTService:
         "password_reset",
         "email_verification",
         "magic_link",
+        "admin_reauth",
         "service",
     })
 
@@ -246,6 +247,63 @@ class JWTService:
             logger.error(f"Failed to create refresh token: {e}")
             raise InvalidTokenError(f"Failed to create token: {e}") from e
 
+    def _create_short_lived_email_token(
+        self,
+        *,
+        token_type: str,
+        email: str,
+        user_id: Optional[int] = None,
+        expires_in_minutes: Optional[int] = None,
+        base_claims: Optional[dict[str, Any]] = None,
+        additional_claims: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Create a short-lived email-delivered token such as a magic link or admin step-up token."""
+        if token_type not in self.VALID_TOKEN_TYPES:
+            raise InvalidTokenError(f"Unsupported token type: {token_type}")
+
+        ttl_minutes = expires_in_minutes or int(getattr(self.settings, "MAGIC_LINK_EXPIRE_MINUTES", 15))
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+
+        payload: dict[str, Any] = {
+            "sub": str(user_id) if user_id is not None else str(email),
+            "email": str(email).strip().lower(),
+            "exp": expire,
+            "iat": datetime.now(timezone.utc),
+            "jti": str(uuid4()),
+            "type": token_type,
+        }
+        if user_id is not None:
+            payload["user_id"] = int(user_id)
+        if base_claims:
+            payload.update(base_claims)
+        if self.settings.JWT_ISSUER:
+            payload["iss"] = self.settings.JWT_ISSUER
+        if self.settings.JWT_AUDIENCE:
+            payload["aud"] = self.settings.JWT_AUDIENCE
+
+        extra_claims = self._filter_additional_claims(
+            additional_claims,
+            reserved=set(payload.keys()) | {"iss", "aud"},
+        )
+        if extra_claims:
+            payload.update(extra_claims)
+
+        try:
+            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
+            if self.settings.PII_REDACT_LOGS:
+                logger.debug("Created {} token for authenticated user (details redacted)", token_type)
+            else:
+                safe_identifier = (
+                    f"user_id={int(user_id)}"
+                    if user_id is not None
+                    else "email=redacted"
+                )
+                logger.debug("Created {} token for {}", token_type, safe_identifier)
+            return token
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
+            logger.error("Failed to create {} token: {}", token_type, e)
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
+
     def create_magic_link_token(
         self,
         *,
@@ -266,41 +324,31 @@ class JWTService:
         Returns:
             Encoded JWT magic link token
         """
-        ttl_minutes = expires_in_minutes or int(getattr(self.settings, "MAGIC_LINK_EXPIRE_MINUTES", 15))
-        expire = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
-
-        payload: dict[str, Any] = {
-            "sub": str(user_id) if user_id is not None else str(email),
-            "email": str(email).strip().lower(),
-            "exp": expire,
-            "iat": datetime.now(timezone.utc),
-            "jti": str(uuid4()),
-            "type": "magic_link",
-        }
-        if user_id is not None:
-            payload["user_id"] = int(user_id)
-        if self.settings.JWT_ISSUER:
-            payload["iss"] = self.settings.JWT_ISSUER
-        if self.settings.JWT_AUDIENCE:
-            payload["aud"] = self.settings.JWT_AUDIENCE
-
-        extra_claims = self._filter_additional_claims(
-            additional_claims,
-            reserved=set(payload.keys()) | {"iss", "aud"},
+        return self._create_short_lived_email_token(
+            token_type="magic_link",
+            email=email,
+            user_id=user_id,
+            expires_in_minutes=expires_in_minutes,
+            additional_claims=additional_claims,
         )
-        if extra_claims:
-            payload.update(extra_claims)
 
-        try:
-            token = jwt.encode(payload, self._encode_key, algorithm=self.algorithm)
-            if self.settings.PII_REDACT_LOGS:
-                logger.debug("Created magic link token for authenticated user (details redacted)")
-            else:
-                logger.debug(f"Created magic link token for {email}")
-            return token
-        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Failed to create magic link token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}") from e
+    def create_admin_reauth_token(
+        self,
+        *,
+        email: str,
+        user_id: Optional[int] = None,
+        expires_in_minutes: Optional[int] = None,
+        additional_claims: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Create a short-lived admin step-up token delivered by email."""
+        return self._create_short_lived_email_token(
+            token_type="admin_reauth",
+            email=email,
+            user_id=user_id,
+            expires_in_minutes=expires_in_minutes,
+            base_claims={"purpose": "admin_reauth"},
+            additional_claims=additional_claims,
+        )
 
     async def verify_token_async(self, token: str, token_type: Optional[str] = None) -> dict[str, Any]:
         """

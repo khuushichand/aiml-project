@@ -33,6 +33,7 @@ from tldw_Server_API.app.core.testing import (
 )
 
 from .audit_bridge import submit_job_audit_event
+from .fair_share import FairShareScheduler
 from .event_stream import emit_job_event
 from .metrics import (
     ensure_jobs_metrics_registered,
@@ -77,6 +78,17 @@ _JOB_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     sqlite3.Error,
     *_PG_ERRORS,
 )
+
+# Module-level fair-share scheduler instance (lazy singleton)
+_fair_share: FairShareScheduler | None = None
+
+
+def _get_fair_share() -> FairShareScheduler:
+    """Return the module-level FairShareScheduler, creating it on first use."""
+    global _fair_share
+    if _fair_share is None:
+        _fair_share = FairShareScheduler()
+    return _fair_share
 
 
 def _parse_dt(v: Any) -> datetime | None:
@@ -212,6 +224,46 @@ class JobManager:
     def set_acquire_gate(cls, enabled: bool) -> None:
         """Globally gate new acquisitions during graceful shutdown."""
         cls._ACQUIRE_GATE_ENABLED = bool(enabled)
+
+    def _count_active_jobs_for_user(self, user_id: str) -> int:
+        """Count jobs with active status (queued or processing) for a user.
+
+        Args:
+            user_id: The owner_user_id to count active jobs for.
+
+        Returns:
+            Number of active jobs for this user.
+        """
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) AS c FROM jobs WHERE owner_user_id = %s AND status IN ('queued', 'processing')",
+                        (user_id,),
+                    )
+                    row = cur.fetchone()
+                    return int(row["c"] if isinstance(row, dict) else (row[0] if row else 0))
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE owner_user_id = ? AND status IN ('queued', 'processing')",
+                    (user_id,),
+                ).fetchone()
+                return int(row[0] if row else 0)
+        except _JOB_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"Failed to count active jobs for user {user_id}: {exc}")
+            return 0
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _map_fair_share_score_to_priority(score: int) -> int:
+        """Convert a higher fair-share score into a higher queue priority.
+
+        Queue priority is stored as 1..10 where lower numbers run first.
+        """
+        clamped_score = max(0, min(100, int(score)))
+        return max(1, 10 - min(9, clamped_score // 10))
 
     def _get_allowed_queues(self, domain: str | None = None) -> list[str]:
         allowed = list(self.STANDARD_QUEUES)
@@ -1044,6 +1096,24 @@ class JobManager:
         allowed_queues = self._get_allowed_queues(domain)
         if queue not in allowed_queues:
             raise ValueError(f"Queue '{queue}' not allowed for domain '{domain}'. Allowed: {allowed_queues}")  # noqa: TRY003
+
+        # Fair-share scheduling: enforce per-user concurrency limits and adjust priority
+        if owner_user_id:
+            try:
+                scheduler = _get_fair_share()
+                active_count = self._count_active_jobs_for_user(owner_user_id)
+                if not scheduler.can_submit(owner_user_id, active_count):
+                    raise BadRequestError(
+                        f"User {owner_user_id} has reached the maximum concurrent job limit "
+                        f"({scheduler.max_per_user})"
+                    )
+                fair_priority = scheduler.calculate_priority(owner_user_id, active_count)
+                fair_priority_mapped = self._map_fair_share_score_to_priority(fair_priority)
+                priority = min(priority, fair_priority_mapped)
+            except BadRequestError:
+                raise
+            except _JOB_NONCRITICAL_EXCEPTIONS as _fs_exc:
+                logger.warning(f"Fair-share scheduling check skipped: {_fs_exc}")
 
         # Secret hygiene (reject/redact)
         try:

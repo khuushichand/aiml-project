@@ -19,7 +19,8 @@ const routerMocks = vi.hoisted(() => ({
 
 const clientMocks = vi.hoisted(() => ({
   createPresentation: vi.fn(),
-  getPresentation: vi.fn()
+  getPresentation: vi.fn(),
+  listVisualStyles: vi.fn()
 }))
 
 vi.mock("@/hooks/useServerOnline", () => ({
@@ -39,9 +40,15 @@ vi.mock("react-router-dom", async () => {
 })
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
+  buildPresentationVisualStyleSnapshot: (style: Record<string, unknown>) => ({
+    ...style
+  }),
+  clonePresentationVisualStyleSnapshot: (style: Record<string, unknown> | null | undefined) =>
+    style ? { ...style } : null,
   tldwClient: {
     createPresentation: (...args: unknown[]) => clientMocks.createPresentation(...args),
-    getPresentation: (...args: unknown[]) => clientMocks.getPresentation(...args)
+    getPresentation: (...args: unknown[]) => clientMocks.getPresentation(...args),
+    listVisualStyles: (...args: unknown[]) => clientMocks.listVisualStyles(...args)
   }
 }))
 
@@ -51,6 +58,7 @@ describe("PresentationStudioPage bootstrap", () => {
     routerMocks.navigate.mockReset()
     clientMocks.createPresentation.mockReset()
     clientMocks.getPresentation.mockReset()
+    clientMocks.listVisualStyles.mockReset()
     onlineMocks.useServerOnline.mockReturnValue(true)
     capabilityMocks.useServerCapabilities.mockReturnValue({
       loading: false,
@@ -60,9 +68,22 @@ describe("PresentationStudioPage bootstrap", () => {
         hasPresentationRender: true
       }
     })
+    clientMocks.listVisualStyles.mockResolvedValue([
+      {
+        id: "minimal-academic",
+        name: "Minimal Academic",
+        scope: "builtin",
+        description: "Structured, restrained, study-first slides.",
+        generation_rules: {},
+        artifact_preferences: [],
+        appearance_defaults: { theme: "white" },
+        fallback_policy: {},
+        version: 1
+      }
+    ])
   })
 
-  it("creates a blank project only once in strict mode", async () => {
+  it("loads the precreate form in strict mode without creating until submit", async () => {
     let resolveCreate: ((value: any) => void) | null = null
     clientMocks.createPresentation.mockReturnValue(
       new Promise((resolve) => {
@@ -77,6 +98,14 @@ describe("PresentationStudioPage bootstrap", () => {
     )
 
     await waitFor(() => {
+      expect(clientMocks.listVisualStyles).toHaveBeenCalled()
+    })
+    expect(clientMocks.createPresentation).not.toHaveBeenCalled()
+
+    const createButton = await screen.findByTestId("presentation-studio-create-button")
+    createButton.click()
+
+    await waitFor(() => {
       expect(clientMocks.createPresentation).toHaveBeenCalledTimes(1)
     })
 
@@ -84,7 +113,17 @@ describe("PresentationStudioPage bootstrap", () => {
       id: "presentation-strict",
       title: "Untitled Presentation",
       description: null,
-      theme: "black",
+      theme: "white",
+      visual_style_id: "minimal-academic",
+      visual_style_scope: "builtin",
+      visual_style_name: "Minimal Academic",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "minimal-academic",
+        scope: "builtin",
+        name: "Minimal Academic",
+        appearance_defaults: { theme: "white" }
+      },
       slides: [
         {
           order: 0,
@@ -128,6 +167,16 @@ describe("PresentationStudioPage bootstrap", () => {
       title: "Loaded Presentation",
       description: null,
       theme: "black",
+      visual_style_id: "minimal-academic",
+      visual_style_scope: "builtin",
+      visual_style_name: "Minimal Academic",
+      visual_style_version: 1,
+      visual_style_snapshot: {
+        id: "minimal-academic",
+        scope: "builtin",
+        name: "Minimal Academic",
+        appearance_defaults: { theme: "white" }
+      },
       slides: [
         {
           order: 0,

@@ -4,6 +4,7 @@ import { ManageTab } from "../ManageTab"
 import { clearSetting } from "@/services/settings/registry"
 import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
 import type { Flashcard } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 import {
   useUpdateFlashcardsBulkMutation,
   useDecksQuery,
@@ -139,6 +140,7 @@ const sampleCard: Flashcard = {
   interval_days: 5,
   repetitions: 3,
   lapses: 1,
+  queue_state: "review",
   due_at: null,
   last_reviewed_at: null,
   last_modified: null,
@@ -163,7 +165,9 @@ describe("ManageTab scheduling metadata visibility", () => {
           description: null,
           deleted: false,
           client_id: "test",
-          version: 1
+          version: 1,
+          scheduler_type: "sm2_plus",
+          scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
         }
       ],
       isLoading: false

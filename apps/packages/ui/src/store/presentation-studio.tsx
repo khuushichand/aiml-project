@@ -1,9 +1,11 @@
 import { createWithEqualityFn } from "zustand/traditional"
 
 import type {
+  PresentationVisualStyleSnapshot,
   PresentationStudioRecord,
   PresentationStudioSlide
 } from "@/services/tldw/TldwApiClient"
+import { clonePresentationVisualStyleSnapshot } from "@/services/tldw/TldwApiClient"
 
 export type PresentationStudioAssetStatus =
   | "missing"
@@ -38,10 +40,21 @@ export type PresentationStudioEditorSlide = Omit<PresentationStudioSlide, "metad
   }
 }
 
+type PresentationStudioSlideUpdate = Partial<Omit<PresentationStudioEditorSlide, "metadata">> & {
+  metadata?: Record<string, any> & {
+    studio?: Partial<PresentationStudioSlideStudioMeta>
+  }
+}
+
 export type PresentationStudioPatchPayload = {
   title: string
   description: string | null
   theme: string
+  visual_style_id: string | null
+  visual_style_scope: string | null
+  visual_style_name: string | null
+  visual_style_version: number | null
+  visual_style_snapshot: PresentationVisualStyleSnapshot | null
   studio_data: Record<string, any> | null
   slides: PresentationStudioSlide[]
 }
@@ -54,6 +67,11 @@ type PresentationStudioStore = {
   title: string
   description: string
   theme: string
+  visualStyleId: string | null
+  visualStyleScope: string | null
+  visualStyleName: string | null
+  visualStyleVersion: number | null
+  visualStyleSnapshot: PresentationVisualStyleSnapshot | null
   studioData: Record<string, any> | null
   slides: PresentationStudioEditorSlide[]
   selectedSlideId: string | null
@@ -71,6 +89,11 @@ type PresentationStudioStore = {
     title?: string
     description?: string
     theme?: string
+    visualStyleId?: string | null
+    visualStyleScope?: string | null
+    visualStyleName?: string | null
+    visualStyleVersion?: number | null
+    visualStyleSnapshot?: PresentationVisualStyleSnapshot | null
     studioData?: Record<string, any> | null
   }) => void
   selectSlide: (slideId: string) => void
@@ -81,7 +104,7 @@ type PresentationStudioStore = {
   reorderSlides: (fromIndex: number, toIndex: number) => void
   updateSlide: (
     slideId: string,
-    updates: Partial<PresentationStudioEditorSlide>
+    updates: PresentationStudioSlideUpdate
   ) => void
   setAutosaveState: (state: AutosaveState, error?: string | null) => void
   markPersisted: (etag?: string | null, project?: PresentationStudioRecord) => void
@@ -89,6 +112,11 @@ type PresentationStudioStore = {
     title: string
     description: string | null
     theme: string
+    visual_style_id: string | null
+    visual_style_scope: string | null
+    visual_style_name: string | null
+    visual_style_version: number | null
+    visual_style_snapshot: PresentationVisualStyleSnapshot | null
     studio_data: Record<string, any> | null
     slides: PresentationStudioSlide[]
   }
@@ -227,12 +255,22 @@ const buildPatchPayloadFromSlides = (input: {
   title: string
   description?: string | null
   theme: string
+  visual_style_id?: string | null
+  visual_style_scope?: string | null
+  visual_style_name?: string | null
+  visual_style_version?: number | null
+  visual_style_snapshot?: PresentationVisualStyleSnapshot | null
   studio_data?: Record<string, any> | null
   slides: Array<PresentationStudioSlide | PresentationStudioEditorSlide>
 }): PresentationStudioPatchPayload => ({
   title: input.title,
   description: input.description || null,
   theme: input.theme,
+  visual_style_id: input.visual_style_id ?? null,
+  visual_style_scope: input.visual_style_scope ?? null,
+  visual_style_name: input.visual_style_name ?? null,
+  visual_style_version: input.visual_style_version ?? null,
+  visual_style_snapshot: clonePresentationVisualStyleSnapshot(input.visual_style_snapshot),
   studio_data: input.studio_data ?? null,
   slides: input.slides.map((slide, index) => ({
     order: index,
@@ -330,12 +368,29 @@ const mergeSlideMetadata = (
 }
 
 export const buildPresentationStudioPatchPayloadFromRecord = (
-  project: Pick<PresentationStudioRecord, "title" | "description" | "theme" | "studio_data" | "slides">
+  project: Pick<
+    PresentationStudioRecord,
+    | "title"
+    | "description"
+    | "theme"
+    | "visual_style_id"
+    | "visual_style_scope"
+    | "visual_style_name"
+    | "visual_style_version"
+    | "visual_style_snapshot"
+    | "studio_data"
+    | "slides"
+  >
 ): PresentationStudioPatchPayload =>
   buildPatchPayloadFromSlides({
     title: project.title,
     description: project.description,
     theme: project.theme,
+    visual_style_id: project.visual_style_id ?? null,
+    visual_style_scope: project.visual_style_scope ?? null,
+    visual_style_name: project.visual_style_name ?? null,
+    visual_style_version: project.visual_style_version ?? null,
+    visual_style_snapshot: project.visual_style_snapshot ?? null,
     studio_data: project.studio_data ?? null,
     slides: project.slides
   })
@@ -344,6 +399,18 @@ export const mergePresentationStudioDraftWithRemote = (
   latest: PresentationStudioRecord,
   localDraft: PresentationStudioPatchPayload
 ): PresentationStudioRecord => {
+  const localHasVisualStyleName = Object.prototype.hasOwnProperty.call(
+    localDraft,
+    "visual_style_name"
+  )
+  const localHasVisualStyleVersion = Object.prototype.hasOwnProperty.call(
+    localDraft,
+    "visual_style_version"
+  )
+  const localHasVisualStyleSnapshot = Object.prototype.hasOwnProperty.call(
+    localDraft,
+    "visual_style_snapshot"
+  )
   const remoteSlides = (latest.slides || []).map((slide, index) => normalizeSlide(slide, index))
   const localSlides = (localDraft.slides || []).map((slide, index) => normalizeSlide(slide, index))
   const remoteBySlideId = new Map(
@@ -386,6 +453,19 @@ export const mergePresentationStudioDraftWithRemote = (
     title: localDraft.title,
     description: localDraft.description,
     theme: localDraft.theme,
+    visual_style_id: localDraft.visual_style_id,
+    visual_style_scope: localDraft.visual_style_scope,
+    visual_style_name:
+      localHasVisualStyleName
+        ? localDraft.visual_style_name ?? null
+        : latest.visual_style_name ?? latest.visual_style_snapshot?.name ?? null,
+    visual_style_version: localHasVisualStyleVersion
+      ? localDraft.visual_style_version ?? null
+      : latest.visual_style_version ?? null,
+    visual_style_snapshot:
+      localHasVisualStyleSnapshot
+        ? clonePresentationVisualStyleSnapshot(localDraft.visual_style_snapshot)
+        : clonePresentationVisualStyleSnapshot(latest.visual_style_snapshot),
     studio_data: localDraft.studio_data,
     slides: mergedSlides
   }
@@ -435,6 +515,11 @@ const createInitialState = () => ({
   title: "Untitled Presentation",
   description: "",
   theme: "black",
+  visualStyleId: null as string | null,
+  visualStyleScope: null as string | null,
+  visualStyleName: null as string | null,
+  visualStyleVersion: null as number | null,
+  visualStyleSnapshot: null as PresentationVisualStyleSnapshot | null,
   studioData: { origin: "blank" } as Record<string, any> | null,
   slides: [] as PresentationStudioEditorSlide[],
   selectedSlideId: null as string | null,
@@ -472,6 +557,12 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
         title: project.title || "Untitled Presentation",
         description: project.description || "",
         theme: project.theme || "black",
+        visualStyleId: project.visual_style_id ?? null,
+        visualStyleScope: project.visual_style_scope ?? null,
+        visualStyleName:
+          project.visual_style_name ?? project.visual_style_snapshot?.name ?? null,
+        visualStyleVersion: project.visual_style_version ?? null,
+        visualStyleSnapshot: clonePresentationVisualStyleSnapshot(project.visual_style_snapshot),
         studioData:
           project.studio_data && typeof project.studio_data === "object"
             ? { ...project.studio_data }
@@ -490,6 +581,22 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
         title: updates.title ?? state.title,
         description: updates.description ?? state.description,
         theme: updates.theme ?? state.theme,
+        visualStyleId:
+          updates.visualStyleId !== undefined ? updates.visualStyleId : state.visualStyleId,
+        visualStyleScope:
+          updates.visualStyleScope !== undefined
+            ? updates.visualStyleScope
+            : state.visualStyleScope,
+        visualStyleName:
+          updates.visualStyleName !== undefined ? updates.visualStyleName : state.visualStyleName,
+        visualStyleVersion:
+          updates.visualStyleVersion !== undefined
+            ? updates.visualStyleVersion
+            : state.visualStyleVersion,
+        visualStyleSnapshot:
+          updates.visualStyleSnapshot !== undefined
+            ? clonePresentationVisualStyleSnapshot(updates.visualStyleSnapshot)
+            : state.visualStyleSnapshot,
         studioData: updates.studioData ?? state.studioData,
         isDirty: true
       })),
@@ -745,6 +852,11 @@ export const usePresentationStudioStore = createWithEqualityFn<PresentationStudi
         title: state.title,
         description: state.description,
         theme: state.theme,
+        visual_style_id: state.visualStyleId,
+        visual_style_scope: state.visualStyleScope,
+        visual_style_name: state.visualStyleName,
+        visual_style_version: state.visualStyleVersion,
+        visual_style_snapshot: state.visualStyleSnapshot,
         studio_data: state.studioData,
         slides: state.slides
       })

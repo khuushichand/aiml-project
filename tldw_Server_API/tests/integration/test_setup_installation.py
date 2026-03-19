@@ -93,3 +93,22 @@ def test_install_status_endpoint_exposes_snapshot(mocker):
 
     assert response.status_code == 200
     assert response.json() == snapshot
+
+
+def test_setup_ui_script_exposes_bundle_first_audio_actions():
+    with _make_client() as client:
+        response = client.get('/static/setup/js/setup.js')
+
+    assert response.status_code == 200
+    source = response.text
+    assert '/audio/recommendations' in source
+    assert '/audio/provision' in source
+    assert '/audio/verify' in source
+    assert 'Recommended audio bundle' in source
+    assert 'Recommended profile' in source
+    assert 'Light' in source
+    assert 'Balanced' in source
+    assert 'Performance' in source
+    assert 'Provision recommended bundle' in source
+    assert 'Run verification' in source
+    assert 'Safe rerun' in source

@@ -895,6 +895,9 @@ const withQuery = (
   return (qs ? `${path}?${qs}` : path) as ClientPathOrUrlWithQuery
 }
 
+const asClientPath = (path: string): ClientPathOrUrlWithQuery =>
+  path as ClientPathOrUrlWithQuery
+
 export const listAcpProfiles = async (params: {
   owner_scope_type?: McpHubScopeType
   owner_scope_id?: number | null
@@ -1179,7 +1182,7 @@ export const previewCapabilityAdapterMapping = async (
   payload: McpHubCapabilityAdapterMappingInput
 ): Promise<McpHubCapabilityAdapterMappingPreview> => {
   return await bgRequestClient<McpHubCapabilityAdapterMappingPreview>({
-    path: "/api/v1/mcp/hub/capability-mappings/preview",
+    path: asClientPath("/api/v1/mcp/hub/capability-mappings/preview"),
     method: "POST",
     body: payload
   })
@@ -1189,7 +1192,7 @@ export const createCapabilityAdapterMapping = async (
   payload: McpHubCapabilityAdapterMappingInput
 ): Promise<McpHubCapabilityAdapterMapping> => {
   return await bgRequestClient<McpHubCapabilityAdapterMapping>({
-    path: "/api/v1/mcp/hub/capability-mappings",
+    path: asClientPath("/api/v1/mcp/hub/capability-mappings"),
     method: "POST",
     body: payload
   })
@@ -1200,7 +1203,7 @@ export const updateCapabilityAdapterMapping = async (
   payload: McpHubCapabilityAdapterMappingUpdateInput
 ): Promise<McpHubCapabilityAdapterMapping> => {
   return await bgRequestClient<McpHubCapabilityAdapterMapping>({
-    path: `/api/v1/mcp/hub/capability-mappings/${capabilityAdapterMappingId}`,
+    path: asClientPath(`/api/v1/mcp/hub/capability-mappings/${capabilityAdapterMappingId}`),
     method: "PUT",
     body: payload
   })
@@ -1262,7 +1265,7 @@ export const createSharedWorkspace = async (
   payload: McpHubSharedWorkspaceCreateInput
 ): Promise<McpHubSharedWorkspace> => {
   return await bgRequestClient<McpHubSharedWorkspace>({
-    path: "/api/v1/mcp/hub/shared-workspaces",
+    path: asClientPath("/api/v1/mcp/hub/shared-workspaces"),
     method: "POST",
     body: payload
   })
@@ -1273,7 +1276,7 @@ export const updateSharedWorkspace = async (
   payload: McpHubSharedWorkspaceUpdateInput
 ): Promise<McpHubSharedWorkspace> => {
   return await bgRequestClient<McpHubSharedWorkspace>({
-    path: `/api/v1/mcp/hub/shared-workspaces/${sharedWorkspaceId}`,
+    path: asClientPath(`/api/v1/mcp/hub/shared-workspaces/${sharedWorkspaceId}`),
     method: "PUT",
     body: payload
   })
@@ -1283,7 +1286,7 @@ export const deleteSharedWorkspace = async (
   sharedWorkspaceId: number
 ): Promise<{ ok: boolean }> => {
   return await bgRequestClient<{ ok: boolean }>({
-    path: `/api/v1/mcp/hub/shared-workspaces/${sharedWorkspaceId}`,
+    path: asClientPath(`/api/v1/mcp/hub/shared-workspaces/${sharedWorkspaceId}`),
     method: "DELETE"
   })
 }
@@ -1292,7 +1295,7 @@ export const createWorkspaceSetObject = async (
   payload: McpHubWorkspaceSetObjectCreateInput
 ): Promise<McpHubWorkspaceSetObject> => {
   return await bgRequestClient<McpHubWorkspaceSetObject>({
-    path: "/api/v1/mcp/hub/workspace-set-objects",
+    path: asClientPath("/api/v1/mcp/hub/workspace-set-objects"),
     method: "POST",
     body: payload
   })
@@ -1303,7 +1306,7 @@ export const updateWorkspaceSetObject = async (
   payload: McpHubWorkspaceSetObjectUpdateInput
 ): Promise<McpHubWorkspaceSetObject> => {
   return await bgRequestClient<McpHubWorkspaceSetObject>({
-    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}`,
+    path: asClientPath(`/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}`),
     method: "PUT",
     body: payload
   })
@@ -1313,7 +1316,7 @@ export const deleteWorkspaceSetObject = async (
   workspaceSetObjectId: number
 ): Promise<{ ok: boolean }> => {
   return await bgRequestClient<{ ok: boolean }>({
-    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}`,
+    path: asClientPath(`/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}`),
     method: "DELETE"
   })
 }
@@ -1322,7 +1325,7 @@ export const listWorkspaceSetMembers = async (
   workspaceSetObjectId: number
 ): Promise<McpHubWorkspaceSetObjectMember[]> => {
   return await bgRequestClient<McpHubWorkspaceSetObjectMember[]>({
-    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members`,
+    path: asClientPath(`/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members`),
     method: "GET"
   })
 }
@@ -1332,7 +1335,7 @@ export const addWorkspaceSetMember = async (
   workspaceId: string
 ): Promise<McpHubWorkspaceSetObjectMember> => {
   return await bgRequestClient<McpHubWorkspaceSetObjectMember>({
-    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members`,
+    path: asClientPath(`/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members`),
     method: "POST",
     body: { workspace_id: workspaceId }
   })
@@ -1343,7 +1346,9 @@ export const deleteWorkspaceSetMember = async (
   workspaceId: string
 ): Promise<{ ok: boolean }> => {
   return await bgRequestClient<{ ok: boolean }>({
-    path: `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members/${encodeURIComponent(workspaceId)}`,
+    path: asClientPath(
+      `/api/v1/mcp/hub/workspace-set-objects/${workspaceSetObjectId}/members/${encodeURIComponent(workspaceId)}`
+    ),
     method: "DELETE"
   })
 }
@@ -1352,7 +1357,7 @@ export const createPathScopeObject = async (
   payload: McpHubPathScopeObjectCreateInput
 ): Promise<McpHubPathScopeObject> => {
   return await bgRequestClient<McpHubPathScopeObject>({
-    path: "/api/v1/mcp/hub/path-scope-objects",
+    path: asClientPath("/api/v1/mcp/hub/path-scope-objects"),
     method: "POST",
     body: payload
   })
@@ -1363,7 +1368,7 @@ export const updatePathScopeObject = async (
   payload: McpHubPathScopeObjectUpdateInput
 ): Promise<McpHubPathScopeObject> => {
   return await bgRequestClient<McpHubPathScopeObject>({
-    path: `/api/v1/mcp/hub/path-scope-objects/${pathScopeObjectId}`,
+    path: asClientPath(`/api/v1/mcp/hub/path-scope-objects/${pathScopeObjectId}`),
     method: "PUT",
     body: payload
   })
@@ -1373,7 +1378,7 @@ export const deletePathScopeObject = async (
   pathScopeObjectId: number
 ): Promise<{ ok: boolean }> => {
   return await bgRequestClient<{ ok: boolean }>({
-    path: `/api/v1/mcp/hub/path-scope-objects/${pathScopeObjectId}`,
+    path: asClientPath(`/api/v1/mcp/hub/path-scope-objects/${pathScopeObjectId}`),
     method: "DELETE"
   })
 }
@@ -1641,7 +1646,7 @@ export const getGovernancePackDetail = async (
   governancePackId: number
 ): Promise<McpHubGovernancePackDetail> => {
   return await bgRequestClient<McpHubGovernancePackDetail>({
-    path: `/api/v1/mcp/hub/governance-packs/${governancePackId}`,
+    path: asClientPath(`/api/v1/mcp/hub/governance-packs/${governancePackId}`),
     method: "GET"
   })
 }
@@ -1652,7 +1657,7 @@ export const dryRunGovernancePack = async (payload: {
   pack: McpHubGovernancePackDocument
 }): Promise<McpHubGovernancePackDryRunResponse> => {
   return await bgRequestClient<McpHubGovernancePackDryRunResponse>({
-    path: "/api/v1/mcp/hub/governance-packs/dry-run",
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/dry-run"),
     method: "POST",
     body: payload
   })
@@ -1665,7 +1670,7 @@ export const dryRunGovernancePackUpgrade = async (payload: {
   pack: McpHubGovernancePackDocument
 }): Promise<McpHubGovernancePackUpgradeDryRunResponse> => {
   return await bgRequestClient<McpHubGovernancePackUpgradeDryRunResponse>({
-    path: "/api/v1/mcp/hub/governance-packs/dry-run-upgrade",
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/dry-run-upgrade"),
     method: "POST",
     body: payload
   })
@@ -1677,7 +1682,7 @@ export const importGovernancePack = async (payload: {
   pack: McpHubGovernancePackDocument
 }): Promise<McpHubGovernancePackImportResponse> => {
   return await bgRequestClient<McpHubGovernancePackImportResponse>({
-    path: "/api/v1/mcp/hub/governance-packs/import",
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/import"),
     method: "POST",
     body: payload
   })
@@ -1692,7 +1697,7 @@ export const executeGovernancePackUpgrade = async (payload: {
   pack: McpHubGovernancePackDocument
 }): Promise<McpHubGovernancePackUpgradeExecutionResponse> => {
   return await bgRequestClient<McpHubGovernancePackUpgradeExecutionResponse>({
-    path: "/api/v1/mcp/hub/governance-packs/execute-upgrade",
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/execute-upgrade"),
     method: "POST",
     body: payload
   })
@@ -1702,7 +1707,7 @@ export const listGovernancePackUpgradeHistory = async (
   governancePackId: number
 ): Promise<McpHubGovernancePackUpgradeHistoryEntry[]> => {
   return await bgRequestClient<McpHubGovernancePackUpgradeHistoryEntry[]>({
-    path: `/api/v1/mcp/hub/governance-packs/${governancePackId}/upgrade-history`,
+    path: asClientPath(`/api/v1/mcp/hub/governance-packs/${governancePackId}/upgrade-history`),
     method: "GET"
   })
 }

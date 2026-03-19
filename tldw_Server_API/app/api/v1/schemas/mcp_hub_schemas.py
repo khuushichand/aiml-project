@@ -692,6 +692,7 @@ class CredentialBindingResponse(BaseModel):
     external_server_id: str
     slot_name: str | None = None
     credential_ref: str
+    managed_secret_ref_id: int | None = None
     binding_mode: str
     usage_rules: dict[str, Any] = Field(default_factory=dict)
     created_by: int | None = None
@@ -700,8 +701,33 @@ class CredentialBindingResponse(BaseModel):
     updated_at: datetime | str | None = None
 
 
+class ProfileCredentialBindingUpsertRequest(BaseModel):
+    managed_secret_ref_id: int | None = Field(default=None, ge=1)
+
+
 class AssignmentCredentialBindingUpsertRequest(BaseModel):
     binding_mode: str = Field(default="grant", pattern="^(grant|disable)$")
+    managed_secret_ref_id: int | None = Field(default=None, ge=1)
+
+
+class McpCredentialSlotStatusResponse(BaseModel):
+    server_id: str
+    slot_name: str
+    binding_target_type: Literal["profile", "assignment"]
+    binding_target_id: str
+    credential_ref: str
+    managed_secret_ref_id: int | None = None
+    state: Literal[
+        "ready",
+        "missing",
+        "expired",
+        "reauth_required",
+        "approval_required",
+        "backend_unavailable",
+    ]
+    blocked_reason: str | None = None
+    backend_name: str | None = None
+    expires_at: datetime | str | None = None
 
 
 class EffectiveExternalAccessSlotResponse(BaseModel):

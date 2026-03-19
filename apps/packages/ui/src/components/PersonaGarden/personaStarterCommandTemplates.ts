@@ -4,9 +4,9 @@ export type PersonaStarterCommandTemplate = {
   description: string
   name: string
   commandDescription: string
-  phrases: string[]
+  phrases: readonly string[]
   toolName: string
-  slotMap: Record<string, string>
+  slotMap: Readonly<Record<string, string>>
   requiresConfirmation: boolean
 }
 

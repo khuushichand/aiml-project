@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class SlideLayout(str, Enum):
@@ -31,7 +31,33 @@ class Slide(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class PresentationBase(BaseModel):
+def _validate_visual_style_selection_pair(
+    *,
+    visual_style_id: str | None,
+    visual_style_scope: str | None,
+) -> None:
+    """Require visual-style id and scope to be set or cleared together."""
+
+    if (visual_style_id is None) != (visual_style_scope is None):
+        raise ValueError("visual_style_id and visual_style_scope must be provided together")
+
+
+class VisualStyleSelectionMixin(BaseModel):
+    """Shared validation for presentation-level visual-style selection."""
+
+    visual_style_id: str | None = None
+    visual_style_scope: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_visual_style_selection(self) -> VisualStyleSelectionMixin:
+        _validate_visual_style_selection_pair(
+            visual_style_id=self.visual_style_id,
+            visual_style_scope=self.visual_style_scope,
+        )
+        return self
+
+
+class PresentationBase(VisualStyleSelectionMixin):
     """Shared fields for presentation create/update payloads."""
 
     title: str
@@ -57,7 +83,7 @@ class PresentationUpdateRequest(PresentationBase):
     pass
 
 
-class PresentationPatchRequest(BaseModel):
+class PresentationPatchRequest(VisualStyleSelectionMixin):
     """Request payload for patching a presentation."""
 
     title: str | None = None
@@ -81,6 +107,9 @@ class PresentationResponse(PresentationBase):
     """Presentation response model."""
 
     id: str
+    visual_style_name: str | None = None
+    visual_style_version: int | None = None
+    visual_style_snapshot: dict[str, Any] | None = None
     source_type: str | None = None
     source_ref: Any | None = None
     source_query: str | None = None
@@ -128,6 +157,53 @@ class SlidesTemplateListResponse(BaseModel):
     templates: list[SlidesTemplateResponse]
 
 
+class VisualStyleBase(BaseModel):
+    """Structured visual style payload fields."""
+
+    name: str
+    description: str | None = None
+    generation_rules: dict[str, Any] = Field(default_factory=dict)
+    artifact_preferences: list[str] = Field(default_factory=list)
+    appearance_defaults: dict[str, Any] = Field(default_factory=dict)
+    fallback_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class VisualStyleCreateRequest(VisualStyleBase):
+    """Request payload for creating a user visual style."""
+
+    pass
+
+
+class VisualStylePatchRequest(BaseModel):
+    """Request payload for patching a user visual style."""
+
+    name: str | None = None
+    description: str | None = None
+    generation_rules: dict[str, Any] | None = None
+    artifact_preferences: list[str] | None = None
+    appearance_defaults: dict[str, Any] | None = None
+    fallback_policy: dict[str, Any] | None = None
+
+
+class VisualStyleResponse(VisualStyleBase):
+    """Visual style response model for built-in and user presets."""
+
+    id: str
+    scope: str
+    version: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class VisualStyleListResponse(BaseModel):
+    """List response for visual styles."""
+
+    styles: list[VisualStyleResponse]
+    total_count: int
+    limit: int
+    offset: int
+
+
 class PresentationSummary(BaseModel):
     """Summary item for presentation listings."""
 
@@ -159,7 +235,7 @@ class PresentationSearchResponse(BaseModel):
     offset: int
 
 
-class SlideGenerationBase(BaseModel):
+class SlideGenerationBase(VisualStyleSelectionMixin):
     """Shared settings for slide generation requests."""
 
     title_hint: str | None = None

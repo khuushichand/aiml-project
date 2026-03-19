@@ -7,6 +7,35 @@ Scope:
 - Use [Getting Started — STT and TTS](./Getting-Started-STT_and_TTS.md) for quick dual STT+TTS bring-up.
 - Use [TTS Provider Setup Guide](./TTS-SETUP-GUIDE.md) to jump to deep provider runbooks and tuning docs.
 
+## Recommended Setup Path - Bundle First
+
+For fresh installs, the default operator path is now `/setup`, not manual provider-by-provider bring-up.
+Open `http://127.0.0.1:8000/setup`, review the detected hardware profile, provision the recommended audio bundle, and run verification before tuning individual TTS providers in this guide.
+
+Use manual provider setup below when:
+- you need a provider that is not the bundle default
+- you want to override the curated bundle choice
+- you are debugging a specific TTS adapter or voice path
+
+Current curated bundle matrix (generated from `Helper_Scripts/generate_audio_bundle_docs.py`):
+
+| Bundle ID | Label | Profiles | Offline runtime after provisioning | Offline pack compatibility | Default TTS |
+| --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | kokoro |
+| `apple_silicon_local` | Apple Silicon Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | kokoro |
+| `nvidia_local` | NVIDIA Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | kokoro |
+| `hosted_plus_local_backup` | Hosted With Local Backup | Balanced | No | v1 manifest import only | kokoro |
+
+Resource profile guidance:
+- `Light`: smallest local download set; use it when disk or memory pressure matters more than quality.
+- `Balanced`: the default choice for most TTS-first setups.
+- `Performance`: larger local footprint meant for stronger Apple Silicon or NVIDIA machines.
+
+Offline pack guidance:
+- `Online provisioning` remains the main path because it installs dependencies and verifies the selected TTS path immediately.
+- `Offline pack import` is available through the setup audio pack import endpoint for v1 manifest + model portability.
+- `Offline pack` v1 does not install Python dependencies, ffmpeg, or eSpeak NG on the target machine.
+
 ## YAML Quick Start
 
 Minimal configuration to get going. Save to `tldw_Server_API/Config_Files/tts_providers_config.yaml` (canonical location; alternate config roots are supported).

@@ -935,7 +935,6 @@ export const useChatActions = ({
       imageGenerationSource,
       imageEventSyncPolicy,
     }).catch((error) => {
-      sendInFlightRef.current = false;
       throw error;
     });
     const baseMessages = chatHistory || messages;
@@ -1411,6 +1410,7 @@ export const useChatActions = ({
       });
       setIsProcessing(false);
       setStreaming(false);
+      setAbortController(null);
     } finally {
       sendInFlightRef.current = false;
       if (replyActive && capturedReplyTargetId != null) {

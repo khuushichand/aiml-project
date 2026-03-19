@@ -6,6 +6,7 @@ import { KnowledgeQAProvider, useKnowledgeQA } from "../KnowledgeQAProvider"
 const fetchWithAuthMock = vi.fn()
 const addChatMessageMock = vi.fn()
 const createChatMock = vi.fn()
+const deleteChatMock = vi.fn()
 const resolveConversationShareLinkMock = vi.fn()
 const messageOpenMock = vi.fn()
 
@@ -31,6 +32,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearchStream: vi.fn(),
     addChatMessage: (...args: unknown[]) => addChatMessageMock(...args),
     createChat: (...args: unknown[]) => createChatMock(...args),
+    deleteChat: (...args: unknown[]) => deleteChatMock(...args),
     getChat: vi.fn().mockResolvedValue({ version: 1 }),
     searchCharacters: vi.fn().mockResolvedValue([{ id: 10, name: "Helpful AI Assistant" }]),
     listCharacters: vi.fn().mockResolvedValue([{ id: 10, name: "Helpful AI Assistant" }]),
@@ -53,6 +55,7 @@ describe("KnowledgeQAProvider branch/share actions", () => {
     localStorage.clear()
 
     createChatMock.mockResolvedValue({ id: "branch-thread-1", version: 1 })
+    deleteChatMock.mockResolvedValue(undefined)
     addChatMessageMock
       .mockResolvedValueOnce({ id: "branch-u1", created_at: "2026-02-19T10:00:01.000Z" })
       .mockResolvedValueOnce({ id: "branch-a1", created_at: "2026-02-19T10:00:02.000Z" })
@@ -165,6 +168,52 @@ describe("KnowledgeQAProvider branch/share actions", () => {
       expect(latestContext!.messages[1]?.content).toContain("Branch source answer")
       expect(latestContext!.answer).toBe("Branch source answer [1]")
     })
+  })
+
+  it("does not restore a stale branch after the user clears the session", async () => {
+    let resolveBranchThread: ((value: Record<string, unknown>) => void) | null = null
+    createChatMock.mockImplementationOnce(
+      () =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          resolveBranchThread = resolve
+        })
+    )
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+
+    await act(async () => {
+      await latestContext!.selectThread("source-thread-1")
+    })
+
+    await waitFor(() => expect(latestContext!.messages).toHaveLength(4))
+
+    act(() => {
+      void latestContext!.branchFromTurn("u1")
+    })
+
+    await waitFor(() => expect(createChatMock).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      latestContext!.clearResults()
+    })
+
+    resolveBranchThread?.({ id: "branch-thread-stale", version: 1 })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(latestContext!.currentThreadId).toBeNull()
+    expect(latestContext!.messages).toEqual([])
+    expect(latestContext!.answer).toBeNull()
+    expect(addChatMessageMock).not.toHaveBeenCalled()
+    expect(deleteChatMock).toHaveBeenCalledWith("branch-thread-stale")
   })
 
   it("hydrates shared conversations through tokenized links", async () => {

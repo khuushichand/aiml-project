@@ -2,6 +2,7 @@ import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { Modal } from "antd"
+import type { AudioGenerationSettings } from "@/types/workspace"
 import { StudioPane } from "../StudioPane"
 
 const {
@@ -43,12 +44,12 @@ const {
   const createChatCompletion = vi.fn()
   const getMediaDetails = vi.fn()
   const getChatModels = vi.fn()
-  const defaultAudioSettings = {
-    provider: "browser" as const,
+  const defaultAudioSettings: AudioGenerationSettings = {
+    provider: "browser",
     model: "kokoro",
     voice: "af_heart",
     speed: 1,
-    format: "mp3" as const
+    format: "mp3"
   }
   const defaultSources = [
     {
@@ -195,6 +196,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    listVisualStyles: vi.fn().mockResolvedValue([]),
     createChatCompletion: mockCreateChatCompletion,
     getMediaDetails: mockGetMediaDetails,
     exportPresentation: vi.fn(),
@@ -275,6 +277,27 @@ const expandGeneratedOutputsSection = () => {
   }
 }
 
+const createChatCompletionResponse = (
+  content: string,
+  usage?: Record<string, unknown>
+) =>
+  new Response(
+    JSON.stringify({
+      choices: [
+        {
+          message: {
+            content
+          }
+        }
+      ],
+      usage
+    }),
+    {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }
+  )
+
 const renderStudioPane = () => {
   const renderResult = render(<StudioPane />)
   expandOutputTypesSection()
@@ -350,7 +373,21 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       }
     )
 
+    messageOptionStoreState.selectedModel = "gpt-4o-mini"
+    messageOptionStoreState.ragAdvancedOptions = {
+      min_score: 0.2,
+      enable_reranking: true
+    }
     mockRagSearch.mockResolvedValue({ generation: "Generated summary" })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse("Generated summary")
+    )
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "DSPy helps optimize prompts and compound AI pipelines."
+      }
+    })
     mockGenerateFlashcardsService.mockResolvedValue({
       flashcards: [{ front: "Term", back: "Definition" }],
       count: 1
@@ -368,8 +405,8 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
   })
 
   it("shows cancel control during generation and aborts active run", async () => {
-    mockRagSearch.mockImplementation(
-      (_query: string, options?: { signal?: AbortSignal }) =>
+    mockCreateChatCompletion.mockImplementation(
+      (_request: unknown, options?: { signal?: AbortSignal }) =>
         new Promise((_resolve, reject) => {
           const abortError = createAbortError()
           const signal = options?.signal
@@ -410,7 +447,7 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
   })
 
   it("treats non-abort cancellation wording as generation failure", async () => {
-    mockRagSearch.mockRejectedValue(
+    mockCreateChatCompletion.mockRejectedValue(
       new Error("Generation cancelled by upstream worker")
     )
 
@@ -437,8 +474,8 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageInfo).not.toHaveBeenCalledWith("Generation canceled")
   })
 
-  it("marks summary artifacts failed when ragSearch returns no usable content", async () => {
-    mockRagSearch.mockResolvedValue({ generation: "", answer: "" })
+  it("marks summary artifacts failed when chat completion returns no usable content", async () => {
+    mockCreateChatCompletion.mockResolvedValue(createChatCompletionResponse(""))
 
     renderStudioPane()
 
@@ -457,94 +494,80 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageSuccess).not.toHaveBeenCalled()
   })
 
-  it("marks summary artifacts failed when ragSearch returns the local failure sentinel", async () => {
-    mockRagSearch.mockResolvedValue({ generation: "Summary generation failed" })
-
-    renderStudioPane()
-
-    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
-
-    await waitFor(() => {
-      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
-        "artifact-1",
-        "failed",
-        expect.objectContaining({
-          errorMessage: expect.stringContaining("usable summary")
-        })
-      )
-    })
-
-    expect(mockMessageSuccess).not.toHaveBeenCalled()
-  })
-
-  it("marks summary artifacts failed when ragSearch returns a backend error string", async () => {
-    mockRagSearch.mockResolvedValue({
-      generation: "Sorry, I encountered an error. Please try again."
-    })
-
-    renderStudioPane()
-
-    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
-
-    await waitFor(() => {
-      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
-        "artifact-1",
-        "failed",
-        expect.objectContaining({
-          errorMessage: expect.stringContaining("usable summary")
-        })
-      )
-    })
-
-    expect(mockMessageSuccess).not.toHaveBeenCalled()
-  })
-
-  it("marks summary artifacts failed when ragSearch returns a voice assistant backend error string", async () => {
-    mockRagSearch.mockResolvedValue({
-      generation: "I'm sorry, I encountered an error processing your request."
-    })
-
-    renderStudioPane()
-
-    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
-
-    await waitFor(() => {
-      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
-        "artifact-1",
-        "failed",
-        expect.objectContaining({
-          errorMessage: expect.stringContaining("usable summary")
-        })
-      )
-    })
-
-    expect(mockMessageSuccess).not.toHaveBeenCalled()
-  })
-
-  it("still completes valid summary artifacts from generated_answer responses", async () => {
-    mockRagSearch.mockResolvedValue({ generated_answer: "Generated summary" })
-
-    renderStudioPane()
-
-    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
-
-    await waitFor(() => {
-      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
-        "artifact-1",
-        "completed",
-        expect.objectContaining({
-          content: "Generated summary"
-        })
-      )
-    })
-
-    expect(mockMessageSuccess).toHaveBeenCalledWith(
-      expect.stringContaining("generated successfully")
+  it("marks summary artifacts failed when chat completion returns the local failure sentinel", async () => {
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse("Summary generation failed")
     )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable summary")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
+  it("marks summary artifacts failed when chat completion returns a backend error string", async () => {
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse(
+        "Sorry, I encountered an error. Please try again."
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable summary")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
+  })
+
+  it("marks summary artifacts failed when chat completion returns a voice assistant backend error string", async () => {
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse(
+        "I'm sorry, I encountered an error processing your request."
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("usable summary")
+        })
+      )
+    })
+
+    expect(mockMessageSuccess).not.toHaveBeenCalled()
   })
 
   it("still completes valid summary artifacts", async () => {
-    mockRagSearch.mockResolvedValue({ generation: "Generated summary" })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse("Generated summary")
+    )
 
     renderStudioPane()
 
@@ -563,6 +586,124 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockMessageSuccess).toHaveBeenCalledWith(
       expect.stringContaining("generated successfully")
     )
+  })
+
+  it("preserves summary usage metrics from chat completion responses", async () => {
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse("Generated summary", {
+        total_tokens: 321,
+        total_cost_usd: 0.0123
+      })
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "completed",
+        expect.objectContaining({
+          content: "Generated summary",
+          totalTokens: 321,
+          totalCostUsd: 0.0123
+        })
+      )
+    })
+  })
+
+  it("uses the workspace generation_prompt and selected source content for summary generation", async () => {
+    messageOptionStoreState.ragAdvancedOptions = {
+      min_score: 0.2,
+      enable_reranking: true,
+      generation_prompt:
+        "Write an executive summary focused on failures, tradeoffs, and next steps."
+    }
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "The talk covers DSPy, prompt optimization, and compound AI pipeline tradeoffs."
+      }
+    })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    const summaryRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(summaryRequest).toMatchObject({
+      model: "gpt-4o-mini"
+    })
+    expect(summaryRequest.messages?.[0]).toMatchObject({
+      role: "system"
+    })
+    expect(summaryRequest.messages?.[0]?.content).toContain(
+      "Summarize only the provided source content"
+    )
+    expect(summaryRequest.messages?.[1]).toMatchObject({
+      role: "user"
+    })
+    expect(summaryRequest.messages?.[1]?.content).toContain(
+      "Write an executive summary focused on failures, tradeoffs, and next steps."
+    )
+    expect(summaryRequest.messages?.[1]?.content).toContain("DSPy Prompting Talk")
+    expect(summaryRequest.messages?.[1]?.content).toContain(
+      "compound AI pipeline tradeoffs"
+    )
+    expect(mockRagSearch).not.toHaveBeenCalled()
+  })
+
+  it("falls back to the default summary instruction when no custom prompt is set", async () => {
+    messageOptionStoreState.ragAdvancedOptions = {
+      min_score: 0.2,
+      enable_reranking: true,
+      generation_prompt: "   "
+    }
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    const summaryRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(summaryRequest.messages?.[1]).toMatchObject({
+      role: "user"
+    })
+    expect(summaryRequest.messages?.[1]?.content).toContain(
+      "Provide a comprehensive summary of the key points and main ideas."
+    )
+    expect(mockRagSearch).not.toHaveBeenCalled()
+  })
+
+  it("fails summary generation when no model is available", async () => {
+    messageOptionStoreState.selectedModel = null
+    mockGetChatModels.mockResolvedValue([])
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "failed",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining(
+            "No model available for summary generation"
+          )
+        })
+      )
+    })
+
+    expect(mockCreateChatCompletion).not.toHaveBeenCalled()
   })
 
   it("downloads quiz artifacts locally instead of calling outputs download", async () => {
@@ -674,42 +815,6 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     })
 
     expect(mockMessageSuccess).not.toHaveBeenCalled()
-  })
-
-  it("passes extended timeout to summary generation RAG request", async () => {
-    renderStudioPane()
-
-    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
-
-    await waitFor(() => {
-      expect(mockRagSearch).toHaveBeenCalled()
-    })
-
-    expect(mockRagSearch).toHaveBeenLastCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        timeoutMs: 120000
-      })
-    )
-  })
-
-  it("routes summary authoring instructions through generation_prompt", async () => {
-    renderStudioPane()
-
-    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
-
-    await waitFor(() => {
-      expect(mockRagSearch).toHaveBeenCalled()
-    })
-
-    expect(mockRagSearch).toHaveBeenLastCalledWith(
-      "key points main ideas summary",
-      expect.objectContaining({
-        include_media_ids: [101],
-        generation_prompt:
-          "Provide a comprehensive summary of the key points and main ideas."
-      })
-    )
   })
 
   it("passes extended timeout to report generation RAG request", async () => {

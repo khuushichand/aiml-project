@@ -18,6 +18,9 @@ from tldw_Server_API.app.core.MCP_unified.external_servers.config_schema import 
 from tldw_Server_API.app.core.MCP_unified.external_servers.transports.stdio_adapter import (
     StdioExternalMCPAdapter,
 )
+from tldw_Server_API.app.core.MCP_unified.external_servers.transports.base import (
+    BrokeredExternalCredential,
+)
 
 
 class _FakeStdioClient:
@@ -188,3 +191,68 @@ async def test_stdio_adapter_connect_failure_closes_client() -> None:
     assert health["connected"] is False
     assert health["initialized"] is False
     assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_stdio_adapter_uses_ephemeral_runtime_env_without_mutating_base_client() -> None:
+    cfg = ExternalMCPServerConfig(
+        id="docs",
+        name="Docs",
+        transport=ExternalTransportType.STDIO,
+        stdio=ExternalStdioConfig(command="node", args=["stub.js"], env={"BASE_ENV": "1"}),
+        timeouts=ExternalTimeoutConfig(connect_seconds=1.0, request_seconds=0.2),
+    )
+    base_client = _FakeStdioClient(responses={"initialize": {"serverInfo": {"name": "base"}}})
+    runtime_client = _FakeStdioClient(
+        responses={
+            "initialize": {"serverInfo": {"name": "runtime"}},
+            "tools/call": {"content": [{"type": "text", "text": "ok"}]},
+        }
+    )
+    seen_envs: list[dict[str, str]] = []
+
+    def _client_factory(server_cfg: ExternalMCPServerConfig) -> _FakeStdioClient:
+        assert server_cfg.stdio is not None
+        seen_envs.append(dict(server_cfg.stdio.env or {}))
+        if "DOCS_TOKEN" in (server_cfg.stdio.env or {}):
+            return runtime_client
+        return base_client
+
+    adapter = StdioExternalMCPAdapter(cfg, client_factory=_client_factory)
+
+    try:
+        await adapter.connect()
+        result = await adapter.call_tool(
+            "docs.search",
+            {"q": "runtime"},
+            runtime_auth=BrokeredExternalCredential(env={"DOCS_TOKEN": "ephemeral-token"}),
+        )
+
+        assert result.is_error is False
+        assert base_client.calls == [
+            (
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "clientInfo": {"name": "tldw_external_federation", "version": "0.1.0"},
+                },
+            )
+        ]
+        assert runtime_client.calls == [
+            (
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "clientInfo": {"name": "tldw_external_federation", "version": "0.1.0"},
+                },
+            ),
+            ("tools/call", {"name": "docs.search", "arguments": {"q": "runtime"}}),
+        ]
+        assert runtime_client.close_calls == 1
+        assert seen_envs[0] == {"BASE_ENV": "1"}
+        assert seen_envs[1]["BASE_ENV"] == "1"
+        assert seen_envs[1]["DOCS_TOKEN"] == "ephemeral-token"
+        assert cfg.stdio is not None
+        assert cfg.stdio.env == {"BASE_ENV": "1"}
+    finally:
+        await adapter.close()

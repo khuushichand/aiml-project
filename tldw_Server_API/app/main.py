@@ -919,6 +919,7 @@ else:
         _HAS_AUDIO_JOBS = False
     # Chat Endpoint
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_memory import router as character_memory_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
 
     # Workspace Endpoints
@@ -1161,6 +1162,7 @@ elif _MINIMAL_TEST_APP:
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
+    from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
 
     # Admin endpoints are used by several pytest modules; import for minimal app
     try:
@@ -1174,6 +1176,7 @@ elif _MINIMAL_TEST_APP:
     # Minimal chat/character endpoints to support lightweight tests
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
+    from tldw_Server_API.app.api.v1.endpoints.character_memory import router as character_memory_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
     from tldw_Server_API.app.api.v1.endpoints.workspaces import router as workspaces_router
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
@@ -1242,6 +1245,7 @@ else:
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
+    from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
@@ -5534,6 +5538,7 @@ elif _MINIMAL_TEST_APP:
     include_router_idempotent(app, chat_loop_router, prefix=f"{API_V1_PREFIX}")
     include_router_idempotent(app, conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     include_router_idempotent(app, character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    include_router_idempotent(app, character_memory_router, prefix=f"{API_V1_PREFIX}/characters", tags=["character-memory"])
     include_router_idempotent(
         app, character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
     )
@@ -5693,6 +5698,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
     except _IMPORT_EXCEPTIONS as _billing_webhooks_min_err:
         logger.debug(f"Skipping billing webhooks router in minimal test app: {_billing_webhooks_min_err}")
+    # Consent management endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
+
+        app.include_router(consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
+    except _IMPORT_EXCEPTIONS as _consent_min_err:
+        logger.debug("Skipping consent router in minimal test app: {}", _consent_min_err)
     # Collections endpoints (treated as lightweight; always included in minimal app)
     try:
         from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
@@ -5928,6 +5940,10 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _audit_min_err:
         logger.debug(f"Skipping audit router in minimal test app: {_audit_min_err}")
     # Config info endpoints (includes /api/v1/config/jobs used by OpenAPI tests)
+    try:
+        app.include_router(setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
+    except _IMPORT_EXCEPTIONS as _setup_min_err:
+        logger.debug(f"Skipping setup router in minimal test app: {_setup_min_err}")
     try:
         from tldw_Server_API.app.api.v1.endpoints.config_info import router as config_info_router
 
@@ -6176,6 +6192,7 @@ else:
 
     _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    _include_if_enabled("consent", consent_router, prefix=f"{API_V1_PREFIX}", tags=["consent"])
     logger.info("Auth router consolidated: endpoints/auth.py")
     if "users_router" in locals() and users_router is not None:
         _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
@@ -6287,6 +6304,10 @@ else:
         _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    if "character_memory_router" in locals():
+        _include_if_enabled(
+            "character-memory", character_memory_router, prefix=f"{API_V1_PREFIX}/characters", tags=["character-memory"]
+        )
     if "workspaces_router" in locals():
         _include_if_enabled(
             "workspaces", workspaces_router, prefix=f"{API_V1_PREFIX}/workspaces", tags=["workspaces"]

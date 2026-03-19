@@ -411,7 +411,7 @@ function SettingSelect({
 
 const ARRAY_VALUE_KIND_BY_KEY: Partial<Record<RagKey, "string" | "number">> = {
   include_media_ids: "number",
-  include_note_ids: "number",
+  include_note_ids: "string",
   expansion_strategies: "string",
   chunk_type_filter: "string",
   content_policy_types: "string",

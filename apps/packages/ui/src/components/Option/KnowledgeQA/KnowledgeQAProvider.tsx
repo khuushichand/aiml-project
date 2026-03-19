@@ -10,6 +10,7 @@ import React, {
   useMemo,
   useEffect,
   useRef,
+  useState,
   type ReactNode,
 } from "react"
 import { useStorage } from "@plasmohq/storage/hook"
@@ -32,6 +33,7 @@ import {
   DEFAULT_RAG_SETTINGS,
   applyRagPreset,
   buildRagSearchRequest,
+  type RagSearchMode,
   type RagSettings,
   type RagPresetName,
 } from "@/services/rag/unified-rag"
@@ -46,9 +48,26 @@ import { truncateAnswerPreview } from "./historyUtils"
 const LOCAL_THREAD_PREFIX = "local-"
 const DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
 const RAG_QUERY_MAX_LENGTH = 20000
+const VALID_WEB_FALLBACK_MERGE_STRATEGIES = ["prepend", "append", "interleave"] as const
+const VALID_RAG_SEARCH_MODES: ReadonlyArray<RagSearchMode> = ["fts", "vector", "hybrid"]
+
+function isValidWebFallbackMergeStrategy(
+  value: string
+): value is RagSettings["web_fallback_merge_strategy"] {
+  return VALID_WEB_FALLBACK_MERGE_STRATEGIES.includes(
+    value as RagSettings["web_fallback_merge_strategy"]
+  )
+}
+
+function isValidRagSearchMode(value: string): value is RagSearchMode {
+  return VALID_RAG_SEARCH_MODES.includes(value as RagSearchMode)
+}
+
 type CreateThreadOptions = {
   parentConversationId?: string
   forkedFromMessageId?: string
+  shouldActivate?: () => boolean
+  cleanupRemoteIfSkipped?: boolean
 }
 const KNOWLEDGE_QA_SETTINGS_OVERRIDES: Partial<RagSettings> = {
   enable_web_fallback: true,
@@ -154,6 +173,13 @@ type Action =
   | { type: "SET_QUERY_STAGE"; payload: QueryStage }
   | { type: "SET_LAST_SEARCH_SCOPE"; payload: ScopeSnapshot | null }
   | { type: "SET_PINNED_SOURCE_FILTERS"; payload: PinnedSourceFilters }
+  | {
+      type: "HYDRATE_RESTORED_SCOPE"
+      payload: {
+        preset?: RagPresetName
+        settingsSnapshot?: Partial<RagSettings> | null
+      }
+    }
 
 // Reducer
 function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
@@ -207,6 +233,7 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
         error: null,
         queryWarning: null,
         hasSearched: false,
+        isSearching: false,
         queryStage: "idle",
         pinnedSourceFilters: {
           mediaIds: [],
@@ -299,6 +326,29 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
       return { ...state, lastSearchScope: action.payload }
     case "SET_PINNED_SOURCE_FILTERS":
       return { ...state, pinnedSourceFilters: action.payload }
+    case "HYDRATE_RESTORED_SCOPE": {
+      const nextPreset = action.payload.preset ?? state.preset
+      const presetSettings =
+        action.payload.preset && action.payload.preset !== "custom"
+          ? {
+              ...applyRagPreset(action.payload.preset as Exclude<RagPresetName, "custom">),
+              ...KNOWLEDGE_QA_SETTINGS_OVERRIDES,
+              enable_web_fallback: state.settings.enable_web_fallback,
+            }
+          : state.settings
+      const nextSettings = action.payload.settingsSnapshot
+        ? {
+            ...presetSettings,
+            ...action.payload.settingsSnapshot,
+          }
+        : presetSettings
+      return {
+        ...state,
+        preset: nextPreset,
+        settings: nextSettings,
+        lastSearchScope: buildScopeSnapshot(nextPreset, nextSettings),
+      }
+    }
     default:
       return state
   }
@@ -320,6 +370,16 @@ function parseCitations(answer: string, results: RagResult[]): CitationRef[] {
     documentId: results[index - 1]?.id || `doc_${index}`,
     excerpt: results[index - 1]?.content || results[index - 1]?.text,
   }))
+}
+
+function normalizeAnswerText(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  return value.trim().length > 0 ? value : null
+}
+
+function normalizeNoteFilterIds(values: unknown): string[] {
+  if (!Array.isArray(values)) return []
+  return mergeStringFilters(values as Array<string | null | undefined>)
 }
 
 function normalizeMessageRole(role: unknown): KnowledgeQAMessage["role"] {
@@ -432,6 +492,7 @@ function deriveThreadHydrationState(messages: KnowledgeQAMessage[]): {
   citations: CitationRef[]
   answerPreview?: string
   sourcesCount: number
+  settingsSnapshot?: Partial<RagSettings> | null
 } | null {
   if (messages.length === 0) return null
 
@@ -452,21 +513,15 @@ function deriveThreadHydrationState(messages: KnowledgeQAMessage[]): {
       results: [],
       citations: [],
       sourcesCount: 0,
+      settingsSnapshot: null,
     }
   }
 
   const ragContext = latestAssistantMessage.ragContext
   const results = mapRagContextDocumentsToResults(ragContext?.retrieved_documents)
-  const answerCandidate =
-    typeof ragContext?.generated_answer === "string" &&
-    ragContext.generated_answer.trim().length > 0
-      ? ragContext.generated_answer
-      : latestAssistantMessage.content
-
   const answer =
-    typeof answerCandidate === "string" && answerCandidate.trim().length > 0
-      ? answerCandidate
-      : null
+    normalizeAnswerText(ragContext?.generated_answer) ??
+    normalizeAnswerText(latestAssistantMessage.content)
   const citations = answer ? parseCitations(answer, results) : []
   const queryFromContext =
     typeof ragContext?.search_query === "string" &&
@@ -482,6 +537,7 @@ function deriveThreadHydrationState(messages: KnowledgeQAMessage[]): {
     citations,
     answerPreview: truncateAnswerPreview(answer),
     sourcesCount: results.length,
+    settingsSnapshot: normalizeRestorableSettingsSnapshot(ragContext?.settings_snapshot),
   }
 }
 
@@ -494,7 +550,9 @@ function extractRagResponse(response: any): {
   const results: RagResult[] =
     response?.results || response?.documents || response?.docs || []
   const answer =
-    response?.generated_answer || response?.answer || response?.response || null
+    normalizeAnswerText(response?.generated_answer) ??
+    normalizeAnswerText(response?.answer) ??
+    normalizeAnswerText(response?.response)
   const expandedQueries = Array.isArray(response?.expanded_queries)
     ? response.expanded_queries.filter(
         (value: unknown): value is string =>
@@ -1063,7 +1121,130 @@ function buildScopeSnapshot(
     preset,
     sources: [...settings.sources],
     webFallback: Boolean(settings.enable_web_fallback),
+    includeMediaIds: Array.isArray(settings.include_media_ids)
+      ? settings.include_media_ids
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+          .map((value) => Math.round(value))
+      : [],
+    includeNoteIds: Array.isArray(settings.include_note_ids)
+      ? settings.include_note_ids
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .map((value) => value.trim())
+      : [],
   }
+}
+
+function createRestorableSettingsSnapshot(settings: RagSettings): Partial<RagSettings> {
+  return {
+    sources: Array.isArray(settings.sources) ? [...settings.sources] : [],
+    include_media_ids: Array.isArray(settings.include_media_ids)
+      ? settings.include_media_ids
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+          .map((value) => Math.round(value))
+      : [],
+    include_note_ids: Array.isArray(settings.include_note_ids)
+      ? settings.include_note_ids
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .map((value) => value.trim())
+      : [],
+    top_k: typeof settings.top_k === "number" && Number.isFinite(settings.top_k)
+      ? settings.top_k
+      : undefined,
+    enable_reranking:
+      typeof settings.enable_reranking === "boolean" ? settings.enable_reranking : undefined,
+    enable_citations:
+      typeof settings.enable_citations === "boolean" ? settings.enable_citations : undefined,
+    enable_web_fallback:
+      typeof settings.enable_web_fallback === "boolean" ? settings.enable_web_fallback : undefined,
+    web_fallback_threshold:
+      typeof settings.web_fallback_threshold === "number" &&
+      Number.isFinite(settings.web_fallback_threshold)
+        ? settings.web_fallback_threshold
+        : undefined,
+    web_search_engine:
+      typeof settings.web_search_engine === "string" ? settings.web_search_engine : undefined,
+    web_fallback_result_count:
+      typeof settings.web_fallback_result_count === "number" &&
+      Number.isFinite(settings.web_fallback_result_count)
+        ? settings.web_fallback_result_count
+        : undefined,
+    web_fallback_merge_strategy:
+      typeof settings.web_fallback_merge_strategy === "string"
+        ? settings.web_fallback_merge_strategy
+        : undefined,
+    search_mode:
+      typeof settings.search_mode === "string" ? settings.search_mode : undefined,
+  }
+}
+
+function normalizeRestorableSettingsSnapshot(
+  snapshot: unknown
+): Partial<RagSettings> | null {
+  if (!snapshot || typeof snapshot !== "object") return null
+
+  const candidate = snapshot as Record<string, unknown>
+  const normalized: Partial<RagSettings> = {}
+
+  if (Array.isArray(candidate.sources)) {
+    normalized.sources = candidate.sources.filter(
+      (value): value is RagSettings["sources"][number] =>
+        typeof value === "string" && value.trim().length > 0
+    )
+  }
+
+  if (Array.isArray(candidate.include_media_ids)) {
+    normalized.include_media_ids = candidate.include_media_ids
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+      .map((value) => Math.round(value))
+  }
+
+  if (Array.isArray(candidate.include_note_ids)) {
+    normalized.include_note_ids = candidate.include_note_ids
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim())
+  }
+
+  if (typeof candidate.top_k === "number" && Number.isFinite(candidate.top_k)) {
+    normalized.top_k = candidate.top_k
+  }
+  if (typeof candidate.enable_reranking === "boolean") {
+    normalized.enable_reranking = candidate.enable_reranking
+  }
+  if (typeof candidate.enable_citations === "boolean") {
+    normalized.enable_citations = candidate.enable_citations
+  }
+  if (typeof candidate.enable_web_fallback === "boolean") {
+    normalized.enable_web_fallback = candidate.enable_web_fallback
+  }
+  if (
+    typeof candidate.web_fallback_threshold === "number" &&
+    Number.isFinite(candidate.web_fallback_threshold)
+  ) {
+    normalized.web_fallback_threshold = candidate.web_fallback_threshold
+  }
+  if (typeof candidate.web_search_engine === "string") {
+    normalized.web_search_engine = candidate.web_search_engine
+  }
+  if (
+    typeof candidate.web_fallback_result_count === "number" &&
+    Number.isFinite(candidate.web_fallback_result_count)
+  ) {
+    normalized.web_fallback_result_count = candidate.web_fallback_result_count
+  }
+  if (
+    typeof candidate.web_fallback_merge_strategy === "string" &&
+    isValidWebFallbackMergeStrategy(candidate.web_fallback_merge_strategy)
+  ) {
+    normalized.web_fallback_merge_strategy = candidate.web_fallback_merge_strategy
+  }
+  if (
+    typeof candidate.search_mode === "string" &&
+    isValidRagSearchMode(candidate.search_mode)
+  ) {
+    normalized.search_mode = candidate.search_mode
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null
 }
 
 function mergeNumberFilters(
@@ -1099,6 +1280,7 @@ function mergeStringFilters(
 // Provider component
 export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState)
+  const [historyHydrated, setHistoryHydrated] = useState(false)
   const [storedPreset] = useStorage<RagPresetName>("ragSearchPreset", "balanced")
   const [storedSettings] = useStorage<RagSettings>(
     "ragSearchSettingsV2",
@@ -1107,6 +1289,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const [streamingFeatureFlag] = useStorage<boolean>("ff_knowledgeQaStreaming", true)
   const hydratedDefaultsRef = useRef<string | null>(null)
   const activeSearchAbortRef = useRef<AbortController | null>(null)
+  const activeSearchRequestIdRef = useRef(0)
+  const activeThreadHydrationRequestIdRef = useRef(0)
+  const activeHistoryLoadRequestIdRef = useRef(0)
+  const historyMutationVersionRef = useRef(0)
   const focusedSourceTimeoutRef = useRef<number | null>(null)
   const persistenceWarningShownRef = useRef(false)
   const historyQuotaWarningShownRef = useRef(false)
@@ -1130,6 +1316,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       ...DEFAULT_RAG_SETTINGS,
       ...(storedSettings || {}),
       ...KNOWLEDGE_QA_SETTINGS_OVERRIDES,
+      include_note_ids: normalizeNoteFilterIds(storedSettings?.include_note_ids),
       enable_web_fallback:
         typeof storedSettings?.enable_web_fallback === "boolean"
           ? storedSettings.enable_web_fallback
@@ -1254,6 +1441,8 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
   const createNewThread = useCallback(
     async (title?: string, options?: CreateThreadOptions): Promise<string> => {
+      const shouldActivate = options?.shouldActivate ?? (() => true)
+      const cleanupRemoteIfSkipped = options?.cleanupRemoteIfSkipped ?? false
       try {
         const characterId = await resolveDefaultCharacterId()
         if (!characterId) {
@@ -1283,6 +1472,17 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         const threadId = response?.id
         if (!threadId) {
           throw new Error("Chat creation returned no ID")
+        }
+
+        if (!shouldActivate()) {
+          if (cleanupRemoteIfSkipped) {
+            try {
+              await tldwClient.deleteChat(String(threadId))
+            } catch (cleanupError) {
+              console.warn("Failed to delete skipped Knowledge QA conversation:", cleanupError)
+            }
+          }
+          return threadId
         }
 
         const version =
@@ -1327,6 +1527,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         console.error("Failed to create thread:", error)
         // Return a local ID as fallback
         const localId = `${LOCAL_THREAD_PREFIX}${crypto.randomUUID()}`
+        if (!shouldActivate()) {
+          return localId
+        }
         dispatch({ type: "SET_THREAD_ID", payload: localId })
         dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: true })
         dispatch({ type: "SET_MESSAGES", payload: [] })
@@ -1351,6 +1554,25 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       duration: 4,
     })
   }, [message])
+
+  const beginThreadHydrationRequest = useCallback(() => {
+    const nextRequestId = activeThreadHydrationRequestIdRef.current + 1
+    activeThreadHydrationRequestIdRef.current = nextRequestId
+    return nextRequestId
+  }, [])
+
+  const beginHistoryLoadRequest = useCallback(() => {
+    const nextRequestId = activeHistoryLoadRequestIdRef.current + 1
+    activeHistoryLoadRequestIdRef.current = nextRequestId
+    return {
+      requestId: nextRequestId,
+      mutationVersion: historyMutationVersionRef.current,
+    }
+  }, [])
+
+  const markHistoryMutation = useCallback(() => {
+    historyMutationVersionRef.current += 1
+  }, [])
 
   const persistChatMessage = useCallback(
     async (
@@ -1428,16 +1650,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     ): RagContextData => ({
       search_query: question,
       search_mode: settings.search_mode,
-      settings_snapshot: {
-        top_k: settings.top_k,
-        enable_reranking: settings.enable_reranking,
-        enable_citations: settings.enable_citations,
-        enable_web_fallback: settings.enable_web_fallback,
-        web_fallback_threshold: settings.web_fallback_threshold,
-        web_search_engine: settings.web_search_engine,
-        web_fallback_result_count: settings.web_fallback_result_count,
-        web_fallback_merge_strategy: settings.web_fallback_merge_strategy,
-      },
+      settings_snapshot: createRestorableSettingsSnapshot(settings),
       retrieved_documents: results.map((r) => ({
         id: r.id,
         source_type: r.metadata?.source_type,
@@ -1471,8 +1684,17 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       })
 
       const searchStartedAt = Date.now()
+      if (activeSearchAbortRef.current) {
+        activeSearchAbortRef.current.abort("superseded")
+      }
+      beginThreadHydrationRequest()
       const abortController = new AbortController()
+      const searchRequestId = activeSearchRequestIdRef.current + 1
+      activeSearchRequestIdRef.current = searchRequestId
       activeSearchAbortRef.current = abortController
+      const isStaleSearchRequest = () =>
+        activeSearchRequestIdRef.current !== searchRequestId ||
+        activeSearchAbortRef.current !== abortController
       dispatch({ type: "SET_SEARCHING", payload: true })
       dispatch({ type: "SET_QUERY_STAGE", payload: "searching" })
       dispatch({ type: "SET_SEARCH_DETAILS", payload: null })
@@ -1485,7 +1707,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           overrideSettings.include_media_ids,
           state.pinnedSourceFilters.mediaIds
         ),
-        include_note_ids: mergeNumberFilters(
+        include_note_ids: mergeStringFilters(
           state.settings.include_note_ids,
           overrideSettings.include_note_ids,
           state.pinnedSourceFilters.noteIds
@@ -1494,13 +1716,22 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
       let threadId = state.currentThreadId
       if (!threadId) {
-        threadId = await createNewThread(trimmedQuery)
+        threadId = await createNewThread(trimmedQuery, {
+          shouldActivate: () => !isStaleSearchRequest(),
+          cleanupRemoteIfSkipped: true,
+        })
+        if (isStaleSearchRequest()) {
+          return
+        }
       }
 
       const userTimestamp = new Date().toISOString()
       const persistedUser = threadId
         ? await persistChatMessage(threadId, "user", trimmedQuery, null)
         : null
+      if (isStaleSearchRequest()) {
+        return
+      }
       const userMessageId = persistedUser?.id || crypto.randomUUID()
 
       if (threadId) {
@@ -1548,6 +1779,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
               ...options,
               signal: abortController.signal,
             })) {
+              if (isStaleSearchRequest()) {
+                return
+              }
               const eventType = typeof event?.type === "string" ? event.type : ""
 
               if (eventType === "contexts" && Array.isArray(event?.contexts)) {
@@ -1563,15 +1797,15 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
                   type: "SET_SEARCH_DETAILS",
                   payload: resolvedSearchDetails,
                 })
-                const partialCitations =
-                  streamAnswer.length > 0
-                    ? parseCitations(streamAnswer, streamResults)
-                    : []
+                const partialAnswer = normalizeAnswerText(streamAnswer)
+                const partialCitations = partialAnswer
+                  ? parseCitations(partialAnswer, streamResults)
+                  : []
                 dispatch({
                   type: "SET_PARTIAL_RESULTS",
                   payload: {
                     results: streamResults,
-                    answer: streamAnswer || null,
+                    answer: partialAnswer,
                     citations: partialCitations,
                   },
                 })
@@ -1585,12 +1819,15 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
                   typeof event?.text === "string" ? event.text : ""
                 if (!deltaText) continue
                 streamAnswer += deltaText
+                const partialAnswer = normalizeAnswerText(streamAnswer)
                 dispatch({
                   type: "SET_PARTIAL_RESULTS",
                   payload: {
                     results: streamResults,
-                    answer: streamAnswer,
-                    citations: parseCitations(streamAnswer, streamResults),
+                    answer: partialAnswer,
+                    citations: partialAnswer
+                      ? parseCitations(partialAnswer, streamResults)
+                      : [],
                   },
                 })
                 receivedStreamEvent = true
@@ -1608,7 +1845,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
             if (receivedStreamEvent) {
               results = streamResults
-              answer = streamAnswer || null
+              answer = normalizeAnswerText(streamAnswer)
               usedStreaming = true
               resolvedSearchDetails = buildSearchDetailsFromStreaming(
                 streamResults,
@@ -1642,6 +1879,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
             ...options,
             signal: abortController.signal,
           })
+          if (isStaleSearchRequest()) {
+            return
+          }
           const extracted = extractRagResponse(response)
           results = extracted.results
           answer = extracted.answer
@@ -1655,6 +1895,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           )
         }
 
+        if (isStaleSearchRequest()) {
+          return
+        }
         // Parse citations from answer
         dispatch({ type: "SET_QUERY_STAGE", payload: "verifying" })
         const citations = answer ? parseCitations(answer, results) : []
@@ -1691,6 +1934,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
             answer,
             persistedUser?.id
           )
+          if (isStaleSearchRequest()) {
+            return
+          }
           assistantMessageId = persistedAssistant?.id || crypto.randomUUID()
           const assistantMessage: KnowledgeQAMessage = {
             id: assistantMessageId,
@@ -1704,9 +1950,15 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
           if (persistedAssistant?.id) {
             await persistRagContext(persistedAssistant.id, ragContext)
+            if (isStaleSearchRequest()) {
+              return
+            }
           }
         }
 
+        if (isStaleSearchRequest()) {
+          return
+        }
         if (addToHistory) {
           const historyItem: SearchHistoryItem = {
             id: crypto.randomUUID(),
@@ -1716,10 +1968,12 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
             hasAnswer: !!answer,
             answerPreview: truncateAnswerPreview(answer),
             preset: state.preset,
+            settingsSnapshot: createRestorableSettingsSnapshot(effectiveSettings),
             conversationId: threadId && !isLocalThreadId(threadId) ? threadId : undefined,
             messageId: assistantMessageId || undefined,
             keywords: [KNOWLEDGE_QA_KEYWORD],
           }
+          markHistoryMutation()
           dispatch({ type: "ADD_HISTORY_ITEM", payload: historyItem })
         }
       } catch (error) {
@@ -1734,9 +1988,12 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           (error as { name?: string } | null)?.name === "AbortError" ||
           /abort|cancel/i.test(rawErrorMessage)
 
+        if (isStaleSearchRequest()) {
+          return
+        }
         if (isAbortError) {
           const abortReason = abortController.signal.reason
-          if (abortReason === "clear") {
+          if (abortReason === "clear" || abortReason === "superseded") {
             dispatch({ type: "SET_ERROR", payload: null })
             return
           }
@@ -1761,6 +2018,8 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       state.settings,
       state.preset,
       state.pinnedSourceFilters,
+      beginThreadHydrationRequest,
+      markHistoryMutation,
       createNewThread,
       persistChatMessage,
       persistRagContext,
@@ -1817,24 +2076,51 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       activeSearchAbortRef.current.abort("clear")
       activeSearchAbortRef.current = null
     }
+    beginThreadHydrationRequest()
     dispatch({ type: "CLEAR_RESULTS" })
     dispatch({ type: "SET_THREAD_ID", payload: null })
     dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
     dispatch({ type: "SET_MESSAGES", payload: [] })
-  }, [state.answer, state.currentThreadId, state.messages.length, state.results.length])
+  }, [
+    beginThreadHydrationRequest,
+    state.answer,
+    state.currentThreadId,
+    state.messages.length,
+    state.results.length,
+  ])
+
+  const startNewTopic = useCallback(async (): Promise<string> => {
+    clearResults()
+    dispatch({ type: "SET_QUERY", payload: "" })
+    const newTopicRequestId = beginThreadHydrationRequest()
+    return await createNewThread(undefined, {
+      shouldActivate: () =>
+        activeThreadHydrationRequestIdRef.current === newTopicRequestId,
+      cleanupRemoteIfSkipped: true,
+    })
+  }, [beginThreadHydrationRequest, clearResults, createNewThread])
 
   const selectThread = useCallback(async (threadId: string) => {
-    dispatch({ type: "SET_THREAD_ID", payload: threadId })
-    dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: isLocalThreadId(threadId) })
-    dispatch({
-      type: "SET_PINNED_SOURCE_FILTERS",
-      payload: { mediaIds: [], noteIds: [] },
-    })
+    const threadHydrationRequestId = beginThreadHydrationRequest()
+    const isStaleThreadHydrationRequest = () =>
+      activeThreadHydrationRequestIdRef.current !== threadHydrationRequestId
+
+    if (activeSearchAbortRef.current) {
+      activeSearchAbortRef.current.abort("superseded")
+      activeSearchAbortRef.current = null
+    }
 
     if (isLocalThreadId(threadId)) {
+      dispatch({ type: "SET_THREAD_ID", payload: threadId })
+      dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: true })
+      dispatch({
+        type: "SET_PINNED_SOURCE_FILTERS",
+        payload: { mediaIds: [], noteIds: [] },
+      })
+      dispatch({ type: "SET_ERROR", payload: null })
       dispatch({ type: "SET_MESSAGES", payload: [] })
       dispatch({ type: "CLEAR_RESULTS" })
-      return
+      return true
     }
 
     try {
@@ -1842,11 +2128,24 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       const response = await tldwClient.fetchWithAuth(
         `/api/v1/chat/conversations/${threadId}/messages-with-context?include_rag_context=true`
       )
+      if (isStaleThreadHydrationRequest()) {
+        return false
+      }
       if (!response.ok) {
         throw new Error(`Failed to load thread ${threadId} (HTTP ${response.status})`)
       }
       const rawMessages = await response.json()
+      if (isStaleThreadHydrationRequest()) {
+        return false
+      }
       const messages = normalizeMessagesWithContext(rawMessages, threadId)
+      dispatch({ type: "SET_THREAD_ID", payload: threadId })
+      dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
+      dispatch({
+        type: "SET_PINNED_SOURCE_FILTERS",
+        payload: { mediaIds: [], noteIds: [] },
+      })
+      dispatch({ type: "SET_ERROR", payload: null })
       dispatch({ type: "SET_MESSAGES", payload: messages })
 
       const hydration = deriveThreadHydrationState(messages)
@@ -1869,7 +2168,17 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       const matchingHistoryItem = state.searchHistory.find(
         (item) => item.conversationId === threadId
       )
+      dispatch({
+        type: "HYDRATE_RESTORED_SCOPE",
+        payload: {
+          preset: matchingHistoryItem?.preset,
+          settingsSnapshot:
+            hydration?.settingsSnapshot ??
+            normalizeRestorableSettingsSnapshot(matchingHistoryItem?.settingsSnapshot),
+        },
+      })
       if (matchingHistoryItem && hydration) {
+        markHistoryMutation()
         dispatch({
           type: "UPDATE_HISTORY_ITEM",
           payload: {
@@ -1882,23 +2191,38 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           },
         })
       }
+      return true
     } catch (error) {
+      if (isStaleThreadHydrationRequest()) {
+        return false
+      }
       console.error("Failed to load thread messages:", error)
-      dispatch({ type: "SET_MESSAGES", payload: [] })
-      dispatch({ type: "CLEAR_RESULTS" })
+      dispatch({ type: "SET_ERROR", payload: "Unable to load this conversation right now." })
+      return false
     }
-  }, [state.searchHistory])
+  }, [beginThreadHydrationRequest, markHistoryMutation, state.searchHistory])
 
   const selectSharedThread = useCallback(
     async (shareToken: string) => {
+      const threadHydrationRequestId = beginThreadHydrationRequest()
+      const isStaleThreadHydrationRequest = () =>
+        activeThreadHydrationRequestIdRef.current !== threadHydrationRequestId
       const trimmedToken = shareToken.trim()
       if (!trimmedToken) {
         dispatch({ type: "SET_ERROR", payload: "Shared link is invalid." })
-        return
+        return false
+      }
+
+      if (activeSearchAbortRef.current) {
+        activeSearchAbortRef.current.abort("superseded")
+        activeSearchAbortRef.current = null
       }
 
       try {
         const payload = await tldwClient.resolveConversationShareLink(trimmedToken)
+        if (isStaleThreadHydrationRequest()) {
+          return false
+        }
         const conversationId =
           typeof payload?.conversation_id === "string" &&
           payload.conversation_id.trim().length > 0
@@ -1915,6 +2239,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           type: "SET_PINNED_SOURCE_FILTERS",
           payload: { mediaIds: [], noteIds: [] },
         })
+        dispatch({ type: "SET_ERROR", payload: null })
 
         const hydration = deriveThreadHydrationState(messages)
         if (hydration?.query) {
@@ -1932,7 +2257,17 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         } else {
           dispatch({ type: "CLEAR_RESULTS" })
         }
+        dispatch({
+          type: "HYDRATE_RESTORED_SCOPE",
+          payload: {
+            settingsSnapshot: hydration?.settingsSnapshot ?? null,
+          },
+        })
+        return true
       } catch (error) {
+        if (isStaleThreadHydrationRequest()) {
+          return false
+        }
         console.error("Failed to load shared thread:", error)
         dispatch({ type: "SET_THREAD_ID", payload: null })
         dispatch({ type: "SET_LOCAL_ONLY_THREAD", payload: false })
@@ -1947,13 +2282,23 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           type: "SET_ERROR",
           payload: "Unable to open this shared conversation link.",
         })
+        return false
       }
     },
-    []
+    [beginThreadHydrationRequest]
   )
 
   const branchFromTurn = useCallback(
     async (messageId: string) => {
+      const branchRequestId = beginThreadHydrationRequest()
+      const isStaleBranchRequest = () =>
+        activeThreadHydrationRequestIdRef.current !== branchRequestId
+
+      if (activeSearchAbortRef.current) {
+        activeSearchAbortRef.current.abort("superseded")
+        activeSearchAbortRef.current = null
+      }
+
       const branchSeedMessages = sliceMessagesForBranch(state.messages, messageId)
       if (branchSeedMessages.length === 0) {
         message.open({
@@ -1974,10 +2319,25 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         state.currentThreadId && !isLocalThreadId(state.currentThreadId)
           ? state.currentThreadId
           : undefined
+      const cleanupStaleBranchThread = async (threadId: string) => {
+        if (!threadId || isLocalThreadId(threadId)) {
+          return
+        }
+        try {
+          await tldwClient.deleteChat(threadId)
+        } catch (cleanupError) {
+          console.warn("Failed to delete stale branch conversation:", cleanupError)
+        }
+      }
       const branchThreadId = await createNewThread(branchTitle, {
         parentConversationId,
         forkedFromMessageId: messageId,
+        shouldActivate: () => !isStaleBranchRequest(),
+        cleanupRemoteIfSkipped: true,
       })
+      if (isStaleBranchRequest()) {
+        return
+      }
 
       const branchedMessages: KnowledgeQAMessage[] = []
       let parentMessageId: string | null = null
@@ -1989,6 +2349,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           sourceMessage.content,
           parentMessageId
         )
+        if (isStaleBranchRequest()) {
+          await cleanupStaleBranchThread(branchThreadId)
+          return
+        }
         const nextMessageId = persisted?.id || crypto.randomUUID()
         parentMessageId = persisted?.id || null
 
@@ -2006,7 +2370,16 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           persisted?.id
         ) {
           await persistRagContext(persisted.id, sourceMessage.ragContext)
+          if (isStaleBranchRequest()) {
+            await cleanupStaleBranchThread(branchThreadId)
+            return
+          }
         }
+      }
+
+      if (isStaleBranchRequest()) {
+        await cleanupStaleBranchThread(branchThreadId)
+        return
       }
 
       dispatch({ type: "SET_THREAD_ID", payload: branchThreadId })
@@ -2042,6 +2415,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       })
     },
     [
+      beginThreadHydrationRequest,
       createNewThread,
       message,
       persistChatMessage,
@@ -2076,12 +2450,18 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const loadSearchHistory = useCallback(async () => {
+    const { requestId, mutationVersion } = beginHistoryLoadRequest()
     // Load from local storage for now
+    let storedItems: SearchHistoryItem[] = []
     try {
       const stored = localStorage.getItem("knowledge_qa_history")
       if (stored) {
-        const history = JSON.parse(stored) as SearchHistoryItem[]
-        dispatch({ type: "SET_SEARCH_HISTORY", payload: history })
+        try {
+          storedItems = JSON.parse(stored) as SearchHistoryItem[]
+          dispatch({ type: "SET_SEARCH_HISTORY", payload: storedItems })
+        } catch (error) {
+          console.error("Failed to parse Knowledge QA local history:", error)
+        }
       }
       // Best-effort: merge server conversation history for cross-session continuity
       try {
@@ -2092,6 +2472,12 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         )
         if (response.ok) {
           const data = await response.json()
+          if (
+            activeHistoryLoadRequestIdRef.current !== requestId ||
+            historyMutationVersionRef.current !== mutationVersion
+          ) {
+            return
+          }
           const items: any[] = Array.isArray(data)
             ? data
             : data?.items || data?.conversations || data?.chats || data?.results || []
@@ -2136,9 +2522,6 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
             .filter(Boolean) as SearchHistoryItem[]
 
           if (serverHistory.length > 0) {
-            const storedItems: SearchHistoryItem[] = stored
-              ? (JSON.parse(stored) as SearchHistoryItem[])
-              : []
             const mergedMap = new Map<string, SearchHistoryItem>()
             for (const item of storedItems) {
               const itemKeywords = Array.isArray(item.keywords) ? item.keywords : []
@@ -2171,8 +2554,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       }
     } catch (error) {
       console.error("Failed to load search history:", error)
+    } finally {
+      setHistoryHydrated(true)
     }
-  }, [])
+  }, [beginHistoryLoadRequest])
 
   const restoreFromHistory = useCallback(
     async (item: SearchHistoryItem) => {
@@ -2180,11 +2565,15 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       if (restoredQuery.length > 0) {
         dispatch({ type: "SET_QUERY", payload: restoredQuery })
       }
-      if (item.preset) {
-        dispatch({ type: "SET_PRESET", payload: item.preset })
-      }
       if (item.conversationId) {
         if (isLocalThreadId(item.conversationId)) {
+          dispatch({
+            type: "HYDRATE_RESTORED_SCOPE",
+            payload: {
+              preset: item.preset,
+              settingsSnapshot: normalizeRestorableSettingsSnapshot(item.settingsSnapshot),
+            },
+          })
           if (restoredQuery.length > 0) {
             await runKnowledgeQuery(restoredQuery, false)
           }
@@ -2194,6 +2583,13 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         return
       }
 
+      dispatch({
+        type: "HYDRATE_RESTORED_SCOPE",
+        payload: {
+          preset: item.preset,
+          settingsSnapshot: normalizeRestorableSettingsSnapshot(item.settingsSnapshot),
+        },
+      })
       if (restoredQuery.length > 0) {
         await runKnowledgeQuery(restoredQuery, false)
       }
@@ -2202,8 +2598,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   )
 
   const toggleHistoryPin = useCallback((id: string) => {
+    markHistoryMutation()
     dispatch({ type: "TOGGLE_HISTORY_PIN", payload: id })
-  }, [])
+  }, [markHistoryMutation])
 
   const deleteHistoryItem = useCallback(
     async (id: string) => {
@@ -2260,9 +2657,18 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         })
       }
 
+      const deletedActiveThread =
+        Boolean(state.currentThreadId) &&
+        (conversationId === state.currentThreadId || id === state.currentThreadId)
+      if (deletedActiveThread) {
+        clearResults()
+        dispatch({ type: "SET_QUERY", payload: "" })
+      }
+
+      markHistoryMutation()
       dispatch({ type: "REMOVE_HISTORY_ITEM", payload: id })
     },
-    [message, state.searchHistory]
+    [clearResults, markHistoryMutation, message, state.currentThreadId, state.searchHistory]
   )
 
   const setSettingsPanelOpen = useCallback((open: boolean) => {
@@ -2292,7 +2698,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const setPinnedSourceFilters = useCallback((filters: PinnedSourceFilters) => {
     const normalized: PinnedSourceFilters = {
       mediaIds: mergeNumberFilters(filters.mediaIds),
-      noteIds: mergeNumberFilters(filters.noteIds),
+      noteIds: mergeStringFilters(filters.noteIds),
     }
     dispatch({ type: "SET_PINNED_SOURCE_FILTERS", payload: normalized })
   }, [])
@@ -2333,8 +2739,15 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
   // Save history to local storage when it changes
   useEffect(() => {
+    if (!historyHydrated) {
+      return
+    }
     if (state.searchHistory.length === 0) {
-      localStorage.removeItem("knowledge_qa_history")
+      try {
+        localStorage.removeItem("knowledge_qa_history")
+      } catch (error) {
+        console.error("Failed to clear Knowledge QA history:", error)
+      }
       return
     }
 
@@ -2347,6 +2760,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       )
 
       if (wasTrimmed && storedHistory.length !== state.searchHistory.length) {
+        markHistoryMutation()
         dispatch({ type: "SET_SEARCH_HISTORY", payload: storedHistory })
         if (!historyQuotaWarningShownRef.current) {
           historyQuotaWarningShownRef.current = true
@@ -2360,7 +2774,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to persist Knowledge QA history:", error)
     }
-  }, [message, state.searchHistory])
+  }, [historyHydrated, markHistoryMutation, message, state.searchHistory])
 
   // Load history on mount
   useEffect(() => {
@@ -2397,12 +2811,14 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const contextValue = useMemo<KnowledgeQAContextValue>(
     () => ({
       ...state,
+      historyHydrated,
       setQuery,
       search,
       cancelSearch,
       clearResults,
       rerunWithTokenLimit,
       createNewThread,
+      startNewTopic,
       selectThread,
       selectSharedThread,
       askFollowUp,
@@ -2428,12 +2844,14 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     }),
     [
       state,
+      historyHydrated,
       setQuery,
       search,
       cancelSearch,
       clearResults,
       rerunWithTokenLimit,
       createNewThread,
+      startNewTopic,
       selectThread,
       selectSharedThread,
       askFollowUp,

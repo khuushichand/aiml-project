@@ -3859,7 +3859,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       clearUploadedFiles()
       textAreaFocus()
       const projectedForSubmission = projectTokenBudget({
-        conversationTokens: conversationTokenCount,
+        conversationTokens:
+          conversationTokenCount +
+          characterContextTokenEstimate +
+          pinnedSourceTokenEstimate,
         draftTokens: estimateTokensForText(trimmed),
         maxTokens: resolvedMaxContext
       })

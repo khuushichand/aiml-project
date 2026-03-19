@@ -9,6 +9,8 @@ const paTesseractPath = path.resolve(__dirname, 'node_modules/pa-tesseract.js');
 const nextConfig = {
   reactStrictMode: true,
   reactCompiler: false,
+  // Support loopback-origin access during local dev, e.g. 127.0.0.1 -> localhost.
+  allowedDevOrigins: ['localhost', '127.0.0.1'],
   async redirects() {
     return [
       {

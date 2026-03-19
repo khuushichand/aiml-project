@@ -241,6 +241,7 @@ const normalChatModeDefinition: ChatModeDefinition<NormalChatModeParams> = {
 
       await tldwClient.initialize()
       for (const backend of imageBackendCandidates) {
+        if (ctx.signal?.aborted) break
         try {
           if (!prompt) {
             throw new Error("Image prompt is required.")
