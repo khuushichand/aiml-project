@@ -98,3 +98,27 @@ def test_public_frontend_does_not_import_hosted_customer_surface() -> None:
             "@web/lib/hosted-route-allowlist" not in text,
             f"expected public frontend entrypoint to avoid hosted route allowlist imports: {path}",
         )
+
+
+def test_boundary_checker_exists() -> None:
+    checker = Path("Helper_Scripts/docs/check_public_private_boundary.py").read_text(
+        encoding="utf-8"
+    )
+
+    _require(
+        "Hosted_Production_Runbook.md" in checker,
+        "expected hosted reference denylist in the boundary checker",
+    )
+    _require(
+        "Docs/Published" in checker,
+        "expected boundary checker to scan public docs paths",
+    )
+
+
+def test_mkdocs_workflow_runs_boundary_checker() -> None:
+    workflow = Path(".github/workflows/mkdocs.yml").read_text(encoding="utf-8")
+
+    _require(
+        "python Helper_Scripts/docs/check_public_private_boundary.py" in workflow,
+        "expected mkdocs workflow to run the public/private boundary checker",
+    )

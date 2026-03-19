@@ -348,7 +348,7 @@ git -C ../tldw-hosted commit -m "feat: add private hosted customer surface"
 
 ### Task 6: Add Boundary Enforcement And Verify Public Repo Independence
 
-**Status:** Not Started
+**Status:** Complete
 
 **Files:**
 - Create: `Helper_Scripts/docs/check_public_private_boundary.py`
