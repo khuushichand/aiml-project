@@ -83,6 +83,14 @@ def _sha256_hexdigest(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _sha256_file_hexdigest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _copy_asset_manifest(installed_assets: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return [dict(entry) for entry in (installed_assets or []) if isinstance(entry, dict)]
 
@@ -96,7 +104,7 @@ def _calculate_asset_checksums(assets: list[dict[str, Any]]) -> dict[str, str]:
         asset_path = Path(path_value)
         if not asset_path.is_file():
             continue
-        checksums[str(asset_path)] = _sha256_hexdigest(asset_path.read_bytes())
+        checksums[str(asset_path)] = _sha256_file_hexdigest(asset_path)
     return checksums
 
 
@@ -174,9 +182,21 @@ def validate_audio_pack_manifest(
 ) -> dict[str, Any]:
     """Validate manifest checksum and local compatibility for an audio pack."""
 
-    manifest = load_audio_pack_manifest(pack_name)
+    raw_manifest = load_audio_pack_manifest(pack_name)
     issues: list[str] = []
     warnings: list[str] = []
+
+    if not isinstance(raw_manifest, dict):
+        return {
+            "compatible": False,
+            "issues": ["Audio pack manifest must be a JSON object."],
+            "warnings": warnings,
+            "manifest": {},
+            "selection_key": None,
+            "bundle_label": None,
+        }
+
+    manifest = dict(raw_manifest)
 
     if manifest.get("format") != AUDIO_PACK_FORMAT:
         issues.append("Unsupported audio pack format.")
@@ -184,27 +204,41 @@ def validate_audio_pack_manifest(
     bundle_id = manifest.get("bundle_id")
     resource_profile = manifest.get("resource_profile")
     catalog_version = manifest.get("catalog_version") or AUDIO_BUNDLE_CATALOG_VERSION
-    try:
-        bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
-        bundle.profile_by_id(resource_profile)
-    except KeyError as exc:
-        bundle = None
-        logger.opt(exception=exc).debug(
-            "Audio pack manifest references unknown bundle/profile {}/{}",
-            bundle_id,
-            resource_profile,
-        )
+    bundle = None
+    if isinstance(bundle_id, str) and isinstance(resource_profile, str):
+        try:
+            bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+            bundle.profile_by_id(resource_profile)
+        except KeyError as exc:
+            logger.opt(exception=exc).debug(
+                "Audio pack manifest references unknown bundle/profile {}/{}",
+                bundle_id,
+                resource_profile,
+            )
+            issues.append("Referenced audio bundle or resource profile is not available in this catalog.")
+    else:
         issues.append("Referenced audio bundle or resource profile is not available in this catalog.")
 
     checksum_payload = dict(manifest)
     checksum_payload["checksums"] = {}
     expected_manifest_checksum = _sha256_hexdigest(_canonical_manifest_payload(checksum_payload))
-    actual_manifest_checksum = manifest.get("checksums", {}).get("manifest_sha256")
+    checksums = manifest.get("checksums")
+    if checksums is None:
+        checksums = {}
+    elif not isinstance(checksums, dict):
+        issues.append("Manifest checksums entry must be an object.")
+        checksums = {}
+    actual_manifest_checksum = checksums.get("manifest_sha256")
     if actual_manifest_checksum != expected_manifest_checksum:
         issues.append("Manifest checksum mismatch.")
 
     local_profile = machine_profile or _default_compatibility()
-    compatibility = manifest.get("compatibility") or {}
+    compatibility = manifest.get("compatibility")
+    if compatibility is None:
+        compatibility = {}
+    elif not isinstance(compatibility, dict):
+        issues.append("Manifest compatibility entry must be an object.")
+        compatibility = {}
     if compatibility.get("platform") and compatibility["platform"] != local_profile.get("platform"):
         issues.append(
             f"Pack platform {compatibility['platform']} does not match local platform {local_profile.get('platform')}."
@@ -217,7 +251,17 @@ def validate_audio_pack_manifest(
     if expected_python and expected_python != local_python:
         issues.append(f"Pack Python {expected_python} does not match local Python {local_python}.")
 
-    for asset in manifest.get("assets", []):
+    manifest_assets = manifest.get("assets")
+    if manifest_assets is None:
+        manifest_assets = []
+    elif not isinstance(manifest_assets, list):
+        issues.append("Manifest assets entry must be a list.")
+        manifest_assets = []
+
+    for asset in manifest_assets:
+        if not isinstance(asset, dict):
+            issues.append("Manifest assets entries must be objects.")
+            continue
         path_value = asset.get("path") or asset.get("asset_path")
         if not path_value:
             continue
@@ -225,13 +269,16 @@ def validate_audio_pack_manifest(
         if not asset_path.exists():
             warnings.append(f"Referenced asset is not present locally: {asset_path}")
 
+    selection_key = manifest.get("selection_key") if isinstance(manifest.get("selection_key"), str) else None
+    if not selection_key and isinstance(bundle_id, str) and isinstance(resource_profile, str):
+        selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
+
     return {
         "compatible": not issues,
         "issues": issues,
         "warnings": warnings,
         "manifest": manifest,
-        "selection_key": manifest.get("selection_key")
-        or build_audio_selection_key(bundle_id, resource_profile, catalog_version),
+        "selection_key": selection_key,
         "bundle_label": bundle.label if bundle else None,
     }
 
@@ -264,7 +311,9 @@ def register_imported_audio_pack(
             "issues": list(validation["issues"]),
             "warnings": list(validation["warnings"]),
             "imported_at": _utc_now(),
-            "manifest_sha256": manifest.get("checksums", {}).get("manifest_sha256"),
+            "manifest_sha256": (manifest.get("checksums") if isinstance(manifest.get("checksums"), dict) else {}).get(
+                "manifest_sha256"
+            ),
         }
     )
 

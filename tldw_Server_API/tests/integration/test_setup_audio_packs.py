@@ -179,6 +179,20 @@ def test_setup_audio_pack_import_masks_missing_path_details(mocker, tmp_path):
         "get_status_snapshot",
         return_value={"enabled": True, "needs_setup": True},
     )
+    mocker.patch.object(
+        setup_endpoint.audio_profile_service,
+        "detect_machine_profile",
+        return_value=MachineProfile(
+            platform="linux",
+            arch="x86_64",
+            apple_silicon=False,
+            cuda_available=False,
+            ffmpeg_available=True,
+            espeak_available=True,
+            free_disk_gb=64.0,
+            network_available_for_downloads=False,
+        ),
+    )
     mocker.patch.object(setup_endpoint.audio_pack_service, "CONFIG_ROOT", tmp_path / "Config_Files")
 
     with _make_client() as client:

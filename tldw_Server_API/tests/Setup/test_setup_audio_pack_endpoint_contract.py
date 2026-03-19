@@ -23,9 +23,9 @@ def _machine_profile() -> MachineProfile:
 
 def test_audio_pack_request_models_accept_legacy_pack_path_alias():
     export_payload = AudioPackExportRequest.model_validate(
-        {"bundle_id": "cpu_local", "resource_profile": "balanced", "pack_path": "legacy-pack.json"}
+        {"bundle_id": "cpu_local", "resource_profile": "balanced", "pack_path": "audio_packs/legacy-pack.json"}
     )
-    import_payload = AudioPackImportRequest.model_validate({"pack_path": "legacy-pack.json"})
+    import_payload = AudioPackImportRequest.model_validate({"pack_path": "audio_packs\\legacy-pack.json"})
 
     assert export_payload.pack_name == "legacy-pack.json"
     assert import_payload.pack_name == "legacy-pack.json"
@@ -96,3 +96,5 @@ async def test_import_audio_pack_uses_managed_directory(mocker, tmp_path):
 
     assert result["audio_readiness"]["imported_packs"][0]["pack_path"] == "audio_packs/import-pack.json"
     assert result["selection_key"] == "v2:cpu_local:balanced"
+    assert result["audio_readiness"]["machine_profile"]["ffmpeg_available"] is True
+    assert result["audio_readiness"]["machine_profile"]["free_disk_gb"] == 64.0

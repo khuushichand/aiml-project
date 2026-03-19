@@ -256,6 +256,12 @@ async def verify_audio_bundle(
         )
     except KeyError as exc:
         _raise_audio_bundle_lookup_not_found(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Audio bundle verification failed via setup endpoint")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify audio bundle.",
+        ) from exc
 
 
 @router.post("/audio/packs/export", openapi_extra={"security": []}, response_model=AudioPackExportResponse)
@@ -314,13 +320,17 @@ async def import_audio_pack(
     pack_name = _normalize_audio_pack_name(payload.pack_name)
     machine_profile = audio_profile_service.detect_machine_profile()
     compatibility = _audio_pack_compatibility(machine_profile)
+    machine_profile_payload = (
+        machine_profile.model_dump() if hasattr(machine_profile, "model_dump") else dict(machine_profile)
+    )
     readiness_store = audio_readiness_store.get_audio_readiness_store()
 
     try:
         result = audio_pack_service.register_imported_audio_pack(
             pack_name,
             readiness_store=readiness_store,
-            machine_profile=compatibility,
+            machine_profile=machine_profile_payload,
+            python_version=compatibility["python_version"],
         )
     except FileNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Audio pack not found.") from exc

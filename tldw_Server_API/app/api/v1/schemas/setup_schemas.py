@@ -11,6 +11,11 @@ from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import DEFAULT_AUDIO_RESOURCE_PROFILE
 
 
+def _legacy_pack_name(path_value: str) -> str:
+    normalized = str(path_value).replace("\\", "/")
+    return normalized.rsplit("/", 1)[-1]
+
+
 class ConfigUpdates(BaseModel):
     updates: dict[str, dict[str, Any]] = Field(
         ..., description="Mapping of section -> key/value pairs to persist in config.txt"
@@ -71,7 +76,7 @@ class AudioPackExportRequest(BaseModel):
     def accept_legacy_pack_path(cls, data: Any) -> Any:
         if isinstance(data, dict) and not data.get("pack_name") and data.get("pack_path"):
             payload = dict(data)
-            payload["pack_name"] = payload["pack_path"]
+            payload["pack_name"] = _legacy_pack_name(payload["pack_path"])
             return payload
         return data
 
@@ -88,7 +93,7 @@ class AudioPackImportRequest(BaseModel):
     def accept_legacy_pack_path(cls, data: Any) -> Any:
         if isinstance(data, dict) and not data.get("pack_name") and data.get("pack_path"):
             payload = dict(data)
-            payload["pack_name"] = payload["pack_path"]
+            payload["pack_name"] = _legacy_pack_name(payload["pack_path"])
             return payload
         return data
 
