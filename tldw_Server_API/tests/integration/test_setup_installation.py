@@ -112,3 +112,27 @@ def test_setup_ui_script_exposes_bundle_first_audio_actions():
     assert 'Provision recommended bundle' in source
     assert 'Run verification' in source
     assert 'Safe rerun' in source
+
+
+def test_setup_ui_script_preserves_audio_banner_messages_on_rerender():
+    with _make_client() as client:
+        response = client.get('/static/setup/js/setup.js')
+
+    assert response.status_code == 200
+    source = response.text
+    assert 'function renderWizardStep(options = {}) {' in source
+    assert "const { preserveMessage = false } = options;" in source
+    assert 'renderWizardStep({ preserveMessage: true });' in source
+
+
+def test_setup_ui_script_avoids_stale_audio_readiness_and_retry_loops():
+    with _make_client() as client:
+        response = client.get('/static/setup/js/setup.js')
+
+    assert response.status_code == 200
+    source = response.text
+    assert 'const readiness = getSelectedAudioReadiness();' in source
+    assert 'getSelectedAudioReadiness() || state.audio.readiness' not in source
+    assert 'state.audio.readinessError = error.message || String(error);' in source
+    assert 'state.audio.readinessLoaded = true;' in source
+    assert 'Retry readiness check' in source

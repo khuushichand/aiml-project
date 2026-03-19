@@ -572,6 +572,7 @@
       verifying: false,
       readinessLoading: false,
       readinessLoaded: false,
+      readinessError: '',
       readiness: null,
       lastProvisionResult: null,
       lastVerificationResult: null,
@@ -1075,7 +1076,7 @@
     } catch (error) {
       console.warn('Failed to load audio setup bundle recommendations', error);
       state.audio.error = error.message || String(error);
-      state.audio.loaded = false;
+      state.audio.loaded = true;
       return null;
     } finally {
       state.audio.loading = false;
@@ -1097,11 +1098,13 @@
     }
 
     state.audio.readinessLoading = true;
+    state.audio.readinessError = '';
 
     try {
       const readiness = await fetchJson(`${API_BASE}/audio/readiness`);
       state.audio.readiness = readiness;
       state.audio.readinessLoaded = true;
+      state.audio.readinessError = '';
       if (readiness?.selected_bundle_id) {
         state.audio.selectedBundleId = readiness.selected_bundle_id;
         state.audio.selectedResourceProfile = readiness.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
@@ -1109,6 +1112,8 @@
       syncSelectedAudioSelection();
       return readiness;
     } catch (error) {
+      state.audio.readinessError = error.message || String(error);
+      state.audio.readinessLoaded = true;
       if (!silent) {
         console.warn('Failed to load setup audio readiness', error);
       }
@@ -1215,7 +1220,7 @@
     } finally {
       state.audio.provisioning = false;
       updateSaveState();
-      renderWizardStep();
+      renderWizardStep({ preserveMessage: true });
     }
   }
 
@@ -1261,7 +1266,7 @@
     } finally {
       state.audio.verifying = false;
       updateSaveState();
-      renderWizardStep();
+      renderWizardStep({ preserveMessage: true });
     }
   }
 
@@ -2005,7 +2010,8 @@
     renderWizardStep();
   }
 
-  function renderWizardStep() {
+  function renderWizardStep(options = {}) {
+    const { preserveMessage = false } = options;
     // Clean up any per-step intervals before re-rendering
     try { stopKokoroEspeakAutoRefresh(); } catch (_) {}
     const step = WIZARD_STEPS[state.wizard.currentStep];
@@ -2013,7 +2019,9 @@
       return;
     }
 
-    clearMessage();
+    if (!preserveMessage) {
+      clearMessage();
+    }
     clearWizardMessage();
     elements.wizardContent.innerHTML = '';
     elements.wizardBack.disabled = state.wizard.currentStep === 0;
@@ -2935,7 +2943,7 @@ function renderAudioReadinessReport() {
   heading.textContent = 'Audio readiness report';
   header.appendChild(heading);
 
-  const readiness = getSelectedAudioReadiness() || state.audio.readiness;
+  const readiness = getSelectedAudioReadiness();
   const statusMeta = formatAudioReadinessBadge(readiness?.status || 'not_started');
   const badge = document.createElement('span');
   badge.className = `status-badge ${statusMeta.className}`;
@@ -2948,6 +2956,25 @@ function renderAudioReadinessReport() {
     loading.className = 'audio-stage-note';
     loading.textContent = 'Loading readiness report…';
     panel.appendChild(loading);
+    return panel;
+  }
+
+  if (state.audio.readinessError && !readiness) {
+    const notice = document.createElement('div');
+    notice.className = 'status-notice';
+    notice.textContent = `Unable to load audio readiness: ${state.audio.readinessError}`;
+
+    const retryButton = document.createElement('button');
+    retryButton.type = 'button';
+    retryButton.className = 'btn subtle';
+    retryButton.textContent = 'Retry readiness check';
+    retryButton.addEventListener('click', () => {
+      state.audio.readinessLoaded = false;
+      loadAudioReadiness({ force: true }).catch(() => {});
+    });
+    notice.appendChild(document.createTextNode(' '));
+    notice.appendChild(retryButton);
+    panel.appendChild(notice);
     return panel;
   }
 
