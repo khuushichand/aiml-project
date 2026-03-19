@@ -140,3 +140,20 @@ After the stack is healthy:
 3. verify signup, login, `/account`, `/billing`, checkout, portal return, and cancel/downgrade flows
 
 Treat this runbook as the baseline for hosted staging. If you need a different topology, update the hosted profile first rather than mutating staging ad hoc.
+
+Frontend smoke command:
+
+```bash
+cd apps/tldw-frontend
+TLDW_STAGING_BASE_URL=https://staging.example.com bun run e2e:hosted:staging
+```
+
+Optional authenticated smoke:
+
+```bash
+cd apps/tldw-frontend
+TLDW_STAGING_BASE_URL=https://staging.example.com \
+TLDW_STAGING_USER_EMAIL=user@example.com \
+TLDW_STAGING_USER_PASSWORD='replace-me' \
+bun run e2e:hosted:staging
+```
