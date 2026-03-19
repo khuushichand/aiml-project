@@ -15,19 +15,12 @@ Authentication & Secrets
   - Startup fails in production if the secret is missing/weak/default.
 - Masking:
   - In production, the API key is masked in startup logs.
-- Hosted SaaS profile:
-  - Use `AUTH_MODE=multi_user`.
-  - Set `PUBLIC_WEB_BASE_URL` to the public web origin for auth emails.
-  - Keep hosted browser sessions behind the same-origin proxy boundary; do not depend on browser-stored bearer tokens for the hosted web app.
 
 Database & Storage
 - Multi-user production: Use PostgreSQL. SQLite is not supported when `tldw_production=true`.
 - Set `DATABASE_URL=postgresql://<user>:<pass>@<host>:5432/<db>`.
 - Configure connection pool sizes and resource limits as appropriate.
 - Ensure backups and retention policies for databases and the `Databases/` directory.
-- Hosted SaaS profile:
-  - Managed PostgreSQL is required.
-  - Durable mounted application storage is acceptable for v1, but it still needs backup and restore coverage.
 
 Reverse Proxy & TLS
 - Terminate TLS at your reverse proxy (Nginx/Traefik) and forward to the app.
@@ -37,11 +30,13 @@ Reverse Proxy & TLS
 - Set appropriate timeouts and keep-alive settings for long-running requests.
 - If exposing the Next.js WebUI, prefer serving it behind the same origin as the API (reverse proxy) to avoid CORS complexity.
  - See reverse proxy examples: `../Deployment/Reverse_Proxy_Examples.md`
-- Hosted SaaS profile:
+- For browser-based multi-user deployments:
+  - Set `PUBLIC_WEB_BASE_URL` to the public web origin used in auth emails.
+  - Prefer serving the WebUI and API behind the same origin instead of relying on browser-stored bearer tokens.
   - Require `PUBLIC_WEB_BASE_URL` to use `https://`.
   - Require `BILLING_REDIRECT_REQUIRE_HTTPS=true`.
   - Require `BILLING_REDIRECT_ALLOWLIST_REQUIRED=true`.
-  - Set `BILLING_ALLOWED_REDIRECT_HOSTS` to the public app host so checkout and portal redirects cannot escape the customer surface.
+  - Set `BILLING_ALLOWED_REDIRECT_HOSTS` to the public app host so checkout and portal redirects cannot escape the intended customer surface.
 
 CORS & CSRF
 - Restrict CORS to trusted origins only (avoid wildcard in production).
@@ -84,9 +79,8 @@ Preflight Report
 Incident Response
 - Have a process to rotate keys (`SINGLE_USER_API_KEY`, `JWT_SECRET_KEY`) and revoke sessions.
 - Configure backups and validate restore procedures.
-- For the hosted launch profile, run `python Helper_Scripts/validate_hosted_saas_profile.py` as part of staging and pre-release checks.
+- Run deployment-specific preflight checks as part of staging and pre-release verification.
 
 References
 - Multi-User Deployment Guide: `./Multi-User_Deployment_Guide.md`
 - README sections: Authentication Setup, Configuration Options
-- Hosted SaaS launch profile: `../../Published/Deployment/Hosted_SaaS_Profile.md`
