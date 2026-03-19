@@ -134,12 +134,21 @@ vi.mock("../PlaygroundEmpty", () => ({
 }))
 
 vi.mock("@/components/Common/Playground/Message", () => ({
-  PlaygroundMessage: (props: { message: string; onUseInChat?: () => void }) => (
+  PlaygroundMessage: (props: {
+    message: string
+    onUseInChat?: () => void
+    onFollowUp?: () => void
+  }) => (
     <div data-testid="playground-message-mock">
       <div>{props.message}</div>
       {props.onUseInChat && (
         <button type="button" onClick={() => props.onUseInChat?.()}>
           Use in Chat
+        </button>
+      )}
+      {props.onFollowUp && (
+        <button type="button" onClick={() => props.onFollowUp?.()}>
+          Follow up
         </button>
       )}
     </div>
@@ -150,10 +159,10 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: clientMocks
 }))
 
-const renderChat = (onAttachResearchContext?: (context: unknown) => void) =>
+const renderChat = (extraProps?: Record<string, unknown>) =>
   render(
     <DemoModeProvider>
-      <PlaygroundChat onAttachResearchContext={onAttachResearchContext} />
+      <PlaygroundChat {...(extraProps as any)} />
     </DemoModeProvider>
   )
 
@@ -193,7 +202,7 @@ describe("PlaygroundChat research use-in-chat message integration", () => {
     ]
 
     const attachSpy = vi.fn()
-    renderChat(attachSpy)
+    renderChat({ onAttachResearchContext: attachSpy })
 
     const buttons = screen.getAllByRole("button", { name: "Use in Chat" })
     expect(buttons).toHaveLength(1)
@@ -207,6 +216,50 @@ describe("PlaygroundChat research use-in-chat message integration", () => {
           run_id: "run_msg",
           query: "Battery recycling supply chain",
           research_url: "/research?run=run_msg"
+        })
+      )
+    )
+  })
+
+  it("shows Follow up for completion handoff messages and not for unrelated assistant messages", async () => {
+    useMessageOptionState.value.messages = [
+      {
+        isBot: true,
+        role: "assistant",
+        name: "Assistant",
+        message: "Deep research finished.",
+        sources: [],
+        metadataExtra: {
+          deep_research_completion: {
+            run_id: "run_msg",
+            query: "Battery recycling supply chain",
+            kind: "completion_handoff"
+          }
+        }
+      },
+      {
+        isBot: true,
+        role: "assistant",
+        name: "Assistant",
+        message: "Ordinary assistant reply.",
+        sources: [],
+        metadataExtra: {}
+      }
+    ]
+
+    const followUpSpy = vi.fn()
+    renderChat({ onPrepareResearchFollowUp: followUpSpy })
+
+    const buttons = screen.getAllByRole("button", { name: "Follow up" })
+    expect(buttons).toHaveLength(1)
+
+    fireEvent.click(buttons[0])
+
+    await waitFor(() =>
+      expect(followUpSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          run_id: "run_msg",
+          query: "Battery recycling supply chain"
         })
       )
     )

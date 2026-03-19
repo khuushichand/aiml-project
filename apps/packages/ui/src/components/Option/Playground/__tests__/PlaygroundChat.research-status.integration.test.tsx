@@ -168,10 +168,10 @@ const setLinkedRunError = () => {
   queryState.errorUpdatedAt += 1
 }
 
-const renderChat = () =>
+const renderChat = (extraProps?: Record<string, unknown>) =>
   render(
     <DemoModeProvider>
-      <PlaygroundChat />
+      <PlaygroundChat {...(extraProps as any)} />
     </DemoModeProvider>
   )
 
@@ -321,6 +321,58 @@ describe("PlaygroundChat linked research status integration", () => {
           query: "Battery recycling supply chain",
           question: "What changed in the battery recycling market?",
           research_url: "/research?run=rs_completed"
+        })
+      )
+    )
+  })
+
+  it("shows Follow up only on completed linked runs and routes it through the shared preparation path", async () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_running",
+        query: "Running query",
+        status: "running",
+        phase: "collecting",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-08T20:03:00+00:00"
+      },
+      {
+        run_id: "rs_completed",
+        query: "Completed query",
+        status: "completed",
+        phase: "completed",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-08T20:02:00+00:00"
+      },
+      {
+        run_id: "rs_failed",
+        query: "Failed query",
+        status: "failed",
+        phase: "failed",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-08T20:01:00+00:00"
+      }
+    ])
+
+    const followUpSpy = vi.fn()
+    renderChat({ onPrepareResearchFollowUp: followUpSpy })
+
+    const rows = screen.getAllByTestId("research-run-status-row")
+    expect(rows).toHaveLength(3)
+    expect(within(rows[0]).queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+    expect(within(rows[1]).getByRole("button", { name: "Follow up" })).toBeInTheDocument()
+    expect(within(rows[2]).queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "Follow up" }))
+
+    await waitFor(() =>
+      expect(followUpSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          run_id: "rs_completed",
+          query: "Completed query"
         })
       )
     )

@@ -99,6 +99,8 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain("Reset to Attached Run")
     expect(formSource).toContain("Apply")
     expect(formSource).toContain("Follow-up Research")
+    expect(formSource).toContain("Follow up on this research:")
+    expect(formSource).toContain("Follow up")
     expect(formSource).toContain("Use attached research as background")
     expect(formSource).toContain("Start research")
     expect(researchRunsSource).toContain("follow_up?:")
