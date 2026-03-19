@@ -66,6 +66,7 @@ const renderApp = (pathname: string) => {
 
 const originalEnvApiKey = process.env.NEXT_PUBLIC_X_API_KEY
 const originalEnvBearer = process.env.NEXT_PUBLIC_API_BEARER
+const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
 
 beforeEach(() => {
   mockRouter.push.mockClear()
@@ -78,11 +79,13 @@ beforeEach(() => {
   mockGetConfig.mockImplementation(async () => currentConfig)
   delete process.env.NEXT_PUBLIC_X_API_KEY
   delete process.env.NEXT_PUBLIC_API_BEARER
+  delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
 })
 
 afterAll(() => {
   process.env.NEXT_PUBLIC_X_API_KEY = originalEnvApiKey
   process.env.NEXT_PUBLIC_API_BEARER = originalEnvBearer
+  process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
 })
 
 describe("App layout routing", () => {
@@ -94,6 +97,14 @@ describe("App layout routing", () => {
 
   it("skips OptionLayout for /login", () => {
     renderApp("/login")
+    expect(screen.queryByTestId("option-layout")).toBeNull()
+    expect(screen.getByTestId("page-content")).toBeInTheDocument()
+  })
+
+  it("skips OptionLayout for hosted public auth routes", () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "hosted"
+
+    renderApp("/signup")
     expect(screen.queryByTestId("option-layout")).toBeNull()
     expect(screen.getByTestId("page-content")).toBeInTheDocument()
   })
@@ -167,6 +178,23 @@ describe("App layout routing", () => {
     })
     expect(layout).toHaveAttribute("data-hide-header", "true")
     expect(layout).toHaveAttribute("data-hide-sidebar", "true")
+  })
+
+  it("treats hosted multi-user sessions as authenticated without browser tokens", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "hosted"
+    currentConfig = {
+      serverUrl: "",
+      authMode: "multi-user"
+    }
+
+    renderApp("/media")
+    const layout = await screen.findByTestId("option-layout")
+
+    await waitFor(() => {
+      expect(mockGetCurrentUser).toHaveBeenCalled()
+    })
+    expect(layout).toHaveAttribute("data-hide-header", "false")
+    expect(layout).toHaveAttribute("data-hide-sidebar", "false")
   })
 
   it("warms primary navigation routes after auth resolves", async () => {

@@ -10,6 +10,7 @@ import dynamic from "next/dynamic"
 import { useRouter } from "next/router"
 import React from "react"
 import { AppProviders } from "@web/components/AppProviders"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 const OptionLayout = dynamic(
   () => import("@web/components/layout/WebLayout"),
@@ -41,6 +42,13 @@ const PREFETCH_STEP_DELAY_MS = 250
 const PREFETCH_IDLE_TIMEOUT_MS = 2000
 const PREFETCH_FALLBACK_DELAY_MS = 1200
 const SLOW_EFFECTIVE_TYPES = new Set(["slow-2g", "2g"])
+const HOSTED_PUBLIC_AUTH_ROUTES = new Set([
+  "/login",
+  "/signup",
+  "/auth/verify-email",
+  "/auth/reset-password",
+  "/auth/magic-link"
+])
 
 const hasEnvAuth = () => {
   const envApiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim()
@@ -58,6 +66,7 @@ const getConfiguredAuthState = async (): Promise<ConfiguredAuthState> => {
   try {
     const { tldwClient } = await import("@/services/tldw/TldwApiClient")
     const config = await tldwClient.getConfig()
+    const hostedMode = isHostedTldwDeployment()
     if (!config) {
       return {
         hasConfig: false,
@@ -69,7 +78,7 @@ const getConfiguredAuthState = async (): Promise<ConfiguredAuthState> => {
       const hasAccessToken =
         typeof config.accessToken === "string" &&
         config.accessToken.trim().length > 0
-      if (!hasAccessToken) {
+      if (!hostedMode && !hasAccessToken) {
         return {
           hasConfig: true,
           authMode: "multi-user",
@@ -115,8 +124,10 @@ export default function App({ Component, pageProps }: AppProps) {
     pathname.length > 1 && pathname.endsWith("/")
       ? pathname.slice(0, -1)
       : pathname
-
-  const isLoginRoute = routePath === "/login"
+  const isHostedMode = isHostedTldwDeployment()
+  const isPublicAuthRoute =
+    routePath === "/login" ||
+    (isHostedMode && HOSTED_PUBLIC_AUTH_ROUTES.has(routePath))
   const isSettingsRoute =
     routePath === "/settings" || routePath.startsWith("/settings/")
   const [isAuthenticated, setIsAuthenticated] = React.useState(false)
@@ -167,7 +178,7 @@ export default function App({ Component, pageProps }: AppProps) {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    if (!authResolved || !isAuthenticated || isLoginRoute) return
+    if (!authResolved || !isAuthenticated || isPublicAuthRoute) return
     if (didWarmRoutePrefetch.current) return
 
     const prefetchRoute = router.prefetch?.bind(router)
@@ -248,13 +259,13 @@ export default function App({ Component, pageProps }: AppProps) {
         windowWithIdle.cancelIdleCallback(idleHandle)
       }
     }
-  }, [authResolved, isAuthenticated, isLoginRoute, routePath, router])
+  }, [authResolved, isAuthenticated, isPublicAuthRoute, routePath, router])
 
   const hideShellNav = !authResolved || !isAuthenticated
 
   return (
     <AppProviders>
-      {isLoginRoute ? (
+      {isPublicAuthRoute ? (
         <Component {...pageProps} />
       ) : (
         <OptionLayout
