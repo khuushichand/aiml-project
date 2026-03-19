@@ -370,6 +370,26 @@ async def test_embeddings_worker_storage_uses_first_normalized_chunk_type(monkey
     assert captured["metadatas"][0]["chunk_type"] == "code"
 
 
+def test_normalize_chunk_type_logs_noncritical_failures(monkeypatch):
+    debug_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def fail_normalization(_value):
+        raise ValueError("bad chunk metadata")
+
+    monkeypatch.setattr(jobs_worker.Chunker, "normalize_chunk_type", fail_normalization)
+    monkeypatch.setattr(
+        jobs_worker.logger,
+        "debug",
+        lambda message, *args: debug_calls.append((message, args)),
+    )
+
+    result = jobs_worker._normalize_chunk_type({"bad": "metadata"})
+
+    assert result is None
+    assert debug_calls
+    assert "Failed to normalize chunk type candidate" in debug_calls[0][0]
+
+
 @pytest.mark.asyncio
 async def test_embeddings_worker_storage_rejects_malformed_idempotent_artifact(monkeypatch, tmp_path):
     artifact_dir = tmp_path / "artifacts"

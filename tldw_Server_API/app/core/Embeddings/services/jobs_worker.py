@@ -129,13 +129,18 @@ def _root_job_uuid(payload: dict[str, Any]) -> str | None:
 
 
 def _normalize_chunk_type(value: Any) -> str | None:
+    """Normalize a chunk-type candidate while surfacing non-fatal normalization failures."""
+
     try:
         return Chunker.normalize_chunk_type(value)
-    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to normalize chunk type candidate {!r}: {}", value, exc)
         return None
 
 
 def _resolve_chunk_type(*candidates: Any) -> str:
+    """Return the first normalized chunk type from the candidate list, else fall back to ``text``."""
+
     for candidate in candidates:
         normalized = _normalize_chunk_type(candidate)
         if normalized:
