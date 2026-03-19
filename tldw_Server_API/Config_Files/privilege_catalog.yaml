@@ -191,6 +191,36 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/agent-orchestration-projects-manage
+  - id: agent_orchestration.workspaces.read
+    description: View agent orchestration workspaces, health, and MCP server summaries.
+    resource_tags:
+      - orchestration
+      - workspaces
+      - read
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/agent-orchestration-workspaces-read
+  - id: agent_orchestration.workspaces.manage
+    description: Create, update, discover, and administer agent orchestration workspaces.
+    resource_tags:
+      - orchestration
+      - workspaces
+      - control
+    sensitivity_tier: restricted
+    rate_limit_class: admin
+    default_roles:
+      - admin
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/agent-orchestration-workspaces-manage
   - id: agent_orchestration.tasks.read
     description: View agent orchestration tasks and run history.
     resource_tags:
