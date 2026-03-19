@@ -440,25 +440,24 @@ describe("FamilyGuardrailsWizard", () => {
   })
 
   it("shows mixed activation statuses for pending and active dependents", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
-      status: "partially_active",
       active_count: 1,
       pending_count: 1,
       failed_count: 0,
       items: [
-        {
-          dependent_user_id: "child-1",
-          relationship_status: "pending",
-          plan_status: "queued",
-          message: "Queued until acceptance"
-        },
-        {
-          dependent_user_id: "child-2",
+        trackerItem(),
+        trackerItem({
+          member_draft_id: "member-dependent-2",
+          display_name: "Sam",
+          dependent_user_id: "sam-kid",
           relationship_status: "active",
           plan_status: "active",
-          message: null
-        }
+          invite_id: "invite-2",
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        })
       ]
     })
 
@@ -484,29 +483,38 @@ describe("FamilyGuardrailsWizard", () => {
       expect(
         screen.getByText("Guardrails for pending dependents stay queued until acceptance.")
       ).toBeInTheDocument()
+      expect(screen.getByText("Waiting on acceptance")).toBeInTheDocument()
     })
   })
 
   it("shows all-active tracker guidance when no dependents are pending", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
-      status: "active",
       active_count: 2,
       pending_count: 0,
       failed_count: 0,
       items: [
-        {
+        trackerItem({
+          member_draft_id: "member-dependent-1",
+          display_name: "Child One",
           dependent_user_id: "child-1",
           relationship_status: "active",
           plan_status: "active",
-          message: null
-        },
-        {
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        }),
+        trackerItem({
+          member_draft_id: "member-dependent-2",
+          display_name: "Child Two",
           dependent_user_id: "child-2",
           relationship_status: "active",
           plan_status: "active",
-          message: null
-        }
+          invite_id: "invite-2",
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        })
       ]
     })
 
@@ -531,34 +539,49 @@ describe("FamilyGuardrailsWizard", () => {
         screen.getByText("No pending invite acceptances remain for this household.")
       ).toBeInTheDocument()
       expect(
-        screen.getByRole("button", { name: "Copy pending invite reminder" })
-      ).toBeDisabled()
-      expect(
         screen.getByRole("button", { name: "Resend Pending Invites" })
       ).toBeDisabled()
+      expect(
+        screen.queryByRole("button", { name: "Copy pending invite reminder" })
+      ).not.toBeInTheDocument()
     })
   })
 
-  it("copies a pending-invite reminder from the tracker step", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+  it("creates a missing invite from the tracker step", async () => {
+    provisionHouseholdMemberInviteMock.mockResolvedValue({
+      id: "invite-1",
       household_draft_id: "draft-1",
-      status: "partially_active",
-      active_count: 1,
+      member_draft_id: "member-dependent-1",
+      status: "ready",
+      delivery_channel: "email",
+      delivery_target: "alex@example.com",
+      invite_token: "token-1",
+      resend_count: 0,
+      last_sent_at: null,
+      accepted_at: null,
+      expires_at: "2026-01-08T00:00:00Z",
+      revoked_at: null,
+      failure_reason: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z"
+    })
+    getHouseholdInviteTrackerMock.mockResolvedValue({
+      household_draft_id: "draft-1",
+      active_count: 0,
       pending_count: 1,
       failed_count: 0,
       items: [
-        {
-          dependent_user_id: "alex-kid",
-          relationship_status: "pending",
-          plan_status: "queued",
-          message: null
-        },
-        {
-          dependent_user_id: "sam-kid",
-          relationship_status: "active",
-          plan_status: "active",
-          message: null
-        }
+        trackerItem({
+          account_mode: "invite_new",
+          dependent_user_id: null,
+          invite_id: null,
+          invite_status: "not_started",
+          invite_delivery_channel: "guardian_copy",
+          invite_delivery_target: null,
+          invite_last_sent_at: null,
+          blocker_codes: ["invite_not_provisioned", "account_not_accepted", "plan_waiting_for_acceptance"],
+          available_actions: ["provision_invite"]
+        })
       ]
     })
 
@@ -577,42 +600,38 @@ describe("FamilyGuardrailsWizard", () => {
       />
     )
 
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Copy pending invite reminder" })
-      ).toBeEnabled()
+    const createInviteButton = await screen.findByRole("button", {
+      name: "Create Invite for Alex"
     })
-
-    fireEvent.click(screen.getByRole("button", { name: "Copy pending invite reminder" }))
+    fireEvent.click(createInviteButton)
 
     await waitFor(() => {
-      expect(clipboardWriteTextMock).toHaveBeenCalledTimes(1)
-      expect(clipboardWriteTextMock).toHaveBeenCalledWith(
-        expect.stringContaining("alex-kid")
+      expect(provisionHouseholdMemberInviteMock).toHaveBeenCalledWith(
+        "draft-1",
+        "member-dependent-1"
       )
     })
   })
 
   it("resends pending invites from tracker step", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
-      status: "partially_active",
       active_count: 1,
       pending_count: 1,
       failed_count: 0,
       items: [
-        {
-          dependent_user_id: "alex-kid",
-          relationship_status: "pending",
-          plan_status: "queued",
-          message: null
-        },
-        {
+        trackerItem(),
+        trackerItem({
+          member_draft_id: "member-dependent-2",
+          display_name: "Sam",
           dependent_user_id: "sam-kid",
           relationship_status: "active",
           plan_status: "active",
-          message: null
-        }
+          invite_id: "invite-2",
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        })
       ]
     })
 
@@ -642,31 +661,48 @@ describe("FamilyGuardrailsWizard", () => {
     await waitFor(() => {
       expect(resendPendingInvitesMock).toHaveBeenCalledTimes(1)
       expect(resendPendingInvitesMock).toHaveBeenCalledWith("draft-1", {
-        dependent_user_ids: ["alex-kid"]
+        dependent_user_ids: [],
+        member_draft_ids: ["member-dependent-1"]
       })
     })
   })
 
   it("offers per-dependent resend action for pending tracker rows", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+    resendHouseholdMemberInviteMock.mockResolvedValue({
+      id: "invite-1",
       household_draft_id: "draft-1",
-      status: "partially_active",
+      member_draft_id: "member-dependent-1",
+      status: "sent",
+      delivery_channel: "email",
+      delivery_target: "alex@example.com",
+      invite_token: "token-1",
+      resend_count: 1,
+      last_sent_at: "2026-01-02T00:00:00Z",
+      accepted_at: null,
+      expires_at: "2026-01-08T00:00:00Z",
+      revoked_at: null,
+      failure_reason: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z"
+    })
+    getHouseholdInviteTrackerMock.mockResolvedValue({
+      household_draft_id: "draft-1",
       active_count: 1,
       pending_count: 1,
       failed_count: 0,
       items: [
-        {
-          dependent_user_id: "alex-kid",
-          relationship_status: "pending",
-          plan_status: "queued",
-          message: null
-        },
-        {
+        trackerItem(),
+        trackerItem({
+          member_draft_id: "member-dependent-2",
+          display_name: "Sam",
           dependent_user_id: "sam-kid",
           relationship_status: "active",
           plan_status: "active",
-          message: null
-        }
+          invite_id: "invite-2",
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        })
       ]
     })
 
@@ -686,31 +722,29 @@ describe("FamilyGuardrailsWizard", () => {
     )
 
     const resendRowButton = await screen.findByRole("button", {
-      name: "Resend invite for alex-kid"
+      name: "Resend Invite for Alex"
     })
     fireEvent.click(resendRowButton)
 
     await waitFor(() => {
-      expect(resendPendingInvitesMock).toHaveBeenCalledWith("draft-1", {
-        dependent_user_ids: ["alex-kid"]
-      })
+      expect(resendHouseholdMemberInviteMock).toHaveBeenCalledWith("draft-1", "invite-1")
     })
   })
 
   it("offers per-dependent template review action for failed tracker rows", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
-      status: "needs_attention",
       active_count: 1,
       pending_count: 0,
       failed_count: 1,
       items: [
-        {
-          dependent_user_id: "alex-kid",
+        trackerItem({
           relationship_status: "active",
           plan_status: "failed",
-          message: null
-        }
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        })
       ]
     })
 
@@ -730,7 +764,7 @@ describe("FamilyGuardrailsWizard", () => {
     )
 
     const reviewTemplateButton = await screen.findByRole("button", {
-      name: "Review template for alex-kid"
+      name: "Review Template for Alex"
     })
     fireEvent.click(reviewTemplateButton)
 
@@ -739,25 +773,24 @@ describe("FamilyGuardrailsWizard", () => {
         screen.getByText("Apply a template first, then customize if needed.")
       ).toBeInTheDocument()
       expect(
-        screen.getByText("Reviewing template for alex-kid.")
+        screen.getByText("Reviewing template for Alex.")
       ).toBeInTheDocument()
     })
   })
 
   it("shows blocker fallback and fix-mapping action for declined tracker rows", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
-      status: "needs_attention",
       active_count: 0,
       pending_count: 0,
       failed_count: 1,
       items: [
-        {
-          dependent_user_id: "alex-kid",
+        trackerItem({
           relationship_status: "declined",
           plan_status: "queued",
-          message: null
-        }
+          blocker_codes: ["plan_waiting_for_acceptance"],
+          available_actions: []
+        })
       ]
     })
 
@@ -777,47 +810,41 @@ describe("FamilyGuardrailsWizard", () => {
     )
 
     await waitFor(() => {
-      expect(
-        screen.getByText("Relationship no longer active. Remap this dependent and resend invite.")
-      ).toBeInTheDocument()
+      expect(screen.getByText("Plan queued for acceptance")).toBeInTheDocument()
     })
     const fixMappingButton = await screen.findByRole("button", {
-      name: "Fix mapping for alex-kid"
+      name: "Fix Mapping for Alex"
     })
     fireEvent.click(fixMappingButton)
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Create or link dependent accounts here. User IDs are required for invitation and acceptance."
+          "Choose whether each dependent already has an account or needs a new invite."
         )
       ).toBeInTheDocument()
-      expect(screen.getByText("Fixing mapping for alex-kid.")).toBeInTheDocument()
-      expect(
-        (screen.getAllByPlaceholderText("Child account user ID")[0] as HTMLInputElement).value
-      ).toBe("alex-kid")
+      expect(screen.getByText("Fixing mapping for Alex.")).toBeInTheDocument()
     })
   })
 
-  it("uses status-aware tracker message fallback when API messages are null", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+  it("shows blocker tags for queued invite rows", async () => {
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
-      status: "needs_attention",
       active_count: 0,
       pending_count: 1,
       failed_count: 1,
       items: [
-        {
-          dependent_user_id: "child-1",
-          relationship_status: "pending",
-          plan_status: "queued",
-          message: null
-        },
-        {
+        trackerItem(),
+        trackerItem({
+          member_draft_id: "member-dependent-2",
+          display_name: "Child Two",
           dependent_user_id: "child-2",
           relationship_status: "active",
           plan_status: "failed",
-          message: null
-        }
+          invite_id: "invite-2",
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        })
       ]
     })
 
@@ -838,32 +865,30 @@ describe("FamilyGuardrailsWizard", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("Queued until acceptance").length).toBeGreaterThan(0)
-      expect(
-        screen.getByText("Activation failed. Review configuration and retry.")
-      ).toBeInTheDocument()
+      expect(screen.getByText("Waiting on acceptance")).toBeInTheDocument()
+      expect(screen.getByText("Plan queued for acceptance")).toBeInTheDocument()
     })
   })
 
   it("shows pending acceptance warning on review step", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
-      status: "invites_pending",
       active_count: 1,
       pending_count: 1,
       failed_count: 0,
       items: [
-        {
-          dependent_user_id: "child-1",
-          relationship_status: "pending",
-          plan_status: "queued",
-          message: "Queued until acceptance"
-        },
-        {
+        trackerItem(),
+        trackerItem({
+          member_draft_id: "member-dependent-2",
+          display_name: "Child Two",
           dependent_user_id: "child-2",
           relationship_status: "active",
           plan_status: "active",
-          message: null
-        }
+          invite_id: "invite-2",
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        })
       ]
     })
 
@@ -896,25 +921,33 @@ describe("FamilyGuardrailsWizard", () => {
   })
 
   it("keeps default finish label on review step when all dependents are active", async () => {
-    getActivationSummaryMock.mockResolvedValue({
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
-      status: "active",
       active_count: 2,
       pending_count: 0,
       failed_count: 0,
       items: [
-        {
+        trackerItem({
+          member_draft_id: "member-dependent-1",
+          display_name: "Child One",
           dependent_user_id: "child-1",
           relationship_status: "active",
           plan_status: "active",
-          message: null
-        },
-        {
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        }),
+        trackerItem({
+          member_draft_id: "member-dependent-2",
+          display_name: "Child Two",
           dependent_user_id: "child-2",
           relationship_status: "active",
           plan_status: "active",
-          message: null
-        }
+          invite_id: "invite-2",
+          invite_status: "accepted",
+          blocker_codes: [],
+          available_actions: []
+        })
       ]
     })
 

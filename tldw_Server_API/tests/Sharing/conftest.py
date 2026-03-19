@@ -27,13 +27,13 @@ class _FakePool:
         if row is None:
             return None
         cols = [d[0] for d in cur.description]
-        return dict(zip(cols, row))
+        return dict(zip(cols, row, strict=True))
 
     async def fetchall(self, sql: str, params: tuple = ()) -> list[dict]:
         cur = self._conn.execute(sql, params)
         rows = cur.fetchall()
         cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in rows]
+        return [dict(zip(cols, row, strict=True)) for row in rows]
 
 
 @pytest.fixture

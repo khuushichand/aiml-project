@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.asyncio
-async def test_on_workspace_deleted_revokes_shares(repo):
+async def test_repo_revokes_workspace_shares_and_tokens(repo):
     # Create a share and a token
     await repo.create_share(
         workspace_id="ws-del",

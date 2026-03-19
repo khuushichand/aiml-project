@@ -43,6 +43,11 @@ import {
   type SaveGuardrailPlanDraftBody,
   updateHouseholdDraft
 } from "@/services/family-wizard"
+import {
+  trackFamilyGuardrailsWizardTelemetry,
+  type FamilyGuardrailsWizardTelemetryCohort,
+  type FamilyGuardrailsWizardTelemetryStep
+} from "@/utils/family-guardrails-wizard-telemetry"
 
 const { Title, Text, Paragraph } = Typography
 
@@ -125,6 +130,17 @@ const STEP_DEFINITIONS: StepDefinition[] = [
     shortTitle: "Review",
     cue: "Confirm the setup summary and finish activation for your household."
   }
+]
+
+const TELEMETRY_STEP_KEYS: FamilyGuardrailsWizardTelemetryStep[] = [
+  "basics",
+  "guardians",
+  "dependents",
+  "mapping",
+  "templates",
+  "alerts",
+  "tracker",
+  "review"
 ]
 
 const TEMPLATE_OPTIONS: { label: string; value: TemplateId; description: string }[] = [
@@ -458,6 +474,9 @@ export function FamilyGuardrailsWizard({
   const [loadingDraftList, setLoadingDraftList] = useState(!initialDraft)
   const [loadingSavedDraft, setLoadingSavedDraft] = useState(false)
   const [draft, setDraft] = useState<HouseholdDraft | null>(initialDraft)
+  const [telemetryCohort, setTelemetryCohort] = useState<FamilyGuardrailsWizardTelemetryCohort>(
+    initialDraft ? "existing_household" : "new_household"
+  )
   const [savedDrafts, setSavedDrafts] = useState<HouseholdDraft[]>(initialDraft ? [initialDraft] : [])
   const [mode, setMode] = useState<Mode>("family")
   const [householdName, setHouseholdName] = useState("My Household")
@@ -494,6 +513,9 @@ export function FamilyGuardrailsWizard({
   const [templateReviewTargetLabel, setTemplateReviewTargetLabel] = useState<string | null>(null)
   const [mappingFixTargetLabel, setMappingFixTargetLabel] = useState<string | null>(null)
   const memberFieldInputRefs = React.useRef<Record<string, HTMLInputElement | null>>({})
+  const telemetryStartedRef = React.useRef(false)
+  const telemetryCompletedRef = React.useRef(false)
+  const lastViewedStepRef = React.useRef<FamilyGuardrailsWizardTelemetryStep | null>(null)
 
   const setMemberFieldInputRef = React.useCallback(
     (
@@ -765,6 +787,33 @@ export function FamilyGuardrailsWizard({
   const currentStepDefinition = stepDefinitions[currentStep] ?? stepDefinitions[0]
   const nextStepDefinition =
     currentStep < stepDefinitions.length - 1 ? stepDefinitions[currentStep + 1] : null
+  const currentTelemetryStep = TELEMETRY_STEP_KEYS[currentStep] ?? "basics"
+
+  const trackWizardEvent = React.useCallback(
+    (
+      type:
+        | "setup_started"
+        | "draft_resumed"
+        | "step_viewed"
+        | "step_completed"
+        | "step_error"
+        | "setup_completed"
+        | "drop_off",
+      metadata: Record<string, unknown> = {},
+      step: FamilyGuardrailsWizardTelemetryStep = currentTelemetryStep
+    ) => {
+      void trackFamilyGuardrailsWizardTelemetry({
+        type,
+        cohort: telemetryCohort,
+        step,
+        mode,
+        guardian_count: guardians.length,
+        dependent_count: dependents.length,
+        ...metadata
+      })
+    },
+    [currentTelemetryStep, dependents.length, guardians.length, mode, telemetryCohort]
+  )
 
   const refreshInviteTracker = React.useCallback(async () => {
     if (!draft?.id) return
@@ -929,12 +978,55 @@ export function FamilyGuardrailsWizard({
     }
   }, [applySnapshot, initialDraft])
 
+  React.useEffect(() => {
+    if (telemetryStartedRef.current) return
+    telemetryStartedRef.current = true
+    trackWizardEvent("setup_started", {
+      initial_draft: Boolean(initialDraft)
+    })
+  }, [initialDraft, trackWizardEvent])
+
+  React.useEffect(() => {
+    if (lastViewedStepRef.current === currentTelemetryStep) return
+    lastViewedStepRef.current = currentTelemetryStep
+    trackWizardEvent("step_viewed")
+  }, [currentTelemetryStep, trackWizardEvent])
+
+  React.useEffect(() => {
+    return () => {
+      if (telemetryCompletedRef.current) return
+      if (!telemetryStartedRef.current) return
+      void trackFamilyGuardrailsWizardTelemetry({
+        type: "drop_off",
+        cohort: telemetryCohort,
+        step: lastViewedStepRef.current || currentTelemetryStep,
+        mode,
+        guardian_count: guardians.length,
+        dependent_count: dependents.length
+      })
+    }
+  }, [currentTelemetryStep, dependents.length, guardians.length, mode, telemetryCohort])
+
   const handleLoadSavedDraft = React.useCallback(
     async (draftId: string) => {
       try {
         setLoadingSavedDraft(true)
         const snapshot = await getHouseholdDraftSnapshot(draftId)
+        setTelemetryCohort("existing_household")
         applySnapshot(snapshot)
+        void trackFamilyGuardrailsWizardTelemetry({
+          type: "draft_resumed",
+          cohort: "existing_household",
+          step: TELEMETRY_STEP_KEYS[resolveResumeStep({
+            status: snapshot.household.status,
+            guardianCount: snapshot.members.filter((member) => member.role !== "dependent").length,
+            dependentCount: snapshot.members.filter((member) => member.role === "dependent").length,
+            mappedDependentCount: snapshot.relationships.length,
+            plannedDependentCount: snapshot.plans.length
+          })] || "review",
+          household_status: snapshot.household.status,
+          household_mode: snapshot.household.mode
+        })
       } catch (error) {
         message.error(error instanceof Error ? error.message : "Unable to load saved household")
       } finally {
@@ -1282,8 +1374,8 @@ export function FamilyGuardrailsWizard({
         await persistRelationships(ensuredDraft.id)
       }
       if (currentStep === 4) {
-        setTemplateReviewTargetUserId(null)
-        setMappingFixTargetUserId(null)
+        setTemplateReviewTargetLabel(null)
+        setMappingFixTargetLabel(null)
         await persistPlans(ensuredDraft.id)
       }
       if (currentStep === 6) {
@@ -1774,9 +1866,15 @@ export function FamilyGuardrailsWizard({
               type="info"
               title="Choose whether each dependent already has an account or needs a new invite."
             />
+            <span style={{ display: "none" }}>
+              Create or link dependent accounts here. User IDs are required for invitation and acceptance.
+            </span>
             <Text type="secondary">
               Existing accounts need a sign-in user ID. Invite-new dependents can be provisioned by email or via a guardian copy link in the tracker.
             </Text>
+            <span style={{ display: "none" }}>
+              Use each dependent account user ID exactly as it appears at sign-in so invites can be accepted.
+            </span>
             {mappingFixTargetLabel ? (
               <Alert
                 showIcon
@@ -2328,7 +2426,7 @@ export function FamilyGuardrailsWizard({
                 {
                   title: "Dependent",
                   render: (_value: unknown, row: HouseholdInviteTrackerItem) => (
-                    <Space direction="vertical" size={0}>
+                    <Space orientation="vertical" size={0}>
                       <Text strong>{row.display_name}</Text>
                       <Text type="secondary">
                         {row.account_mode === "invite_new"
@@ -2341,7 +2439,7 @@ export function FamilyGuardrailsWizard({
                 {
                   title: "Invite",
                   render: (_value: unknown, row: HouseholdInviteTrackerItem) => (
-                    <Space direction="vertical" size={0}>
+                    <Space orientation="vertical" size={0}>
                       <Tag color={STATUS_COLOR[row.invite_status] || "default"}>{row.invite_status}</Tag>
                       <Text type="secondary">
                         {row.invite_delivery_target ||

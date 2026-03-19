@@ -4658,28 +4658,21 @@ async def save_chat_knowledge(
 ):
     """Persist a snippet from a conversation into Notes (and optional Flashcard)."""
     try:
-        # Validate conversation ownership and optional message linkage before mutating.
-        conversation = db.get_conversation_by_id(payload.conversation_id)
-        if not conversation or conversation.get("deleted"):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-        conv_client_id = conversation.get("client_id")
-        user_id = current_user.id
-        if conv_client_id is None or user_id is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-        try:
-            if int(conv_client_id) != int(user_id):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-        except (TypeError, ValueError):
-            if str(conv_client_id) != str(user_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Forbidden for this conversation",
-                ) from None
+        scope = _resolve_conversation_scope(payload.scope_type, payload.workspace_id)
+        conversation = _verify_conversation_ownership(
+            db,
+            payload.conversation_id,
+            current_user,
+            scope,
+        )
 
         if payload.message_id:
-            message = db.get_message_by_id(payload.message_id)
-            if not message or message.get("deleted"):
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+            message = _verify_message_ownership(
+                db,
+                payload.message_id,
+                current_user,
+                scope,
+            )
             if message.get("conversation_id") != payload.conversation_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is not in conversation")
 

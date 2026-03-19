@@ -38,6 +38,10 @@ class BadRequestError(ValueError):
     """Raised when a caller provides invalid arguments for an operation."""
 
 
+class AuditLogError(RuntimeError):
+    """Raised when persisting an audit event fails."""
+
+
 class ValidationError(BadRequestError):
     """Raised when validation of input parameters fails."""
 

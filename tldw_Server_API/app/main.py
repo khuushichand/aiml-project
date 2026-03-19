@@ -5788,7 +5788,7 @@ elif _MINIMAL_TEST_APP:
 
         app.include_router(notifications_router, prefix=f"{API_V1_PREFIX}", tags=["notifications"])
     except _IMPORT_EXCEPTIONS as _notifications_min_err:
-        logger.debug(f"Skipping notifications router in minimal test app: {_notifications_min_err}")
+        logger.debug("Skipping notifications router in minimal test app: {}", _notifications_min_err)
     # Chatbooks endpoints (export/import, jobs, download)
     try:
         from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router

@@ -59,7 +59,7 @@ async def test_validate_token_expired(token_service):
 
 
 @pytest.mark.asyncio
-async def test_validate_token_max_uses_exceeded(token_service, repo):
+async def test_validate_token_max_uses_exceeded(token_service):
     result = await token_service.generate_token(
         resource_type="workspace",
         resource_id="ws-1",
