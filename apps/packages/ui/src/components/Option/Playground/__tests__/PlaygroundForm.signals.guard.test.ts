@@ -9,6 +9,10 @@ describe("PlaygroundForm signal surface guard", () => {
       __dirname,
       "../AttachedResearchContextChip.tsx"
     )
+    const researchRunsSourcePath = path.resolve(
+      __dirname,
+      "../../../../../../../tldw-frontend/lib/api/researchRuns.ts"
+    )
     const contextPanelSourcePath = path.resolve(
       __dirname,
       "../ContextFootprintPanel.tsx"
@@ -19,6 +23,7 @@ describe("PlaygroundForm signal surface guard", () => {
     )
     const chipSource = fs.readFileSync(chipSourcePath, "utf8")
     const formSource = fs.readFileSync(formSourcePath, "utf8")
+    const researchRunsSource = fs.readFileSync(researchRunsSourcePath, "utf8")
     const contextPanelSource = fs.readFileSync(contextPanelSourcePath, "utf8")
     const recommendationsPanelSource = fs.readFileSync(
       recommendationsPanelSourcePath,
@@ -93,6 +98,10 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain("Attached Research Context")
     expect(formSource).toContain("Reset to Attached Run")
     expect(formSource).toContain("Apply")
+    expect(formSource).toContain("Follow-up Research")
+    expect(formSource).toContain("Use attached research as background")
+    expect(formSource).toContain("Start research")
+    expect(researchRunsSource).toContain("follow_up?:")
     expect(chipSource).toContain("Edit attached research")
     expect(chipSource).toContain("Pinned research")
     expect(chipSource).toContain("Unpin")

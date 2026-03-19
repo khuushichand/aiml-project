@@ -143,6 +143,27 @@ git commit -m "feat(research): support chat follow-up launch metadata"
 
 ### Task 3: Add Red Package-Client And Composer Tests
 
+Execution notes:
+
+- Completed on 2026-03-19.
+- Added red package/client/form coverage in:
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts`
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx`
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts`
+- Verified red with:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts
+```
+
+- Red reasons are expected:
+  - `TldwApiClient.createResearchRun(...)` does not exist yet
+  - `PlaygroundForm.tsx` does not yet expose `Follow-up Research`
+  - `apps/tldw-frontend/lib/api/researchRuns.ts` does not yet include `follow_up?:`
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx`

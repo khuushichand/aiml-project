@@ -29,6 +29,65 @@ describe("TldwApiClient research run methods", () => {
     vi.clearAllMocks()
   })
 
+  it("creates follow-up research runs with bounded launch metadata", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      id: "rs_456",
+      status: "running",
+      phase: "collecting",
+      control_state: "running"
+    })
+
+    const client = new TldwApiClient()
+    await client.createResearchRun({
+      query: "Investigate source of claim",
+      source_policy: "balanced",
+      autonomy_mode: "checkpointed",
+      chat_handoff: {
+        chat_id: "chat_123",
+        launch_message_id: "msg_123"
+      },
+      follow_up: {
+        question: "Investigate source of claim",
+        background: {
+          question: "Seed question",
+          outline: [{ title: "Overview" }],
+          key_claims: [{ claim_id: "claim_1", text: "Claim one" }],
+          unresolved_questions: ["What changed?"],
+          verification_summary: {
+            supported_claim_count: 1,
+            unsupported_claim_count: 0
+          },
+          source_trust_summary: {
+            high_trust_count: 1,
+            low_trust_count: 0
+          }
+        }
+      }
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/research/runs",
+        method: "POST",
+        body: expect.objectContaining({
+          query: "Investigate source of claim",
+          source_policy: "balanced",
+          autonomy_mode: "checkpointed",
+          chat_handoff: {
+            chat_id: "chat_123",
+            launch_message_id: "msg_123"
+          },
+          follow_up: {
+            question: "Investigate source of claim",
+            background: expect.objectContaining({
+              question: "Seed question"
+            })
+          }
+        })
+      })
+    )
+  })
+
   it("lists linked deep research runs for a chat", async () => {
     mocks.bgRequest.mockResolvedValue({
       runs: [
