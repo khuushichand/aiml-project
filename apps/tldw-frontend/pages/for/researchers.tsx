@@ -16,19 +16,32 @@ import {
   LandingPricing,
   LandingCTA,
 } from "@web/components/landing"
+import { isHostedSaaSMode } from "@web/lib/deployment-mode"
 
 export default function ResearchersPage() {
+  const hostedMode = isHostedSaaSMode()
+  const description = hostedMode
+    ? "Hosted tldw launches with the core qualitative workflow: signup, secure ingest, chat, and search. Self-host remains the path for IRB-constrained or institution-managed deployments."
+    : "Self-hosted AI transcription and semantic search for qualitative research. IRB-compliant by design—your participant data never leaves your infrastructure."
   return (
     <LandingLayout
       title="tldw for Academic Researchers"
-      description="Self-hosted AI transcription and semantic search for qualitative research. IRB-compliant by design—your participant data never leaves your infrastructure."
+      description={description}
       segment="researchers"
     >
       <LandingHero
         headline="Your Research Data Deserves Better Than\n$1.50/Minute Transcription and NVivo"
-        subheadline="Self-hosted AI transcription and semantic search for qualitative research. IRB-compliant by design—your participant data never leaves your infrastructure."
-        primaryCTA={{ text: "Start Self-Hosting Free", href: "/docs/self-hosting" }}
-        secondaryCTA={{ text: "View Documentation", href: "/docs" }}
+        subheadline={description}
+        primaryCTA={
+          hostedMode
+            ? { text: "Start Hosted Trial", href: "/signup" }
+            : { text: "Start Self-Hosting Free", href: "/docs/self-hosting" }
+        }
+        secondaryCTA={
+          hostedMode
+            ? { text: "View Self-Host Docs", href: "/docs/self-hosting" }
+            : { text: "View Documentation", href: "/docs" }
+        }
         badges={["Open Source", "IRB Compliant", "Self-Hosted"]}
       />
 
@@ -163,8 +176,16 @@ export default function ResearchersPage() {
       <LandingCTA
         headline="Your Research Deserves Modern Tools"
         description="Stop paying for transcription by the minute or struggling with decade-old software. Get AI-powered research infrastructure on your own terms."
-        primaryCTA={{ text: "Download Free", href: "/docs/self-hosting" }}
-        secondaryCTA={{ text: "Read the Docs", href: "/docs" }}
+        primaryCTA={
+          hostedMode
+            ? { text: "Start Hosted Trial", href: "/signup" }
+            : { text: "Download Free", href: "/docs/self-hosting" }
+        }
+        secondaryCTA={
+          hostedMode
+            ? { text: "View Self-Host Docs", href: "/docs/self-hosting" }
+            : { text: "Read the Docs", href: "/docs" }
+        }
       />
     </LandingLayout>
   )

@@ -1,4 +1,5 @@
 import React from "react"
+import Link from "next/link"
 import { CheckCircle2, HardDrive, ShieldCheck, UserCircle2 } from "lucide-react"
 
 import type { AccountProfileResponse } from "@web/lib/api/account"
@@ -107,18 +108,27 @@ export function AccountOverview({ profile }: AccountOverviewProps) {
             </p>
           </div>
 
-          <div className="rounded-3xl border border-border/70 bg-bg/90 p-5 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-primary/10 p-3 text-primary">
-                <HardDrive className="h-5 w-5" />
-              </div>
-              <div>
-                <p className="text-sm text-text-muted">Storage usage</p>
-                <p className="text-2xl font-semibold text-text">
-                  {formatStorage(storageUsed)} / {formatStorage(storageQuota)}
-                </p>
+          <div className="space-y-3">
+            <div className="rounded-3xl border border-border/70 bg-bg/90 p-5 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-primary/10 p-3 text-primary">
+                  <HardDrive className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm text-text-muted">Storage usage</p>
+                  <p className="text-2xl font-semibold text-text">
+                    {formatStorage(storageUsed)} / {formatStorage(storageQuota)}
+                  </p>
+                </div>
               </div>
             </div>
+
+            <Link
+              href="/billing"
+              className="inline-flex items-center rounded-md border border-border px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-surface2"
+            >
+              Open billing
+            </Link>
           </div>
         </div>
       </section>

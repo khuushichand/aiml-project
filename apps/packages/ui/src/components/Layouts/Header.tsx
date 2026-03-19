@@ -7,6 +7,7 @@ import { getTitleById, updateHistory } from "@/db"
 import { useMessageOption } from "~/hooks/useMessageOption"
 import { useSetting } from "@/hooks/useSetting"
 import { HEADER_SHORTCUTS_EXPANDED_SETTING } from "@/services/settings/ui-settings"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 import { ChatHeader } from "./ChatHeader"
 import { TtsClipsDrawer } from "@/components/Sidepanel/Chat/TtsClipsDrawer"
 import { useDarkMode } from "@/hooks/useDarkmode"
@@ -43,6 +44,7 @@ export const Header: React.FC<Props> = ({
   const [headerShortcutsExpanded, setHeaderShortcutsExpanded] = useSetting(
     HEADER_SHORTCUTS_EXPANDED_SETTING
   )
+  const hostedMode = isHostedTldwDeployment()
   const { mode: themeMode, toggleDarkMode } = useDarkMode()
   const { clearChat, historyId, temporaryChat, setTemporaryChat, serverChatId } =
     useMessageOption()
@@ -333,7 +335,7 @@ export const Header: React.FC<Props> = ({
         onOpenShareModal={isChatRoute ? openShareModal : undefined}
         shareStatusLabel={isChatRoute ? shareStatusLabel : null}
         shareButtonDisabled={shareButtonDisabled}
-        onOpenSettings={() => navigate("/settings/tldw")}
+        onOpenSettings={() => navigate(hostedMode ? "/account" : "/settings/tldw")}
         onToggleTheme={toggleDarkMode}
         themeMode={themeMode}
         onClearChat={clearChat}

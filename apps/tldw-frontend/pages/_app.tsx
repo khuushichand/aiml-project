@@ -11,6 +11,7 @@ import { useRouter } from "next/router"
 import React from "react"
 import { AppProviders } from "@web/components/AppProviders"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
+import { isHostedAllowedRoute } from "@web/lib/hosted-route-allowlist"
 
 const OptionLayout = dynamic(
   () => import("@web/components/layout/WebLayout"),
@@ -125,6 +126,7 @@ export default function App({ Component, pageProps }: AppProps) {
       ? pathname.slice(0, -1)
       : pathname
   const isHostedMode = isHostedTldwDeployment()
+  const isHostedRouteAllowed = !isHostedMode || isHostedAllowedRoute(routePath)
   const isPublicAuthRoute =
     routePath === "/login" ||
     (isHostedMode && HOSTED_PUBLIC_AUTH_ROUTES.has(routePath))
@@ -261,7 +263,17 @@ export default function App({ Component, pageProps }: AppProps) {
     }
   }, [authResolved, isAuthenticated, isPublicAuthRoute, routePath, router])
 
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!isHostedMode || isHostedRouteAllowed) return
+    void router.replace("/")
+  }, [isHostedMode, isHostedRouteAllowed, router])
+
   const hideShellNav = !authResolved || !isAuthenticated
+
+  if (isHostedMode && !isHostedRouteAllowed) {
+    return null
+  }
 
   return (
     <AppProviders>

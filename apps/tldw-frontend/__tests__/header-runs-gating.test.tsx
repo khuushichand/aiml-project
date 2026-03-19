@@ -35,6 +35,7 @@ import { Header } from "@web/components/layout/Header"
 
 const originalEnableRunsLink = process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK
 const originalRequireAdmin = process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN
+const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
 
 const resetEnv = () => {
   if (originalEnableRunsLink === undefined) {
@@ -46,6 +47,11 @@ const resetEnv = () => {
     delete process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN
   } else {
     process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN = originalRequireAdmin
+  }
+  if (originalDeploymentMode === undefined) {
+    delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+  } else {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
   }
 }
 
@@ -109,6 +115,25 @@ describe("Header runs link role gating", () => {
     render(<Header />)
 
     expect(screen.getByRole("link", { name: "Runs" })).toBeInTheDocument()
+  })
+
+  it("hides operator routes and exposes account links in hosted mode", () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "hosted"
+    authState.user = {
+      username: "admin-user",
+      role: "admin",
+      roles: ["admin"],
+      is_admin: true
+    }
+
+    render(<Header />)
+
+    expect(screen.queryByRole("link", { name: "Runs" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Admin" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Config" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "Profile" })).toBeNull()
+    expect(screen.getByRole("link", { name: "Account" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Billing" })).toBeInTheDocument()
   })
 })
 

@@ -42,6 +42,7 @@ import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -68,6 +69,14 @@ export type RouteDefinition = {
   targets?: PlatformTarget[]
   nav?: RouteNav
 }
+
+const HOSTED_VISIBLE_OPTION_PATHS = new Set([
+  "/",
+  "/chat",
+  "/media",
+  "/knowledge",
+  "/collections"
+])
 const OptionSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/general-settings"),
   "GeneralSettings"
@@ -962,7 +971,9 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
 ]
 
 export const optionRoutes = ROUTE_DEFINITIONS.filter(
-  (route) => route.kind === "options"
+  (route) =>
+    route.kind === "options" &&
+    (!isHostedTldwDeployment() || HOSTED_VISIBLE_OPTION_PATHS.has(route.path))
 )
 
 export const sidepanelRoutes = ROUTE_DEFINITIONS.filter(

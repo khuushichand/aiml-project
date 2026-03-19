@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import { classifySmokeIssues } from "../../e2e/smoke/smoke.setup"
+import {
+  getHostedAllowedRoutes,
+  isHostedAllowedRoute
+} from "@web/lib/hosted-route-allowlist"
 
 describe("smoke hard-gate allowlist", () => {
   it("allowlists minimal-backend family wizard latest-draft 404 noise", () => {
@@ -81,5 +85,24 @@ describe("smoke hard-gate allowlist", () => {
 
     expect(classified.allowlistedConsoleErrors).toHaveLength(1)
     expect(classified.unexpectedConsoleErrors).toHaveLength(0)
+  })
+
+  it("keeps the hosted smoke surface narrow", () => {
+    const routes = getHostedAllowedRoutes()
+
+    expect(routes).toEqual(
+      expect.arrayContaining([
+        "/",
+        "/chat",
+        "/media",
+        "/knowledge",
+        "/collections",
+        "/account",
+        "/billing"
+      ])
+    )
+    expect(isHostedAllowedRoute("/settings/tldw")).toBe(false)
+    expect(isHostedAllowedRoute("/admin/server")).toBe(false)
+    expect(isHostedAllowedRoute("/prompt-studio")).toBe(false)
   })
 })

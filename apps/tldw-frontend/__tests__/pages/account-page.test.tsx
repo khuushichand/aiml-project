@@ -61,6 +61,10 @@ describe("AccountPage", () => {
     expect(await screen.findByText("owner@example.com")).toBeInTheDocument()
     expect(screen.getByText(/northwind research/i)).toBeInTheDocument()
     expect(screen.getByText(/5 gb/i)).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: /open billing/i })).toHaveAttribute(
+      "href",
+      "/billing"
+    )
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(

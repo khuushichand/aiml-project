@@ -19,19 +19,32 @@ import {
   LandingPricing,
   LandingCTA,
 } from "@web/components/landing"
+import { isHostedSaaSMode } from "@web/lib/deployment-mode"
 
 export default function JournalistsPage() {
+  const hostedMode = isHostedSaaSMode()
+  const description = hostedMode
+    ? "Hosted tldw focuses the launch surface on signup, ingest, chat, and search for solo investigative workflows. Self-host remains the right path for air-gapped or newsroom-controlled deployments."
+    : "Self-hosted transcription, search, and knowledge management for investigative journalism. Your interviews and research never touch third-party servers."
   return (
     <LandingLayout
       title="tldw for Investigative Journalists"
-      description="Self-hosted transcription, search, and knowledge management for investigative journalism. Your interviews and research never touch third-party servers."
+      description={description}
       segment="journalists"
     >
       <LandingHero
         headline="Your Sources Trust You With Their Safety.\nYour Research Tool Should Deserve That Trust."
-        subheadline="Self-hosted transcription, search, and knowledge management for investigative journalism. Your interviews, documents, and research never touch third-party servers."
-        primaryCTA={{ text: "Start Self-Hosting Free", href: "/docs/self-hosting" }}
-        secondaryCTA={{ text: "Try Cloud (E2E Encrypted)", href: "/signup" }}
+        subheadline={description}
+        primaryCTA={
+          hostedMode
+            ? { text: "Start Hosted Trial", href: "/signup" }
+            : { text: "Start Self-Hosting Free", href: "/docs/self-hosting" }
+        }
+        secondaryCTA={
+          hostedMode
+            ? { text: "View Self-Host Docs", href: "/docs/self-hosting" }
+            : { text: "Try Cloud (E2E Encrypted)", href: "/signup" }
+        }
       />
 
       <LandingProblem
@@ -204,8 +217,16 @@ export default function JournalistsPage() {
       <LandingCTA
         headline="Your Next Investigation Deserves Better Tools"
         description="Stop trusting your most sensitive work to tools that weren't built for it. Get transcription, search, and AI analysis on infrastructure you control."
-        primaryCTA={{ text: "Download Self-Hosted", href: "/docs/self-hosting" }}
-        secondaryCTA={{ text: "Start Cloud Trial", href: "/signup" }}
+        primaryCTA={
+          hostedMode
+            ? { text: "Start Hosted Trial", href: "/signup" }
+            : { text: "Download Self-Hosted", href: "/docs/self-hosting" }
+        }
+        secondaryCTA={
+          hostedMode
+            ? { text: "View Self-Host Docs", href: "/docs/self-hosting" }
+            : { text: "Start Cloud Trial", href: "/signup" }
+        }
       />
     </LandingLayout>
   )
