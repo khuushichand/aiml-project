@@ -236,6 +236,13 @@ git commit -m "test(chat): cover follow-up research launch"
 
 ### Task 4: Implement Direct Follow-Up Launch In The Package Client And Composer
 
+Execution notes:
+
+- Completed on 2026-03-19.
+- Added `TldwApiClient.createResearchRun(...)`, extended the web `ResearchRunCreateRequest` type with `follow_up`, and wired `PlaygroundForm.tsx` to expose a `Follow-up Research` composer action plus confirmation modal.
+- The implementation keeps normal send behavior unchanged, preserves the current draft, and invalidates `["playground:chat-linked-research-runs", serverChatId]` after a successful launch.
+- The real-form test harness also needed one small fix so the mocked `ComposerToolbar` renders the `researchLaunchButton` slot during follow-up tests.
+
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/services/tldw/TldwApiClient.ts`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`
@@ -313,6 +320,21 @@ git commit -m "feat(chat): launch follow-up research from composer"
 ```
 
 ### Task 5: Run Focused Verification And Record Outcome
+
+Execution notes:
+
+- Focused frontend verification passed on 2026-03-19:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/ComposerToolbar.test.tsx
+```
+
+- Result: `4` test files passed, `26` tests passed.
+- No backend files changed after Task 2 in this slice, so Bandit is not applicable to the Task 4 follow-up-launch diff.
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/Docs/Plans/2026-03-19-deep-research-chat-follow-up-launch-implementation-plan.md`
