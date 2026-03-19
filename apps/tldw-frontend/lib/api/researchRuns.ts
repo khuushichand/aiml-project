@@ -11,6 +11,29 @@ export interface ResearchRunCreateRequest {
     chat_id: string;
     launch_message_id?: string | null;
   } | null;
+  follow_up?: {
+    question: string;
+    background?: {
+      question: string;
+      outline: Array<{
+        title: string;
+        focus_area?: string | null;
+      }>;
+      key_claims: Array<{
+        claim_id: string;
+        text: string;
+      }>;
+      unresolved_questions: string[];
+      verification_summary: {
+        supported_claim_count: number;
+        unsupported_claim_count: number;
+      };
+      source_trust_summary: {
+        high_trust_count: number;
+        low_trust_count: number;
+      };
+    } | null;
+  } | null;
 }
 
 export interface ResearchRun {

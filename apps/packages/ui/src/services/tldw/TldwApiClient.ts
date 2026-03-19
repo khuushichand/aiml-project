@@ -240,6 +240,67 @@ export interface ChatResearchContext {
   research_url: string
 }
 
+export interface ResearchRunFollowUpOutlineItem {
+  title: string
+  focus_area?: string | null
+}
+
+export interface ResearchRunFollowUpClaimItem {
+  claim_id: string
+  text: string
+}
+
+export interface ResearchRunFollowUpVerificationSummary {
+  supported_claim_count: number
+  unsupported_claim_count: number
+}
+
+export interface ResearchRunFollowUpSourceTrustSummary {
+  high_trust_count: number
+  low_trust_count: number
+}
+
+export interface ResearchRunFollowUpBackground {
+  question: string
+  outline: ResearchRunFollowUpOutlineItem[]
+  key_claims: ResearchRunFollowUpClaimItem[]
+  unresolved_questions: string[]
+  verification_summary: ResearchRunFollowUpVerificationSummary
+  source_trust_summary: ResearchRunFollowUpSourceTrustSummary
+}
+
+export interface ResearchRunFollowUp {
+  question: string
+  background?: ResearchRunFollowUpBackground | null
+}
+
+export interface ResearchChatHandoff {
+  chat_id: string
+  launch_message_id?: string | null
+}
+
+export interface ResearchRunCreateRequest {
+  query: string
+  source_policy?: string
+  autonomy_mode?: string
+  limits_json?: Record<string, unknown> | null
+  provider_overrides?: Record<string, unknown> | null
+  chat_handoff?: ResearchChatHandoff | null
+  follow_up?: ResearchRunFollowUp | null
+}
+
+export interface ResearchRunResponse {
+  id: string
+  status: string
+  phase: string
+  control_state: string
+  progress_percent?: number | null
+  progress_message?: string | null
+  active_job_id?: string | null
+  latest_checkpoint_id?: string | null
+  completed_at?: string | null
+}
+
 export interface ChatCompletionRequest {
   messages: ChatMessage[]
   model: string
@@ -3853,6 +3914,17 @@ export class TldwApiClient {
         updated_at: String(run?.updated_at ?? "")
       }))
     }
+  }
+
+  async createResearchRun(
+    payload: ResearchRunCreateRequest
+  ): Promise<ResearchRunResponse> {
+    return await bgRequest<ResearchRunResponse>({
+      path: "/api/v1/research/runs",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
   }
 
   async getResearchBundle(

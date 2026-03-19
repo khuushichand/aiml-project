@@ -99,7 +99,9 @@ import {
   tldwClient,
   type ConversationState,
   type ChatCompletionRequest,
-  type ChatMessage
+  type ChatMessage,
+  type ResearchRunCreateRequest,
+  type ResearchRunFollowUpBackground
 } from "@/services/tldw/TldwApiClient"
 import {
   captureChatRequestDebugSnapshot,
@@ -271,6 +273,63 @@ const estimateTokensFromText = (value: string): number => {
   return Math.max(1, Math.ceil(normalized.length / 4))
 }
 
+const buildFollowUpResearchBackground = (
+  context: AttachedResearchContext
+): ResearchRunFollowUpBackground => {
+  const unsupportedClaimCount =
+    typeof context.verification_summary?.unsupported_claim_count === "number" &&
+    Number.isFinite(context.verification_summary.unsupported_claim_count) &&
+    context.verification_summary.unsupported_claim_count >= 0
+      ? Math.trunc(context.verification_summary.unsupported_claim_count)
+      : 0
+  const highTrustCount =
+    typeof context.source_trust_summary?.high_trust_count === "number" &&
+    Number.isFinite(context.source_trust_summary.high_trust_count) &&
+    context.source_trust_summary.high_trust_count >= 0
+      ? Math.trunc(context.source_trust_summary.high_trust_count)
+      : 0
+
+  return {
+    question: context.question || context.query,
+    outline: Array.isArray(context.outline)
+      ? context.outline
+          .filter(
+            (section) =>
+              typeof section?.title === "string" && section.title.trim().length > 0
+          )
+          .map((section) => ({ title: section.title.trim() }))
+      : [],
+    key_claims: Array.isArray(context.key_claims)
+      ? context.key_claims
+          .map((claim, index) =>
+            typeof claim?.text === "string" && claim.text.trim().length > 0
+              ? {
+                  claim_id: `claim_${index + 1}`,
+                  text: claim.text.trim()
+                }
+              : null
+          )
+          .filter(
+            (claim): claim is { claim_id: string; text: string } => claim !== null
+          )
+      : [],
+    unresolved_questions: Array.isArray(context.unresolved_questions)
+      ? context.unresolved_questions.filter(
+          (question): question is string =>
+            typeof question === "string" && question.trim().length > 0
+        )
+      : [],
+    verification_summary: {
+      supported_claim_count: 0,
+      unsupported_claim_count: unsupportedClaimCount
+    },
+    source_trust_summary: {
+      high_trust_count: highTrustCount,
+      low_trust_count: 0
+    }
+  }
+}
+
 const collectStringSegments = (
   value: unknown,
   segments: string[],
@@ -348,6 +407,15 @@ export const PlaygroundForm = ({
   const [typing, setTyping] = React.useState<boolean>(false)
   const [attachedResearchContextDraft, setAttachedResearchContextDraft] =
     React.useState<AttachedResearchContext | null>(null)
+  const [followUpResearchModalOpen, setFollowUpResearchModalOpen] =
+    React.useState(false)
+  const [
+    includeAttachedResearchAsBackground,
+    setIncludeAttachedResearchAsBackground
+  ] = React.useState(Boolean(attachedResearchContext))
+  const [followUpResearchPending, setFollowUpResearchPending] =
+    React.useState(false)
+  const followUpResearchPendingRef = React.useRef(false)
   const [checkWideMode] = useStorage("checkWideMode", false)
   const [allowExternalImages, setAllowExternalImages] = useStorage(
     "allowExternalImages",
@@ -3354,6 +3422,85 @@ export const PlaygroundForm = ({
     },
     [attachedResearchContext]
   )
+
+  const followUpResearchDraftQuery = React.useMemo(
+    () => form.values.message.trim(),
+    [form.values.message]
+  )
+  const canLaunchFollowUpResearch =
+    !temporaryChat &&
+    Boolean(serverChatId) &&
+    followUpResearchDraftQuery.length > 0
+
+  const openFollowUpResearchModal = React.useCallback(() => {
+    if (!canLaunchFollowUpResearch) return
+    setIncludeAttachedResearchAsBackground(Boolean(attachedResearchContext))
+    setFollowUpResearchModalOpen(true)
+  }, [attachedResearchContext, canLaunchFollowUpResearch])
+
+  const closeFollowUpResearchModal = React.useCallback(() => {
+    if (followUpResearchPendingRef.current) return
+    setFollowUpResearchModalOpen(false)
+  }, [])
+
+  const handleStartFollowUpResearch = React.useCallback(async () => {
+    if (followUpResearchPendingRef.current) return
+    if (!serverChatId || temporaryChat) return
+    const query = form.values.message.trim()
+    if (!query) return
+
+    const payload: ResearchRunCreateRequest = {
+      query,
+      source_policy: "balanced",
+      autonomy_mode: "checkpointed",
+      chat_handoff: {
+        chat_id: serverChatId
+      },
+      follow_up: {
+        question: query,
+        background:
+          includeAttachedResearchAsBackground && attachedResearchContext
+            ? buildFollowUpResearchBackground(attachedResearchContext)
+            : undefined
+      }
+    }
+
+    followUpResearchPendingRef.current = true
+    setFollowUpResearchPending(true)
+    try {
+      await tldwClient.createResearchRun(payload)
+      void queryClient.invalidateQueries({
+        queryKey: ["playground:chat-linked-research-runs", serverChatId]
+      })
+      setFollowUpResearchModalOpen(false)
+      notificationApi.success({
+        message: t(
+          "playground:actions.followUpResearchStarted",
+          "Follow-up research started."
+        )
+      })
+    } catch (error) {
+      notificationApi.error({
+        message: t(
+          "playground:actions.followUpResearchFailed",
+          "Unable to start follow-up research."
+        ),
+        description: error instanceof Error ? error.message : undefined
+      })
+    } finally {
+      followUpResearchPendingRef.current = false
+      setFollowUpResearchPending(false)
+    }
+  }, [
+    attachedResearchContext,
+    form.values.message,
+    includeAttachedResearchAsBackground,
+    notificationApi,
+    queryClient,
+    serverChatId,
+    t,
+    temporaryChat
+  ])
 
   const submitForm = (options?: { ignorePinnedResults?: boolean }) => {
     form.onSubmit(async (value) => {
@@ -7370,20 +7517,43 @@ export const PlaygroundForm = ({
   }, [form.values.message, navigate, serverChatId])
 
   const researchLaunchButton = (
-    <TldwButton
-      variant="outline"
-      size={isMobileViewport ? "lg" : "sm"}
-      shape={isProMode ? "rounded" : "pill"}
-      onClick={handleLaunchDeepResearch}
-      title={t("playground:actions.deepResearch", "Deep Research") as string}
-      ariaLabel={t("playground:actions.deepResearch", "Deep Research") as string}
-      className={isProMode ? "" : "whitespace-nowrap"}
-    >
-      <span className="inline-flex items-center gap-1.5">
-        <Search className="h-4 w-4" aria-hidden="true" />
-        <span>{t("playground:actions.deepResearch", "Deep Research")}</span>
-      </span>
-    </TldwButton>
+    <>
+      <TldwButton
+        variant="outline"
+        size={isMobileViewport ? "lg" : "sm"}
+        shape={isProMode ? "rounded" : "pill"}
+        onClick={handleLaunchDeepResearch}
+        title={t("playground:actions.deepResearch", "Deep Research") as string}
+        ariaLabel={t("playground:actions.deepResearch", "Deep Research") as string}
+        className={isProMode ? "" : "whitespace-nowrap"}
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <Search className="h-4 w-4" aria-hidden="true" />
+          <span>{t("playground:actions.deepResearch", "Deep Research")}</span>
+        </span>
+      </TldwButton>
+      <TldwButton
+        variant="outline"
+        size={isMobileViewport ? "lg" : "sm"}
+        shape={isProMode ? "rounded" : "pill"}
+        onClick={openFollowUpResearchModal}
+        disabled={!canLaunchFollowUpResearch || followUpResearchPending}
+        title={
+          t("playground:actions.followUpResearch", "Follow-up Research") as string
+        }
+        ariaLabel={
+          t("playground:actions.followUpResearch", "Follow-up Research") as string
+        }
+        className={isProMode ? "" : "whitespace-nowrap"}
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <GitBranch className="h-4 w-4" aria-hidden="true" />
+          <span>
+            {t("playground:actions.followUpResearch", "Follow-up Research")}
+          </span>
+        </span>
+      </TldwButton>
+    </>
   )
 
   const startupTemplatePromptResolution = startupTemplatePreview
@@ -9069,6 +9239,66 @@ export const PlaygroundForm = ({
               placeholder='{"tiling": false}'
             />
           </div>
+        </div>
+      </Modal>
+      <Modal
+        open={followUpResearchModalOpen}
+        onCancel={closeFollowUpResearchModal}
+        destroyOnHidden
+        title={t(
+          "playground:actions.followUpResearch",
+          "Follow-up Research"
+        )}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              onClick={closeFollowUpResearchModal}
+              disabled={followUpResearchPending}
+            >
+              {t("common:cancel", "Cancel")}
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => {
+                void handleStartFollowUpResearch()
+              }}
+              disabled={!canLaunchFollowUpResearch || followUpResearchPending}
+              loading={followUpResearchPending}
+            >
+              {t("playground:actions.startResearch", "Start research")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-text-muted">
+            {t(
+              "playground:actions.followUpResearchBody",
+              "Start a new linked research run from the current draft without sending a chat message."
+            )}
+          </p>
+          <div className="rounded-md border border-border bg-surface px-3 py-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+              {t("playground:actions.followUpResearchQuery", "Query")}
+            </div>
+            <div className="mt-1 text-sm text-text">
+              {followUpResearchDraftQuery}
+            </div>
+          </div>
+          {attachedResearchContext ? (
+            <Checkbox
+              checked={includeAttachedResearchAsBackground}
+              onChange={(event) =>
+                setIncludeAttachedResearchAsBackground(event.target.checked)
+              }
+              disabled={followUpResearchPending}
+            >
+              {t(
+                "playground:actions.followUpResearchUseAttachedBackground",
+                "Use attached research as background"
+              )}
+            </Checkbox>
+          ) : null}
         </div>
       </Modal>
       <Modal

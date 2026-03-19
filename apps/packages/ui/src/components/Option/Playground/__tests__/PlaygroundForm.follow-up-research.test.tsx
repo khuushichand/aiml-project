@@ -567,13 +567,16 @@ vi.mock("../ComposerTextarea", () => ({
 
 vi.mock("../ComposerToolbar", () => ({
   ComposerToolbar: ({
+    researchLaunchButton,
     toolsButton,
     sendControl
   }: {
+    researchLaunchButton?: React.ReactNode
     toolsButton?: React.ReactNode
     sendControl?: React.ReactNode
   }) => (
     <div data-testid="composer-toolbar">
+      {researchLaunchButton}
       {toolsButton}
       {sendControl}
     </div>
