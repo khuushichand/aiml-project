@@ -340,11 +340,20 @@ class TestWorkspaceMCPServers:
     def test_delete_mcp_server(self, db):
         ws = db.create_workspace(name="WS1", root_path="/tmp/ws1")
         server = db.create_workspace_mcp_server(ws.id, "server-a", command="cmd")
-        assert db.delete_workspace_mcp_server(server["id"]) is True
+        assert db.delete_workspace_mcp_server(ws.id, server["id"]) is True
         assert len(db.list_workspace_mcp_servers(ws.id)) == 0
 
     def test_delete_mcp_server_not_found(self, db):
-        assert db.delete_workspace_mcp_server(999) is False
+        assert db.delete_workspace_mcp_server(999, 999) is False
+
+    def test_delete_mcp_server_wrong_workspace(self, db):
+        ws1 = db.create_workspace(name="WS1", root_path="/tmp/ws1")
+        ws2 = db.create_workspace(name="WS2", root_path="/tmp/ws2")
+        server = db.create_workspace_mcp_server(ws1.id, "server-a", command="cmd")
+        # Should not delete a server from wrong workspace
+        assert db.delete_workspace_mcp_server(ws2.id, server["id"]) is False
+        # Server still exists
+        assert len(db.list_workspace_mcp_servers(ws1.id)) == 1
 
     def test_duplicate_server_name_raises(self, db):
         ws = db.create_workspace(name="WS1", root_path="/tmp/ws1")
