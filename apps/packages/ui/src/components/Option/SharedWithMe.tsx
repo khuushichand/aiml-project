@@ -4,11 +4,16 @@ import { Button, Card, Empty, List, Space, Spin, Tag, Typography, message } from
 
 import { useCloneWorkspace, useSharedWithMe } from "@/hooks/useSharing"
 import {
-  getAccessLevelColor,
-  getAccessLevelLabel
+  ACCESS_LEVEL_COLORS,
+  ACCESS_LEVEL_LABELS,
+  type AccessLevel
 } from "@/types/sharing"
 
 const { Paragraph, Text } = Typography
+
+const isValidAccessLevel = (accessLevel: string): accessLevel is AccessLevel =>
+  Object.prototype.hasOwnProperty.call(ACCESS_LEVEL_LABELS, accessLevel) &&
+  Object.prototype.hasOwnProperty.call(ACCESS_LEVEL_COLORS, accessLevel)
 
 export const SharedWithMe: React.FC = () => {
   const { data, isLoading, error } = useSharedWithMe()
@@ -64,45 +69,54 @@ export const SharedWithMe: React.FC = () => {
       {messageContext}
       <List
         dataSource={shares}
-        renderItem={(share) => (
-          <List.Item
-            actions={[
-              <Button
-                key="clone"
-                disabled={!share.allow_clone}
-                icon={<CopyOutlined />}
-                loading={
-                  cloneWorkspace.isPending &&
-                  cloneWorkspace.variables?.shareId === share.share_id
+        renderItem={(share) => {
+          const accessLevel = String(share.access_level || "")
+          const hasValidAccessLevel = isValidAccessLevel(accessLevel)
+          const accessLevelColor = hasValidAccessLevel
+            ? ACCESS_LEVEL_COLORS[accessLevel]
+            : "default"
+          const accessLevelLabel = hasValidAccessLevel
+            ? ACCESS_LEVEL_LABELS[accessLevel]
+            : accessLevel || "Unknown access"
+
+          return (
+            <List.Item
+              actions={[
+                <Button
+                  key="clone"
+                  disabled={!share.allow_clone}
+                  icon={<CopyOutlined />}
+                  loading={
+                    cloneWorkspace.isPending &&
+                    cloneWorkspace.variables?.shareId === share.share_id
+                  }
+                  onClick={() => _cloneWorkspace(share.share_id, share.workspace_name)}
+                >
+                  Clone
+                </Button>
+              ]}
+            >
+              <List.Item.Meta
+                title={
+                  <Space size="small">
+                    <span>{share.workspace_name}</span>
+                    <Tag color={accessLevelColor}>{accessLevelLabel}</Tag>
+                  </Space>
                 }
-                onClick={() => _cloneWorkspace(share.share_id, share.workspace_name)}
-              >
-                Clone
-              </Button>
-            ]}
-          >
-            <List.Item.Meta
-              title={
-                <Space size="small">
-                  <span>{share.workspace_name}</span>
-                  <Tag color={getAccessLevelColor(String(share.access_level || ""))}>
-                    {getAccessLevelLabel(String(share.access_level || "Unknown access"))}
-                  </Tag>
-                </Space>
-              }
-              description={
-                <Space direction="vertical" size={2}>
-                  {share.workspace_description ? (
-                    <Text type="secondary">{share.workspace_description}</Text>
-                  ) : null}
-                  <Text type="secondary">
-                    {`Shared by workspace owner (account ${share.owner_user_id})`}
-                  </Text>
-                </Space>
-              }
-            />
-          </List.Item>
-        )}
+                description={
+                  <Space direction="vertical" size={2}>
+                    {share.workspace_description ? (
+                      <Text type="secondary">{share.workspace_description}</Text>
+                    ) : null}
+                    <Text type="secondary">
+                      {`Shared by workspace owner (account ${share.owner_user_id})`}
+                    </Text>
+                  </Space>
+                }
+              />
+            </List.Item>
+          )
+        }}
       />
     </Card>
   )

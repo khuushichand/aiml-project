@@ -138,6 +138,14 @@ class ChatSessionUpdate(BaseModel):
 class ChatSessionResponse(BaseModel):
     """Schema for chat session responses."""
     id: str = Field(..., description="UUID of the chat session")
+    scope_type: Literal["global", "workspace"] = Field(
+        "global",
+        description="Conversation scope type",
+    )
+    workspace_id: Optional[str] = Field(
+        None,
+        description="Workspace ID when scope_type='workspace'",
+    )
     character_id: int | None = Field(None, description="ID of the associated character")
     assistant_kind: Literal["character", "persona"] | None = Field(
         None,

@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import Field
 
 from tldw_Server_API.app.api.v1.endpoints.sharing import router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
@@ -15,8 +16,8 @@ pytestmark = pytest.mark.unit
 
 class _TestUser(User):
     """Subclass with team/org membership for testing shared-with-me."""
-    team_ids: list[int] = []
-    org_ids: list[int] = []
+    team_ids: list[int] = Field(default_factory=list)
+    org_ids: list[int] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
 

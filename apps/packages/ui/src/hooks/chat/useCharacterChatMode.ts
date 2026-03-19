@@ -36,6 +36,7 @@ import {
   discardAbortedTurnIfRequested,
 } from "@/hooks/chat/abort-turn-cleanup";
 import type { Character } from "@/types/character";
+import type { ChatScope } from "@/types/chat-scope";
 import type { ChatHistory, Message } from "@/store/option";
 import type { SaveMessageData } from "@/types/chat-modes";
 import {
@@ -114,6 +115,7 @@ export type CharacterChatModeDeps = {
   saveMessageOnSuccess: (payload?: SaveMessagePayload) => Promise<string | null>;
   saveMessageOnError: (payload: any) => Promise<any>;
   discardCurrentTurnOnAbortRef: React.MutableRefObject<boolean>;
+  scope?: ChatScope;
 };
 
 export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
@@ -173,6 +175,7 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
       saveMessageOnSuccess,
       saveMessageOnError,
       discardCurrentTurnOnAbortRef,
+      scope,
     } = deps;
 
     const activeCharacter = character ?? selectedCharacter;
@@ -449,14 +452,17 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
       let chatId = shouldResetServerChat ? null : resolvedServerChatId;
       let createdNewChat = false;
       if (!chatId) {
-        const created = (await tldwClient.createChat({
-          character_id: activeCharacter.id,
-          state: serverChatState || "in-progress",
-          topic_label: serverChatTopic || undefined,
-          cluster_id: serverChatClusterId || undefined,
-          source: serverChatSource || undefined,
-          external_ref: serverChatExternalRef || undefined,
-        })) as TldwChatMeta;
+        const created = (await tldwClient.createChat(
+          {
+            character_id: activeCharacter.id,
+            state: serverChatState || "in-progress",
+            topic_label: serverChatTopic || undefined,
+            cluster_id: serverChatClusterId || undefined,
+            source: serverChatSource || undefined,
+            external_ref: serverChatExternalRef || undefined,
+          },
+          scope ? { scope } : undefined,
+        )) as TldwChatMeta;
 
         let rawId: string | number | undefined;
         if (created && typeof created === "object") {
@@ -509,10 +515,14 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
 
       if (createdNewChat && !isRegenerate && greetingText.length > 0) {
         try {
-          const createdGreeting = (await tldwClient.addChatMessage(chatId, {
-            role: "assistant",
-            content: greetingText,
-          })) as { id?: string | number; version?: number } | null;
+          const createdGreeting = (await tldwClient.addChatMessage(
+            chatId,
+            {
+              role: "assistant",
+              content: greetingText,
+            },
+            scope ? { scope } : undefined,
+          )) as { id?: string | number; version?: number } | null;
           if (createdGreeting?.id != null) {
             setMessages((prev) => {
               const updated = [...prev] as (Message & {
@@ -584,6 +594,7 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
           const createdUser = (await tldwClient.addChatMessage(
             chatId,
             payload,
+            scope ? { scope } : undefined,
           )) as TldwChatMessage | null;
           persistedUserServerMessageId =
             createdUser?.id != null ? String(createdUser.id) : undefined;
@@ -657,7 +668,7 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
             resolvedMessageSteeringPrompts,
           ),
         },
-        { signal },
+        scope ? { signal, scope } : { signal },
       )) {
         resetInactivityTimer();
         const interruptionEvent =
@@ -811,6 +822,7 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
           const persisted = (await tldwClient.persistCharacterCompletion(
             chatId,
             persistPayload,
+            scope ? { scope } : undefined,
           )) as {
             assistant_message_id?: string | number;
             message_id?: string | number;
@@ -856,10 +868,14 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
             e,
           );
           try {
-            const createdAsst = (await tldwClient.addChatMessage(chatId, {
-              role: "assistant",
-              content: finalPersistedContent,
-            })) as { id?: string | number; version?: number } | null;
+            const createdAsst = (await tldwClient.addChatMessage(
+              chatId,
+              {
+                role: "assistant",
+                content: finalPersistedContent,
+              },
+              scope ? { scope } : undefined,
+            )) as { id?: string | number; version?: number } | null;
             assistantPersistedToServer = createdAsst?.id != null;
             setMessages(
               (prev) =>
@@ -969,10 +985,14 @@ export const createCharacterChatMode = (deps: CharacterChatModeDeps) => {
         error: e,
         persist: async (assistantContent) => {
           if (!activeChatId) return false;
-          const createdAsst = (await tldwClient.addChatMessage(activeChatId, {
-            role: "assistant",
-            content: assistantContent,
-          })) as { id?: string | number; version?: number } | null;
+          const createdAsst = (await tldwClient.addChatMessage(
+            activeChatId,
+            {
+              role: "assistant",
+              content: assistantContent,
+            },
+            scope ? { scope } : undefined,
+          )) as { id?: string | number; version?: number } | null;
           if (createdAsst?.id == null) return false;
           assistantPersistedToServer = true;
           setMessages(

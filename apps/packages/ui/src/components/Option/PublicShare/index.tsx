@@ -1,6 +1,6 @@
 import React, { useState } from "react"
 import { Card, Button, Input, Spin, Empty, Tag, message } from "antd"
-import { Lock, Download, ExternalLink } from "lucide-react"
+import { Lock, Download } from "lucide-react"
 import {
   usePublicPreview,
   useVerifySharePassword,
@@ -35,8 +35,8 @@ export const PublicShare: React.FC<PublicShareProps> = ({ token }) => {
     try {
       const result = await importToken.mutateAsync(token)
       message.success(result.message || "Resource imported")
-    } catch (err: any) {
-      message.error(err?.message || "Failed to import")
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : "Failed to import")
     }
   }
 

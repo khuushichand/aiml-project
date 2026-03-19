@@ -32,6 +32,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from loguru import logger
+from pydantic import ValidationError
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -40,6 +41,9 @@ from tldw_Server_API.app.api.v1.API_Deps.llm_routing_deps import (
 )
 
 # Schemas
+from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
+    ConversationScopeParams,
+)
 from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     AuthorNoteInfoResponse,
     CharacterChatCompletionPrepRequest,
@@ -526,8 +530,9 @@ def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
 def _verify_chat_ownership(
     conversation: Optional[dict[str, Any]],
     user_id: Any,
-    chat_id: str
-) -> None:
+    chat_id: str,
+    scope: ConversationScopeParams | None = None,
+) -> dict[str, Any]:
     """Verify that the user owns the chat session.
 
     Args:
@@ -554,6 +559,40 @@ def _verify_chat_ownership(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this chat session"
         )
+    expected_scope = scope or ConversationScopeParams()
+    conversation_scope = conversation.get("scope_type") or "global"
+    conversation_workspace_id = conversation.get("workspace_id")
+    if conversation_scope != expected_scope.scope_type:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat session {chat_id} not found",
+        )
+    if (
+        expected_scope.scope_type == "workspace"
+        and conversation_workspace_id != expected_scope.workspace_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat session {chat_id} not found",
+        )
+    return conversation
+
+
+def _resolve_chat_scope(
+    scope_type: Literal["global", "workspace"] | None,
+    workspace_id: str | None,
+) -> ConversationScopeParams:
+    try:
+        return ConversationScopeParams(
+            scope_type=scope_type or "global",
+            workspace_id=workspace_id,
+        )
+    except ValidationError as exc:
+        detail = exc.errors()[0].get("msg") if exc.errors() else str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        ) from exc
 
 
 router = APIRouter()
@@ -654,6 +693,8 @@ def _convert_db_conversation_to_response(
         assistant_id = str(character_id)
     return ChatSessionResponse(
         id=conv_data.get('id', ''),
+        scope_type=conv_data.get("scope_type") or "global",
+        workspace_id=conv_data.get("workspace_id"),
         character_id=character_id,
         assistant_kind=assistant_kind,
         assistant_id=assistant_id,
@@ -2496,6 +2537,7 @@ async def create_chat_session(
         HTTPException: 404 if character not found, 429 if rate limited
     """
     try:
+        scope = _resolve_chat_scope(session_data.scope_type, session_data.workspace_id)
         # Check rate limits
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "chat_create")
@@ -2504,7 +2546,11 @@ async def create_chat_session(
             # Use DB-layer count for efficiency/accuracy. The helper expects
             # the current count (before this create) and rejects when
             # current_chat_count >= max_chats_per_user.
-            user_chat_count = db.count_conversations_for_user(str(current_user.id))
+            user_chat_count = db.count_conversations_for_user(
+                str(current_user.id),
+                scope_type=scope.scope_type,
+                workspace_id=scope.workspace_id,
+            )
             await rate_limiter.check_chat_limit(current_user.id, user_chat_count)
         except HTTPException:
             # Propagate enforcement failures
@@ -2545,7 +2591,12 @@ async def create_chat_session(
         validated_forked_from_message_id: Optional[str] = None
         if session_data.parent_conversation_id:
             parent_conversation = db.get_conversation_by_id(session_data.parent_conversation_id)
-            _verify_chat_ownership(parent_conversation, current_user.id, session_data.parent_conversation_id)
+            _verify_chat_ownership(
+                parent_conversation,
+                current_user.id,
+                session_data.parent_conversation_id,
+                scope,
+            )
             if parent_conversation:
                 validated_parent_id = parent_conversation.get("id") or session_data.parent_conversation_id
                 parent_root_id = parent_conversation.get("root_id") or parent_conversation.get("id")
@@ -2922,6 +2973,8 @@ async def get_chat_session(
         False,
         description="Include per-chat settings payload in the response.",
     ),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -2940,8 +2993,9 @@ async def get_chat_session(
         HTTPException: 404 if not found, 403 if unauthorized
     """
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         # Get message count efficiently
         try:
@@ -2973,16 +3027,19 @@ async def get_chat_session(
 @router.get("/{chat_id}/context", summary="Get chat context for completions", tags=["Chat Sessions"])
 async def get_chat_context(
     chat_id: str = Path(..., description="Chat session ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
     """Return chat context formatted for chat completions."""
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id)
         if not conversation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {chat_id} not found")
 
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         settings_row = db.get_conversation_settings(chat_id)
         history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
@@ -4607,6 +4664,7 @@ async def list_chat_sessions(
     try:
         user_id_str = str(current_user.id)
         include_deleted_effective = include_deleted or deleted_only
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         if character_id is not None and character_scope == "non_character":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -4622,23 +4680,18 @@ async def list_chat_sessions(
                 offset=offset,
                 include_deleted=include_deleted_effective,
                 deleted_only=deleted_only,
+                scope_type=scope.scope_type,
+                workspace_id=scope.workspace_id,
             )
-            # Post-filter by scope when character-scoped query is used
-            if scope_type:
-                conversations = [
-                    c for c in conversations
-                    if c.get("scope_type") == scope_type
-                    and (scope_type != "workspace" or c.get("workspace_id") == workspace_id)
-                ]
             try:
                 total_count = db.count_conversations_for_user_by_character(
                     user_id_str,
                     character_id,
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
+                    scope_type=scope.scope_type,
+                    workspace_id=scope.workspace_id,
                 )
-                if scope_type:
-                    total_count = len(conversations)
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fallback: filter by client_id in-memory if efficient count isn't available
                 total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
@@ -4650,8 +4703,8 @@ async def list_chat_sessions(
                 offset=offset,
                 include_deleted=include_deleted_effective,
                 deleted_only=deleted_only,
-                scope_type=scope_type,
-                workspace_id=workspace_id,
+                scope_type=scope.scope_type,
+                workspace_id=scope.workspace_id,
                 character_scope=character_scope,
             )
             try:
@@ -4660,11 +4713,9 @@ async def list_chat_sessions(
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
                     character_scope=character_scope,
-                    scope_type=scope_type,
-                    workspace_id=workspace_id,
+                    scope_type=scope.scope_type,
+                    workspace_id=scope.workspace_id,
                 )
-                if scope_type:
-                    total_count = len(conversations)
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 total_count = len(conversations)
 
@@ -4741,6 +4792,8 @@ async def update_chat_session(
     update_data: ChatSessionUpdate,
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: int = Query(..., description="Expected version for optimistic locking"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -4761,9 +4814,10 @@ async def update_chat_session(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         # Get current conversation
         conversation = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         # Check version
         if conversation.get('version', 1) != expected_version:
@@ -4816,12 +4870,15 @@ async def update_chat_session(
 )
 async def get_chat_settings(
     chat_id: str = Path(..., description="Chat session ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         settings_row = db.get_conversation_settings(chat_id)
         if not settings_row:
@@ -4887,12 +4944,15 @@ async def get_chat_settings(
 async def update_chat_settings(
     payload: ChatSettingsUpdate,
     chat_id: str = Path(..., description="Chat session ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         incoming_settings = payload.settings or {}
         _validate_chat_settings_payload(incoming_settings)
@@ -4930,6 +4990,8 @@ async def delete_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
     hard_delete: bool = Query(False, description="Permanently delete a chat already in trash"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ) -> Response:
@@ -4946,9 +5008,10 @@ async def delete_chat_session(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         # Get current conversation. Hard-delete may target already deleted rows.
         conversation = db.get_conversation_by_id(chat_id, include_deleted=hard_delete)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         if hard_delete:
             if not conversation.get("deleted"):
@@ -5063,12 +5126,15 @@ async def delete_chat_session(
 async def restore_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id, include_deleted=True)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         # Already active: return current state as idempotent success.
         if not conversation.get("deleted"):
@@ -5082,7 +5148,7 @@ async def restore_chat_session(
         db.restore_conversation(chat_id, exp_ver)
 
         restored = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(restored, current_user.id, chat_id)
+        _verify_chat_ownership(restored, current_user.id, chat_id, scope)
         try:
             restored['message_count'] = db.count_messages_for_conversation(chat_id)
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:

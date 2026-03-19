@@ -31,9 +31,10 @@ import {
 import type { MessageSteeringPromptTemplates } from "@/types/message-steering";
 import { useChatLoopState } from "@/services/chat-loop/hooks";
 import { subscribeChatLoopEvents } from "@/services/chat-loop/bridge";
+import type { ChatScope } from "@/types/chat-scope";
 
 export const useMessageOption = (
-  opts: { forceCompareEnabled?: boolean } = {},
+  opts: { forceCompareEnabled?: boolean; scope?: ChatScope } = {},
 ) => {
   const e2eDebugEnabled =
     typeof window !== "undefined" && (window as any).__tldw_e2e_debug;
@@ -245,7 +246,12 @@ export const useMessageOption = (
     t,
   });
 
-  useServerChatLoader({ ensureServerChatHistoryId, notification, t });
+  useServerChatLoader({
+    ensureServerChatHistoryId,
+    notification,
+    t,
+    scope: opts.scope,
+  });
 
   const lastAssistantKeyRef = React.useRef<string | null>(
     selectedAssistant?.kind && selectedAssistant?.id
@@ -408,6 +414,7 @@ export const useMessageOption = (
     invalidateServerChatHistory,
     selectedCharacter,
     selectedAssistant,
+    scope: opts.scope,
   });
   const onSubmit = React.useCallback(
     async (...args: Parameters<typeof submitChat>) => {

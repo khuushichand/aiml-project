@@ -20,10 +20,16 @@ import {
 import {
   WORKSPACE_EXPORT_BUNDLE_FORMAT,
   WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION,
+  sanitizeImportedChatSession,
   type WorkspaceBundleChatSession,
   type WorkspaceBundleSnapshot,
   type WorkspaceExportBundle
 } from "@/store/workspace-bundle"
+import {
+  buildWorkspaceChatSessionKey,
+  extractWorkspaceIdFromChatSessionKey,
+  isWorkspaceChatSessionKeyForWorkspace
+} from "@/store/workspace-chat-session-key"
 import type {
   AddSourceModalState,
   AddSourceTab,
@@ -2086,13 +2092,15 @@ interface WorkspaceListActions {
   getArchivedWorkspaces: () => SavedWorkspace[]
   /** Save chat session state for a workspace */
   saveWorkspaceChatSession: (
-    workspaceId: string,
+    workspaceSessionKey: string,
     session: WorkspaceChatSession
   ) => void
   /** Retrieve chat session state for a workspace */
-  getWorkspaceChatSession: (workspaceId: string) => WorkspaceChatSession | null
+  getWorkspaceChatSession: (
+    workspaceSessionKey: string
+  ) => WorkspaceChatSession | null
   /** Clear chat session state for a workspace */
-  clearWorkspaceChatSession: (workspaceId: string) => void
+  clearWorkspaceChatSession: (workspaceSessionKey: string) => void
 }
 
 interface UndoActions {
@@ -4497,7 +4505,13 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         ) ||
         null
 
-      const chatSession = state.workspaceChatSessions[targetWorkspaceId]
+      const activeChatSessionKey = buildWorkspaceChatSessionKey(
+        targetWorkspaceId,
+        snapshot.workspaceChatReferenceId || targetWorkspaceId
+      )
+      const chatSession =
+        state.workspaceChatSessions[activeChatSessionKey] ||
+        state.workspaceChatSessions[targetWorkspaceId]
 
       return {
         format: WORKSPACE_EXPORT_BUNDLE_FORMAT,
@@ -4590,11 +4604,17 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
 
       const importedChatSession =
         bundle.workspace?.chatSession &&
-        cloneWorkspaceBundleChatSession(bundle.workspace.chatSession)
+        sanitizeImportedChatSession(
+          cloneWorkspaceBundleChatSession(bundle.workspace.chatSession)
+        )
+      const importedChatSessionKey = buildWorkspaceChatSessionKey(
+        importedSnapshot.workspaceId,
+        importedSnapshot.workspaceChatReferenceId
+      )
       const nextWorkspaceChatSessions = importedChatSession
         ? {
             ...state.workspaceChatSessions,
-            [importedSnapshot.workspaceId]: {
+            [importedChatSessionKey]: {
               messages: importedChatSession.messages,
               history: importedChatSession.history,
               historyId: importedChatSession.historyId,
@@ -4949,8 +4969,11 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
         )
         const { [id]: _removedWorkspace, ...remainingSnapshots } =
           state.workspaceSnapshots
-        const { [id]: _removedChatSession, ...remainingChatSessions } =
-          state.workspaceChatSessions
+        const remainingChatSessions = Object.fromEntries(
+          Object.entries(state.workspaceChatSessions).filter(
+            ([sessionKey]) => !isWorkspaceChatSessionKeyForWorkspace(sessionKey, id)
+          )
+        )
 
         if (state.workspaceId !== id) {
           return {
@@ -5016,26 +5039,34 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
       return sortByLastAccessedDesc(state.archivedWorkspaces)
     },
 
-    saveWorkspaceChatSession: (workspaceId, session) => {
-      if (!workspaceId) return
+    saveWorkspaceChatSession: (workspaceSessionKey, session) => {
+      const normalizedSessionKey = workspaceSessionKey.trim()
+      if (!normalizedSessionKey) return
       set((state) => ({
         workspaceChatSessions: {
           ...state.workspaceChatSessions,
-          [workspaceId]: cloneWorkspaceChatSession(session)
+          [normalizedSessionKey]: cloneWorkspaceChatSession(session)
         }
       }))
     },
 
-    getWorkspaceChatSession: (workspaceId) => {
+    getWorkspaceChatSession: (workspaceSessionKey) => {
       const state = get()
-      const session = state.workspaceChatSessions[workspaceId]
+      const normalizedSessionKey = workspaceSessionKey.trim()
+      if (!normalizedSessionKey) return null
+      const session =
+        state.workspaceChatSessions[normalizedSessionKey] ??
+        state.workspaceChatSessions[
+          extractWorkspaceIdFromChatSessionKey(normalizedSessionKey)
+        ]
       return session ? cloneWorkspaceChatSession(session) : null
     },
 
-    clearWorkspaceChatSession: (workspaceId) => {
-      if (!workspaceId) return
+    clearWorkspaceChatSession: (workspaceSessionKey) => {
+      const normalizedSessionKey = workspaceSessionKey.trim()
+      if (!normalizedSessionKey) return
       set((state) => {
-        const { [workspaceId]: _removedSession, ...remainingSessions } =
+        const { [normalizedSessionKey]: _removedSession, ...remainingSessions } =
           state.workspaceChatSessions
         return {
           workspaceChatSessions: remainingSessions

@@ -11,9 +11,12 @@ const {
   addHouseholdMemberDraftMock,
   saveRelationshipDraftMock,
   saveGuardrailPlanDraftMock,
-  getLatestHouseholdDraftMock,
+  listHouseholdDraftsMock,
   getHouseholdDraftSnapshotMock,
-  getActivationSummaryMock,
+  getHouseholdInviteTrackerMock,
+  provisionHouseholdMemberInviteMock,
+  resendHouseholdMemberInviteMock,
+  reissueHouseholdMemberInviteMock,
   clipboardWriteTextMock,
   resendPendingInvitesMock
 } = vi.hoisted(() => ({
@@ -22,9 +25,12 @@ const {
   addHouseholdMemberDraftMock: vi.fn(),
   saveRelationshipDraftMock: vi.fn(),
   saveGuardrailPlanDraftMock: vi.fn(),
-  getLatestHouseholdDraftMock: vi.fn(),
+  listHouseholdDraftsMock: vi.fn(),
   getHouseholdDraftSnapshotMock: vi.fn(),
-  getActivationSummaryMock: vi.fn(),
+  getHouseholdInviteTrackerMock: vi.fn(),
+  provisionHouseholdMemberInviteMock: vi.fn(),
+  resendHouseholdMemberInviteMock: vi.fn(),
+  reissueHouseholdMemberInviteMock: vi.fn(),
   clipboardWriteTextMock: vi.fn(),
   resendPendingInvitesMock: vi.fn()
 }))
@@ -35,11 +41,41 @@ vi.mock("@/services/family-wizard", () => ({
   addHouseholdMemberDraft: addHouseholdMemberDraftMock,
   saveRelationshipDraft: saveRelationshipDraftMock,
   saveGuardrailPlanDraft: saveGuardrailPlanDraftMock,
-  getLatestHouseholdDraft: getLatestHouseholdDraftMock,
+  listHouseholdDrafts: listHouseholdDraftsMock,
   getHouseholdDraftSnapshot: getHouseholdDraftSnapshotMock,
-  getActivationSummary: getActivationSummaryMock,
+  getHouseholdInviteTracker: getHouseholdInviteTrackerMock,
+  provisionHouseholdMemberInvite: provisionHouseholdMemberInviteMock,
+  resendHouseholdMemberInvite: resendHouseholdMemberInviteMock,
+  reissueHouseholdMemberInvite: reissueHouseholdMemberInviteMock,
   resendPendingInvites: resendPendingInvitesMock
 }))
+
+const startNewHousehold = async () => {
+  await waitFor(() => {
+    expect(screen.getByRole("heading", { name: "Household Basics" })).toBeInTheDocument()
+  })
+}
+
+const trackerItem = (overrides: Record<string, unknown> = {}) => ({
+  member_draft_id: "member-dependent-1",
+  display_name: "Alex",
+  account_mode: "existing_account",
+  dependent_user_id: "alex-kid",
+  relationship_draft_id: "relationship-draft-1",
+  relationship_status: "pending",
+  plan_draft_id: "plan-draft-1",
+  plan_status: "queued",
+  invite_id: "invite-1",
+  invite_status: "sent",
+  invite_delivery_channel: "email",
+  invite_delivery_target: "alex@example.com",
+  invite_last_sent_at: "2026-01-01T00:00:00Z",
+  invite_accepted_at: null,
+  invite_expires_at: "2026-01-08T00:00:00Z",
+  blocker_codes: ["invite_pending_acceptance", "plan_waiting_for_acceptance"],
+  available_actions: ["resend_invite"],
+  ...overrides
+})
 
 describe("FamilyGuardrailsWizard", () => {
   const originalMatchMedia = window.matchMedia
@@ -85,19 +121,24 @@ describe("FamilyGuardrailsWizard", () => {
     addHouseholdMemberDraftMock.mockReset()
     saveRelationshipDraftMock.mockReset()
     saveGuardrailPlanDraftMock.mockReset()
-    getLatestHouseholdDraftMock.mockReset()
+    listHouseholdDraftsMock.mockReset()
     getHouseholdDraftSnapshotMock.mockReset()
-    getActivationSummaryMock.mockReset()
+    getHouseholdInviteTrackerMock.mockReset()
+    provisionHouseholdMemberInviteMock.mockReset()
+    resendHouseholdMemberInviteMock.mockReset()
+    reissueHouseholdMemberInviteMock.mockReset()
     resendPendingInvitesMock.mockReset()
     clipboardWriteTextMock.mockReset()
-    getLatestHouseholdDraftMock.mockResolvedValue(null)
+    listHouseholdDraftsMock.mockResolvedValue([])
     clipboardWriteTextMock.mockResolvedValue(undefined)
     resendPendingInvitesMock.mockResolvedValue({
       household_draft_id: "draft-1",
       resent_count: 1,
       skipped_count: 0,
       resent_user_ids: ["child-1"],
-      skipped_user_ids: []
+      skipped_user_ids: [],
+      resent_member_draft_ids: ["member-dependent-1"],
+      skipped_member_draft_ids: []
     })
     createHouseholdDraftMock.mockResolvedValue({
       id: "draft-1",
@@ -131,7 +172,7 @@ describe("FamilyGuardrailsWizard", () => {
         updated_at: "2026-01-01T00:00:00Z"
       })
     )
-    getActivationSummaryMock.mockResolvedValue({
+    getHouseholdInviteTrackerMock.mockResolvedValue({
       household_draft_id: "draft-1",
       status: "invites_pending",
       active_count: 1,
@@ -141,8 +182,32 @@ describe("FamilyGuardrailsWizard", () => {
     })
   })
 
-  it("renders compact step labels with current and next step context", () => {
+  it("shows resume and edit actions for saved household drafts", async () => {
+    listHouseholdDraftsMock.mockResolvedValue([
+      {
+        id: "draft-saved-1",
+        owner_user_id: "guardian-1",
+        name: "Saved Home",
+        mode: "family",
+        status: "draft",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-02T00:00:00Z"
+      }
+    ])
     render(<FamilyGuardrailsWizard />)
+
+    await waitFor(() => {
+      expect(screen.getByText("Resume saved household")).toBeInTheDocument()
+    })
+    expect(screen.getByRole("button", { name: "Resume latest draft" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Edit household" })).toBeInTheDocument()
+    expect(screen.getByText("Saved Home")).toBeInTheDocument()
+  })
+
+  it("renders compact step labels with current and next step context", async () => {
+    render(<FamilyGuardrailsWizard />)
+
+    await startNewHousehold()
 
     expect(screen.getByText("Basics")).toBeInTheDocument()
     expect(screen.getByText("Tracker")).toBeInTheDocument()
@@ -155,6 +220,7 @@ describe("FamilyGuardrailsWizard", () => {
   it("updates step context cues as the wizard advances", async () => {
     render(<FamilyGuardrailsWizard />)
 
+    await startNewHousehold()
     fireEvent.click(screen.getByRole("button", { name: /Save & Continue/i }))
 
     await waitFor(() => {
@@ -167,6 +233,7 @@ describe("FamilyGuardrailsWizard", () => {
   it("uses caregiver step labels in institutional mode", async () => {
     render(<FamilyGuardrailsWizard />)
 
+    await startNewHousehold()
     fireEvent.click(screen.getByRole("radio", { name: "Caregiver/Institutional" }))
     fireEvent.click(screen.getByRole("button", { name: /Save & Continue/i }))
 
@@ -178,9 +245,10 @@ describe("FamilyGuardrailsWizard", () => {
     })
   })
 
-  it("uses preset-only household setup without a separate mode selector", () => {
+  it("uses preset-only household setup without a separate mode selector", async () => {
     render(<FamilyGuardrailsWizard />)
 
+    await startNewHousehold()
     expect(screen.getByText("Household Preset")).toBeInTheDocument()
     expect(screen.queryByText("Household Mode")).not.toBeInTheDocument()
     expect(screen.getByRole("radio", { name: "Caregiver/Institutional" })).toBeInTheDocument()
@@ -195,6 +263,7 @@ describe("FamilyGuardrailsWizard", () => {
       )
     ).toBeInTheDocument()
 
+    await startNewHousehold()
     fireEvent.click(screen.getByRole("radio", { name: "Caregiver/Institutional" }))
 
     await waitFor(() => {
@@ -206,9 +275,10 @@ describe("FamilyGuardrailsWizard", () => {
     })
   })
 
-  it("renders a sticky action footer with mobile-friendly wrapping controls", () => {
+  it("renders a sticky action footer with mobile-friendly wrapping controls", async () => {
     render(<FamilyGuardrailsWizard />)
 
+    await startNewHousehold()
     const footer = screen.getByTestId("wizard-action-footer")
     const controls = screen.getByTestId("wizard-action-controls")
     const continueButton = screen.getByRole("button", { name: /Save & Continue/i })
@@ -218,9 +288,10 @@ describe("FamilyGuardrailsWizard", () => {
     expect(continueButton).toHaveStyle({ flex: "1 1 220px" })
   })
 
-  it("anchors action footer to the bottom of the wizard shell", () => {
+  it("anchors action footer to the bottom of the wizard shell", async () => {
     render(<FamilyGuardrailsWizard />)
 
+    await startNewHousehold()
     const shell = screen.getByTestId("wizard-shell")
     const footer = screen.getByTestId("wizard-action-footer")
 
@@ -231,6 +302,7 @@ describe("FamilyGuardrailsWizard", () => {
   it("shows explicit accessible labels for card-entry guardian and dependent fields", async () => {
     render(<FamilyGuardrailsWizard />)
 
+    await startNewHousehold()
     fireEvent.click(screen.getByRole("button", { name: /Save & Continue/i }))
 
     await waitFor(() => {
@@ -251,6 +323,7 @@ describe("FamilyGuardrailsWizard", () => {
   it("shows account user ID guidance in guardian and dependent setup steps", async () => {
     render(<FamilyGuardrailsWizard />)
 
+    await startNewHousehold()
     fireEvent.click(screen.getByRole("button", { name: /Save & Continue/i }))
     await waitFor(() => {
       expect(
@@ -264,23 +337,26 @@ describe("FamilyGuardrailsWizard", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Use each dependent account user ID exactly as it appears at sign-in so invites can be accepted."
+          "Existing accounts need a sign-in user ID. Invite-new dependents can be provisioned by email or via a guardian copy link in the tracker."
         )
       ).toBeInTheDocument()
     })
   })
 
   it("resumes latest draft snapshot for returning guardians", async () => {
-    getLatestHouseholdDraftMock.mockResolvedValue({
-      id: "draft-resume-1",
-      owner_user_id: "guardian-1",
-      name: "Resume Home",
-      mode: "family",
-      status: "draft",
-      created_at: "2026-01-01T00:00:00Z",
-      updated_at: "2026-01-01T00:00:00Z"
-    })
+    listHouseholdDraftsMock.mockResolvedValue([
+      {
+        id: "draft-resume-1",
+        owner_user_id: "guardian-1",
+        name: "Resume Home",
+        mode: "family",
+        status: "draft",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z"
+      }
+    ])
     getHouseholdDraftSnapshotMock.mockResolvedValue({
+      id: "draft-resume-1",
       household: {
         id: "draft-resume-1",
         owner_user_id: "guardian-1",
@@ -299,6 +375,8 @@ describe("FamilyGuardrailsWizard", () => {
           user_id: "guardian-primary",
           email: null,
           invite_required: false,
+          account_mode: "existing_account",
+          provisioning_status: "not_started",
           metadata: {},
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z"
@@ -311,6 +389,8 @@ describe("FamilyGuardrailsWizard", () => {
           user_id: "alex-kid",
           email: null,
           invite_required: true,
+          account_mode: "existing_account",
+          provisioning_status: "not_started",
           metadata: {},
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z"
@@ -336,7 +416,11 @@ describe("FamilyGuardrailsWizard", () => {
     render(<FamilyGuardrailsWizard />)
 
     await waitFor(() => {
-      expect(getLatestHouseholdDraftMock).toHaveBeenCalledTimes(1)
+      expect(screen.getByRole("button", { name: "Resume latest draft" })).toBeEnabled()
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Resume latest draft" }))
+
+    await waitFor(() => {
       expect(getHouseholdDraftSnapshotMock).toHaveBeenCalledWith("draft-resume-1")
       expect(
         screen.getByText("Apply a template first, then customize if needed.")
@@ -348,7 +432,7 @@ describe("FamilyGuardrailsWizard", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Create or link dependent accounts here. User IDs are required for invitation and acceptance."
+          "Choose whether each dependent already has an account or needs a new invite."
         )
       ).toBeInTheDocument()
       expect(screen.getByDisplayValue("alex-kid")).toBeInTheDocument()

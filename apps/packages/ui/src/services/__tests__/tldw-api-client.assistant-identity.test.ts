@@ -54,10 +54,46 @@ describe("TldwApiClient assistant identity helpers", () => {
     mocks.storedConfig = null
   })
 
+  it("preserves scope metadata and forwards workspace scope when loading a chat", async () => {
+    mocks.bgRequest.mockImplementation(
+      async (request: { path?: string; method?: string }) => {
+        if (
+          request.path ===
+            "/api/v1/chats/chat-7?scope_type=workspace&workspace_id=workspace-7" &&
+          request.method === "GET"
+        ) {
+          return {
+            id: "chat-7",
+            title: "Workspace thread",
+            created_at: "2026-03-08T00:00:00Z",
+            scope_type: "workspace",
+            workspace_id: "workspace-7"
+          }
+        }
+
+        throw new Error(`Unexpected request: ${request.method} ${request.path}`)
+      }
+    )
+
+    const client = createConfiguredClient()
+    const chat = await client.getChat("chat-7", {
+      scope: { type: "workspace", workspaceId: "workspace-7" }
+    })
+
+    expect(chat).toMatchObject({
+      id: "chat-7",
+      scope_type: "workspace",
+      workspace_id: "workspace-7"
+    })
+  })
+
   it("normalizes assistant identity fields for persona-backed chats", async () => {
     mocks.bgRequest.mockImplementation(
       async (request: { path?: string; method?: string }) => {
-        if (request.path === "/api/v1/chats/chat-7" && request.method === "GET") {
+        if (
+          request.path === "/api/v1/chats/chat-7?scope_type=global" &&
+          request.method === "GET"
+        ) {
           return {
             id: "chat-7",
             title: "Persona thread",

@@ -85,6 +85,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
     ConversationListPagination,
     ConversationListResponse,
     ConversationMetadata,
+    ConversationScopeParams,
     ConversationTreeNode,
     ConversationTreePagination,
     ConversationTreeResponse,
@@ -205,7 +206,7 @@ from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_pro
 
 _ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -4332,10 +4333,35 @@ def _conversation_assistant_identity_fields(conversation: dict[str, Any]) -> dic
     }
 
 
+def _resolve_conversation_scope(
+    scope_type: Literal["global", "workspace"] | None,
+    workspace_id: str | None,
+) -> ConversationScopeParams:
+    try:
+        return ConversationScopeParams(
+            scope_type=scope_type or "global",
+            workspace_id=workspace_id,
+        )
+    except ValidationError as exc:
+        detail = exc.errors()[0].get("msg") if exc.errors() else str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        ) from exc
+
+
+def _scoped_conversation_fields(conversation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "scope_type": conversation.get("scope_type") or "global",
+        "workspace_id": conversation.get("workspace_id"),
+    }
+
+
 def _verify_conversation_ownership(
     db: CharactersRAGDB,
     conversation_id: str,
     current_user: User,
+    scope: ConversationScopeParams | None = None,
 ) -> dict[str, Any]:
     conversation = db.get_conversation_by_id(conversation_id)
     if not conversation or conversation.get("deleted"):
@@ -4350,7 +4376,39 @@ def _verify_conversation_ownership(
     except (TypeError, ValueError):
         if str(conv_client_id) != str(user_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation") from None
+    expected_scope = scope or ConversationScopeParams()
+    conversation_scope = conversation.get("scope_type") or "global"
+    conversation_workspace_id = conversation.get("workspace_id")
+    if conversation_scope != expected_scope.scope_type:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    if (
+        expected_scope.scope_type == "workspace"
+        and conversation_workspace_id != expected_scope.workspace_id
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     return conversation
+
+
+def _verify_message_ownership(
+    db: CharactersRAGDB,
+    message_id: str,
+    current_user: User,
+    scope: ConversationScopeParams | None = None,
+) -> dict[str, Any]:
+    message = db.get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Message {message_id} not found",
+        )
+    conversation_id = message.get("conversation_id")
+    if not conversation_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Message {message_id} not found",
+        )
+    _verify_conversation_ownership(db, str(conversation_id), current_user, scope)
+    return message
 
 
 def _replace_conversation_keywords(
@@ -4818,6 +4876,7 @@ async def list_chat_conversations(
 
         start_iso = _parse_iso_datetime(start_date, "start_date").isoformat() if start_date else None
         end_iso = _parse_iso_datetime(end_date, "end_date").isoformat() if end_date else None
+        resolved_scope = _resolve_conversation_scope(scope_type, workspace_id)
 
         if character_id is not None and character_scope == "non_character":
             raise HTTPException(
@@ -4849,8 +4908,8 @@ async def list_chat_conversations(
             half_life_days=RECENCY_HALF_LIFE_DAYS,
             bm25_weight=CHAT_BM25_WEIGHT,
             recency_weight=CHAT_RECENCY_WEIGHT,
-            scope_type=scope_type,
-            workspace_id=workspace_id,
+            scope_type=resolved_scope.scope_type,
+            workspace_id=resolved_scope.workspace_id,
         )
         db_ms = (time.perf_counter() - db_started_at) * 1000.0
         enrichment_started_at = time.perf_counter()
@@ -4869,6 +4928,7 @@ async def list_chat_conversations(
             items.append(
                 ConversationListItem(
                     id=conv_id,
+                    **_scoped_conversation_fields(row),
                     **assistant_fields,
                     title=row.get("title"),
                     state=row.get("state") or "in-progress",
@@ -4982,11 +5042,14 @@ async def list_chat_conversations(
 async def update_chat_conversation(
     payload: ConversationUpdateRequest,
     conversation_id: str = Path(..., description="Conversation ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
-        conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
         if conversation.get("version", 1) != payload.version:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -5048,6 +5111,7 @@ async def update_chat_conversation(
 
         return ConversationListItem(
             id=updated.get("id") or conversation_id,
+            **_scoped_conversation_fields(updated),
             **_conversation_assistant_identity_fields(updated),
             title=updated.get("title"),
             state=updated.get("state") or "in-progress",
@@ -5099,11 +5163,14 @@ async def get_conversation_tree(
     limit: int = Query(50, ge=1, le=200, description="Root threads per page"),
     offset: int = Query(0, ge=0, description="Root thread offset"),
     max_depth: int = Query(4, ge=1, le=20, description="Max depth for the tree"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
-        conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
         character_name = None
         if conversation.get("character_id"):
             card = db.get_character_card_by_id(int(conversation.get("character_id")))
@@ -5241,6 +5308,7 @@ async def get_conversation_tree(
 
         metadata = ConversationMetadata(
             id=conversation.get("id") or conversation_id,
+            **_scoped_conversation_fields(conversation),
             **_conversation_assistant_identity_fields(conversation),
             title=conversation.get("title"),
             state=conversation.get("state") or "in-progress",
@@ -5285,10 +5353,13 @@ async def get_conversation_tree(
 async def create_conversation_share_link(
     request_body: ConversationShareLinkCreateRequest,
     conversation_id: str = Path(..., description="Conversation ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
-    conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+    scope = _resolve_conversation_scope(scope_type, workspace_id)
+    conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
     now = datetime.now(timezone.utc)
     ttl_seconds = request_body.ttl_seconds or _KNOWLEDGE_QA_SHARE_DEFAULT_TTL_SECONDS
     ttl_seconds = max(300, min(ttl_seconds, _KNOWLEDGE_QA_SHARE_MAX_TTL_SECONDS))
@@ -5354,10 +5425,13 @@ async def create_conversation_share_link(
 )
 async def list_conversation_share_links(
     conversation_id: str = Path(..., description="Conversation ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
-    conversation = _verify_conversation_ownership(db, conversation_id, current_user)
+    scope = _resolve_conversation_scope(scope_type, workspace_id)
+    conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
     settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
     links = _prune_knowledge_qa_share_links(existing_links)
     if links != existing_links:
@@ -5427,10 +5501,13 @@ async def list_conversation_share_links(
 async def revoke_conversation_share_link(
     conversation_id: str = Path(..., description="Conversation ID"),
     share_id: str = Path(..., description="Share link ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
-    _verify_conversation_ownership(db, conversation_id, current_user)
+    scope = _resolve_conversation_scope(scope_type, workspace_id)
+    _verify_conversation_ownership(db, conversation_id, current_user, scope)
     settings_payload, existing_links = _load_knowledge_qa_share_links(db, conversation_id)
     links = _prune_knowledge_qa_share_links(existing_links)
 
@@ -5680,18 +5757,15 @@ class ConversationCitationsResponse(BaseModel):
 async def persist_rag_context(
     message_id: str = Path(..., description="The message ID to attach RAG context to"),
     request_body: RagContextPersistRequest = Body(...),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     """Persist RAG context (citations, retrieved documents, settings) with a message."""
     try:
-        # Verify the message exists and belongs to the user
-        message = db.get_message_by_id(message_id)
-        if not message:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Message {message_id} not found"
-            )
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        _verify_message_ownership(db, message_id, current_user, scope)
 
         # Convert RagContext to dict for storage
         rag_context_dict = request_body.rag_context.model_dump(exclude_none=True)
@@ -5738,18 +5812,15 @@ async def persist_rag_context(
 )
 async def get_rag_context(
     message_id: str = Path(..., description="The message ID to get RAG context for"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     """Retrieve RAG context stored with a message."""
     try:
-        # Verify the message exists
-        message = db.get_message_by_id(message_id)
-        if not message:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Message {message_id} not found"
-            )
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        _verify_message_ownership(db, message_id, current_user, scope)
 
         rag_context = db.get_message_rag_context(message_id)
         if not rag_context:
@@ -5788,18 +5859,15 @@ async def get_messages_with_rag_context(
     limit: int = Query(100, ge=1, le=500, description="Maximum messages to return"),
     offset: int = Query(0, ge=0, description="Number of messages to skip"),
     include_rag_context: bool = Query(True, description="Whether to include RAG context"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     """Get messages from a conversation with optional RAG context."""
     try:
-        # Verify conversation exists
-        conversation = db.get_conversation_by_id(conversation_id)
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Conversation {conversation_id} not found"
-            )
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        _verify_conversation_ownership(db, conversation_id, current_user, scope)
 
         messages = db.get_messages_with_rag_context(
             conversation_id,

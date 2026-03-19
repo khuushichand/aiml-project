@@ -39,7 +39,10 @@ describe("TldwApiClient chat mutations", () => {
         ) {
           throw Object.assign(new Error("Version conflict"), { status: 409 })
         }
-        if (request.path === "/api/v1/chats/abc" && request.method === "GET") {
+        if (
+          request.path === "/api/v1/chats/abc?scope_type=global" &&
+          request.method === "GET"
+        ) {
           return {
             id: "abc",
             title: "Latest",
@@ -49,7 +52,8 @@ describe("TldwApiClient chat mutations", () => {
           }
         }
         if (
-          request.path === "/api/v1/chats/abc?expected_version=7" &&
+          request.path ===
+            "/api/v1/chats/abc?scope_type=global&expected_version=7" &&
           request.method === "PUT"
         ) {
           return {
@@ -77,15 +81,15 @@ describe("TldwApiClient chat mutations", () => {
     })
     expect(calls).toEqual([
       expect.objectContaining({
-        path: "/api/v1/chats/abc?expected_version=4",
+        path: "/api/v1/chats/abc?scope_type=global&expected_version=4",
         method: "PUT"
       }),
       expect.objectContaining({
-        path: "/api/v1/chats/abc",
+        path: "/api/v1/chats/abc?scope_type=global",
         method: "GET"
       }),
       expect.objectContaining({
-        path: "/api/v1/chats/abc?expected_version=7",
+        path: "/api/v1/chats/abc?scope_type=global&expected_version=7",
         method: "PUT"
       })
     ])

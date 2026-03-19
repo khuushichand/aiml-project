@@ -684,6 +684,8 @@ export interface ServerChatSummary {
   root_id?: string | null
   forked_from_message_id?: string | null
   version?: number | null
+  scope_type?: "global" | "workspace" | null
+  workspace_id?: string | null
 }
 
 export interface PersonaProfileSummary {
@@ -4723,6 +4725,19 @@ export class TldwApiClient {
       (assistant_kind === "character" && character_id != null
         ? String(character_id)
         : null)
+    const scope_type =
+      input?.scope_type === "global" || input?.scopeType === "global"
+        ? "global"
+        : input?.scope_type === "workspace" || input?.scopeType === "workspace"
+          ? "workspace"
+          : null
+    const workspace_id =
+      typeof input?.workspace_id === "string" && input.workspace_id.trim().length > 0
+        ? input.workspace_id
+        : typeof input?.workspaceId === "string" &&
+            input.workspaceId.trim().length > 0
+          ? input.workspaceId
+          : null
     return {
       id: String(input?.id ?? ""),
       title: String(input?.title || ""),
@@ -4770,7 +4785,9 @@ export class TldwApiClient {
           ? input.version
           : typeof input?.expected_version === "number"
             ? input.expected_version
-            : null
+            : null,
+      scope_type,
+      workspace_id
     }
   }
 
@@ -4937,8 +4954,11 @@ export class TldwApiClient {
     )
   }
 
-  private async getLatestChatVersion(chatId: string): Promise<number> {
-    const current = await this.getChat(chatId)
+  private async getLatestChatVersion(
+    chatId: string,
+    options?: { scope?: ChatScope }
+  ): Promise<number> {
+    const current = await this.getChat(chatId, options)
     const version = Number(current?.version)
     if (Number.isInteger(version) && version >= 0) {
       return version
@@ -5092,30 +5112,40 @@ export class TldwApiClient {
     })
   }
 
-  async getChat(chat_id: string | number): Promise<ServerChatSummary> {
+  async getChat(
+    chat_id: string | number,
+    options?: { scope?: ChatScope }
+  ): Promise<ServerChatSummary> {
     const cid = String(chat_id)
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     const res = await bgRequest<any>({
-      path: `/api/v1/chats/${cid}`,
+      path: appendPathQuery(`/api/v1/chats/${cid}`, query),
       method: "GET"
     })
     return this.normalizeChatSummary(res)
   }
 
-  async getChatSettings(chat_id: string | number): Promise<ChatSettingsResponse> {
+  async getChatSettings(
+    chat_id: string | number,
+    options?: { scope?: ChatScope }
+  ): Promise<ChatSettingsResponse> {
     const cid = String(chat_id)
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     return await bgRequest<ChatSettingsResponse>({
-      path: `/api/v1/chats/${cid}/settings`,
+      path: appendPathQuery(`/api/v1/chats/${cid}/settings`, query),
       method: "GET"
     })
   }
 
   async updateChatSettings(
     chat_id: string | number,
-    settings: Record<string, unknown>
+    settings: Record<string, unknown>,
+    options?: { scope?: ChatScope }
   ): Promise<ChatSettingsResponse> {
     const cid = String(chat_id)
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     return await bgRequest<ChatSettingsResponse>({
-      path: `/api/v1/chats/${cid}/settings`,
+      path: appendPathQuery(`/api/v1/chats/${cid}/settings`, query),
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: { settings }
@@ -5124,10 +5154,14 @@ export class TldwApiClient {
 
   async getChatLorebookDiagnostics(
     chat_id: string | number,
-    params?: Record<string, any>
+    params?: Record<string, any>,
+    options?: { scope?: ChatScope }
   ): Promise<LorebookDiagnosticExportResponse> {
     const cid = String(chat_id)
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({
+      ...toChatScopeParams(options?.scope),
+      ...(params || {})
+    })
     return await bgRequest<LorebookDiagnosticExportResponse>({
       path: `/api/v1/chats/${cid}/diagnostics/lorebook${query}`,
       method: "GET"
@@ -5137,13 +5171,13 @@ export class TldwApiClient {
   async updateChat(
     chat_id: string | number,
     payload: Record<string, any>,
-    options?: { expectedVersion?: number }
+    options?: { expectedVersion?: number; scope?: ChatScope }
   ): Promise<ServerChatSummary> {
     const cid = String(chat_id)
     let expectedVersion = options?.expectedVersion
     if (expectedVersion == null) {
       try {
-        expectedVersion = await this.getLatestChatVersion(cid)
+        expectedVersion = await this.getLatestChatVersion(cid, options)
       } catch {
         // ignore and fall back to unversioned update
       }
@@ -5153,12 +5187,15 @@ export class TldwApiClient {
       hasRetried = false
     ): Promise<ServerChatSummary> => {
       const qp =
-        typeof versionToUse === "number"
-          ? `?expected_version=${encodeURIComponent(String(versionToUse))}`
-          : ""
+        this.buildQuery({
+          ...toChatScopeParams(options?.scope),
+          ...(typeof versionToUse === "number"
+            ? { expected_version: versionToUse }
+            : {})
+        })
       try {
         const res = await bgRequest<any>({
-          path: `/api/v1/chats/${cid}${qp}`,
+          path: appendPathQuery(`/api/v1/chats/${cid}`, qp),
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: payload
@@ -5168,7 +5205,7 @@ export class TldwApiClient {
         if (hasRetried || !this.isVersionConflictError(error)) {
           throw error
         }
-        const latestVersion = await this.getLatestChatVersion(cid)
+        const latestVersion = await this.getLatestChatVersion(cid, options)
         return await attemptUpdate(latestVersion, true)
       }
     }
@@ -5181,6 +5218,7 @@ export class TldwApiClient {
     options?: {
       expectedVersion?: number
       hardDelete?: boolean
+      scope?: ChatScope
     }
   ): Promise<void> {
     const cid = String(chat_id)
@@ -5189,6 +5227,7 @@ export class TldwApiClient {
       hasRetried = false
     ): Promise<void> => {
       const query = this.buildQuery({
+        ...toChatScopeParams(options?.scope),
         ...(typeof versionToUse === "number"
           ? { expected_version: versionToUse }
           : {}),
@@ -5203,7 +5242,7 @@ export class TldwApiClient {
         if (hasRetried || !this.isVersionConflictError(error)) {
           throw error
         }
-        const latestVersion = await this.getLatestChatVersion(cid)
+        const latestVersion = await this.getLatestChatVersion(cid, options)
         await attemptDelete(latestVersion, true)
       }
     }
@@ -5213,12 +5252,12 @@ export class TldwApiClient {
 
   async restoreChat(
     chat_id: string | number,
-    options?: { expectedVersion?: number }
+    options?: { expectedVersion?: number; scope?: ChatScope }
   ): Promise<ServerChatSummary> {
     const cid = String(chat_id)
     let expectedVersion = options?.expectedVersion
     if (expectedVersion == null) {
-      expectedVersion = await this.getLatestChatVersion(cid)
+      expectedVersion = await this.getLatestChatVersion(cid, options)
     }
 
     const attemptRestore = async (
@@ -5226,9 +5265,12 @@ export class TldwApiClient {
       hasRetried = false
     ): Promise<ServerChatSummary> => {
       const query = this.buildQuery(
-        typeof versionToUse === "number"
-          ? { expected_version: versionToUse }
-          : {}
+        {
+          ...toChatScopeParams(options?.scope),
+          ...(typeof versionToUse === "number"
+            ? { expected_version: versionToUse }
+            : {})
+        }
       )
       try {
         const res = await bgRequest<any>({
@@ -5240,7 +5282,7 @@ export class TldwApiClient {
         if (hasRetried || !this.isVersionConflictError(error)) {
           throw error
         }
-        const latestVersion = await this.getLatestChatVersion(cid)
+        const latestVersion = await this.getLatestChatVersion(cid, options)
         return await attemptRestore(latestVersion, true)
       }
     }
@@ -5254,11 +5296,16 @@ export class TldwApiClient {
       permission?: ConversationSharePermission
       ttl_seconds?: number
       label?: string
-    }
+    },
+    options?: { scope?: ChatScope }
   ): Promise<ConversationShareLinkCreateResponse> {
     const cid = String(chat_id)
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     return await bgRequest<ConversationShareLinkCreateResponse>({
-      path: `/api/v1/chat/conversations/${encodeURIComponent(cid)}/share-links`,
+      path: appendPathQuery(
+        `/api/v1/chat/conversations/${encodeURIComponent(cid)}/share-links`,
+        query
+      ),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload || {},
@@ -5266,23 +5313,33 @@ export class TldwApiClient {
   }
 
   async listConversationShareLinks(
-    chat_id: string | number
+    chat_id: string | number,
+    options?: { scope?: ChatScope }
   ): Promise<ConversationShareLinksListResponse> {
     const cid = String(chat_id)
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     return await bgRequest<ConversationShareLinksListResponse>({
-      path: `/api/v1/chat/conversations/${encodeURIComponent(cid)}/share-links`,
+      path: appendPathQuery(
+        `/api/v1/chat/conversations/${encodeURIComponent(cid)}/share-links`,
+        query
+      ),
       method: "GET",
     })
   }
 
   async revokeConversationShareLink(
     chat_id: string | number,
-    shareId: string
+    shareId: string,
+    options?: { scope?: ChatScope }
   ): Promise<{ success: boolean; share_id: string }> {
     const cid = encodeURIComponent(String(chat_id))
     const sid = encodeURIComponent(String(shareId))
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     return await bgRequest<{ success: boolean; share_id: string }>({
-      path: `/api/v1/chat/conversations/${cid}/share-links/${sid}`,
+      path: appendPathQuery(
+        `/api/v1/chat/conversations/${cid}/share-links/${sid}`,
+        query
+      ),
       method: "DELETE",
     })
   }
@@ -5301,10 +5358,13 @@ export class TldwApiClient {
   async listChatMessages(
     chat_id: string | number,
     params?: Record<string, any>,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: ChatScope }
   ): Promise<ServerChatMessage[]> {
     const cid = String(chat_id)
-    const query = this.buildQuery(params)
+    const query = this.buildQuery({
+      ...toChatScopeParams(options?.scope),
+      ...(params || {})
+    })
     const cacheKey = this.getChatMessagesCacheKey(cid, query)
     const cached = this.chatMessagesCache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) {
@@ -5445,11 +5505,13 @@ export class TldwApiClient {
 
   async addChatMessage(
     chat_id: string | number,
-    payload: Record<string, any>
+    payload: Record<string, any>,
+    options?: { scope?: ChatScope }
   ): Promise<ServerChatMessage> {
     const cid = String(chat_id)
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     const res = await bgRequest<ServerChatMessage>({
-      path: `/api/v1/chats/${cid}/messages`,
+      path: appendPathQuery(`/api/v1/chats/${cid}/messages`, query),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload
@@ -5460,18 +5522,20 @@ export class TldwApiClient {
 
   async prepareCharacterCompletion(
     chat_id: string | number,
-    payload?: Record<string, any>
+    payload?: Record<string, any>,
+    options?: { scope?: ChatScope }
   ): Promise<any> {
     const cid = String(chat_id)
     const body = payload || {}
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     captureChatRequestDebugSnapshot({
-      endpoint: `/api/v1/chats/${cid}/completions`,
+      endpoint: appendPathQuery(`/api/v1/chats/${cid}/completions`, query),
       method: "POST",
       mode: "non-stream",
       body
     })
     return await bgRequest<any>({
-      path: `/api/v1/chats/${cid}/completions`,
+      path: appendPathQuery(`/api/v1/chats/${cid}/completions`, query),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body
@@ -5480,11 +5544,13 @@ export class TldwApiClient {
 
   async getCharacterPromptPreview(
     chat_id: string | number,
-    payload?: Record<string, any>
+    payload?: Record<string, any>,
+    options?: { scope?: ChatScope }
   ): Promise<any> {
     const cid = String(chat_id)
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     return await bgRequest<any>({
-      path: `/api/v1/chats/${cid}/prompt-preview`,
+      path: appendPathQuery(`/api/v1/chats/${cid}/prompt-preview`, query),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload || {}
@@ -5493,11 +5559,13 @@ export class TldwApiClient {
 
   async persistCharacterCompletion(
     chat_id: string | number,
-    payload: Record<string, any>
+    payload: Record<string, any>,
+    options?: { scope?: ChatScope }
   ): Promise<any> {
     const cid = String(chat_id)
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     const res = await bgRequest<any>({
-      path: `/api/v1/chats/${cid}/completions/persist`,
+      path: appendPathQuery(`/api/v1/chats/${cid}/completions/persist`, query),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload
@@ -5509,18 +5577,19 @@ export class TldwApiClient {
   async *streamCharacterChatCompletion(
     chat_id: string | number,
     payload?: Record<string, any>,
-    options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }
+    options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number; scope?: ChatScope }
   ): AsyncGenerator<any> {
     const cid = String(chat_id)
     const body = { ...(payload || {}), stream: true }
+    const query = this.buildQuery(toChatScopeParams(options?.scope))
     captureChatRequestDebugSnapshot({
-      endpoint: `/api/v1/chats/${cid}/complete-v2`,
+      endpoint: appendPathQuery(`/api/v1/chats/${cid}/complete-v2`, query),
       method: "POST",
       mode: "stream",
       body
     })
     for await (const line of bgStream({
-      path: `/api/v1/chats/${cid}/complete-v2`,
+      path: appendPathQuery(`/api/v1/chats/${cid}/complete-v2`, query),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
@@ -5537,10 +5606,22 @@ export class TldwApiClient {
     }
   }
 
-  async searchChatMessages(chat_id: string | number, query: string, limit?: number): Promise<any> {
+  async searchChatMessages(
+    chat_id: string | number,
+    query: string,
+    limit?: number,
+    options?: { scope?: ChatScope }
+  ): Promise<any> {
     const cid = String(chat_id)
-    const qp = `?query=${encodeURIComponent(query)}${typeof limit === 'number' ? `&limit=${encodeURIComponent(String(limit))}` : ''}`
-    return await bgRequest<any>({ path: `/api/v1/chats/${cid}/messages/search${qp}`, method: 'GET' })
+    const qp = this.buildQuery({
+      ...toChatScopeParams(options?.scope),
+      query,
+      ...(typeof limit === "number" ? { limit } : {})
+    })
+    return await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/messages/search${qp}`,
+      method: "GET"
+    })
   }
 
   async completeChat(chat_id: string | number, payload?: Record<string, any>): Promise<any> {

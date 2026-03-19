@@ -1,4 +1,5 @@
 import type { AssistantSelection } from "@/types/assistant-selection"
+import type { ChatScope } from "@/types/chat-scope"
 import { normalizeConversationState } from "@/utils/conversation-state"
 
 export const DEFAULT_PERSONA_MEMORY_MODE = "read_only" as const
@@ -20,7 +21,11 @@ type EnsurePersonaServerChatArgs = {
   serverChatExternalRef: string | null
   historyId: string | null
   temporaryChat: boolean
-  createChat: (payload: Record<string, unknown>) => Promise<any>
+  scope?: ChatScope
+  createChat: (
+    payload: Record<string, unknown>,
+    options?: { scope?: ChatScope }
+  ) => Promise<any>
   ensureServerChatHistoryId: (
     chatId: string,
     title?: string
@@ -103,6 +108,7 @@ export const ensurePersonaServerChat = async ({
   serverChatExternalRef,
   historyId,
   temporaryChat,
+  scope,
   createChat,
   ensureServerChatHistoryId,
   invalidateServerChatHistory,
@@ -168,7 +174,7 @@ export const ensurePersonaServerChat = async ({
       cluster_id: serverChatClusterId || undefined,
       source: serverChatSource || undefined,
       external_ref: serverChatExternalRef || undefined
-    })
+    }, scope ? { scope } : undefined)
 
     let rawId: string | number | undefined
     if (created && typeof created === "object") {

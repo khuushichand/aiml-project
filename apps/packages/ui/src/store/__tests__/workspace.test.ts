@@ -1820,6 +1820,7 @@ describe("workspace store snapshot persistence", () => {
       .getWorkspaceChatSession(importedWorkspaceId as string)
     expect(importedSession?.historyId).toBe("history-export")
     expect(importedSession?.messages[0]?.message).toBe("Export this workspace")
+    expect(importedSession?.serverChatId).toBeNull()
   })
 
   it("imports workspace bundles as unassigned even when bundle metadata includes a collection id", () => {
