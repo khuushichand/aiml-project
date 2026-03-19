@@ -50,3 +50,10 @@ def test_claims_rebuild_db_session_uses_managed_media_database(monkeypatch) -> N
         "suppress_init_exceptions": (),
         "suppress_close_exceptions": main._STARTUP_GUARD_EXCEPTIONS,
     }
+
+
+def test_main_imports_claims_rebuild_media_id_helper_from_claims_service() -> None:
+    from tldw_Server_API.app import main
+    from tldw_Server_API.app.core.Claims_Extraction import claims_service
+
+    assert main.list_claims_rebuild_media_ids is claims_service.list_claims_rebuild_media_ids

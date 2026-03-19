@@ -24,6 +24,7 @@ def soft_delete_transcript(
     db_instance: MediaDbLike,
     transcript_uuid: str,
 ) -> bool:
+    """Soft delete a transcript by UUID and emit the matching sync-log event."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -103,6 +104,7 @@ def upsert_transcript(
     whisper_model: str,
     created_at: str | None = None,
 ) -> dict[str, Any]:
+    """Create or update a transcript row for a media/model pair."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",

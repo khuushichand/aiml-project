@@ -68,15 +68,19 @@ ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
-except Exception:
-    print("tldw_Server_API not available; run from repo root or set PYTHONPATH.", file=sys.stderr)
-    raise SystemExit(1) from None
+except ImportError as exc:
+    logger.error(
+        "tldw_Server_API import failed (run from repo root or set PYTHONPATH): {}",
+        exc,
+    )
+    raise SystemExit(1) from exc
 
 
 MediaDbLike = Any
 
 
 def _open_media_db(*, db_path: Path, client_id: str) -> MediaDbLike:
+    """Open the media DB handle used by this benchmark for the given tenant path."""
     return create_media_database(client_id, db_path=db_path)
 
 

@@ -1,10 +1,12 @@
 import configparser
 from contextlib import contextmanager
 import inspect
+from types import ModuleType
 
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, QueryResult
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import collections as runtime_collections
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import factory as runtime_factory
 
 
@@ -49,6 +51,36 @@ def test_create_media_database_sqlite_uses_default_path_and_no_backend(monkeypat
             "db_path": "/tmp/media.db",
             "client_id": "client-1",
             "backend": None,
+            "config": runtime.default_config,
+        }
+    ]
+
+
+def test_create_media_database_sqlite_preserves_explicit_backend(monkeypatch):
+    explicit_backend = object()
+
+    class StubMediaDatabase:
+        calls = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.__class__.calls.append(kwargs)
+
+    runtime = _runtime_config(postgres_content_mode=False)
+    monkeypatch.setattr(runtime_factory, "_load_media_database_cls", lambda: StubMediaDatabase)
+
+    runtime_factory.create_media_database(
+        "client-2",
+        db_path="/tmp/explicit.db",
+        backend=explicit_backend,
+        runtime=runtime,
+    )
+
+    assert StubMediaDatabase.calls == [
+        {
+            "db_path": "/tmp/explicit.db",
+            "client_id": "client-2",
+            "backend": explicit_backend,
             "config": runtime.default_config,
         }
     ]
@@ -118,3 +150,34 @@ def test_validate_postgres_content_backend_uses_factory_validator(monkeypatch):
     assert StubMediaDatabase.instances
     assert StubMediaDatabase.instances[-1].checked_policies
     assert StubMediaDatabase.instances[-1].closed is True
+
+
+def test_load_collections_database_cls_returns_none_for_missing_optional_module(monkeypatch):
+    def _raise_missing(_module_path: str):
+        raise ModuleNotFoundError("missing optional module", name="tldw_Server_API.app.core.DB_Management.Collections_DB")
+
+    monkeypatch.setattr(runtime_collections, "import_module", _raise_missing)
+
+    assert runtime_collections.load_collections_database_cls() is None
+
+
+def test_load_collections_database_cls_reraises_internal_import_errors(monkeypatch):
+    def _raise_internal(_module_path: str):
+        raise ModuleNotFoundError("missing dependency", name="loguru")
+
+    monkeypatch.setattr(runtime_collections, "import_module", _raise_internal)
+
+    with pytest.raises(ModuleNotFoundError) as excinfo:
+        runtime_collections.load_collections_database_cls()
+
+    assert excinfo.value.name == "loguru"
+
+
+def test_load_collections_database_cls_returns_only_class_objects(monkeypatch):
+    monkeypatch.setattr(
+        runtime_collections,
+        "import_module",
+        lambda _module_path: ModuleType("collections_stub"),
+    )
+
+    assert runtime_collections.load_collections_database_cls() is None

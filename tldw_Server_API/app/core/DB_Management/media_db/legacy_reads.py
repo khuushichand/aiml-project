@@ -19,6 +19,7 @@ def get_media_transcripts(
     db_instance: MediaDbLike,
     media_id: int,
 ) -> list[dict]:
+    """Return undeleted transcript rows for a media item, newest first."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -45,6 +46,7 @@ def get_latest_transcription(
     db_instance: MediaDbLike,
     media_id: int,
 ) -> str | None:
+    """Return the most recent transcript text for a media item, if present."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -91,6 +93,7 @@ def get_specific_transcript(
     db_instance: MediaDbLike,
     transcript_uuid: str,
 ) -> dict[str, Any] | None:
+    """Return a specific undeleted transcript row by UUID."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -116,6 +119,7 @@ def get_media_prompts(
     db_instance: MediaDbLike,
     media_id: int,
 ) -> list[dict]:
+    """Return prompt-bearing document versions for a media item."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -151,6 +155,7 @@ def get_specific_prompt(
     db_instance: MediaDbLike,
     version_uuid: str,
 ) -> str | None:
+    """Return the prompt stored for a specific undeleted document version."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",

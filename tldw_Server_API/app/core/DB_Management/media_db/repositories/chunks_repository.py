@@ -3,15 +3,10 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from loguru import logger
+
 from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError, InputError
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
-
-try:
-    from loguru import logger
-except ImportError:  # pragma: no cover - defensive fallback
-    import logging as _stdlib_logging
-
-    logger = _stdlib_logging.getLogger("media_db.chunks_repository")
 
 class ChunksRepository:
     """Repository for MediaChunks persistence."""

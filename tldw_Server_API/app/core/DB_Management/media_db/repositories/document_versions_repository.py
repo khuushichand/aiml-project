@@ -3,19 +3,14 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from loguru import logger
+
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
-
-try:
-    from loguru import logger
-except ImportError:  # pragma: no cover - defensive fallback
-    import logging as _stdlib_logging
-
-    logger = _stdlib_logging.getLogger("media_db.document_versions_repository")
 
 class DocumentVersionsRepository:
     """Repository for document version persistence and lookup."""
@@ -44,80 +39,55 @@ class DocumentVersionsRepository:
         new_uuid = db._generate_uuid()
         new_version = 1
 
-        conn = db.get_connection()
         try:
-            def _exec(query: str, params: tuple | list | dict | None = None):
-                return db._execute_with_connection(conn, query, params)
+            with db.transaction() as conn:
+                def _exec(query: str, params: tuple | list | dict | None = None):
+                    return db._execute_with_connection(conn, query, params)
 
-            def _fetchone(query: str, params: tuple | list | dict | None = None):
-                return db._fetchone_with_connection(conn, query, params)
+                def _fetchone(query: str, params: tuple | list | dict | None = None):
+                    return db._fetchone_with_connection(conn, query, params)
 
-            media_info = _fetchone(
-                "SELECT uuid FROM Media WHERE id = ? AND deleted = 0",
-                (media_id,),
-            )
-            if not media_info:
-                raise InputError(f"Parent Media ID {media_id} not found or deleted.")  # noqa: TRY003, TRY301
-            media_uuid = media_info["uuid"]
-
-            next_version_row = _fetchone(
-                "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version FROM DocumentVersions WHERE media_id = ?",
-                (media_id,),
-            )
-            local_version_number = next_version_row["next_version"] if next_version_row else 1
-            logger.debug(
-                "Creating document version {} for media ID {}, UUID {}",
-                local_version_number,
-                media_id,
-                new_uuid,
-            )
-
-            insert_data = {
-                "media_id": media_id,
-                "version_number": local_version_number,
-                "content": content,
-                "prompt": prompt,
-                "analysis_content": analysis_content,
-                "safe_metadata": safe_metadata,
-                "created_at": current_time,
-                "uuid": new_uuid,
-                "last_modified": current_time,
-                "version": new_version,
-                "client_id": client_id,
-                "deleted": 0,
-                "media_uuid": media_uuid,
-            }
-            try:
-                insert_sql = """
-                    INSERT INTO DocumentVersions (
-                        media_id, version_number, content, prompt, analysis_content, safe_metadata, created_at,
-                        uuid, last_modified, version, client_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                insert_params = (
-                    insert_data["media_id"],
-                    insert_data["version_number"],
-                    insert_data["content"],
-                    insert_data["prompt"],
-                    insert_data["analysis_content"],
-                    insert_data["safe_metadata"],
-                    insert_data["created_at"],
-                    insert_data["uuid"],
-                    insert_data["last_modified"],
-                    insert_data["version"],
-                    insert_data["client_id"],
+                media_info = _fetchone(
+                    "SELECT uuid FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
                 )
-                if db.backend_type.name == "POSTGRESQL":
-                    insert_sql += " RETURNING id"
-                insert_cursor = _exec(insert_sql, insert_params)
-            except DatabaseError as exc:
-                message = str(exc).lower()
-                if "safe_metadata" in message and "no column" in message:
+                if not media_info:
+                    raise InputError(f"Parent Media ID {media_id} not found or deleted.")  # noqa: TRY003, TRY301
+                media_uuid = media_info["uuid"]
+
+                next_version_row = _fetchone(
+                    "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version FROM DocumentVersions WHERE media_id = ?",
+                    (media_id,),
+                )
+                local_version_number = next_version_row["next_version"] if next_version_row else 1
+                logger.debug(
+                    "Creating document version {} for media ID {}, UUID {}",
+                    local_version_number,
+                    media_id,
+                    new_uuid,
+                )
+
+                insert_data = {
+                    "media_id": media_id,
+                    "version_number": local_version_number,
+                    "content": content,
+                    "prompt": prompt,
+                    "analysis_content": analysis_content,
+                    "safe_metadata": safe_metadata,
+                    "created_at": current_time,
+                    "uuid": new_uuid,
+                    "last_modified": current_time,
+                    "version": new_version,
+                    "client_id": client_id,
+                    "deleted": 0,
+                    "media_uuid": media_uuid,
+                }
+                try:
                     insert_sql = """
                         INSERT INTO DocumentVersions (
-                            media_id, version_number, content, prompt, analysis_content, created_at,
+                            media_id, version_number, content, prompt, analysis_content, safe_metadata, created_at,
                             uuid, last_modified, version, client_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                     insert_params = (
                         insert_data["media_id"],
@@ -125,74 +95,99 @@ class DocumentVersionsRepository:
                         insert_data["content"],
                         insert_data["prompt"],
                         insert_data["analysis_content"],
+                        insert_data["safe_metadata"],
                         insert_data["created_at"],
                         insert_data["uuid"],
                         insert_data["last_modified"],
                         insert_data["version"],
                         insert_data["client_id"],
                     )
-                    insert_data["safe_metadata"] = None
                     if db.backend_type.name == "POSTGRESQL":
                         insert_sql += " RETURNING id"
                     insert_cursor = _exec(insert_sql, insert_params)
+                except DatabaseError as exc:
+                    message = str(exc).lower()
+                    if "safe_metadata" in message and "no column" in message:
+                        insert_sql = """
+                            INSERT INTO DocumentVersions (
+                                media_id, version_number, content, prompt, analysis_content, created_at,
+                                uuid, last_modified, version, client_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """
+                        insert_params = (
+                            insert_data["media_id"],
+                            insert_data["version_number"],
+                            insert_data["content"],
+                            insert_data["prompt"],
+                            insert_data["analysis_content"],
+                            insert_data["created_at"],
+                            insert_data["uuid"],
+                            insert_data["last_modified"],
+                            insert_data["version"],
+                            insert_data["client_id"],
+                        )
+                        insert_data["safe_metadata"] = None
+                        if db.backend_type.name == "POSTGRESQL":
+                            insert_sql += " RETURNING id"
+                        insert_cursor = _exec(insert_sql, insert_params)
+                    else:
+                        raise
+
+                if db.backend_type.name == "POSTGRESQL":
+                    inserted_row = insert_cursor.fetchone()
+                    version_id = inserted_row["id"] if inserted_row else None
                 else:
-                    raise
+                    version_id = insert_cursor.lastrowid
+                if not version_id:
+                    raise DatabaseError("Failed to get last row ID for new document version.")  # noqa: TRY003, TRY301
 
-            if db.backend_type.name == "POSTGRESQL":
-                inserted_row = insert_cursor.fetchone()
-                version_id = inserted_row["id"] if inserted_row else None
-            else:
-                version_id = insert_cursor.lastrowid
-            if not version_id:
-                raise DatabaseError("Failed to get last row ID for new document version.")  # noqa: TRY003, TRY301
+                try:
+                    if insert_data.get("safe_metadata"):
+                        import json as _json
 
-            try:
-                if insert_data.get("safe_metadata"):
-                    import json as _json
-
-                    try:
-                        safe_metadata_data = (
-                            _json.loads(insert_data["safe_metadata"])
-                            if isinstance(insert_data["safe_metadata"], str)
-                            else insert_data["safe_metadata"]
-                        )
-                    except Exception:
-                        safe_metadata_data = None
-                    if isinstance(safe_metadata_data, dict):
-                        doi = safe_metadata_data.get("doi") or safe_metadata_data.get("DOI")
-                        pmid = safe_metadata_data.get("pmid") or safe_metadata_data.get("PMID")
-                        pmcid = safe_metadata_data.get("pmcid") or safe_metadata_data.get("PMCID")
-                        arxiv_id = (
-                            safe_metadata_data.get("arxiv_id")
-                            or safe_metadata_data.get("arxiv")
-                            or safe_metadata_data.get("ArXiv")
-                        )
-                        s2id = safe_metadata_data.get("s2_paper_id") or safe_metadata_data.get("paperId")
                         try:
-                            if db.backend_type.name == "POSTGRESQL":
-                                ident_sql = (
-                                    "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                                    "VALUES (?, ?, ?, ?, ?, ?) "
-                                    "ON CONFLICT (dv_id) DO UPDATE SET "
-                                    "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
-                                    "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
-                                )
-                            else:
-                                ident_sql = (
-                                    "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                                    "VALUES (?, ?, ?, ?, ?, ?)"
-                                )
-                            _exec(ident_sql, (version_id, doi, pmid, pmcid, arxiv_id, s2id))
-                        except DatabaseError:
-                            pass
-            except Exception as exc:
-                logger.warning(
-                    "Could not populate identifiers for version_id={}: {}",
-                    version_id,
-                    exc,
-                )
+                            safe_metadata_data = (
+                                _json.loads(insert_data["safe_metadata"])
+                                if isinstance(insert_data["safe_metadata"], str)
+                                else insert_data["safe_metadata"]
+                            )
+                        except Exception:
+                            safe_metadata_data = None
+                        if isinstance(safe_metadata_data, dict):
+                            doi = safe_metadata_data.get("doi") or safe_metadata_data.get("DOI")
+                            pmid = safe_metadata_data.get("pmid") or safe_metadata_data.get("PMID")
+                            pmcid = safe_metadata_data.get("pmcid") or safe_metadata_data.get("PMCID")
+                            arxiv_id = (
+                                safe_metadata_data.get("arxiv_id")
+                                or safe_metadata_data.get("arxiv")
+                                or safe_metadata_data.get("ArXiv")
+                            )
+                            s2id = safe_metadata_data.get("s2_paper_id") or safe_metadata_data.get("paperId")
+                            try:
+                                if db.backend_type.name == "POSTGRESQL":
+                                    ident_sql = (
+                                        "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                                        "VALUES (?, ?, ?, ?, ?, ?) "
+                                        "ON CONFLICT (dv_id) DO UPDATE SET "
+                                        "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
+                                        "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
+                                    )
+                                else:
+                                    ident_sql = (
+                                        "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                                        "VALUES (?, ?, ?, ?, ?, ?)"
+                                    )
+                                _exec(ident_sql, (version_id, doi, pmid, pmcid, arxiv_id, s2id))
+                            except DatabaseError:
+                                pass
+                except Exception as exc:
+                    logger.warning(
+                        "Could not populate identifiers for version_id={}: {}",
+                        version_id,
+                        exc,
+                    )
 
-            db._log_sync_event(conn, "DocumentVersions", new_uuid, "create", new_version, insert_data)
+                db._log_sync_event(conn, "DocumentVersions", new_uuid, "create", new_version, insert_data)
         except (InputError, DatabaseError, sqlite3.Error) as exc:
             if "foreign key constraint failed" in str(exc).lower():
                 logger.exception(

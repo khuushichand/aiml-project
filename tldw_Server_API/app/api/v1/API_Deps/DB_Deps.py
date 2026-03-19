@@ -289,6 +289,15 @@ def reset_media_db_cache() -> None:
         except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
         try:
+            for factory in list(_media_db_factories.values()):  # type: ignore[attr-defined]
+                try:
+                    if hasattr(factory, "close"):
+                        factory.close()
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                    pass
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+        try:
             _media_db_factories.clear()  # type: ignore[attr-defined]
         except (AttributeError, RuntimeError, TypeError, ValueError):
             pass

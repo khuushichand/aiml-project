@@ -53,6 +53,9 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     managed_media_database,
 )
+from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
+    list_claims_rebuild_media_ids,
+)
 
 # Backward-compat for Starlette variants that expose 413 as
 # HTTP_413_REQUEST_ENTITY_TOO_LARGE instead of HTTP_413_CONTENT_TOO_LARGE.
@@ -3025,30 +3028,13 @@ async def lifespan(app: FastAPI):
             while True:
                 try:
                     with _claims_rebuild_db_session(_app_settings) as (_, db_path, db):
-                        # Find media missing claims
-                        if _claims_policy == "missing":
-                            sql = (
-                                "SELECT m.id FROM Media m "
-                                "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
-                                "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
-                                ") LIMIT 25"
-                            )
-                        elif _claims_policy == "all":
-                            sql = "SELECT m.id FROM Media m WHERE m.deleted=0 AND m.is_trash=0 LIMIT 25"
-                        else:
-                            # rudimentary stale policy: claims older than N days since media last_modified
-                            int(_app_settings.get("CLAIMS_STALE_DAYS", 7))
-                            sql = (
-                                "SELECT m.id FROM Media m "
-                                "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
-                                "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR julianday('now') - julianday(c.lastc) >= ?) "
-                                "LIMIT 25"
-                            )
-                        if _claims_policy == "stale":
-                            rows = db.execute_query(sql, (int(_app_settings.get("CLAIMS_STALE_DAYS", 7)),)).fetchall()
-                        else:
-                            rows = db.execute_query(sql).fetchall()
-                        mids = [int(r[0]) for r in rows]
+                        mids = list_claims_rebuild_media_ids(
+                            db,
+                            policy=_claims_policy,
+                            stale_days=int(_app_settings.get("CLAIMS_STALE_DAYS", 7)),
+                            compare_media_last_modified=False,
+                            limit=25,
+                        )
                         for mid in mids:
                             svc.submit(media_id=mid, db_path=db_path)
                 except _STARTUP_GUARD_EXCEPTIONS as e:

@@ -35,6 +35,6 @@ class ConflictError(DatabaseError):
         details: list[str] = []
         if self.entity:
             details.append(f"Entity: {self.entity}")
-        if self.identifier:
+        if self.identifier is not None:
             details.append(f"ID: {self.identifier}")
         return f"{base} ({', '.join(details)})" if details else base

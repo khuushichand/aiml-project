@@ -26,6 +26,7 @@ def get_document_version(
     version_number: int | None = None,
     include_content: bool = True,
 ) -> dict[str, Any] | None:
+    """Return a document version for a media item via the repository wrapper."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance must be a Database object.",
@@ -50,6 +51,7 @@ def ingest_article_to_db_new(
     custom_prompt: str | None = None,
     overwrite: bool = False,
 ) -> tuple[int | None, str | None, str]:
+    """Ingest an article payload through the repository-backed media wrapper."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -75,6 +77,7 @@ def import_obsidian_note_to_db(
     db_instance: MediaDbLike,
     note_data: dict[str, Any],
 ) -> tuple[int | None, str | None, str]:
+    """Import an Obsidian note payload as a media record with normalized metadata."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",

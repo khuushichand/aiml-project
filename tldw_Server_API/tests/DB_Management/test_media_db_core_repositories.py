@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
     upsert_transcript,
@@ -350,6 +352,42 @@ def test_document_versions_repository_returns_latest_version() -> None:
         assert latest is not None
         assert latest["version_number"] == 2
         assert latest["content"] == "v2"
+    finally:
+        db.close_connection()
+
+
+def test_document_versions_repository_create_uses_transaction_context(monkeypatch) -> None:
+    db = MediaDatabase(db_path=":memory:", client_id="doc-repo-transaction")
+    media_repo = MediaRepository.from_legacy_db(db)
+    versions_repo = DocumentVersionsRepository.from_legacy_db(db)
+    try:
+        media_id, _, _ = media_repo.add_text_media(
+            title="Versioned doc",
+            content="v1",
+            media_type="text",
+        )
+        calls: dict[str, object] = {"count": 0}
+        original_transaction = db.transaction
+
+        @contextmanager
+        def _tracking_transaction():
+            calls["count"] = int(calls["count"]) + 1
+            with original_transaction() as conn:
+                calls["conn"] = conn
+                yield conn
+
+        monkeypatch.setattr(db, "transaction", _tracking_transaction)
+        monkeypatch.setattr(
+            db,
+            "get_connection",
+            lambda: (_ for _ in ()).throw(AssertionError("create() should not call get_connection")),
+        )
+
+        version = versions_repo.create(media_id=media_id, content="v2")
+
+        assert version["version_number"] == 2
+        assert calls["count"] == 1
+        assert calls["conn"] is not None
     finally:
         db.close_connection()
 

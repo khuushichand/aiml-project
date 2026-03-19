@@ -1,10 +1,14 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from tldw_Server_API.app.api.v1.API_Deps import DB_Deps as deps
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.DB_Management.media_db.api import MediaDbFactory
+from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import session as media_db_session
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import validation as media_db_validation
 
 
 def test_factory_returns_distinct_sessions_for_distinct_scopes() -> None:
@@ -30,6 +34,52 @@ def test_cached_factory_does_not_mutate_existing_session_scope() -> None:
     _ = factory.for_request(org_id=3, team_id=4)
 
     assert (first.org_id, first.team_id) == (1, 2)
+
+
+def test_for_sqlite_path_provisions_shared_backend_for_request_scopes(monkeypatch) -> None:
+    sentinel_backend = object()
+    backend_calls: list[tuple[str, str]] = []
+    database_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        media_db_session,
+        "_create_sqlite_backend",
+        lambda db_path, client_id: backend_calls.append((db_path, client_id)) or sentinel_backend,
+    )
+
+    def _fake_database_factory(**kwargs):
+        database_calls.append(kwargs)
+        return SimpleNamespace(
+            default_org_id=None,
+            default_team_id=None,
+            release_context_connection=lambda: None,
+        )
+
+    factory = media_db_session.MediaDbFactory.for_sqlite_path(
+        "/tmp/scope-test.db",
+        client_id="scope-test",
+    )
+    factory.database_factory = _fake_database_factory
+
+    first = factory.for_request(org_id=10, team_id=20)
+    second = factory.for_request(org_id=11, team_id=21)
+
+    assert backend_calls == [("/tmp/scope-test.db", "scope-test")]
+    assert factory.backend is sentinel_backend
+    assert database_calls == [
+        {
+            "db_path": "/tmp/scope-test.db",
+            "client_id": "scope-test",
+            "backend": sentinel_backend,
+        },
+        {
+            "db_path": "/tmp/scope-test.db",
+            "client_id": "scope-test",
+            "backend": sentinel_backend,
+        },
+    ]
+    assert (first.org_id, first.team_id) == (10, 20)
+    assert (second.org_id, second.team_id) == (11, 21)
 
 
 def _make_user(user_id: int = 1) -> User:
@@ -111,3 +161,40 @@ def test_resolve_media_db_for_user_returns_fresh_scoped_session_from_cached_fact
     assert (first.org_id, first.team_id) == (10, 20)
     assert (second.org_id, second.team_id) == (11, 21)
     assert len(sessions) == 2
+
+
+def test_reset_media_db_cache_closes_cached_factories(monkeypatch) -> None:
+    closed: list[str] = []
+
+    class _FakeFactory:
+        def close(self) -> None:
+            closed.append("closed")
+
+    monkeypatch.setattr(deps, "_media_db_factories", {1: _FakeFactory()}, raising=True)
+    monkeypatch.setattr(deps, "_user_db_instances", {}, raising=True)
+
+    deps.reset_media_db_cache()
+
+    assert closed == ["closed"]
+    assert deps._media_db_factories == {}
+
+
+def test_conflict_error_str_includes_zero_identifier() -> None:
+    exc = ConflictError(entity="Media", identifier=0)
+
+    assert "ID: 0" in str(exc)
+
+
+def test_media_db_validation_requires_full_legacy_helper_contract() -> None:
+    incomplete = SimpleNamespace(
+        execute_query=lambda *args, **kwargs: None,
+        transaction=lambda: None,
+        client_id="scope-test",
+        db_path_str=":memory:",
+    )
+
+    with pytest.raises(TypeError):
+        media_db_validation.require_media_database_like(
+            incomplete,
+            error_message="expected media db",
+        )

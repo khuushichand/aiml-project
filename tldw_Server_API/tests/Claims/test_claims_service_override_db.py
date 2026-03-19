@@ -176,3 +176,25 @@ def test_rebuild_claims_fts_uses_override_helper_for_sqlite_admin_override(monke
 
     assert result == {"status": "ok", "indexed": 12}
     assert helper_calls == [7]
+
+
+def test_list_claims_rebuild_media_ids_supports_stale_days_policy() -> None:
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    class _FakeDb:
+        def execute_query(self, sql: str, params: tuple[object, ...] | None = None):
+            calls.append((sql, params or ()))
+            return _RowsResult([{"id": 3}, {"id": 9}])
+
+    result = claims_service.list_claims_rebuild_media_ids(
+        _FakeDb(),
+        policy="stale",
+        stale_days=14,
+        compare_media_last_modified=False,
+        limit=25,
+    )
+
+    assert result == [3, 9]
+    assert len(calls) == 1
+    assert "julianday('now') - julianday(c.lastc) >= ?" in calls[0][0]
+    assert calls[0][1] == (14, 25)

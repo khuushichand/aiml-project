@@ -125,6 +125,75 @@ def _normalize_setting_mode(value: Any, *, allowed: frozenset[str]) -> str | Non
     return normalized
 
 
+def _coerce_claims_rebuild_media_ids(rows: list[Any]) -> list[int]:
+    mids: list[int] = []
+    for row in rows:
+        try:
+            mids.append(int(row["id"]))
+            continue
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+            pass
+        try:
+            mids.append(int(row[0]))
+            continue
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+            pass
+        try:
+            if isinstance(row, dict):
+                mids.append(int(next(iter(row.values()))))
+        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+            continue
+    return mids
+
+
+def list_claims_rebuild_media_ids(
+    query_db: Any,
+    *,
+    policy: str,
+    limit: int | None = None,
+    stale_days: int | None = None,
+    compare_media_last_modified: bool = True,
+) -> list[int]:
+    """Return media IDs targeted by the requested claims rebuild policy."""
+    normalized_policy = str(policy or "missing").lower()
+    params: list[Any] = []
+
+    if normalized_policy == "all":
+        sql = "SELECT id FROM Media WHERE deleted=0 AND is_trash=0"
+    elif normalized_policy == "stale":
+        if compare_media_last_modified:
+            sql = (
+                "SELECT m.id FROM Media m "
+                "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
+                "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR c.lastc < m.last_modified)"
+            )
+        else:
+            sql = (
+                "SELECT m.id FROM Media m "
+                "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
+                "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR julianday('now') - julianday(c.lastc) >= ?)"
+            )
+            params.append(int(stale_days or 7))
+    else:
+        sql = (
+            "SELECT m.id FROM Media m "
+            "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
+            "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
+            ")"
+        )
+
+    if limit is not None:
+        sql = f"{sql} LIMIT ?"
+        params.append(int(limit))
+
+    cursor = (
+        query_db.execute_query(sql, tuple(params))
+        if params
+        else query_db.execute_query(sql)
+    )
+    return _coerce_claims_rebuild_media_ids(cursor.fetchall())
+
+
 def _coerce_setting_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -3943,83 +4012,27 @@ def rebuild_all_media(
     rebuild_service: Any = None,
 ) -> dict[str, Any]:
     svc = rebuild_service or get_claims_rebuild_service()
+    normalized_policy = str(policy or "missing").lower()
+
+    def _enqueue_for_db(query_db: Any, *, db_path: str) -> dict[str, Any]:
+        mids = list_claims_rebuild_media_ids(
+            query_db,
+            policy=normalized_policy,
+            compare_media_last_modified=True,
+        )
+        for mid in mids:
+            svc.submit(media_id=mid, db_path=db_path)
+        return {
+            "status": "accepted",
+            "enqueued": len(mids),
+            "policy": normalized_policy,
+        }
+
     if user_id is not None and _legacy_user_has_platform_admin_claims(current_user):
         with _claims_user_override_db(int(user_id)) as (query_db, db_path):
-            policy = str(policy or "missing").lower()
-            if policy == "all":
-                sql = "SELECT id FROM Media WHERE deleted=0 AND is_trash=0"
-                rows = query_db.execute_query(sql).fetchall()
-            elif policy == "stale":
-                sql = (
-                    "SELECT m.id FROM Media m "
-                    "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
-                    "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR c.lastc < m.last_modified)"
-                )
-                rows = query_db.execute_query(sql).fetchall()
-            else:
-                sql = (
-                    "SELECT m.id FROM Media m "
-                    "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
-                    "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
-                    ")"
-                )
-                rows = query_db.execute_query(sql).fetchall()
-            mids: list[int] = []
-            for r in rows:
-                try:
-                    mids.append(int(r["id"]))
-                except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                    try:
-                        mids.append(int(r[0]))
-                    except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                        try:
-                            if isinstance(r, dict):
-                                first_val = next(iter(r.values()))
-                                mids.append(int(first_val))
-                        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                            continue
-            for mid in mids:
-                svc.submit(media_id=mid, db_path=db_path)
-            return {"status": "accepted", "enqueued": len(mids), "policy": policy}
+            return _enqueue_for_db(query_db, db_path=db_path)
 
-    db_path = db.db_path_str
-    query_db = db
-    policy = str(policy or "missing").lower()
-    if policy == "all":
-        sql = "SELECT id FROM Media WHERE deleted=0 AND is_trash=0"
-        rows = query_db.execute_query(sql).fetchall()
-    elif policy == "stale":
-        sql = (
-            "SELECT m.id FROM Media m "
-            "LEFT JOIN (SELECT media_id, MAX(last_modified) AS lastc FROM Claims WHERE deleted=0 GROUP BY media_id) c ON c.media_id = m.id "
-            "WHERE m.deleted=0 AND m.is_trash=0 AND (c.lastc IS NULL OR c.lastc < m.last_modified)"
-        )
-        rows = query_db.execute_query(sql).fetchall()
-    else:
-        sql = (
-            "SELECT m.id FROM Media m "
-            "WHERE m.deleted = 0 AND m.is_trash = 0 AND NOT EXISTS ("
-            "  SELECT 1 FROM Claims c WHERE c.media_id = m.id AND c.deleted = 0"
-            ")"
-        )
-        rows = query_db.execute_query(sql).fetchall()
-    mids: list[int] = []
-    for r in rows:
-        try:
-            mids.append(int(r["id"]))
-        except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-            try:
-                mids.append(int(r[0]))
-            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                try:
-                    if isinstance(r, dict):
-                        first_val = next(iter(r.values()))
-                        mids.append(int(first_val))
-                except _CLAIMS_NONCRITICAL_EXCEPTIONS:
-                    continue
-    for mid in mids:
-        svc.submit(media_id=mid, db_path=db_path)
-    return {"status": "accepted", "enqueued": len(mids), "policy": policy}
+    return _enqueue_for_db(db, db_path=db.db_path_str)
 
 
 def rebuild_claims_fts(

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Any
 import uuid
+from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
@@ -32,7 +31,6 @@ class MediaFilesRepository:
         checksum: str | None = None,
     ) -> str:
         db = self.session
-        conn = db.get_connection()
         new_uuid = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         data: dict[str, Any] = {
@@ -56,22 +54,21 @@ class MediaFilesRepository:
         columns = ", ".join(data.keys())
         sql = f"INSERT INTO MediaFiles ({columns}) VALUES ({placeholders})"  # nosec B608
         try:
-            db._execute_with_connection(conn, sql, data)
-            with suppress(Exception):
-                db._log_sync_event(
-                    conn,
-                    "MediaFiles",
-                    new_uuid,
-                    "create",
-                    1,
-                    json.dumps(
+            with db.transaction() as conn:
+                db._execute_with_connection(conn, sql, data)
+                with suppress(Exception):
+                    db._log_sync_event(
+                        conn,
+                        "MediaFiles",
+                        new_uuid,
+                        "create",
+                        1,
                         {
                             "media_id": media_id,
                             "file_type": file_type,
                             "storage_path": storage_path,
-                        }
-                    ),
-                )
+                        },
+                    )
         except Exception as exc:
             raise DatabaseError(f"Failed to insert MediaFile: {exc}") from exc  # noqa: TRY003
         return new_uuid
@@ -121,35 +118,35 @@ class MediaFilesRepository:
 
     def soft_delete(self, file_id: int) -> None:
         db = self.session
-        conn = db.get_connection()
         try:
-            rows = db._fetchall_with_connection(
-                conn,
-                "SELECT uuid, version FROM MediaFiles WHERE id = :id",
-                {"id": file_id},
-            )
-            if not rows:
-                return
-            row = rows[0]
-            file_uuid = row.get("uuid")
-            current_version = int(row.get("version") or 1)
-            new_version = current_version + 1
-            now = datetime.now(timezone.utc).isoformat()
-
-            db._execute_with_connection(
-                conn,
-                "UPDATE MediaFiles SET deleted = 1, version = :version, last_modified = :last_modified WHERE id = :id",
-                {"id": file_id, "version": new_version, "last_modified": now},
-            )
-            with suppress(Exception):
-                db._log_sync_event(
+            with db.transaction() as conn:
+                rows = db._fetchall_with_connection(
                     conn,
-                    "MediaFiles",
-                    file_uuid,
-                    "delete",
-                    new_version,
-                    json.dumps({"file_id": file_id}),
+                    "SELECT uuid, version FROM MediaFiles WHERE id = :id",
+                    {"id": file_id},
                 )
+                if not rows:
+                    return
+                row = rows[0]
+                file_uuid = row.get("uuid")
+                current_version = int(row.get("version") or 1)
+                new_version = current_version + 1
+                now = datetime.now(timezone.utc).isoformat()
+
+                db._execute_with_connection(
+                    conn,
+                    "UPDATE MediaFiles SET deleted = 1, version = :version, last_modified = :last_modified WHERE id = :id",
+                    {"id": file_id, "version": new_version, "last_modified": now},
+                )
+                with suppress(Exception):
+                    db._log_sync_event(
+                        conn,
+                        "MediaFiles",
+                        file_uuid,
+                        "delete",
+                        new_version,
+                        {"file_id": file_id},
+                    )
         except Exception as exc:
             raise DatabaseError(f"Failed to soft-delete MediaFile id={file_id}: {exc}") from exc  # noqa: TRY003
 
@@ -160,48 +157,55 @@ class MediaFilesRepository:
         hard_delete: bool = False,
     ) -> None:
         db = self.session
-        conn = db.get_connection()
         try:
-            if hard_delete:
-                db._execute_with_connection(
+            with db.transaction() as conn:
+                rows = db._fetchall_with_connection(
                     conn,
-                    "DELETE FROM MediaFiles WHERE media_id = :media_id",
+                    "SELECT id, uuid, version, deleted FROM MediaFiles WHERE media_id = :media_id",
                     {"media_id": media_id},
                 )
-                with suppress(Exception):
-                    db._log_sync_event(
+                if hard_delete:
+                    if not rows:
+                        return
+                    db._execute_with_connection(
                         conn,
-                        "MediaFiles",
-                        "",
-                        "delete",
-                        1,
-                        json.dumps({"media_id": media_id, "hard_delete": True}),
+                        "DELETE FROM MediaFiles WHERE media_id = :media_id",
+                        {"media_id": media_id},
                     )
-                return
+                    for row in rows:
+                        file_uuid = row.get("uuid")
+                        current_version = int(row.get("version") or 1)
+                        with suppress(Exception):
+                            db._log_sync_event(
+                                conn,
+                                "MediaFiles",
+                                file_uuid,
+                                "delete",
+                                current_version + 1,
+                                {"media_id": media_id, "hard_delete": True},
+                            )
+                    return
 
-            rows = db._fetchall_with_connection(
-                conn,
-                "SELECT id, uuid, version FROM MediaFiles WHERE media_id = :media_id AND deleted = 0",
-                {"media_id": media_id},
-            )
-            now = datetime.now(timezone.utc).isoformat()
-            for row in rows:
-                file_uuid = row.get("uuid")
-                current_version = int(row.get("version") or 1)
-                new_version = current_version + 1
-                db._execute_with_connection(
-                    conn,
-                    "UPDATE MediaFiles SET deleted = 1, version = :version, last_modified = :last_modified WHERE uuid = :uuid",
-                    {"uuid": file_uuid, "version": new_version, "last_modified": now},
-                )
-                with suppress(Exception):
-                    db._log_sync_event(
+                now = datetime.now(timezone.utc).isoformat()
+                for row in rows:
+                    if int(row.get("deleted") or 0) == 1:
+                        continue
+                    file_uuid = row.get("uuid")
+                    current_version = int(row.get("version") or 1)
+                    new_version = current_version + 1
+                    db._execute_with_connection(
                         conn,
-                        "MediaFiles",
-                        file_uuid,
-                        "delete",
-                        new_version,
-                        json.dumps({"media_id": media_id}),
+                        "UPDATE MediaFiles SET deleted = 1, version = :version, last_modified = :last_modified WHERE uuid = :uuid",
+                        {"uuid": file_uuid, "version": new_version, "last_modified": now},
                     )
+                    with suppress(Exception):
+                        db._log_sync_event(
+                            conn,
+                            "MediaFiles",
+                            file_uuid,
+                            "delete",
+                            new_version,
+                            {"media_id": media_id},
+                        )
         except Exception as exc:
             raise DatabaseError(f"Failed to delete MediaFiles for media_id={media_id}: {exc}") from exc  # noqa: TRY003

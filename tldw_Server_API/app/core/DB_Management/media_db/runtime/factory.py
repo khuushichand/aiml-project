@@ -73,7 +73,7 @@ def create_media_database(
     return media_database_cls(
         db_path=str(target_path),
         client_id=client_id,
-        backend=None,
+        backend=backend_to_use,
         config=cfg,
     )
 

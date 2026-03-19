@@ -141,6 +141,7 @@ def permanently_delete_item(db_instance: MediaDbLike, media_id: int) -> bool:
             sel_cur = db_instance.execute_query(
                 "SELECT 1 AS one FROM Media WHERE id = ?",
                 (media_id,),
+                connection=conn,
             )
             row = sel_cur.fetchone()
             if not row:
@@ -151,6 +152,7 @@ def permanently_delete_item(db_instance: MediaDbLike, media_id: int) -> bool:
                 "DELETE FROM Media WHERE id = ?",
                 (media_id,),
                 commit=False,
+                connection=conn,
             )
             deleted_count = getattr(del_cur, "rowcount", 0) or 0
 

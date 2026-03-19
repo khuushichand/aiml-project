@@ -9,10 +9,20 @@ MediaDbLike = Any
 
 
 def is_media_database_like(candidate: Any) -> bool:
+    required_callables = (
+        "execute_query",
+        "transaction",
+        "_fetchall_with_connection",
+        "_fetchone_with_connection",
+        "_execute_with_connection",
+        "_get_current_utc_timestamp_str",
+        "_log_sync_event",
+    )
+    required_attrs = ("client_id", "db_path_str")
     return (
         candidate is not None
-        and callable(getattr(candidate, "execute_query", None))
-        and callable(getattr(candidate, "transaction", None))
+        and all(callable(getattr(candidate, name, None)) for name in required_callables)
+        and all(getattr(candidate, name, None) is not None for name in required_attrs)
     )
 
 

@@ -4,6 +4,8 @@ import sqlite3
 from contextlib import suppress
 from typing import Any
 
+from loguru import logger
+
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
@@ -11,13 +13,6 @@ from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     InputError,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
-
-try:
-    from loguru import logger
-except ImportError:  # pragma: no cover - defensive fallback
-    import logging as _stdlib_logging
-
-    logger = _stdlib_logging.getLogger("media_db.keywords_repository")
 
 class KeywordsRepository:
     """Repository for keyword rows and media-keyword links."""
@@ -157,7 +152,10 @@ class KeywordsRepository:
     ) -> bool:
         db = self.session
         valid_keywords = sorted({k.strip().lower() for k in keywords if k and k.strip()})
-        connection = conn or db.get_connection()
+        if conn is None:
+            with db.transaction() as tx_conn:
+                return self.replace_keywords(media_id, keywords, conn=tx_conn)
+        connection = conn
 
         try:
             media_info = db._fetchone_with_connection(
@@ -181,9 +179,7 @@ class KeywordsRepository:
 
             target_keyword_data: dict[int, str] = {}
             for kw_text in valid_keywords:
-                # Preserve the legacy nested-transaction behavior here because
-                # higher-level update flows assert one add transaction per new keyword.
-                kw_id, kw_uuid = self.add(kw_text)
+                kw_id, kw_uuid = self.add(kw_text, conn=connection)
                 if kw_id and kw_uuid:
                     target_keyword_data[kw_id] = kw_uuid
                     continue
