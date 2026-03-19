@@ -58,13 +58,26 @@ const storeOptionState = vi.hoisted(() => ({
     compareParentByHistory: {} as Record<
       string,
       { parentHistoryId: string; clusterId?: string }
-    >
+    >,
+    setSelectedQuickPrompt: vi.fn()
   }
 }))
 
 const chatSettingsState = vi.hoisted(() => ({
   syncChatSettingsForServerChat: vi.fn(async () => null),
   applyChatSettingsPatch: vi.fn(async () => null)
+}))
+
+const researchClientMocks = vi.hoisted(() => ({
+  initialize: vi.fn().mockResolvedValue(undefined),
+  getResearchBundle: vi.fn().mockResolvedValue({
+    question: "Prepared follow-up question",
+    outline: { sections: [{ title: "Overview" }] },
+    claims: [{ text: "Claim one" }],
+    unresolved_questions: ["Open question"],
+    verification_summary: { unsupported_claim_count: 0 },
+    source_trust: [{ source_id: "src_1", trust_tier: "high" }]
+  })
 }))
 
 const buildAttachedContext = (runId: string, query: string) => ({
@@ -236,6 +249,7 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
 vi.mock("@/components/Option/Playground/PlaygroundChat", () => ({
   PlaygroundChat: (props: {
     onAttachResearchContext?: (context: ReturnType<typeof buildAttachedContext>) => void
+    onPrepareResearchFollowUp?: (target: { run_id: string; query: string }) => void
   }) => (
     <div data-testid="playground-chat">
       <button
@@ -257,6 +271,17 @@ vi.mock("@/components/Option/Playground/PlaygroundChat", () => ({
         }
       >
         Attach run 2
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          props.onPrepareResearchFollowUp?.({
+            run_id: "run_follow_up",
+            query: "Battery recycling supply chain"
+          })
+        }
+      >
+        Prepare follow up
       </button>
     </div>
   )
@@ -340,6 +365,10 @@ vi.mock("@/services/chat-settings", () => ({
     chatSettingsState.applyChatSettingsPatch(...args)
 }))
 
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: researchClientMocks
+}))
+
 vi.mock("@/hooks/useLoadLocalConversation", () => ({
   useLoadLocalConversation: () => vi.fn(async () => {})
 }))
@@ -358,10 +387,32 @@ describe("Playground research context integration", () => {
     mobileViewportState.value = false
     artifactsState.value.isOpen = false
     storeOptionState.value.compareParentByHistory = {}
+    storeOptionState.value.setSelectedQuickPrompt = vi.fn()
     messageOptionState.value.serverChatId = "chat-1"
     messageOptionState.value.historyId = "history-1"
     chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue(null)
     chatSettingsState.applyChatSettingsPatch.mockResolvedValue(null)
+  })
+
+  it("prepares follow-up research by attaching the selected run and seeding the deterministic draft", async () => {
+    render(<Playground />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare follow up" }))
+
+    await waitFor(() =>
+      expect(researchClientMocks.getResearchBundle).toHaveBeenCalledWith(
+        "run_follow_up"
+      )
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_follow_up"
+      )
+    )
+    expect(storeOptionState.value.setSelectedQuickPrompt).toHaveBeenCalledWith(
+      "Follow up on this research: Battery recycling supply chain"
+    )
   })
 
   it("replaces the attached research context and lets the form remove it", async () => {

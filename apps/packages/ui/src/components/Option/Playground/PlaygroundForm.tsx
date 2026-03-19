@@ -241,6 +241,8 @@ import {
   type AttachedResearchContext
 } from "./research-chat-context"
 
+const FOLLOW_UP_RESEARCH_PROMPT_PREFIX = "Follow up on this research:"
+
 type Props = {
   droppedFiles: File[]
   attachedResearchContext?: AttachedResearchContext | null
@@ -3294,10 +3296,16 @@ export const PlaygroundForm = ({
 
     const currentMessage = form.values.message || ""
     const promptText = selectedQuickPrompt
+    const isFollowUpResearchPrompt =
+      promptText === "Follow up on this research" ||
+      promptText.startsWith(FOLLOW_UP_RESEARCH_PROMPT_PREFIX)
 
     const applyOverwrite = () => {
       const word = getVariable(promptText)
       setMessageValue(promptText, { collapseLarge: true })
+      if (isFollowUpResearchPrompt) {
+        textAreaFocus()
+      }
       if (word) {
         textareaRef.current?.focus()
         const interval = setTimeout(() => {
@@ -3318,6 +3326,9 @@ export const PlaygroundForm = ({
           ? `${currentMessage}\n\n${promptText}`
           : promptText
       setMessageValue(next, { collapseLarge: true })
+      if (isFollowUpResearchPrompt) {
+        textAreaFocus()
+      }
       setSelectedQuickPrompt(null)
     }
 
@@ -3355,6 +3366,7 @@ export const PlaygroundForm = ({
     setMessageValue,
     setSelectedQuickPrompt,
     t,
+    textAreaFocus,
     textareaRef
   ])
 

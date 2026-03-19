@@ -26,6 +26,7 @@ import { useStorage } from "@plasmohq/storage/hook"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useLoadLocalConversation } from "@/hooks/useLoadLocalConversation"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { resolvePlaygroundShortcutAction } from "./playground-shortcuts"
 import {
   EDIT_MESSAGE_EVENT,
@@ -40,7 +41,9 @@ import {
   syncChatSettingsForServerChat
 } from "@/services/chat-settings"
 import {
+  buildResearchFollowUpPrompt,
   clearAttachedResearchContext,
+  deriveAttachedResearchContext,
   fromPersistedDeepResearchAttachment,
   pinAttachedResearchContext,
   resetAttachedResearchContext,
@@ -48,7 +51,8 @@ import {
   setAttachedResearchContextActive,
   toPersistedDeepResearchAttachment,
   unpinAttachedResearchContext,
-  type AttachedResearchContext
+  type AttachedResearchContext,
+  type ResearchFollowUpTarget
 } from "./research-chat-context"
 import {
   collectThreadSearchMatches,
@@ -128,6 +132,9 @@ export const Playground = () => {
     historyId && historyId !== "temp" ? historyId : null
   const setRouteContext = useChatSurfaceCoordinatorStore(
     (state) => state.setRouteContext
+  )
+  const setSelectedQuickPrompt = useStoreMessageOption(
+    (state) => state.setSelectedQuickPrompt
   )
 
   React.useEffect(() => {
@@ -384,6 +391,25 @@ export const Playground = () => {
       attachedResearchContextHistory,
       persistAttachedResearchContext
     ]
+  )
+
+  const handlePrepareResearchFollowUp = React.useCallback(
+    async (target: ResearchFollowUpTarget) => {
+      if (attachedResearchContext?.run_id !== target.run_id) {
+        try {
+          await tldwClient.initialize().catch(() => null)
+          const bundle = await tldwClient.getResearchBundle(target.run_id)
+          handleAttachResearchContext(
+            deriveAttachedResearchContext(bundle, target.run_id, target.query)
+          )
+        } catch {
+          // Keep prompt preparation available even if bundle reload fails.
+        }
+      }
+
+      setSelectedQuickPrompt(buildResearchFollowUpPrompt(target.query))
+    },
+    [attachedResearchContext?.run_id, handleAttachResearchContext, setSelectedQuickPrompt]
   )
 
   const handleApplyAttachedResearchContext = React.useCallback(
@@ -1501,6 +1527,7 @@ export const Playground = () => {
                 matchedMessageIndices={threadSearchMatchSet}
                 activeSearchMessageIndex={threadSearchActiveMessageIndex}
                 onAttachResearchContext={handleAttachResearchContext}
+                onPrepareResearchFollowUp={handlePrepareResearchFollowUp}
               />
             </div>
           </div>
