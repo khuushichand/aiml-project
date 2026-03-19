@@ -46,6 +46,7 @@ from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (
     generate_embeddings_for_media,
 )
 from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
@@ -125,6 +126,21 @@ def _root_job_uuid(payload: dict[str, Any]) -> str | None:
     if root is None:
         return None
     return str(root)
+
+
+def _normalize_chunk_type(value: Any) -> str | None:
+    try:
+        return Chunker.normalize_chunk_type(value)
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
+        return None
+
+
+def _resolve_chunk_type(*candidates: Any) -> str:
+    for candidate in candidates:
+        normalized = _normalize_chunk_type(candidate)
+        if normalized:
+            return normalized
+    return "text"
 
 
 def _update_root_job(
@@ -643,11 +659,19 @@ async def _handle_storage_job(
         if text is None:
             raise EmbeddingsJobError("Chunk payload missing text for storage stage", retryable=False)
         chunk_texts.append(text)
+        chunk_metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
         metadata = {
             "media_id": str(media_id),
             "chunk_index": chunk.get("index", idx),
             "chunk_start": chunk.get("start"),
             "chunk_end": chunk.get("end"),
+            "chunk_type": _resolve_chunk_type(
+                chunk.get("chunk_type"),
+                chunk_metadata.get("chunk_type"),
+                chunk_metadata.get("paragraph_kind"),
+                chunk_metadata.get("type"),
+                chunk_metadata.get("kind"),
+            ),
             "title": media_content["media_item"].get("title", ""),
             "author": media_content["media_item"].get("author", ""),
             "embedding_model": embedding_model,
