@@ -202,12 +202,24 @@ const setWizardClientConfig = async (page: Page) => {
   })
 }
 
+const dismissBlockingDiagnosticsModalIfPresent = async (page: Page) => {
+  const dismissButton = page.getByRole("button", { name: "Dismiss" }).last()
+  try {
+    await dismissButton.waitFor({ state: "visible", timeout: 1500 })
+    await dismissButton.click({ force: true })
+  } catch {
+    // No diagnostics modal is present for this run.
+  }
+}
+
 const gotoWizard = async (page: Page) => {
   await setWizardClientConfig(page)
   await page.goto("/settings/family-guardrails")
+  await dismissBlockingDiagnosticsModalIfPresent(page)
 }
 
 const advanceToDependentsStep = async (page: Page, dependentCount = 1) => {
+  await dismissBlockingDiagnosticsModalIfPresent(page)
   await page.getByRole("spinbutton", { name: /Dependents to set up/i }).fill(String(dependentCount))
   await page.getByRole("button", { name: /Save & Continue/i }).click()
   await expect(page.getByRole("heading", { name: "Add Guardians" })).toBeVisible()
@@ -218,6 +230,7 @@ const advanceToDependentsStep = async (page: Page, dependentCount = 1) => {
 }
 
 const resumeLatestDraft = async (page: Page) => {
+  await dismissBlockingDiagnosticsModalIfPresent(page)
   await expect(page.getByText("Resume saved household")).toBeVisible()
   await page.getByRole("button", { name: "Resume latest draft" }).click()
 }
