@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
 
 
 def get_all_content_from_database(db_instance: MediaDbLike) -> list[dict[str, Any]]:
+    """Return active media rows ordered by most recent modification first."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -37,6 +38,7 @@ def get_all_content_from_database(db_instance: MediaDbLike) -> list[dict[str, An
 
 
 def fetch_keywords_for_media(media_id: int, db_instance: MediaDbLike) -> list[str]:
+    """Return active keywords attached to a single media row."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -49,6 +51,7 @@ def fetch_keywords_for_media_batch(
     media_ids: list[int],
     db_instance: MediaDbLike,
 ) -> dict[int, list[str]]:
+    """Return active keywords for each requested media row keyed by media ID."""
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",
@@ -72,7 +75,7 @@ def fetch_keywords_for_media_batch(
         f"WHERE mk.media_id IN ({placeholders}) AND k.deleted = ? AND m.deleted = ? "
         f"ORDER BY mk.media_id, {order_expr}"
     )
-    params = tuple(safe_media_ids + [False, False])
+    params = tuple([*safe_media_ids, False, False])
     try:
         cursor = db_instance.execute_query(query, params)
         for row in cursor.fetchall():

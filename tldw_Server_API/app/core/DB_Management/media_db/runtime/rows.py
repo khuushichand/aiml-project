@@ -37,7 +37,9 @@ class RowAdapter:
         return self._data.items()
 
     def __iter__(self):
-        return iter(self._data)
+        if self._cols:
+            return iter(self._data.get(column) for column in self._cols)
+        return iter(self._data.values())
 
     def __len__(self) -> int:
         return len(self._data)
@@ -63,7 +65,9 @@ class BackendCursorAdapter:
         return RowAdapter(row, self.description)
 
     def fetchall(self):
-        return [self._wrap(row) for row in self._result.rows]
+        rows = self._result.rows[self._index:]
+        self._index = len(self._result.rows)
+        return [self._wrap(row) for row in rows]
 
     def fetchone(self):
         if self._index >= len(self._result.rows):
@@ -81,7 +85,11 @@ class BackendCursorAdapter:
         return [self._wrap(row) for row in rows]
 
     def __iter__(self):
-        return iter(self.fetchall())
+        while True:
+            row = self.fetchone()
+            if row is None:
+                return
+            yield row
 
     def close(self) -> None:
         self._result = QueryResult(rows=[], rowcount=0)

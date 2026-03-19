@@ -118,6 +118,34 @@ def test_get_or_create_media_db_factory_caches_factory_per_user(monkeypatch) -> 
     assert len(created) == 1
 
 
+def test_get_or_create_media_db_factory_accepts_string_user_ids_via_id_int(monkeypatch) -> None:
+    created: list[object] = []
+
+    class FakeFactory:
+        def __init__(self, *, db_path: str, client_id: str):
+            self.db_path = db_path
+            self.client_id = client_id
+            created.append(self)
+
+    monkeypatch.setattr(deps, "_media_db_factories", {}, raising=False)
+    monkeypatch.setattr(deps, "_get_db_path_for_user", lambda user_id: Path(f"/tmp/{user_id}.db"), raising=True)
+    monkeypatch.setattr(deps, "get_content_backend_instance", lambda: None, raising=True)
+    monkeypatch.setattr(
+        deps.MediaDbFactory,
+        "for_sqlite_path",
+        classmethod(lambda cls, db_path, client_id: FakeFactory(db_path=db_path, client_id=client_id)),
+        raising=True,
+    )
+
+    string_user = _make_user()
+    string_user.id = "7"
+
+    factory = deps._get_or_create_media_db_factory(string_user)
+
+    assert factory is created[0]
+    assert factory.db_path == "/tmp/7.db"
+
+
 def test_resolve_media_db_for_user_returns_fresh_scoped_session_from_cached_factory(monkeypatch) -> None:
     sessions: list[object] = []
 

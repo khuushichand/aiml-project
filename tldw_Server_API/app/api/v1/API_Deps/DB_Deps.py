@@ -113,11 +113,17 @@ def _get_db_path_for_user(user_id: int) -> Path:
         raise OSError(f"Could not initialize storage directory for user {user_id}.") from e
 
 def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
-    if not current_user or not isinstance(current_user.id, int):
-        logger.error("get_media_db_for_user called without a valid User object/ID.")
+    if not current_user:
+        logger.error("get_media_db_for_user called without a valid User object.")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User identification failed.")
 
-    user_id = current_user.id  # Will be SINGLE_USER_FIXED_ID in single-user mode
+    user_id = getattr(current_user, "id_int", None)
+    if user_id is None and isinstance(getattr(current_user, "id", None), int):
+        user_id = current_user.id
+    if user_id is None:
+        logger.error("get_media_db_for_user could not resolve a numeric user identifier.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User identification failed.")
+
     backend_mode_hint = (os.getenv("CONTENT_DB_MODE") or str(settings.get("CONTENT_DB_BACKEND", "sqlite"))).strip().lower()
     require_shared_backend = backend_mode_hint in {"postgres", "postgresql"}
 
