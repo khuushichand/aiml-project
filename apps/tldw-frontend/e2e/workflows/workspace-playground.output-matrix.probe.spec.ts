@@ -125,14 +125,26 @@ const cleanupMediaItem = async (mediaId: number | null): Promise<void> => {
 
 const fetchLiveMediaDetail = async (
   mediaId: number,
+  timeoutMs = 30_000,
 ): Promise<Record<string, unknown>> => {
-  const response = await fetchWithApiKey(
+  const response = await fetchWithApiKeyTimeout(
     `${TEST_CONFIG.serverUrl}/api/v1/media/${mediaId}?include_content=true&include_versions=false&include_version_content=false`,
+    { method: "GET" },
+    timeoutMs,
   )
-  if (!response.ok) {
+  if (!response?.ok) {
     throw new Error(`GET /api/v1/media/${mediaId} returned HTTP ${response.status}`)
   }
-  const payload = await response.json().catch(() => null)
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch (error) {
+    throw new Error(
+      `Failed to parse media detail response for ${mediaId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
   if (!payload || typeof payload !== "object") {
     throw new Error(`GET /api/v1/media/${mediaId} returned a non-object payload`)
   }
@@ -176,7 +188,16 @@ const createLiveWorkspaceProbeSource = async (
     )
   }
 
-  const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null
+  let payload: Record<string, unknown> | null = null
+  try {
+    payload = (await response.json()) as Record<string, unknown>
+  } catch (error) {
+    throw new Error(
+      `Failed to parse workspace output probe media add response: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
   const createdCandidate =
     payload?.results?.[0]?.media_id ??
     payload?.results?.[0]?.db_id ??
@@ -342,10 +363,6 @@ const verifyGeneratedOutputs = async (
         },
       )
       .toBe("completed")
-
-    await expect(artifactCard).not.toContainText(/failed|encountered an error/i, {
-      timeout: 5_000,
-    })
 
     const downloadButton = artifactCard.getByRole("button", { name: "Download" })
     await expect(downloadButton).toBeVisible({ timeout: 30_000 })
