@@ -3,6 +3,9 @@
 Version: v0.1.0
 Audience: operators preparing the first cloud-managed customer-facing deployment
 
+Related documents
+- Hosted staging runbook: `Docs/Published/Deployment/Hosted_Staging_Runbook.md`
+
 This profile defines the minimum deployment contract for the hosted SaaS launch surface. It is intentionally narrower than the general self-host guidance. The target is a same-origin hosted web app with server-managed auth sessions, public auth callback routes, org-scoped billing, and a narrow core product surface.
 
 ## 1) What this profile assumes
@@ -53,6 +56,8 @@ Recommended supporting settings:
 - Restore should be exercised before launch, not just documented.
 
 ## 5) Release-gate verification
+
+For the canonical same-origin staging topology, start with `Docs/Published/Deployment/Hosted_Staging_Runbook.md` and use its compose overlay plus env-file validation flow.
 
 Run these checks before calling a hosted environment launch-ready:
 

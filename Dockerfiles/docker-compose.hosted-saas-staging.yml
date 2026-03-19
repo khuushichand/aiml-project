@@ -1,0 +1,105 @@
+# docker-compose.hosted-saas-staging.yml
+# Overlay for the same-origin hosted SaaS staging stack.
+#
+# Usage (from repo root):
+#   docker compose --env-file tldw_Server_API/Config_Files/.env.hosted-staging.example \
+#     -f Dockerfiles/docker-compose.yml \
+#     -f Dockerfiles/docker-compose.hosted-saas-staging.yml up -d --build
+
+services:
+  app:
+    ports: []
+    expose:
+      - "8000"
+    environment:
+      AUTH_MODE: ${AUTH_MODE:?Set AUTH_MODE}
+      SINGLE_USER_API_KEY: ${SINGLE_USER_API_KEY:-}
+      tldw_production: ${tldw_production:?Set tldw_production}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      JOBS_DB_URL: ${JOBS_DB_URL:-}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-4}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-}
+      PUBLIC_WEB_BASE_URL: ${PUBLIC_WEB_BASE_URL:?Set PUBLIC_WEB_BASE_URL}
+      PUBLIC_PASSWORD_RESET_PATH: ${PUBLIC_PASSWORD_RESET_PATH:-/auth/reset-password}
+      PUBLIC_EMAIL_VERIFICATION_PATH: ${PUBLIC_EMAIL_VERIFICATION_PATH:-/auth/verify-email}
+      PUBLIC_MAGIC_LINK_PATH: ${PUBLIC_MAGIC_LINK_PATH:-/auth/magic-link}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?Set ALLOWED_ORIGINS}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
+      BILLING_ENABLED: ${BILLING_ENABLED:-true}
+      BILLING_REDIRECT_ALLOWLIST_REQUIRED: ${BILLING_REDIRECT_ALLOWLIST_REQUIRED:-true}
+      BILLING_REDIRECT_REQUIRE_HTTPS: ${BILLING_REDIRECT_REQUIRE_HTTPS:-true}
+      BILLING_ALLOWED_REDIRECT_HOSTS: ${BILLING_ALLOWED_REDIRECT_HOSTS:?Set BILLING_ALLOWED_REDIRECT_HOSTS}
+      STRIPE_API_KEY: ${STRIPE_API_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-smtp}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@app.example.com}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    ports: []
+    expose:
+      - "5432"
+
+  redis:
+    ports: []
+    expose:
+      - "6379"
+
+  webui:
+    build:
+      context: ..
+      dockerfile: Dockerfiles/Dockerfile.webui
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?Set NEXT_PUBLIC_API_BASE_URL}
+        NEXT_PUBLIC_API_VERSION: ${NEXT_PUBLIC_API_VERSION:-v1}
+        NEXT_PUBLIC_X_API_KEY: ${NEXT_PUBLIC_X_API_KEY:-}
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: hosted
+    image: tldw-webui:hosted-staging
+    container_name: tldw-webui-hosted-staging
+    restart: unless-stopped
+    expose:
+      - "3000"
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?Set NEXT_PUBLIC_API_BASE_URL}
+      NEXT_PUBLIC_API_VERSION: ${NEXT_PUBLIC_API_VERSION:-v1}
+      NEXT_PUBLIC_X_API_KEY: ${NEXT_PUBLIC_X_API_KEY:-}
+      NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: hosted
+
+  caddy:
+    image: caddy:2
+    container_name: tldw-caddy-hosted-staging
+    depends_on:
+      app:
+        condition: service_healthy
+      webui:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../Helper_Scripts/Samples/Caddy/Caddyfile.hosted-saas.compose:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
