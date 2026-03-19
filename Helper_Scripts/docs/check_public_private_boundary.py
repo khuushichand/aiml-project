@@ -27,9 +27,6 @@ SCAN_TARGETS = (
 )
 
 SKIP_PATHS = {
-    Path("Docs/Published/Deployment/Hosted_SaaS_Profile.md"),
-    Path("Docs/Published/Deployment/Hosted_Staging_Runbook.md"),
-    Path("Docs/Published/Deployment/Hosted_Production_Runbook.md"),
     Path("Docs/Operations/Hosted_Staging_Operations_Runbook.md"),
     Path("Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md"),
 }
