@@ -1,4 +1,11 @@
+import pytest
+
 from Helper_Scripts.validate_hosted_saas_profile import main, validate_hosted_profile
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        pytest.fail(message)
 
 
 def test_validator_rejects_missing_public_web_base_url():
@@ -13,8 +20,11 @@ def test_validator_rejects_missing_public_web_base_url():
         }
     )
 
-    assert result.ok is False
-    assert "PUBLIC_WEB_BASE_URL" in result.errors
+    _require(result.ok is False, "expected validation to fail without PUBLIC_WEB_BASE_URL")
+    _require(
+        "PUBLIC_WEB_BASE_URL" in result.errors,
+        "expected PUBLIC_WEB_BASE_URL validation error",
+    )
 
 
 def test_validator_rejects_non_multi_user_auth_mode():
@@ -30,8 +40,8 @@ def test_validator_rejects_non_multi_user_auth_mode():
         }
     )
 
-    assert result.ok is False
-    assert "AUTH_MODE" in result.errors
+    _require(result.ok is False, "expected validation to fail for single_user auth mode")
+    _require("AUTH_MODE" in result.errors, "expected AUTH_MODE validation error")
 
 
 def test_validator_rejects_non_postgres_database_url():
@@ -47,8 +57,11 @@ def test_validator_rejects_non_postgres_database_url():
         }
     )
 
-    assert result.ok is False
-    assert "DATABASE_URL" in result.errors
+    _require(
+        result.ok is False,
+        "expected validation to fail for non-Postgres DATABASE_URL",
+    )
+    _require("DATABASE_URL" in result.errors, "expected DATABASE_URL validation error")
 
 
 def test_validator_rejects_when_production_guard_is_disabled():
@@ -64,8 +77,14 @@ def test_validator_rejects_when_production_guard_is_disabled():
         }
     )
 
-    assert result.ok is False
-    assert "tldw_production" in result.errors
+    _require(
+        result.ok is False,
+        "expected validation to fail when tldw_production is disabled",
+    )
+    _require(
+        "tldw_production" in result.errors,
+        "expected tldw_production validation error",
+    )
 
 
 def test_validator_rejects_when_billing_redirect_host_is_not_allowlisted():
@@ -81,8 +100,14 @@ def test_validator_rejects_when_billing_redirect_host_is_not_allowlisted():
         }
     )
 
-    assert result.ok is False
-    assert "BILLING_ALLOWED_REDIRECT_HOSTS" in result.errors
+    _require(
+        result.ok is False,
+        "expected validation to fail when redirect host is not allowlisted",
+    )
+    _require(
+        "BILLING_ALLOWED_REDIRECT_HOSTS" in result.errors,
+        "expected BILLING_ALLOWED_REDIRECT_HOSTS validation error",
+    )
 
 
 def test_validator_accepts_the_hosted_saas_contract():
@@ -98,8 +123,8 @@ def test_validator_accepts_the_hosted_saas_contract():
         }
     )
 
-    assert result.ok is True
-    assert result.errors == {}
+    _require(result.ok is True, "expected hosted SaaS contract to validate successfully")
+    _require(result.errors == {}, "expected no validation errors for hosted SaaS contract")
 
 
 def test_validator_cli_can_read_env_file(tmp_path):
@@ -123,7 +148,7 @@ def test_validator_cli_can_read_env_file(tmp_path):
         ["validate_hosted_saas_profile.py", "--env-file", str(env_file)]
     )
 
-    assert exit_code == 0
+    _require(exit_code == 0, "expected CLI validation to pass for valid env file")
 
 
 def test_validator_cli_rejects_missing_env_file(tmp_path):
@@ -133,4 +158,4 @@ def test_validator_cli_rejects_missing_env_file(tmp_path):
         ["validate_hosted_saas_profile.py", "--env-file", str(missing_env_file)]
     )
 
-    assert exit_code == 1
+    _require(exit_code == 1, "expected CLI validation to fail for missing env file")
