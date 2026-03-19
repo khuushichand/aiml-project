@@ -631,21 +631,19 @@ class OrchestrationDB:
         ).fetchall()
         return [self._row_to_mcp_server(r) for r in rows]
 
-    def delete_workspace_mcp_server(self, server_id: int) -> bool:
+    def delete_workspace_mcp_server(self, workspace_id: int, server_id: int) -> bool:
+        """Delete an MCP server in a single atomic query that also verifies ownership."""
         self._ensure_schema()
         conn = self._get_conn()
-        # Verify ownership through workspace join
-        row = conn.execute(
-            "SELECT s.id FROM acp_workspace_mcp_servers s "
-            "JOIN acp_workspaces w ON s.workspace_id = w.id "
-            "WHERE s.id = ? AND w.user_id = ?",
-            (server_id, self._user_id),
-        ).fetchone()
-        if row is None:
-            return False
-        conn.execute("DELETE FROM acp_workspace_mcp_servers WHERE id = ?", (server_id,))
+        cur = conn.execute(
+            "DELETE FROM acp_workspace_mcp_servers "
+            "WHERE id = ? AND workspace_id = ? "
+            "AND EXISTS (SELECT 1 FROM acp_workspaces w "
+            "            WHERE w.id = ? AND w.user_id = ?)",
+            (server_id, workspace_id, workspace_id, self._user_id),
+        )
         conn.commit()
-        return True
+        return cur.rowcount > 0
 
     # ------------------------------------------------------------------
     # Projects

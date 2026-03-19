@@ -449,17 +449,15 @@ async def delete_workspace_mcp_server(
 ) -> dict[str, Any]:
     """Remove an MCP server from a workspace."""
     db = get_orchestration_db(_user_id_int(user))
-    # Verify workspace exists and belongs to user
-    ws = await _run_sync(lambda: db.get_workspace(workspace_id))
-    if not ws:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    # Verify server belongs to this workspace
-    servers = await _run_sync(lambda: db.list_workspace_mcp_servers(workspace_id))
-    if not any(s["id"] == server_id for s in servers):
-        raise HTTPException(status_code=404, detail="MCP server not found in this workspace")
-    deleted = await _run_sync(lambda: db.delete_workspace_mcp_server(server_id))
+    # Single atomic delete that verifies workspace ownership
+    deleted = await _run_sync(
+        lambda: db.delete_workspace_mcp_server(workspace_id, server_id)
+    )
     if not deleted:
-        raise HTTPException(status_code=404, detail="MCP server not found")
+        raise HTTPException(
+            status_code=404,
+            detail="MCP server not found in this workspace, or workspace not found",
+        )
     return {"deleted": True, "server_id": server_id}
 
 
@@ -741,22 +739,17 @@ async def dispatch_run(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # --- CWD resolution: explicit > workspace root > "." ---
-    effective_cwd = payload.cwd
-    project = None
-    workspace = None
-    workspace_mcp_servers: list[dict[str, Any]] = []
-
     project = await _run_sync(lambda: db.get_project(task.project_id))
-
-    if effective_cwd == "." and project and project.workspace_id:
-        workspace = await _run_sync(lambda: db.get_workspace(project.workspace_id))
-        if workspace:
-            effective_cwd = workspace.root_path
-
-    # Gather workspace MCP servers for injection (even when cwd is explicit)
-    if workspace is None and project and project.workspace_id:
+    workspace = None
+    if project and project.workspace_id:
         workspace = await _run_sync(lambda: db.get_workspace(project.workspace_id))
 
+    effective_cwd = payload.cwd
+    if effective_cwd == "." and workspace:
+        effective_cwd = workspace.root_path
+
+    # Gather workspace MCP servers for injection
+    workspace_mcp_servers: list[dict[str, Any]] = []
     if workspace:
         workspace_mcp_servers = await _run_sync(
             lambda: db.list_workspace_mcp_servers(workspace.id)
