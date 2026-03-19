@@ -13,8 +13,6 @@ from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     get_audio_bundle_catalog,
 )
 
-PROFILE_ORDER = ["light", "balanced", "performance"]
-
 
 def _step_labels(steps: Iterable[AudioBundleStep]) -> list[str]:
     return [step.label for step in steps]
@@ -34,14 +32,7 @@ def _plan_summary(resource: AudioBundle | AudioResourceProfile, category: str, v
 
 
 def _iter_profiles(bundle: AudioBundle) -> list[AudioResourceProfile]:
-    return sorted(
-        bundle.resource_profiles.values(),
-        key=lambda profile: (
-            PROFILE_ORDER.index(profile.profile_id)
-            if profile.profile_id in PROFILE_ORDER
-            else len(PROFILE_ORDER)
-        ),
-    )
+    return list(bundle.resource_profiles.values())
 
 
 def _offline_pack_compatibility(bundle: AudioBundle) -> str:
