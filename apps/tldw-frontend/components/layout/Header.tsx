@@ -4,7 +4,6 @@ import { cn } from '@web/lib/utils';
 import { useAuth } from '@web/hooks/useAuth';
 import { useIsAdmin } from '@web/hooks/useIsAdmin';
 import { toBool } from '@web/lib/authz';
-import { isHostedSaaSMode } from '@web/lib/deployment-mode';
 
 /**
  * Render the application's top navigation header with logo, primary links, and user controls.
@@ -19,7 +18,6 @@ import { isHostedSaaSMode } from '@web/lib/deployment-mode';
 export function Header() {
   const router = useRouter();
   const { isAuthenticated, user, logout } = useAuth();
-  const hostedMode = isHostedSaaSMode();
 
   const handleLogout = () => {
     logout();
@@ -37,38 +35,28 @@ export function Header() {
     const normalizedPerms = perms.map((p) => String(p).toLowerCase());
     return normalizedRoles.includes('reviewer') || normalizedPerms.includes('claims.review') || normalizedPerms.includes('claims.admin');
   })();
-  const showRuns = !hostedMode && showRunsEnv && (!runsRequireAdmin || userIsAdmin);
-  const navLinks = hostedMode
-    ? [
-        { href: '/', label: 'Home' },
-        { href: '/chat', label: 'Chat' },
-        { href: '/media', label: 'Media' },
-        { href: '/knowledge', label: 'Knowledge' },
-        { href: '/collections', label: 'Collections' },
-        { href: '/account', label: 'Account' },
-        { href: '/billing', label: 'Billing' },
-      ]
-    : [
-        { href: '/', label: 'Home' },
-        { href: '/media', label: 'Media' },
-        { href: '/items', label: 'Items' },
-        { href: '/reading', label: 'Reading' },
-        { href: '/watchlists', label: 'Watchlists' },
-        ...(showRuns ? [{ href: '/admin/watchlists-runs', label: 'Runs' } as const] : []),
-        { href: '/chat', label: 'Chat' },
-        { href: '/search', label: 'Search' },
-        { href: '/audio', label: 'Audio' },
-        { href: '/evaluations', label: 'Evals' },
-        ...(canReviewClaims ? [{ href: '/claims-review', label: 'Claims Review' } as const] : []),
-        ...(userIsAdmin
-          ? [
-              { href: '/admin/data-ops', label: 'Data Ops' } as const,
-              { href: '/admin', label: 'Admin' } as const,
-            ]
-          : []),
-        { href: '/profile', label: 'Profile' },
-        { href: '/config', label: 'Config' },
-      ];
+  const showRuns = showRunsEnv && (!runsRequireAdmin || userIsAdmin);
+  const navLinks = [
+    { href: '/', label: 'Home' },
+    { href: '/media', label: 'Media' },
+    { href: '/items', label: 'Items' },
+    { href: '/reading', label: 'Reading' },
+    { href: '/watchlists', label: 'Watchlists' },
+    ...(showRuns ? [{ href: '/admin/watchlists-runs', label: 'Runs' } as const] : []),
+    { href: '/chat', label: 'Chat' },
+    { href: '/search', label: 'Search' },
+    { href: '/audio', label: 'Audio' },
+    { href: '/evaluations', label: 'Evals' },
+    ...(canReviewClaims ? [{ href: '/claims-review', label: 'Claims Review' } as const] : []),
+    ...(userIsAdmin
+      ? [
+          { href: '/admin/data-ops', label: 'Data Ops' } as const,
+          { href: '/admin', label: 'Admin' } as const,
+        ]
+      : []),
+    { href: '/profile', label: 'Profile' },
+    { href: '/config', label: 'Config' },
+  ];
 
   return (
     <header className="border-b border-border bg-surface">

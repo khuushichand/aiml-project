@@ -74,3 +74,27 @@ def test_public_docs_do_not_point_self_host_users_to_hosted_runbooks() -> None:
         "Hosted_Production_Runbook.md" not in staging_ops,
         "expected hosted staging ops doc to avoid public hosted production runbook links",
     )
+
+
+def test_public_frontend_does_not_import_hosted_customer_surface() -> None:
+    checked_files = [
+        "apps/tldw-frontend/pages/_app.tsx",
+        "apps/tldw-frontend/pages/login.tsx",
+        "apps/tldw-frontend/pages/signup.tsx",
+        "apps/tldw-frontend/pages/account/index.tsx",
+        "apps/tldw-frontend/pages/billing/index.tsx",
+        "apps/tldw-frontend/pages/auth/verify-email.tsx",
+        "apps/tldw-frontend/pages/auth/reset-password.tsx",
+        "apps/tldw-frontend/pages/auth/magic-link.tsx",
+    ]
+
+    for path in checked_files:
+        text = Path(path).read_text(encoding="utf-8")
+        _require(
+            "@web/components/hosted" not in text,
+            f"expected public frontend entrypoint to avoid hosted component imports: {path}",
+        )
+        _require(
+            "@web/lib/hosted-route-allowlist" not in text,
+            f"expected public frontend entrypoint to avoid hosted route allowlist imports: {path}",
+        )

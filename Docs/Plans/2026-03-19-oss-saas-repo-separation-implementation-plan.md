@@ -12,6 +12,8 @@
 
 ### Task 1: Add A Public/Private Boundary Policy And Inventory
 
+**Status:** Complete
+
 **Files:**
 - Create: `Docs/Policies/OSS_Private_Boundary.md`
 - Create: `Docs/Plans/2026-03-19-oss-saas-private-inventory.md`
@@ -81,6 +83,8 @@ git commit -m "docs: add oss and private boundary policy"
 ```
 
 ### Task 2: Stop Publishing Hosted SaaS Docs In The Public Site
+
+**Status:** Complete
 
 **Files:**
 - Modify: `Docs/Code_Documentation/Docs_Site_Guide.md`
@@ -154,6 +158,8 @@ git commit -m "docs: exclude hosted saas material from public docs guidance"
 
 ### Task 3: Remove Hosted SaaS References From Public Docs And Public Tests
 
+**Status:** Complete
+
 **Files:**
 - Modify: `Docs/Published/Deployment/First_Time_Production_Setup.md`
 - Modify: `Docs/Published/Deployment/Hosted_SaaS_Profile.md`
@@ -218,6 +224,8 @@ git commit -m "docs: scrub hosted private references from public repo"
 
 ### Task 4: Bootstrap The Private Hosted Repo And Move Docs/Deployment Assets
 
+**Status:** Complete
+
 **Files:**
 - Create: `../tldw-hosted/README.md`
 - Create: `../tldw-hosted/docs/Hosted_SaaS_Profile.md`
@@ -274,6 +282,8 @@ git -C ../tldw-hosted commit -m "feat: bootstrap private hosted repo"
 Expected: PASS in the private repo.
 
 ### Task 5: Extract Hosted Customer-Surface Code To The Private Repo
+
+**Status:** Complete
 
 **Files:**
 - Create: `../tldw-hosted/web/`
@@ -337,6 +347,8 @@ git -C ../tldw-hosted commit -m "feat: add private hosted customer surface"
 ```
 
 ### Task 6: Add Boundary Enforcement And Verify Public Repo Independence
+
+**Status:** Not Started
 
 **Files:**
 - Create: `Helper_Scripts/docs/check_public_private_boundary.py`
