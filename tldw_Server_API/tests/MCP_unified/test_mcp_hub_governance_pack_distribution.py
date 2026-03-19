@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 
-async def _make_repo(tmp_path, monkeypatch):
+async def _make_repo(tmp_path: Path, monkeypatch: Any):
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
@@ -139,4 +140,3 @@ async def test_governance_pack_trust_policy_persists_as_deployment_wide_config(
     stored = await repo.get_governance_pack_trust_policy()
     assert stored["policy_document"]["allowed_local_roots"] == ["/srv/packs"]
     assert stored["updated_by"] == 11
-

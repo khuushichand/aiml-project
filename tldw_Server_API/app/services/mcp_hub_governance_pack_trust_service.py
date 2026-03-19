@@ -13,6 +13,7 @@ _SSH_REPO_RE = re.compile(r"^(?:[^@]+@)?(?P<host>[^:]+):(?P<path>.+)$")
 
 
 def _normalize_string_list(value: Any) -> list[str]:
+    """Return a stable, de-duplicated list of non-empty string values."""
     if value is None:
         return []
     if isinstance(value, str):
@@ -35,6 +36,7 @@ def _normalize_string_list(value: Any) -> list[str]:
 
 
 def _canonicalize_git_repository(repo_url: str) -> str:
+    """Normalize supported Git repository identifiers to host/org/repo form."""
     cleaned = str(repo_url or "").strip()
     if not cleaned:
         raise ValueError("repo_url is required")
@@ -66,6 +68,7 @@ def _canonicalize_git_repository(repo_url: str) -> str:
 
 
 def _canonicalize_git_host(repo_url: str) -> str:
+    """Extract the canonical Git host name from a repository identifier."""
     return _canonicalize_git_repository(repo_url).split("/", 1)[0]
 
 
@@ -77,6 +80,7 @@ class McpHubGovernancePackTrustService:
 
     @staticmethod
     def _default_policy() -> dict[str, Any]:
+        """Return the fail-closed default trust policy."""
         return {
             "allow_local_path_sources": False,
             "allowed_local_roots": [],
@@ -89,6 +93,7 @@ class McpHubGovernancePackTrustService:
         }
 
     def _normalize_policy(self, policy: dict[str, Any] | None) -> dict[str, Any]:
+        """Normalize persisted or requested trust-policy content."""
         raw = dict(policy or {})
         ref_kinds = [
             kind
@@ -109,10 +114,12 @@ class McpHubGovernancePackTrustService:
         }
 
     async def get_policy(self) -> dict[str, Any]:
+        """Load and normalize the deployment-wide governance-pack trust policy."""
         row = await self.repo.get_governance_pack_trust_policy()
         return self._normalize_policy(row.get("policy_document"))
 
     async def update_policy(self, policy: dict[str, Any], *, actor_id: int | None) -> dict[str, Any]:
+        """Persist a normalized deployment-wide trust policy."""
         normalized = self._normalize_policy(policy)
         await self.repo.upsert_governance_pack_trust_policy(
             policy_document=normalized,
@@ -121,6 +128,7 @@ class McpHubGovernancePackTrustService:
         return normalized
 
     async def evaluate_local_path(self, path: str) -> dict[str, Any]:
+        """Evaluate whether a local filesystem source path is allowed."""
         policy = await self.get_policy()
         resolved_path = str(Path(path).resolve())
         if not policy["allow_local_path_sources"]:
@@ -132,6 +140,7 @@ class McpHubGovernancePackTrustService:
         return {"allowed": False, "reason": "path_not_allowed", "resolved_path": resolved_path}
 
     async def evaluate_git_source(self, repo_url: str, *, ref_kind: str) -> dict[str, Any]:
+        """Evaluate whether a Git source is allowed under the current trust policy."""
         policy = await self.get_policy()
         canonical_repository = _canonicalize_git_repository(repo_url)
         host = _canonicalize_git_host(repo_url)

@@ -966,6 +966,7 @@ class GovernancePackImportResponse(BaseModel):
 
 
 class GovernancePackTrustPolicyRequest(BaseModel):
+    """Request payload for updating the deployment-wide governance-pack trust policy."""
     allow_local_path_sources: bool = False
     allowed_local_roots: list[str] = Field(default_factory=list)
     allow_git_sources: bool = False
@@ -977,6 +978,7 @@ class GovernancePackTrustPolicyRequest(BaseModel):
 
 
 class GovernancePackTrustPolicyResponse(BaseModel):
+    """Deployment-wide governance-pack trust policy response payload."""
     allow_local_path_sources: bool = False
     allowed_local_roots: list[str] = Field(default_factory=list)
     allow_git_sources: bool = False
