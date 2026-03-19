@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from Helper_Scripts.validate_hosted_saas_profile import validate_hosted_profile
 
@@ -52,3 +53,77 @@ def test_hosted_production_env_example_validates_against_hosted_profile():
 
     _require(result.ok is True, "expected hosted production env example to satisfy profile")
     _require(result.errors == {}, "expected no validation errors for hosted production env example")
+
+
+def test_hosted_production_compose_is_standalone_and_keeps_postgres_internal():
+    text = Path("Dockerfiles/docker-compose.hosted-saas-prod.yml").read_text(
+        encoding="utf-8"
+    )
+    data = yaml.safe_load(text)
+    _require(isinstance(data, dict), "expected hosted production compose to parse as a mapping")
+
+    services = data.get("services", {})
+    _require("app" in services, "expected hosted production compose to define app service")
+    _require("webui" in services, "expected hosted production compose to define webui service")
+    _require("redis" in services, "expected hosted production compose to define redis service")
+    _require("caddy" in services, "expected hosted production compose to define caddy service")
+    _require("postgres" not in services, "primary prod compose should not define local postgres")
+
+    app_service = services["app"]
+    _require(
+        app_service.get("ports", []) == [],
+        "expected app service to avoid public host ports",
+    )
+    _require(
+        app_service.get("expose", []) == ["8000"],
+        "expected app service to expose port 8000 internally",
+    )
+
+    redis_service = services["redis"]
+    _require(
+        redis_service.get("ports", []) == [],
+        "expected redis service to avoid public host ports",
+    )
+    _require(
+        redis_service.get("expose", []) == ["6379"],
+        "expected redis service to expose port 6379 internally",
+    )
+
+    caddy_service = services["caddy"]
+    _require(
+        caddy_service.get("ports", []) == ["80:80", "443:443"],
+        "expected caddy to be the only public entrypoint",
+    )
+
+    app_environment = app_service.get("environment", {})
+    _require(
+        app_environment.get("DATABASE_URL") == "${DATABASE_URL:?Set DATABASE_URL}",
+        "expected app service to require a managed DATABASE_URL",
+    )
+    _require(
+        app_environment.get("PUBLIC_WEB_BASE_URL") == "${PUBLIC_WEB_BASE_URL:?Set PUBLIC_WEB_BASE_URL}",
+        "expected app service to require PUBLIC_WEB_BASE_URL",
+    )
+
+    app_volumes = app_service.get("volumes", [])
+    _require(
+        any("TLDW_APP_DATA_DIR" in volume for volume in app_volumes),
+        "expected app data bind mount to use TLDW_APP_DATA_DIR",
+    )
+    _require(
+        any("TLDW_USER_DATA_DIR" in volume for volume in app_volumes),
+        "expected user data bind mount to use TLDW_USER_DATA_DIR",
+    )
+
+    redis_volumes = redis_service.get("volumes", [])
+    _require(
+        any("TLDW_REDIS_DATA_DIR" in volume for volume in redis_volumes),
+        "expected redis data bind mount to use TLDW_REDIS_DATA_DIR",
+    )
+
+    caddy_volumes = caddy_service.get("volumes", [])
+    _require(
+        "../Helper_Scripts/Samples/Caddy/Caddyfile.hosted-saas.prod.compose:/etc/caddy/Caddyfile:ro"
+        in caddy_volumes,
+        "expected caddy service to mount the production Caddyfile sample",
+    )
