@@ -110,6 +110,15 @@ runner_env = HOME=/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_A
 # Startup timeout for runner initialize.
 startup_timeout_ms = 10000
 
+[ACP-WORKSPACE]
+# Optional. If set, workspace root_path must be under one of these paths (comma-separated).
+# Leave empty to allow any absolute path.
+allowed_base_paths =
+# Default max depth for workspace discovery scanning.
+discovery_max_depth = 3
+# Marker files/dirs used for workspace discovery (comma-separated).
+discovery_patterns = .git,package.json,pyproject.toml,Cargo.toml,go.mod
+
 [ACP-SANDBOX]
 # Enable ACP sandbox mode (runs ACP in container/VM and exposes web SSH).
 enabled = false
