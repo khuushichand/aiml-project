@@ -733,11 +733,6 @@ async def dispatch_run(
         )
 
     # Transition to in_progress
-    try:
-        await _run_sync(lambda: db.transition_task(task_id, TaskStatus.IN_PROGRESS))
-    except (InvalidTransitionError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     # --- CWD resolution: explicit > workspace root > "." ---
     project = await _run_sync(lambda: db.get_project(task.project_id))
     workspace = None
