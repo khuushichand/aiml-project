@@ -14,6 +14,7 @@
     "e2e:login": "node scripts/playwright-login.mjs",
     "e2e:pw": "playwright test",
     "e2e:chat-queued-requests": "playwright test e2e/workflows/chat-queued-requests.spec.ts --reporter=line",
+    "e2e:family-guardrails": "playwright test e2e/workflows/family-guardrails-wizard.spec.ts --reporter=line",
     "e2e:onboarding": "playwright test e2e/workflows/onboarding-ingestion-first.spec.ts --reporter=line",
     "e2e:workspace-playground:parity": "playwright test e2e/workflows/workspace-playground.parity.spec.ts --reporter=line",
     "e2e:workspace-playground:real": "playwright test e2e/workflows/workspace-playground.real-backend.spec.ts --reporter=line",
