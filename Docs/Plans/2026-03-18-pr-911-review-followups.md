@@ -20,4 +20,4 @@
 **Goal**: Push the follow-up batch and close the review loop on GitHub.
 **Success Criteria**: Branch is pushed, PR comments are replied to in-thread, and remaining non-actionable comments are explicitly answered.
 **Tests**: `git status --short` clean after push
-**Status**: In Progress
+**Status**: Complete
