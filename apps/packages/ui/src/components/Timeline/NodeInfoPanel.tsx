@@ -227,6 +227,8 @@ export const NodeInfoPanel: React.FC = () => {
         {highlightedContent ? (
           <div
             className="text-sm leading-relaxed"
+            role="region"
+            aria-label={t('common:nodeContent', { defaultValue: 'Node content' })}
             dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightedContent) }}
           />
         ) : (

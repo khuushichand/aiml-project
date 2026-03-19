@@ -167,19 +167,21 @@ const ensurePlaceholderConfig = async (): Promise<string | null> => {
   }
 }
 
-const deriveKnowledgeStatusFromHealth = (raw: any): KnowledgeStatus => {
+const deriveKnowledgeStatusFromHealth = (raw: unknown): KnowledgeStatus => {
   try {
     if (!raw || typeof raw !== "object") {
       return "ready"
     }
-    const components = (raw as any).components
+    const obj = raw as Record<string, unknown>
+    const components = obj.components
     if (components && typeof components === "object") {
-      const search =
-        (components as any).search_index || (components as any).searchIndex
+      const comp = components as Record<string, unknown>
+      const search = comp.search_index || comp.searchIndex
       if (search && typeof search === "object") {
-        const status = String((search as any).status || "").toLowerCase()
-        const message = String((search as any).message || "")
-        const rawCount = (search as any).fts_table_count
+        const s = search as Record<string, unknown>
+        const status = String(s.status || "").toLowerCase()
+        const message = String(s.message || "")
+        const rawCount = s.fts_table_count
         const ftsCount =
           typeof rawCount === "number" && Number.isFinite(rawCount)
             ? rawCount

@@ -4029,6 +4029,8 @@ export function ContentViewer({
                     displayContent ? (
                       <div
                         className={`${richTextTypographyClass} break-words dark:prose-invert max-w-none prose-p:leading-relaxed`}
+                        role="region"
+                        aria-label={t('review:mediaPage.contentRegion', { defaultValue: 'Media content' })}
                         dangerouslySetInnerHTML={{
                           __html: sanitizedRichContent
                         }}

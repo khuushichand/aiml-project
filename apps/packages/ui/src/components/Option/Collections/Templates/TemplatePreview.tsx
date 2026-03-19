@@ -470,6 +470,8 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
           {previewFormat === "html" ? (
             <div
               className="prose prose-sm dark:prose-invert max-w-none"
+              role="region"
+              aria-label={t("collections:templatePreview.contentRegion", { defaultValue: "Template preview" })}
               dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(previewContent, { USE_PROFILES: { html: true } }) }}
             />
           ) : (
