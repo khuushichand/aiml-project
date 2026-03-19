@@ -4,7 +4,7 @@
 app.example.com {
   encode zstd gzip
 
-  @api path /api/* /openapi.json /docs* /redoc* /health /ready
+  @api path /api/* /health /ready
 
   reverse_proxy @api app:8000 {
     transport http {

@@ -2,7 +2,8 @@
 # Optional emergency fallback overlay for hosted SaaS production.
 #
 # Usage (from repo root):
-#   docker compose --env-file tldw_Server_API/Config_Files/.env.hosted-production.example \
+#   cp tldw_Server_API/Config_Files/.env.hosted-production.example tldw_Server_API/Config_Files/.env.hosted-production
+#   docker compose --env-file tldw_Server_API/Config_Files/.env.hosted-production \
 #     -f Dockerfiles/docker-compose.hosted-saas-prod.yml \
 #     -f Dockerfiles/docker-compose.hosted-saas-prod.local-postgres.yml up -d --build
 
