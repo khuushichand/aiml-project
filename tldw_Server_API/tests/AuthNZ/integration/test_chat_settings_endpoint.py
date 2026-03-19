@@ -119,3 +119,61 @@ def test_chat_settings_endpoint_enforces_chat_ownership(isolated_test_environmen
         },
     )
     assert other_put.status_code == 404, other_put.text
+
+
+def test_chat_settings_endpoint_enforces_chat_ownership_with_pinned_attachment(
+    isolated_test_environment,
+):
+    client, _db_name = isolated_test_environment
+    owner_headers = _register_and_login(
+        client,
+        username="settings_owner_pinned",
+        email="settings_owner_pinned@example.com",
+        password="OwnerPinned@Pass#2024!",
+    )
+    other_headers = _register_and_login(
+        client,
+        username="settings_other_pinned",
+        email="settings_other_pinned@example.com",
+        password="OtherPinned@Pass#2024!",
+    )
+
+    chat_id = _create_character_and_chat(client, owner_headers)
+
+    owner_put = client.put(
+        f"/api/v1/chats/{chat_id}/settings",
+        headers=owner_headers,
+        json={
+            "settings": {
+                "schemaVersion": 2,
+                "updatedAt": "2026-03-08T20:00:00Z",
+                "deepResearchAttachment": _valid_attachment(run_id="run_active"),
+                "deepResearchPinnedAttachment": _valid_attachment(run_id="run_pinned"),
+                "deepResearchAttachmentHistory": [
+                    _valid_attachment(run_id="run_hist_owner"),
+                ],
+            }
+        },
+    )
+    assert owner_put.status_code == 200, owner_put.text
+
+    owner_get = client.get(f"/api/v1/chats/{chat_id}/settings", headers=owner_headers)
+    assert owner_get.status_code == 200, owner_get.text
+    owner_settings = owner_get.json()["settings"]
+    assert owner_settings["deepResearchPinnedAttachment"]["run_id"] == "run_pinned"
+
+    other_get = client.get(f"/api/v1/chats/{chat_id}/settings", headers=other_headers)
+    assert other_get.status_code == 404, other_get.text
+
+    other_put = client.put(
+        f"/api/v1/chats/{chat_id}/settings",
+        headers=other_headers,
+        json={
+            "settings": {
+                "schemaVersion": 2,
+                "updatedAt": "2026-03-08T20:05:00Z",
+                "deepResearchPinnedAttachment": _valid_attachment(run_id="run_pinned_other"),
+            }
+        },
+    )
+    assert other_put.status_code == 404, other_put.text

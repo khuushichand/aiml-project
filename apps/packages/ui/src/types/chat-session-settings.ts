@@ -61,5 +61,6 @@ export type ChatSettingsRecord = {
   summary?: ChatSummary | null
   imageEventSyncMode?: "off" | "on"
   deepResearchAttachment?: DeepResearchAttachment | null
+  deepResearchPinnedAttachment?: DeepResearchAttachment | null
   deepResearchAttachmentHistory?: DeepResearchAttachment[]
 }

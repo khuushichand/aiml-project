@@ -23,6 +23,7 @@ export type AttachedResearchContextEdits = Partial<AttachedResearchContext>
 export type AttachedResearchContextState = {
   active: AttachedResearchContext | null
   baseline: AttachedResearchContext | null
+  pinned: AttachedResearchContext | null
   history: AttachedResearchContext[]
 }
 
@@ -220,13 +221,18 @@ export const resetAttachedResearchContext = (
 
 const rebuildAttachedResearchContextHistory = (
   entries: AttachedResearchContext[],
-  activeRunId?: string | null
+  excludedRunIds?: Iterable<string | null | undefined>
 ): AttachedResearchContext[] => {
+  const excluded = new Set(
+    Array.from(excludedRunIds ?? []).filter(
+      (runId): runId is string => typeof runId === "string" && runId.length > 0
+    )
+  )
   const seen = new Set<string>()
   const next: AttachedResearchContext[] = []
   for (const entry of entries) {
     const sanitized = sanitizeAttachedResearchContext(entry)
-    if (activeRunId && sanitized.run_id === activeRunId) {
+    if (excluded.has(sanitized.run_id)) {
       continue
     }
     if (seen.has(sanitized.run_id)) {
@@ -244,6 +250,7 @@ const rebuildAttachedResearchContextHistory = (
 export const setAttachedResearchContextActive = ({
   active,
   baseline: _baseline,
+  pinned,
   history,
   nextActive
 }: AttachedResearchContextState & {
@@ -255,23 +262,96 @@ export const setAttachedResearchContextActive = ({
       ...(active && active.run_id !== sanitizedNextActive.run_id ? [active] : []),
       ...history
     ],
-    sanitizedNextActive.run_id
+    [sanitizedNextActive.run_id, pinned?.run_id]
   )
 
   return {
     active: sanitizedNextActive,
     baseline: sanitizedNextActive,
+    pinned: pinned ? sanitizeAttachedResearchContext(pinned) : null,
     history: nextHistory
   }
 }
 
 export const clearAttachedResearchContext = ({
+  pinned,
   history
 }: AttachedResearchContextState): AttachedResearchContextState => ({
   active: null,
   baseline: null,
-  history: rebuildAttachedResearchContextHistory(history)
+  pinned: pinned ? sanitizeAttachedResearchContext(pinned) : null,
+  history: rebuildAttachedResearchContextHistory(history, [pinned?.run_id])
 })
+
+export const pinAttachedResearchContext = ({
+  active,
+  baseline,
+  pinned: _pinned,
+  history,
+  nextPinned
+}: AttachedResearchContextState & {
+  nextPinned?: AttachedResearchContext
+}): AttachedResearchContextState => {
+  const source = nextPinned ?? active
+  if (!source) {
+    return {
+      active,
+      baseline,
+      pinned: null,
+      history: rebuildAttachedResearchContextHistory(history)
+    }
+  }
+  const sanitizedPinned = sanitizeAttachedResearchContext(source)
+  return {
+    active: active ? sanitizeAttachedResearchContext(active) : null,
+    baseline: baseline ? sanitizeAttachedResearchContext(baseline) : null,
+    pinned: sanitizedPinned,
+    history: rebuildAttachedResearchContextHistory(history, [
+      active?.run_id,
+      sanitizedPinned.run_id
+    ])
+  }
+}
+
+export const unpinAttachedResearchContext = ({
+  active,
+  baseline,
+  history
+}: AttachedResearchContextState): AttachedResearchContextState => ({
+  active: active ? sanitizeAttachedResearchContext(active) : null,
+  baseline: baseline ? sanitizeAttachedResearchContext(baseline) : null,
+  pinned: null,
+  history: rebuildAttachedResearchContextHistory(history, [active?.run_id])
+})
+
+export const restorePinnedResearchContext = ({
+  active,
+  pinned,
+  history
+}: AttachedResearchContextState): AttachedResearchContextState => {
+  if (!pinned) {
+    return {
+      active,
+      baseline: active,
+      pinned: null,
+      history: rebuildAttachedResearchContextHistory(history, [active?.run_id])
+    }
+  }
+  const sanitizedPinned = sanitizeAttachedResearchContext(pinned)
+  const nextHistory = rebuildAttachedResearchContextHistory(
+    [
+      ...(active && active.run_id !== sanitizedPinned.run_id ? [active] : []),
+      ...history
+    ],
+    [sanitizedPinned.run_id]
+  )
+  return {
+    active: sanitizedPinned,
+    baseline: sanitizedPinned,
+    pinned: sanitizedPinned,
+    history: nextHistory
+  }
+}
 
 export const toPersistedDeepResearchAttachment = (
   value: AttachedResearchContext,

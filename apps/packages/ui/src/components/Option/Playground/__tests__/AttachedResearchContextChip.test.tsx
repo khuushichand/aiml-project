@@ -6,14 +6,8 @@ import { describe, expect, it, vi } from "vitest"
 
 import { AttachedResearchContextChip } from "../AttachedResearchContextChip"
 
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({
-    t: (_key: string, defaultValue?: string) => defaultValue || _key
-  })
-}))
-
-const buildContext = (runId: string, query: string) => ({
-  attached_at: "2026-03-08T20:00:00Z",
+const buildAttachedContext = (runId: string, query: string) => ({
+  attached_at: "2026-03-18T21:00:00Z",
   run_id: runId,
   query,
   question: query,
@@ -25,36 +19,59 @@ const buildContext = (runId: string, query: string) => ({
   research_url: `/research?run=${runId}`
 })
 
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (_key: string, defaultValue?: string) => defaultValue || _key
+  })
+}))
+
 describe("AttachedResearchContextChip", () => {
-  it("renders recent research actions and restores a prior attachment immediately", () => {
-    const onSelectHistory = vi.fn()
+  it("shows a separate pinned section when pinned differs from active", () => {
+    const onRestorePinned = vi.fn()
+    const onUnpin = vi.fn()
 
     render(
       <MemoryRouter>
         <AttachedResearchContextChip
-          context={buildContext("run_active", "Active query")}
-          history={[
-            buildContext("run_hist_1", "History one"),
-            buildContext("run_hist_2", "History two")
-          ]}
-          onPreview={vi.fn()}
+          context={buildAttachedContext("run_active", "Active run")}
+          pinned={buildAttachedContext("run_pinned", "Pinned run")}
+          history={[buildAttachedContext("run_hist", "History run")]}
           onRemove={vi.fn()}
-          onSelectHistory={onSelectHistory}
+          onPin={vi.fn()}
+          onUnpin={onUnpin}
+          onRestorePinned={onRestorePinned}
+          onSelectHistory={vi.fn()}
         />
       </MemoryRouter>
     )
 
-    expect(screen.getByTestId("attached-research-context-history")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "History one" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "History two" })).toBeInTheDocument()
+    expect(screen.getByTestId("attached-research-context-pinned")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Pin" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Pinned run" })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("button", { name: "History one" }))
+    fireEvent.click(screen.getByRole("button", { name: "Pinned run" }))
+    expect(onRestorePinned).toHaveBeenCalledTimes(1)
 
-    expect(onSelectHistory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        run_id: "run_hist_1",
-        query: "History one"
-      })
+    fireEvent.click(screen.getAllByRole("button", { name: "Unpin" })[0])
+    expect(onUnpin).toHaveBeenCalledTimes(1)
+  })
+
+  it("collapses duplicate display when the active attachment is already pinned", () => {
+    render(
+      <MemoryRouter>
+        <AttachedResearchContextChip
+          context={buildAttachedContext("run_active", "Active run")}
+          pinned={buildAttachedContext("run_active", "Active run")}
+          onRemove={vi.fn()}
+          onUnpin={vi.fn()}
+        />
+      </MemoryRouter>
     )
+
+    expect(
+      screen.queryByTestId("attached-research-context-pinned")
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Unpin" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Pin" })).not.toBeInTheDocument()
   })
 })

@@ -243,10 +243,14 @@ type Props = {
   droppedFiles: File[]
   attachedResearchContext?: AttachedResearchContext | null
   attachedResearchContextBaseline?: AttachedResearchContext | null
+  attachedResearchContextPinned?: AttachedResearchContext | null
   attachedResearchContextHistory?: AttachedResearchContext[]
   onApplyAttachedResearchContext?: (context: AttachedResearchContext) => void
   onResetAttachedResearchContext?: () => void
   onRemoveAttachedResearchContext?: () => void
+  onPinAttachedResearchContext?: () => void
+  onUnpinAttachedResearchContext?: () => void
+  onRestorePinnedResearchContext?: () => void
   onSelectAttachedResearchContextHistory?: (
     context: AttachedResearchContext
   ) => void
@@ -320,10 +324,14 @@ export const PlaygroundForm = ({
   droppedFiles,
   attachedResearchContext = null,
   attachedResearchContextBaseline = null,
+  attachedResearchContextPinned = null,
   attachedResearchContextHistory = [],
   onApplyAttachedResearchContext,
   onResetAttachedResearchContext,
   onRemoveAttachedResearchContext,
+  onPinAttachedResearchContext,
+  onUnpinAttachedResearchContext,
+  onRestorePinnedResearchContext,
   onSelectAttachedResearchContextHistory
 }: Props) => {
   const { t } = useTranslation(["playground", "common", "option"])
@@ -7627,24 +7635,64 @@ export const PlaygroundForm = ({
                   {attachedResearchContext && (
                       <AttachedResearchContextChip
                         context={attachedResearchContext}
+                        pinned={attachedResearchContextPinned}
                         history={attachedResearchContextHistory}
                         onPreview={openRawRequestModal}
                         onRemove={() => onRemoveAttachedResearchContext?.()}
+                        onPin={() => onPinAttachedResearchContext?.()}
+                        onUnpin={() => onUnpinAttachedResearchContext?.()}
+                        onRestorePinned={() => onRestorePinnedResearchContext?.()}
                         onSelectHistory={onSelectAttachedResearchContextHistory}
                       />
                     )}
                     {!attachedResearchContext &&
-                    attachedResearchContextHistory.length > 0 ? (
+                    (attachedResearchContextPinned ||
+                      attachedResearchContextHistory.length > 0) ? (
                       <div
                         data-testid="attached-research-context-history-fallback"
                         className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text"
                       >
-                        <span className="font-medium text-text-muted">
-                          {t(
-                            "playground:composer.recentResearch",
-                            "Recent research"
-                          )}
-                        </span>
+                        {attachedResearchContextPinned ? (
+                          <>
+                            <span className="font-medium text-text-muted">
+                              {t(
+                                "playground:composer.pinnedResearch",
+                                "Pinned research"
+                              )}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onRestorePinnedResearchContext?.()}
+                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                            >
+                              {attachedResearchContextPinned.query}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onUnpinAttachedResearchContext?.()}
+                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                            >
+                              {t("playground:actions.unpinResearchContext", "Unpin")}
+                            </button>
+                          </>
+                        ) : null}
+                        {attachedResearchContextPinned &&
+                        attachedResearchContextHistory.length > 0 ? (
+                          <span className="font-medium text-text-muted">
+                            {t(
+                              "playground:composer.recentResearch",
+                              "Recent research"
+                            )}
+                          </span>
+                        ) : null}
+                        {!attachedResearchContextPinned ? (
+                          <span className="font-medium text-text-muted">
+                            {t(
+                              "playground:composer.recentResearch",
+                              "Recent research"
+                            )}
+                          </span>
+                        ) : null}
                         {attachedResearchContextHistory.map((entry) => (
                           <button
                             key={entry.run_id}

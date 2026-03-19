@@ -7,20 +7,29 @@ import type { AttachedResearchContext } from "./research-chat-context"
 
 type AttachedResearchContextChipProps = {
   context: AttachedResearchContext
+  pinned?: AttachedResearchContext | null
   history?: AttachedResearchContext[]
   onPreview?: () => void
   onRemove: () => void
+  onPin?: () => void
+  onUnpin?: () => void
+  onRestorePinned?: () => void
   onSelectHistory?: (context: AttachedResearchContext) => void
 }
 
 export const AttachedResearchContextChip = ({
   context,
+  pinned = null,
   history = [],
   onPreview,
   onRemove,
+  onPin,
+  onUnpin,
+  onRestorePinned,
   onSelectHistory
 }: AttachedResearchContextChipProps) => {
   const { t } = useTranslation(["playground", "common"])
+  const pinnedMatchesActive = pinned?.run_id === context.run_id
 
   return (
     <div
@@ -54,6 +63,23 @@ export const AttachedResearchContextChip = ({
             )}
           </button>
         ) : null}
+        {pinnedMatchesActive ? (
+          <button
+            type="button"
+            onClick={onUnpin}
+            className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
+          >
+            {t("playground:actions.unpinResearchContext", "Unpin")}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onPin}
+            className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
+          >
+            {t("playground:actions.pinResearchContext", "Pin")}
+          </button>
+        )}
         <Link
           to={context.research_url}
           className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
@@ -80,6 +106,30 @@ export const AttachedResearchContextChip = ({
           <X className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
+      {pinned && !pinnedMatchesActive ? (
+        <div
+          data-testid="attached-research-context-pinned"
+          className="flex w-full flex-wrap items-center gap-2 border-t border-primary/20 pt-2 text-[11px]"
+        >
+          <span className="font-medium text-primaryStrong/90">
+            {t("playground:composer.pinnedResearch", "Pinned research")}
+          </span>
+          <button
+            type="button"
+            onClick={onRestorePinned}
+            className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+          >
+            {pinned.query}
+          </button>
+          <button
+            type="button"
+            onClick={onUnpin}
+            className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+          >
+            {t("playground:actions.unpinResearchContext", "Unpin")}
+          </button>
+        </div>
+      ) : null}
       {history.length > 0 ? (
         <div
           data-testid="attached-research-context-history"

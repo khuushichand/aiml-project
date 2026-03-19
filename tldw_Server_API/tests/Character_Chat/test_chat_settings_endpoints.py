@@ -138,6 +138,47 @@ async def test_chat_settings_roundtrip_persists_deep_research_attachment_history
 
 
 @pytest.mark.asyncio
+async def test_chat_settings_roundtrip_persists_deep_research_pinned_attachment(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_deep_research_pinned_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            chat_id = await _create_chat(client, headers)
+            payload = {
+                "settings": {
+                    "schemaVersion": 2,
+                    "updatedAt": "2026-03-08T20:00:00Z",
+                    "deepResearchPinnedAttachment": _valid_attachment(run_id="run_pinned"),
+                }
+            }
+
+            put_response = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json=payload,
+            )
+            assert put_response.status_code == 200, put_response.text
+
+            get_response = await client.get(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+            )
+            assert get_response.status_code == 200, get_response.text
+            stored = get_response.json()["settings"]["deepResearchPinnedAttachment"]
+            assert stored["run_id"] == "run_pinned"
+            assert stored["verification_summary"]["unsupported_claim_count"] == 1
+            assert stored["source_trust_summary"]["high_trust_count"] == 2
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_chat_settings_rejects_unknown_keys_inside_deep_research_attachment(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_attachment_unknown_key_")
     monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
@@ -165,6 +206,39 @@ async def test_chat_settings_rejects_unknown_keys_inside_deep_research_attachmen
             )
             assert response.status_code == 422, response.text
             assert "deepResearchAttachment" in response.json()["detail"]
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_chat_settings_rejects_unknown_keys_inside_deep_research_pinned_attachment(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_pinned_unknown_key_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            chat_id = await _create_chat(client, headers)
+            pinned_attachment = _valid_attachment(run_id="run_pinned")
+            pinned_attachment["full_bundle"] = {"too": "much"}
+
+            response = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": "2026-03-08T20:00:00Z",
+                        "deepResearchPinnedAttachment": pinned_attachment,
+                    }
+                },
+            )
+            assert response.status_code == 422, response.text
+            assert "deepResearchPinnedAttachment" in response.json()["detail"]
     finally:
         reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -412,6 +486,83 @@ async def test_chat_settings_attachment_history_merge_prefers_newer_entries_and_
                 "run_hist_a",
             ]
             assert merged["deepResearchAttachmentHistory"][0]["query"] == "History Shared Newer"
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_chat_settings_pinned_attachment_merge_prefers_newer_entry_and_excludes_pinned_run_from_history(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_attachment_pinned_merge_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            chat_id = await _create_chat(client, headers)
+
+            baseline_response = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": "2026-03-08T20:10:00Z",
+                        "deepResearchPinnedAttachment": _valid_attachment(
+                            run_id="run_pinned",
+                            query="Older pinned attachment",
+                            updated_at="2026-03-08T20:00:00Z",
+                        ),
+                        "deepResearchAttachmentHistory": [
+                            _valid_attachment(
+                                run_id="run_hist_old",
+                                query="History old",
+                                updated_at="2026-03-08T19:59:00Z",
+                            ),
+                        ],
+                    }
+                },
+            )
+            assert baseline_response.status_code == 200, baseline_response.text
+
+            merge_response = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": "2026-03-08T20:12:00Z",
+                        "deepResearchPinnedAttachment": _valid_attachment(
+                            run_id="run_pinned",
+                            query="Newer pinned attachment",
+                            updated_at="2026-03-08T20:11:00Z",
+                        ),
+                        "deepResearchAttachmentHistory": [
+                            _valid_attachment(
+                                run_id="run_pinned",
+                                query="Pinned duplicate in history",
+                                updated_at="2026-03-08T20:10:30Z",
+                            ),
+                            _valid_attachment(
+                                run_id="run_hist_new",
+                                query="History new",
+                                updated_at="2026-03-08T20:10:00Z",
+                            ),
+                        ],
+                    }
+                },
+            )
+            assert merge_response.status_code == 200, merge_response.text
+
+            merged = merge_response.json()["settings"]
+            assert merged["deepResearchPinnedAttachment"]["query"] == "Newer pinned attachment"
+            assert [entry["run_id"] for entry in merged["deepResearchAttachmentHistory"]] == [
+                "run_hist_new",
+                "run_hist_old",
+            ]
     finally:
         reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)

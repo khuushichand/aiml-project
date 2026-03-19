@@ -5,9 +5,12 @@ import {
   clearAttachedResearchContext,
   deriveAttachedResearchContext,
   isDeepResearchCompletionMetadata,
+  pinAttachedResearchContext,
   resetAttachedResearchContext,
+  restorePinnedResearchContext,
   setAttachedResearchContextActive,
   sanitizeAttachedResearchContext,
+  unpinAttachedResearchContext,
   type AttachedResearchContext,
   toChatResearchContext
 } from "../research-chat-context"
@@ -213,6 +216,7 @@ describe("research-chat-context", () => {
       active,
       baseline: active,
       history: [prior],
+      pinned: null,
       nextActive: next
     })
 
@@ -237,6 +241,7 @@ describe("research-chat-context", () => {
       active,
       baseline: active,
       history,
+      pinned: null,
       nextActive: replacement
     })
 
@@ -258,6 +263,7 @@ describe("research-chat-context", () => {
       active,
       baseline: active,
       history,
+      pinned: null,
       nextActive: history[0]
     })
 
@@ -276,7 +282,8 @@ describe("research-chat-context", () => {
     const cleared = clearAttachedResearchContext({
       active,
       baseline: active,
-      history
+      history,
+      pinned: null
     })
 
     expect(cleared.active).toBeNull()
@@ -297,6 +304,7 @@ describe("research-chat-context", () => {
       active,
       baseline: active,
       history,
+      pinned: null,
       nextActive: next
     })
 
@@ -304,6 +312,102 @@ describe("research-chat-context", () => {
       "run_active",
       "run_hist_1",
       "run_hist_2"
+    ])
+  })
+
+  it("pinning the active attachment copies it into the pinned slot without changing active", () => {
+    const active = buildContext("run_active")
+    const history = [buildContext("run_hist_1")]
+
+    const pinned = pinAttachedResearchContext({
+      active,
+      baseline: active,
+      history,
+      pinned: null
+    })
+
+    expect(pinned.active?.run_id).toBe("run_active")
+    expect(pinned.pinned?.run_id).toBe("run_active")
+    expect(pinned.history.map((entry) => entry.run_id)).toEqual(["run_hist_1"])
+  })
+
+  it("pinning a history entry copies it into pinned without forcing it active", () => {
+    const active = buildContext("run_active")
+    const history = [buildContext("run_hist_pin"), buildContext("run_hist_keep")]
+
+    const pinned = pinAttachedResearchContext({
+      active,
+      baseline: active,
+      history,
+      pinned: null,
+      nextPinned: history[0]
+    })
+
+    expect(pinned.active?.run_id).toBe("run_active")
+    expect(pinned.pinned?.run_id).toBe("run_hist_pin")
+    expect(pinned.history.map((entry) => entry.run_id)).toEqual(["run_hist_keep"])
+  })
+
+  it("unpin clears only the pinned slot", () => {
+    const active = buildContext("run_active")
+    const pinnedAttachment = buildContext("run_pinned")
+    const history = [buildContext("run_hist_1")]
+
+    const next = unpinAttachedResearchContext({
+      active,
+      baseline: active,
+      history,
+      pinned: pinnedAttachment
+    })
+
+    expect(next.active?.run_id).toBe("run_active")
+    expect(next.pinned).toBeNull()
+    expect(next.history.map((entry) => entry.run_id)).toEqual(["run_hist_1"])
+  })
+
+  it("restoring pinned makes it active immediately and resets baseline", () => {
+    const active = buildContext("run_active")
+    const pinnedAttachment = buildContext("run_pinned")
+    const history = [buildContext("run_hist_1")]
+
+    const next = restorePinnedResearchContext({
+      active,
+      baseline: active,
+      history,
+      pinned: pinnedAttachment
+    })
+
+    expect(next.active?.run_id).toBe("run_pinned")
+    expect(next.baseline?.run_id).toBe("run_pinned")
+    expect(next.pinned?.run_id).toBe("run_pinned")
+    expect(next.history.map((entry) => entry.run_id)).toEqual([
+      "run_active",
+      "run_hist_1"
+    ])
+  })
+
+  it("restoring history while pinned exists preserves slot precedence and dedupe", () => {
+    const active = buildContext("run_active")
+    const pinnedAttachment = buildContext("run_pinned")
+    const history = [
+      buildContext("run_restore"),
+      buildContext("run_pinned"),
+      buildContext("run_hist_old")
+    ]
+
+    const transitioned = setAttachedResearchContextActive({
+      active,
+      baseline: active,
+      history,
+      pinned: pinnedAttachment,
+      nextActive: history[0]
+    })
+
+    expect(transitioned.active?.run_id).toBe("run_restore")
+    expect(transitioned.pinned?.run_id).toBe("run_pinned")
+    expect(transitioned.history.map((entry) => entry.run_id)).toEqual([
+      "run_active",
+      "run_hist_old"
     ])
   })
 })

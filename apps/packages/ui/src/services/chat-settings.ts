@@ -170,15 +170,20 @@ const sanitizeDeepResearchAttachment = (
 
 const sanitizeDeepResearchAttachmentHistory = (
   value: unknown,
-  activeRunId?: string | null
+  excludedRunIds?: Iterable<string | null | undefined>
 ): DeepResearchAttachment[] | undefined => {
   if (!Array.isArray(value)) return undefined
+  const excluded = new Set(
+    Array.from(excludedRunIds ?? []).filter(
+      (runId): runId is string => typeof runId === "string" && runId.length > 0
+    )
+  )
 
   const byRunId = new Map<string, DeepResearchAttachment>()
   for (const rawEntry of value) {
     const entry = sanitizeDeepResearchAttachment(rawEntry)
     if (!entry) continue
-    if (activeRunId && entry.run_id === activeRunId) continue
+    if (excluded.has(entry.run_id)) continue
     const existing = byRunId.get(entry.run_id)
     if (!existing || toEpoch(entry.updatedAt) > toEpoch(existing.updatedAt)) {
       byRunId.set(entry.run_id, entry)
@@ -219,26 +224,51 @@ const coerceSettings = (raw: any): ChatSettingsRecord | null => {
     schemaVersion,
     updatedAt
   }
-  const sanitizedAttachment = Object.prototype.hasOwnProperty.call(
+  const hasAttachment = Object.prototype.hasOwnProperty.call(
     raw,
     "deepResearchAttachment"
   )
-    ? raw.deepResearchAttachment === null
-      ? null
-      : sanitizeDeepResearchAttachment(raw.deepResearchAttachment)
-    : undefined
+  const rawAttachment = hasAttachment ? raw.deepResearchAttachment : undefined
+  const sanitizedAttachment =
+    hasAttachment && rawAttachment !== null
+      ? sanitizeDeepResearchAttachment(rawAttachment)
+      : undefined
 
-  if (Object.prototype.hasOwnProperty.call(raw, "deepResearchAttachment")) {
-    if (sanitizedAttachment === null) {
+  if (hasAttachment) {
+    if (rawAttachment === null) {
       next.deepResearchAttachment = null
     } else if (sanitizedAttachment) {
       next.deepResearchAttachment = sanitizedAttachment
     }
   }
+  const hasPinnedAttachment = Object.prototype.hasOwnProperty.call(
+    raw,
+    "deepResearchPinnedAttachment"
+  )
+  const rawPinnedAttachment = hasPinnedAttachment
+    ? raw.deepResearchPinnedAttachment
+    : undefined
+  const sanitizedPinnedAttachment =
+    hasPinnedAttachment && rawPinnedAttachment !== null
+      ? sanitizeDeepResearchAttachment(rawPinnedAttachment)
+      : undefined
+
+  if (hasPinnedAttachment) {
+    if (rawPinnedAttachment === null) {
+      next.deepResearchPinnedAttachment = null
+    } else if (sanitizedPinnedAttachment) {
+      next.deepResearchPinnedAttachment = sanitizedPinnedAttachment
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(raw, "deepResearchAttachmentHistory")) {
     next.deepResearchAttachmentHistory = sanitizeDeepResearchAttachmentHistory(
       raw.deepResearchAttachmentHistory,
-      sanitizedAttachment?.run_id ?? next.deepResearchAttachment?.run_id ?? null
+      [
+        sanitizedAttachment?.run_id ?? next.deepResearchAttachment?.run_id ?? null,
+        sanitizedPinnedAttachment?.run_id ??
+          next.deepResearchPinnedAttachment?.run_id ??
+          null
+      ]
     )
   }
   return next
@@ -344,12 +374,33 @@ export const mergeChatSettings = (
         : local.deepResearchAttachment
   }
 
+  if (
+    local.deepResearchPinnedAttachment &&
+    remote.deepResearchPinnedAttachment &&
+    local.deepResearchPinnedAttachment !== null &&
+    remote.deepResearchPinnedAttachment !== null
+  ) {
+    const localPinnedTime = toEpoch(local.deepResearchPinnedAttachment.updatedAt)
+    const remotePinnedTime = toEpoch(remote.deepResearchPinnedAttachment.updatedAt)
+    merged.deepResearchPinnedAttachment =
+      remotePinnedTime >= localPinnedTime
+        ? remote.deepResearchPinnedAttachment
+        : local.deepResearchPinnedAttachment
+  } else if (remote.deepResearchPinnedAttachment !== undefined) {
+    merged.deepResearchPinnedAttachment = remote.deepResearchPinnedAttachment
+  } else if (local.deepResearchPinnedAttachment !== undefined) {
+    merged.deepResearchPinnedAttachment = local.deepResearchPinnedAttachment
+  }
+
   const mergedHistory = sanitizeDeepResearchAttachmentHistory(
     [
       ...(local.deepResearchAttachmentHistory || []),
       ...(remote.deepResearchAttachmentHistory || [])
     ],
-    merged.deepResearchAttachment?.run_id ?? null
+    [
+      merged.deepResearchAttachment?.run_id ?? null,
+      merged.deepResearchPinnedAttachment?.run_id ?? null
+    ]
   )
   if (mergedHistory !== undefined) {
     merged.deepResearchAttachmentHistory = mergedHistory

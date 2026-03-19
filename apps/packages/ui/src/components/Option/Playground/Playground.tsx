@@ -42,9 +42,12 @@ import {
 import {
   clearAttachedResearchContext,
   fromPersistedDeepResearchAttachment,
+  pinAttachedResearchContext,
   resetAttachedResearchContext,
+  restorePinnedResearchContext,
   setAttachedResearchContextActive,
   toPersistedDeepResearchAttachment,
+  unpinAttachedResearchContext,
   type AttachedResearchContext
 } from "./research-chat-context"
 import {
@@ -66,6 +69,8 @@ export const Playground = () => {
   const [attachedResearchContext, setAttachedResearchContext] =
     React.useState<AttachedResearchContext | null>(null)
   const [attachedResearchContextBaseline, setAttachedResearchContextBaseline] =
+    React.useState<AttachedResearchContext | null>(null)
+  const [attachedResearchContextPinned, setAttachedResearchContextPinned] =
     React.useState<AttachedResearchContext | null>(null)
   const [attachedResearchContextHistory, setAttachedResearchContextHistory] =
     React.useState<AttachedResearchContext[]>([])
@@ -265,6 +270,7 @@ export const Playground = () => {
     ) {
       setAttachedResearchContext(null)
       setAttachedResearchContextBaseline(null)
+      setAttachedResearchContextPinned(null)
       setAttachedResearchContextHistory([])
     }
     previousThreadRef.current = currentThreadKey
@@ -273,6 +279,7 @@ export const Playground = () => {
   const persistAttachedResearchContext = React.useCallback(
     async (
       context: AttachedResearchContext | null,
+      pinned: AttachedResearchContext | null,
       history: AttachedResearchContext[]
     ) => {
       if (!serverChatId || !stableHistoryId) {
@@ -285,6 +292,9 @@ export const Playground = () => {
           patch: {
             deepResearchAttachment: context
               ? toPersistedDeepResearchAttachment(context)
+              : null,
+            deepResearchPinnedAttachment: pinned
+              ? toPersistedDeepResearchAttachment(pinned)
               : null,
             deepResearchAttachmentHistory: history.map((entry) =>
               toPersistedDeepResearchAttachment(entry, entry.attached_at)
@@ -317,13 +327,22 @@ export const Playground = () => {
         const restoredAttachment = settings?.deepResearchAttachment
           ? fromPersistedDeepResearchAttachment(settings.deepResearchAttachment)
           : null
+        const restoredPinnedAttachment = settings?.deepResearchPinnedAttachment
+          ? fromPersistedDeepResearchAttachment(
+              settings.deepResearchPinnedAttachment
+            )
+          : null
         const restoredHistory = Array.isArray(settings?.deepResearchAttachmentHistory)
           ? settings.deepResearchAttachmentHistory.map(
               fromPersistedDeepResearchAttachment
             )
           : []
-        setAttachedResearchContext((current) => current ?? restoredAttachment)
-        setAttachedResearchContextBaseline((current) => current ?? restoredAttachment)
+        const restoredActive = restoredAttachment ?? restoredPinnedAttachment
+        setAttachedResearchContext((current) => current ?? restoredActive)
+        setAttachedResearchContextBaseline((current) => current ?? restoredActive)
+        setAttachedResearchContextPinned(
+          (current) => current ?? restoredPinnedAttachment
+        )
         setAttachedResearchContextHistory((current) =>
           current.length > 0 ? current : restoredHistory
         )
@@ -344,17 +363,24 @@ export const Playground = () => {
       const nextState = setAttachedResearchContextActive({
         active: attachedResearchContext,
         baseline: attachedResearchContextBaseline,
+        pinned: attachedResearchContextPinned,
         history: attachedResearchContextHistory,
         nextActive: context
       })
       setAttachedResearchContext(nextState.active)
       setAttachedResearchContextBaseline(nextState.baseline)
+      setAttachedResearchContextPinned(nextState.pinned)
       setAttachedResearchContextHistory(nextState.history)
-      void persistAttachedResearchContext(nextState.active, nextState.history)
+      void persistAttachedResearchContext(
+        nextState.active,
+        nextState.pinned,
+        nextState.history
+      )
     },
     [
       attachedResearchContext,
       attachedResearchContextBaseline,
+      attachedResearchContextPinned,
       attachedResearchContextHistory,
       persistAttachedResearchContext
     ]
@@ -363,18 +389,31 @@ export const Playground = () => {
   const handleApplyAttachedResearchContext = React.useCallback(
     (context: AttachedResearchContext) => {
       setAttachedResearchContext(context)
-      void persistAttachedResearchContext(context, attachedResearchContextHistory)
+      void persistAttachedResearchContext(
+        context,
+        attachedResearchContextPinned,
+        attachedResearchContextHistory
+      )
     },
-    [attachedResearchContextHistory, persistAttachedResearchContext]
+    [
+      attachedResearchContextHistory,
+      attachedResearchContextPinned,
+      persistAttachedResearchContext
+    ]
   )
 
   const handleResetAttachedResearchContext = React.useCallback(() => {
     const resetContext = resetAttachedResearchContext(attachedResearchContextBaseline)
     setAttachedResearchContext(resetContext)
-    void persistAttachedResearchContext(resetContext, attachedResearchContextHistory)
+    void persistAttachedResearchContext(
+      resetContext,
+      attachedResearchContextPinned,
+      attachedResearchContextHistory
+    )
   }, [
     attachedResearchContextBaseline,
     attachedResearchContextHistory,
+    attachedResearchContextPinned,
     persistAttachedResearchContext
   ])
 
@@ -382,15 +421,22 @@ export const Playground = () => {
     const cleared = clearAttachedResearchContext({
       active: attachedResearchContext,
       baseline: attachedResearchContextBaseline,
+      pinned: attachedResearchContextPinned,
       history: attachedResearchContextHistory
     })
     setAttachedResearchContext(cleared.active)
     setAttachedResearchContextBaseline(cleared.baseline)
+    setAttachedResearchContextPinned(cleared.pinned)
     setAttachedResearchContextHistory(cleared.history)
-    void persistAttachedResearchContext(cleared.active, cleared.history)
+    void persistAttachedResearchContext(
+      cleared.active,
+      cleared.pinned,
+      cleared.history
+    )
   }, [
     attachedResearchContext,
     attachedResearchContextBaseline,
+    attachedResearchContextPinned,
     attachedResearchContextHistory,
     persistAttachedResearchContext
   ])
@@ -400,21 +446,100 @@ export const Playground = () => {
       const nextState = setAttachedResearchContextActive({
         active: attachedResearchContext,
         baseline: attachedResearchContextBaseline,
+        pinned: attachedResearchContextPinned,
         history: attachedResearchContextHistory,
         nextActive: context
       })
       setAttachedResearchContext(nextState.active)
       setAttachedResearchContextBaseline(nextState.baseline)
+      setAttachedResearchContextPinned(nextState.pinned)
       setAttachedResearchContextHistory(nextState.history)
-      void persistAttachedResearchContext(nextState.active, nextState.history)
+      void persistAttachedResearchContext(
+        nextState.active,
+        nextState.pinned,
+        nextState.history
+      )
     },
     [
       attachedResearchContext,
       attachedResearchContextBaseline,
+      attachedResearchContextPinned,
       attachedResearchContextHistory,
       persistAttachedResearchContext
     ]
   )
+
+  const handlePinAttachedResearchContext = React.useCallback(() => {
+    const nextState = pinAttachedResearchContext({
+      active: attachedResearchContext,
+      baseline: attachedResearchContextBaseline,
+      pinned: attachedResearchContextPinned,
+      history: attachedResearchContextHistory
+    })
+    setAttachedResearchContext(nextState.active)
+    setAttachedResearchContextBaseline(nextState.baseline)
+    setAttachedResearchContextPinned(nextState.pinned)
+    setAttachedResearchContextHistory(nextState.history)
+    void persistAttachedResearchContext(
+      nextState.active,
+      nextState.pinned,
+      nextState.history
+    )
+  }, [
+    attachedResearchContext,
+    attachedResearchContextBaseline,
+    attachedResearchContextPinned,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
+
+  const handleUnpinAttachedResearchContext = React.useCallback(() => {
+    const nextState = unpinAttachedResearchContext({
+      active: attachedResearchContext,
+      baseline: attachedResearchContextBaseline,
+      pinned: attachedResearchContextPinned,
+      history: attachedResearchContextHistory
+    })
+    setAttachedResearchContext(nextState.active)
+    setAttachedResearchContextBaseline(nextState.baseline)
+    setAttachedResearchContextPinned(nextState.pinned)
+    setAttachedResearchContextHistory(nextState.history)
+    void persistAttachedResearchContext(
+      nextState.active,
+      nextState.pinned,
+      nextState.history
+    )
+  }, [
+    attachedResearchContext,
+    attachedResearchContextBaseline,
+    attachedResearchContextPinned,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
+
+  const handleRestorePinnedResearchContext = React.useCallback(() => {
+    const nextState = restorePinnedResearchContext({
+      active: attachedResearchContext,
+      baseline: attachedResearchContextBaseline,
+      pinned: attachedResearchContextPinned,
+      history: attachedResearchContextHistory
+    })
+    setAttachedResearchContext(nextState.active)
+    setAttachedResearchContextBaseline(nextState.baseline)
+    setAttachedResearchContextPinned(nextState.pinned)
+    setAttachedResearchContextHistory(nextState.history)
+    void persistAttachedResearchContext(
+      nextState.active,
+      nextState.pinned,
+      nextState.history
+    )
+  }, [
+    attachedResearchContext,
+    attachedResearchContextBaseline,
+    attachedResearchContextPinned,
+    attachedResearchContextHistory,
+    persistAttachedResearchContext
+  ])
 
   // Session persistence for draft restoration
   const {
@@ -1378,10 +1503,16 @@ export const Playground = () => {
               droppedFiles={droppedFiles}
               attachedResearchContext={attachedResearchContext}
               attachedResearchContextBaseline={attachedResearchContextBaseline}
+              attachedResearchContextPinned={attachedResearchContextPinned}
               attachedResearchContextHistory={attachedResearchContextHistory}
               onApplyAttachedResearchContext={handleApplyAttachedResearchContext}
               onResetAttachedResearchContext={handleResetAttachedResearchContext}
               onRemoveAttachedResearchContext={handleRemoveAttachedResearchContext}
+              onPinAttachedResearchContext={handlePinAttachedResearchContext}
+              onUnpinAttachedResearchContext={handleUnpinAttachedResearchContext}
+              onRestorePinnedResearchContext={
+                handleRestorePinnedResearchContext
+              }
               onSelectAttachedResearchContextHistory={
                 handleSelectAttachedResearchContextHistory
               }

@@ -110,6 +110,11 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
       query?: string
       question?: string
     } | null
+    attachedResearchContextPinned?: {
+      run_id?: string
+      query?: string
+      question?: string
+    } | null
     attachedResearchContextHistory?: Array<{
       run_id?: string
       query?: string
@@ -120,6 +125,9 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
     ) => void
     onResetAttachedResearchContext?: () => void
     onRemoveAttachedResearchContext?: () => void
+    onPinAttachedResearchContext?: () => void
+    onUnpinAttachedResearchContext?: () => void
+    onRestorePinnedResearchContext?: () => void
     onSelectAttachedResearchContextHistory?: (
       context: ReturnType<typeof buildAttachedContext>
     ) => void
@@ -131,6 +139,7 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
       data-attached-question={props.attachedResearchContext?.question || ""}
       data-baseline-run-id={props.attachedResearchContextBaseline?.run_id || ""}
       data-baseline-question={props.attachedResearchContextBaseline?.question || ""}
+      data-pinned-run-id={props.attachedResearchContextPinned?.run_id || ""}
       data-history-run-ids={(props.attachedResearchContextHistory || [])
         .map((entry) => entry.run_id || "")
         .join(",")}
@@ -162,6 +171,28 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
             onClick={() => props.onRemoveAttachedResearchContext?.()}
           >
             Remove attached research
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onPinAttachedResearchContext?.()}
+          >
+            Pin attached research
+          </button>
+        </>
+      ) : null}
+      {props.attachedResearchContextPinned ? (
+        <>
+          <button
+            type="button"
+            onClick={() => props.onRestorePinnedResearchContext?.()}
+          >
+            Restore pinned research
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onUnpinAttachedResearchContext?.()}
+          >
+            Unpin attached research
           </button>
         </>
       ) : null}
@@ -462,6 +493,10 @@ describe("Playground research context integration", () => {
       "run_saved"
     )
     expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-pinned-run-id",
+      ""
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
       "data-history-run-ids",
       "run_hist_1,run_hist_2"
     )
@@ -469,6 +504,40 @@ describe("Playground research context integration", () => {
       historyId: "history-1",
       serverChatId: "chat-1"
     })
+  })
+
+  it("auto-restores the pinned attachment when a saved chat has no active attachment", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchPinnedAttachment: buildPersistedAttachment(
+        "run_pinned",
+        "Pinned recycling run"
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1")
+      ]
+    })
+
+    render(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_pinned"
+      )
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-baseline-run-id",
+      "run_pinned"
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-pinned-run-id",
+      "run_pinned"
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-history-run-ids",
+      "run_hist_1"
+    )
   })
 
   it("persists attachment attach, edit, remove, and history swaps for saved chats", async () => {
@@ -578,6 +647,71 @@ describe("Playground research context integration", () => {
     ).toBeInTheDocument()
   })
 
+  it("persists pin and unpin actions for saved chats", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: buildPersistedAttachment(
+        "run_saved",
+        "Recovered battery recycling run"
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1")
+      ]
+    })
+
+    render(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_saved"
+      )
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Pin attached research" }))
+    await waitFor(() =>
+      expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: expect.objectContaining({
+            deepResearchPinnedAttachment: expect.objectContaining({
+              run_id: "run_saved"
+            }),
+            deepResearchAttachment: expect.objectContaining({
+              run_id: "run_saved"
+            }),
+            deepResearchAttachmentHistory: [
+              expect.objectContaining({ run_id: "run_hist_1" })
+            ]
+          })
+        })
+      )
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-pinned-run-id",
+      "run_saved"
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Unpin attached research" })
+    )
+    await waitFor(() =>
+      expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: expect.objectContaining({
+            deepResearchPinnedAttachment: null,
+            deepResearchAttachment: expect.objectContaining({
+              run_id: "run_saved"
+            })
+          })
+        })
+      )
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-pinned-run-id",
+      ""
+    )
+  })
+
   it("does not persist attachments for temporary chats", async () => {
     messageOptionState.value.serverChatId = null
     messageOptionState.value.historyId = "temp"
@@ -605,6 +739,10 @@ describe("Playground research context integration", () => {
             deepResearchAttachment: buildPersistedAttachment(
               "run_one",
               "First saved run"
+            ),
+            deepResearchPinnedAttachment: buildPersistedAttachment(
+              "run_one_pinned",
+              "First saved pinned run"
             )
           }
         }
@@ -614,6 +752,10 @@ describe("Playground research context integration", () => {
             deepResearchAttachment: buildPersistedAttachment(
               "run_two",
               "Second saved run"
+            ),
+            deepResearchPinnedAttachment: buildPersistedAttachment(
+              "run_two_pinned",
+              "Second saved pinned run"
             )
           }
         }
@@ -629,6 +771,10 @@ describe("Playground research context integration", () => {
         "run_one"
       )
     )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-pinned-run-id",
+      "run_one_pinned"
+    )
 
     messageOptionState.value.serverChatId = "chat-2"
     messageOptionState.value.historyId = "history-2"
@@ -639,6 +785,10 @@ describe("Playground research context integration", () => {
         "data-attached-run-id",
         "run_two"
       )
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-pinned-run-id",
+      "run_two_pinned"
     )
   })
 })

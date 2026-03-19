@@ -532,6 +532,10 @@ def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
         settings.get("deepResearchAttachment"),
         detail_prefix="deepResearchAttachment",
     )
+    _validate_deep_research_attachment(
+        settings.get("deepResearchPinnedAttachment"),
+        detail_prefix="deepResearchPinnedAttachment",
+    )
     _validate_deep_research_attachment_history(settings.get("deepResearchAttachmentHistory"))
 
     memory_by_id = settings.get("characterMemoryById")
@@ -879,7 +883,7 @@ def _merge_deep_research_attachment_history(
     server_history_raw: Any,
     incoming_history_raw: Any,
     *,
-    active_run_id: str | None,
+    excluded_run_ids: set[str] | None,
 ) -> Optional[list[dict[str, Any]]]:
     if not isinstance(server_history_raw, list) and not isinstance(incoming_history_raw, list):
         return None
@@ -895,7 +899,7 @@ def _merge_deep_research_attachment_history(
             run_id = entry.get("run_id")
             if not isinstance(run_id, str) or not run_id.strip():
                 continue
-            if active_run_id and run_id == active_run_id:
+            if excluded_run_ids and run_id in excluded_run_ids:
                 continue
             entry_updated_at = _parse_iso_timestamp(entry.get("updatedAt")) or 0.0
             existing = merged_by_run_id.get(run_id)
@@ -1039,8 +1043,33 @@ def _merge_conversation_settings(
                 else:
                     merged["deepResearchAttachment"] = server_attachment
 
+    if "deepResearchPinnedAttachment" in incoming_settings and incoming_settings.get("deepResearchPinnedAttachment") is None:
+        merged.pop("deepResearchPinnedAttachment", None)
+    else:
+        server_pinned_attachment = server_settings.get("deepResearchPinnedAttachment")
+        incoming_pinned_attachment = incoming_settings.get("deepResearchPinnedAttachment")
+        if isinstance(server_pinned_attachment, dict) or isinstance(incoming_pinned_attachment, dict):
+            if not isinstance(server_pinned_attachment, dict):
+                merged["deepResearchPinnedAttachment"] = incoming_pinned_attachment
+            elif not isinstance(incoming_pinned_attachment, dict):
+                merged["deepResearchPinnedAttachment"] = server_pinned_attachment
+            else:
+                server_pinned_updated_at = _parse_iso_timestamp(server_pinned_attachment.get("updatedAt")) or 0.0
+                incoming_pinned_updated_at = _parse_iso_timestamp(incoming_pinned_attachment.get("updatedAt")) or 0.0
+                if incoming_pinned_updated_at > server_pinned_updated_at:
+                    merged["deepResearchPinnedAttachment"] = incoming_pinned_attachment
+                else:
+                    merged["deepResearchPinnedAttachment"] = server_pinned_attachment
+
     active_attachment = merged.get("deepResearchAttachment")
     active_run_id = active_attachment.get("run_id") if isinstance(active_attachment, dict) else None
+    pinned_attachment = merged.get("deepResearchPinnedAttachment")
+    pinned_run_id = pinned_attachment.get("run_id") if isinstance(pinned_attachment, dict) else None
+    excluded_run_ids = {
+        run_id
+        for run_id in (active_run_id, pinned_run_id)
+        if isinstance(run_id, str) and run_id
+    }
 
     if "deepResearchAttachmentHistory" in incoming_settings and incoming_settings.get("deepResearchAttachmentHistory") is None:
         merged.pop("deepResearchAttachmentHistory", None)
@@ -1048,7 +1077,7 @@ def _merge_conversation_settings(
         merged_history = _merge_deep_research_attachment_history(
             server_settings.get("deepResearchAttachmentHistory"),
             incoming_settings.get("deepResearchAttachmentHistory"),
-            active_run_id=active_run_id if isinstance(active_run_id, str) else None,
+            excluded_run_ids=excluded_run_ids or None,
         )
         if merged_history:
             merged["deepResearchAttachmentHistory"] = merged_history
