@@ -134,7 +134,7 @@ _Generated from `Helper_Scripts/generate_audio_bundle_docs.py` and the setup bun
 ## Provisioning Modes
 
 - `Online provisioning`: `/setup` installs Python dependencies, downloads model assets, and verifies the selected bundle/profile on the current machine.
-- `Offline pack import`: the setup audio pack import endpoint validates a previously exported manifest against local platform, arch, and Python compatibility, then registers the imported pack in the readiness report.
+- `Offline pack import`: the setup audio pack import endpoint validates a manifest stored under `Config_Files/audio_packs/` against local platform, arch, and Python compatibility, then registers the imported pack in the readiness report.
 - `Offline pack` v1 scope: manifest + model portability only. It does not install Python dependencies or OS prerequisites on the target machine.
 
 ## Verification After Provisioning

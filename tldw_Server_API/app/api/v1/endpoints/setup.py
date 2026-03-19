@@ -87,23 +87,12 @@ def _audio_pack_compatibility(machine_profile: audio_profile_service.MachineProf
     }
 
 
-def _normalize_audio_pack_path(pack_path: str) -> Path:
-    """Normalize a local pack path while rejecting parent traversal segments."""
-    candidate = Path(pack_path).expanduser()
-    if any(part == ".." for part in candidate.parts):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="Audio pack path must not contain parent directory traversal.",
-        )
-    if not candidate.name or candidate.suffix.lower() != ".json":
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="Audio pack path must point to a JSON file.",
-        )
+def _normalize_audio_pack_name(pack_name: str) -> str:
+    """Normalize a managed audio pack filename before resolving it under the setup pack directory."""
     try:
-        return candidate.resolve(strict=False)
-    except OSError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid audio pack path.") from exc
+        return audio_pack_service.normalize_audio_pack_name(pack_name)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def _raise_audio_bundle_lookup_not_found(exc: KeyError) -> None:
@@ -280,15 +269,15 @@ async def export_audio_pack(
     if not status_snapshot["enabled"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
 
-    pack_path = _normalize_audio_pack_path(payload.pack_path) if payload.pack_path else None
+    pack_name = _normalize_audio_pack_name(payload.pack_name) if payload.pack_name else None
     readiness = audio_readiness_store.get_audio_readiness_store().load()
     machine_profile = audio_profile_service.detect_machine_profile()
     compatibility = _audio_pack_compatibility(machine_profile)
 
     try:
-        if pack_path:
+        if pack_name:
             manifest = audio_pack_service.write_audio_pack_manifest(
-                pack_path=pack_path,
+                pack_name=pack_name,
                 bundle_id=payload.bundle_id,
                 resource_profile=payload.resource_profile,
                 installed_assets=readiness.get("installed_asset_manifests"),
@@ -307,7 +296,7 @@ async def export_audio_pack(
     return {
         "success": True,
         "manifest": manifest,
-        "pack_path": str(pack_path) if pack_path else None,
+        "pack_path": str(Path(audio_pack_service.AUDIO_PACKS_DIRNAME) / pack_name) if pack_name else None,
     }
 
 
@@ -322,14 +311,14 @@ async def import_audio_pack(
     if not status_snapshot["enabled"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
 
-    pack_path = _normalize_audio_pack_path(payload.pack_path)
+    pack_name = _normalize_audio_pack_name(payload.pack_name)
     machine_profile = audio_profile_service.detect_machine_profile()
     compatibility = _audio_pack_compatibility(machine_profile)
     readiness_store = audio_readiness_store.get_audio_readiness_store()
 
     try:
         result = audio_pack_service.register_imported_audio_pack(
-            pack_path,
+            pack_name,
             readiness_store=readiness_store,
             machine_profile=compatibility,
         )

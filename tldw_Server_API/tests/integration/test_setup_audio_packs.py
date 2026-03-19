@@ -85,7 +85,9 @@ def test_setup_audio_pack_import_updates_readiness(mocker, tmp_path):
     store = setup_endpoint.audio_readiness_store.AudioReadinessStore(
         tmp_path / "audio_readiness.json"
     )
-    pack_path = tmp_path / "audio_pack.json"
+    pack_root = tmp_path / "Config_Files" / "audio_packs"
+    pack_root.mkdir(parents=True, exist_ok=True)
+    pack_path = pack_root / "audio_pack.json"
     pack_path.write_text(
         json.dumps(
             {
@@ -137,11 +139,12 @@ def test_setup_audio_pack_import_updates_readiness(mocker, tmp_path):
         "get_audio_readiness_store",
         return_value=store,
     )
+    mocker.patch.object(setup_endpoint.audio_pack_service, "CONFIG_ROOT", tmp_path / "Config_Files")
 
     with _make_client() as client:
         response = client.post(
             "/api/v1/setup/audio/packs/import",
-            json={"pack_path": str(pack_path)},
+            json={"pack_name": "audio_pack.json"},
         )
         readiness = client.get("/api/v1/setup/audio/readiness")
 
@@ -150,7 +153,7 @@ def test_setup_audio_pack_import_updates_readiness(mocker, tmp_path):
     assert readiness.status_code == 200
     assert readiness.json()["selected_bundle_id"] == "cpu_local"
     assert readiness.json()["selected_resource_profile"] == "balanced"
-    assert readiness.json()["imported_packs"][0]["pack_path"] == str(pack_path)
+    assert readiness.json()["imported_packs"][0]["pack_path"] == "audio_packs/audio_pack.json"
 
 
 def test_setup_audio_pack_import_rejects_parent_directory_traversal(mocker):
@@ -163,30 +166,30 @@ def test_setup_audio_pack_import_rejects_parent_directory_traversal(mocker):
     with _make_client() as client:
         response = client.post(
             "/api/v1/setup/audio/packs/import",
-            json={"pack_path": "../audio_pack.json"},
+            json={"pack_name": "../audio_pack.json"},
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Audio pack path must not contain parent directory traversal."
+    assert response.json()["detail"] == "Audio pack names must be plain JSON filenames inside the managed audio_packs directory."
 
 
 def test_setup_audio_pack_import_masks_missing_path_details(mocker, tmp_path):
-    pack_path = tmp_path / "missing_pack.json"
     mocker.patch.object(
         setup_endpoint.setup_manager,
         "get_status_snapshot",
         return_value={"enabled": True, "needs_setup": True},
     )
+    mocker.patch.object(setup_endpoint.audio_pack_service, "CONFIG_ROOT", tmp_path / "Config_Files")
 
     with _make_client() as client:
         response = client.post(
             "/api/v1/setup/audio/packs/import",
-            json={"pack_path": str(pack_path)},
+            json={"pack_name": "missing_pack.json"},
         )
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Audio pack not found."
-    assert str(pack_path) not in response.text
+    assert "missing_pack.json" not in response.text
 
 
 def test_setup_audio_pack_export_masks_bundle_lookup_details(mocker):
@@ -223,3 +226,37 @@ def test_setup_audio_pack_export_masks_bundle_lookup_details(mocker):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Audio bundle or resource profile not found."
+
+
+def test_setup_audio_pack_export_writes_to_managed_audio_pack_directory(mocker, tmp_path):
+    config_root = tmp_path / "Config_Files"
+    mocker.patch.object(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        return_value={"enabled": True, "needs_setup": True},
+    )
+    mocker.patch.object(
+        setup_endpoint.audio_profile_service,
+        "detect_machine_profile",
+        return_value=MachineProfile(
+            platform="linux",
+            arch="x86_64",
+            apple_silicon=False,
+            cuda_available=False,
+            ffmpeg_available=True,
+            espeak_available=True,
+            free_disk_gb=64.0,
+            network_available_for_downloads=True,
+        ),
+    )
+    mocker.patch.object(setup_endpoint.audio_pack_service, "CONFIG_ROOT", config_root)
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/audio/packs/export",
+            json={"bundle_id": "cpu_local", "resource_profile": "balanced", "pack_name": "managed-pack.json"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["pack_path"] == "audio_packs/managed-pack.json"
+    assert (config_root / "audio_packs" / "managed-pack.json").is_file()

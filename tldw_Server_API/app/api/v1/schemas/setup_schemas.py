@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from tldw_Server_API.app.core.Setup.audio_readiness_store import AudioReadinessRecord
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
@@ -61,14 +61,36 @@ class AudioPackExportRequest(BaseModel):
         min_length=1,
         description="Selected resource profile within the curated audio bundle.",
     )
-    pack_path: str | None = Field(
+    pack_name: str | None = Field(
         None,
-        description="Optional path to write the generated audio pack manifest.",
+        description="Optional JSON filename to write under the setup-managed audio_packs directory.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_pack_path(cls, data: Any) -> Any:
+        if isinstance(data, dict) and not data.get("pack_name") and data.get("pack_path"):
+            payload = dict(data)
+            payload["pack_name"] = payload["pack_path"]
+            return payload
+        return data
 
 
 class AudioPackImportRequest(BaseModel):
-    pack_path: str = Field(..., min_length=1, description="Filesystem path to an audio pack manifest JSON file.")
+    pack_name: str = Field(
+        ...,
+        min_length=1,
+        description="JSON filename inside the setup-managed audio_packs directory.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_pack_path(cls, data: Any) -> Any:
+        if isinstance(data, dict) and not data.get("pack_name") and data.get("pack_path"):
+            payload = dict(data)
+            payload["pack_name"] = payload["pack_path"]
+            return payload
+        return data
 
 
 class SetupPlaceholderField(BaseModel):
@@ -170,4 +192,3 @@ class SetupResetResponse(BaseModel):
     success: bool
     message: str
     requires_restart: bool
-

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.core.Setup.audio_readiness_store import AudioReadinessStore
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     AUDIO_BUNDLE_CATALOG_VERSION,
@@ -20,7 +22,10 @@ from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     get_audio_bundle_catalog,
 )
 
+CONFIG_ROOT = setup_manager.CONFIG_RELATIVE_PATH.parent
 AUDIO_PACK_FORMAT = "audio_bundle_pack_manifest_v1"
+AUDIO_PACKS_DIRNAME = "audio_packs"
+_AUDIO_PACK_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
 
 
 def _utc_now() -> str:
@@ -42,6 +47,32 @@ def _default_compatibility() -> dict[str, str]:
         "arch": platform.machine().lower(),
         "python_version": _normalise_python_version(),
     }
+
+
+def get_audio_pack_root() -> Path:
+    """Return the setup-managed directory used for offline audio pack manifests."""
+    root = CONFIG_ROOT / AUDIO_PACKS_DIRNAME
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def normalize_audio_pack_name(pack_name: str) -> str:
+    """Validate that a caller provided only a bare JSON filename for a managed pack."""
+    normalized = str(pack_name or "").strip()
+    if not normalized or "/" in normalized or "\\" in normalized or not _AUDIO_PACK_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError(
+            "Audio pack names must be plain JSON filenames inside the managed audio_packs directory."
+        )
+    return normalized
+
+
+def resolve_audio_pack_path(pack_name: str) -> Path:
+    """Resolve a managed pack filename into the setup-controlled audio pack directory."""
+    return get_audio_pack_root() / normalize_audio_pack_name(pack_name)
+
+
+def _display_audio_pack_path(pack_name: str) -> str:
+    return str(Path(AUDIO_PACKS_DIRNAME) / normalize_audio_pack_name(pack_name))
 
 
 def _canonical_manifest_payload(payload: dict[str, Any]) -> bytes:
@@ -108,7 +139,7 @@ def build_audio_pack_manifest(
 
 def write_audio_pack_manifest(
     *,
-    pack_path: str | Path,
+    pack_name: str,
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
@@ -124,27 +155,26 @@ def write_audio_pack_manifest(
         compatibility=compatibility,
         installed_assets=installed_assets,
     )
-    destination = Path(pack_path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination = resolve_audio_pack_path(pack_name)
     destination.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
 
-def load_audio_pack_manifest(pack_path: str | Path) -> dict[str, Any]:
+def load_audio_pack_manifest(pack_name: str) -> dict[str, Any]:
     """Load an audio pack manifest from disk."""
 
-    return json.loads(Path(pack_path).read_text(encoding="utf-8"))
+    return json.loads(resolve_audio_pack_path(pack_name).read_text(encoding="utf-8"))
 
 
 def validate_audio_pack_manifest(
-    pack_path: str | Path,
+    pack_name: str,
     *,
     machine_profile: dict[str, Any] | None = None,
     python_version: str | None = None,
 ) -> dict[str, Any]:
     """Validate manifest checksum and local compatibility for an audio pack."""
 
-    manifest = load_audio_pack_manifest(pack_path)
+    manifest = load_audio_pack_manifest(pack_name)
     issues: list[str] = []
     warnings: list[str] = []
 
@@ -207,7 +237,7 @@ def validate_audio_pack_manifest(
 
 
 def register_imported_audio_pack(
-    pack_path: str | Path,
+    pack_name: str,
     *,
     readiness_store: AudioReadinessStore,
     machine_profile: dict[str, Any] | None = None,
@@ -216,7 +246,7 @@ def register_imported_audio_pack(
     """Validate an imported pack and persist its metadata into readiness."""
 
     validation = validate_audio_pack_manifest(
-        pack_path,
+        pack_name,
         machine_profile=machine_profile,
         python_version=python_version,
     )
@@ -225,7 +255,7 @@ def register_imported_audio_pack(
     imported_packs = list(readiness.get("imported_packs") or [])
     imported_packs.append(
         {
-            "pack_path": str(pack_path),
+            "pack_path": _display_audio_pack_path(pack_name),
             "bundle_id": manifest.get("bundle_id"),
             "resource_profile": manifest.get("resource_profile"),
             "catalog_version": manifest.get("catalog_version"),
@@ -255,9 +285,13 @@ def register_imported_audio_pack(
 
 __all__ = [
     "AUDIO_PACK_FORMAT",
+    "AUDIO_PACKS_DIRNAME",
     "build_audio_pack_manifest",
+    "get_audio_pack_root",
     "load_audio_pack_manifest",
+    "normalize_audio_pack_name",
     "register_imported_audio_pack",
+    "resolve_audio_pack_path",
     "validate_audio_pack_manifest",
     "write_audio_pack_manifest",
 ]
