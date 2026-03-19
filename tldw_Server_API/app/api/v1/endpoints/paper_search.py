@@ -66,7 +66,11 @@ from tldw_Server_API.app.api.v1.schemas.research_schemas import (
     SemanticScholarSearchRequestForm,
     SemanticScholarSearchResponse,
 )
-from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    MediaDbSession,
+    MediaWriterLike,
+    get_media_repository,
+)
 from tldw_Server_API.app.core.http_client import (
     RetryPolicy as _RetryPolicy,
 )
@@ -143,7 +147,7 @@ def _raise_http_error_from_exception(
 
 def _ingest_paper_search_media(
     *,
-    media_db: Any,
+    media_db: MediaDbSession | MediaWriterLike,
     url: str,
     title: str,
     media_type: str,
@@ -153,11 +157,10 @@ def _ingest_paper_search_media(
     **kwargs: Any,
 ) -> tuple[Any, Any, Any]:
     """Route paper-search ingest through the repository API for real DB sessions."""
-    media_writer = (
-        get_media_repository(media_db)
-        if hasattr(media_db, "backend") or hasattr(media_db, "db_path")
-        else media_db
-    )
+    try:
+        media_writer = get_media_repository(media_db)
+    except _PAPER_SEARCH_NONCRITICAL_EXCEPTIONS:
+        media_writer = media_db
     return media_writer.add_media_with_keywords(
         url=url,
         title=title,
@@ -795,7 +798,7 @@ async def pmc_oa_ingest_pdf(
     perform_analysis: bool = Query(True, description="Run analysis/summarization"),
     summarize_recursively: bool = Query(False, description="Enable recursive summarization"),
     enrich_metadata: bool = Query(True, description="Enrich with PMC OAI-PMH oai_dc metadata"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Convenience endpoint: fetch PMC PDF and ingest into user's Media DB."""
     loop = asyncio.get_running_loop()
@@ -1014,7 +1017,7 @@ async def arxiv_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -1176,7 +1179,7 @@ async def eartharxiv_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Download an EarthArXiv PDF by OSF ID, process, and persist to the Media DB."""
     loop = asyncio.get_running_loop()
@@ -1323,7 +1326,7 @@ async def pubmed_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -1477,7 +1480,7 @@ async def s2_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -2812,7 +2815,7 @@ async def ingest_by_doi(
     chunk_overlap: int = Query(200, ge=0, le=1000, description="Chunk overlap"),
     perform_analysis: bool = Query(True, description="Run analysis/summarization"),
     summarize_recursively: bool = Query(False, description="Enable recursive summarization"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Best-effort OA ingestion using Unpaywall DOI resolution.
 
@@ -2952,7 +2955,7 @@ async def ingest_by_doi(
 )
 async def ingest_batch(
     payload: IngestBatchRequest,
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     results: list[IngestBatchResultItem] = []
@@ -3784,7 +3787,7 @@ async def osf_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -4103,7 +4106,7 @@ async def zenodo_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Download a PDF from a Zenodo record (if available), process, and persist.
 
@@ -4384,7 +4387,7 @@ async def figshare_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -4534,7 +4537,7 @@ async def figshare_ingest_by_doi(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     """Convenience endpoint: resolves DOI to Figshare article, downloads its PDF, and ingests it."""
     loop = asyncio.get_running_loop()
@@ -4788,7 +4791,7 @@ async def hal_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:
@@ -4952,7 +4955,7 @@ async def vixra_ingest(
     ocr_min_page_text_chars: int = Query(40, ge=0, le=2000),
     ocr_output_format: Optional[str] = Query(None, description="OCR output format: text|markdown|json"),
     ocr_prompt_preset: Optional[str] = Query(None, description="OCR prompt preset (e.g., 'general', 'doc', 'table', 'spotting', 'json')"),
-    db: Any = Depends(get_media_db_for_user),
+    db: MediaDbSession = Depends(get_media_db_for_user),
 ):
     loop = asyncio.get_running_loop()
     try:

@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import os
+from collections.abc import Iterator, Mapping
 
 #
 # Local Imports
@@ -19,6 +20,7 @@ import sys
 import threading
 from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -115,7 +117,10 @@ _REQUEST_GUARD_EXCEPTIONS = (
 
 
 @contextmanager
-def _claims_rebuild_db_session(app_settings):
+def _claims_rebuild_db_session(
+    app_settings: Mapping[str, Any],
+) -> Iterator[tuple[int, str, Any]]:
+    """Yield one managed Media DB session for the claims rebuild worker loop."""
     user_id = int(app_settings.get("SINGLE_USER_FIXED_ID", "1"))
     db_path = str(get_user_media_db_path(user_id))
     client_id = str(app_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1"))
@@ -123,7 +128,6 @@ def _claims_rebuild_db_session(app_settings):
         client_id=client_id,
         db_path=db_path,
         initialize=False,
-        suppress_close_exceptions=_STARTUP_GUARD_EXCEPTIONS,
     ) as db:
         yield user_id, db_path, db
 

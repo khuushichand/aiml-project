@@ -155,11 +155,7 @@ def _ingest_watchlist_media(
     overwrite: bool = False,
 ) -> tuple[Any, Any, Any]:
     """Route watchlist media ingest through the repository API for real DB sessions."""
-    media_writer = (
-        get_media_repository(media_db)
-        if hasattr(media_db, "backend") or hasattr(media_db, "db_path")
-        else media_db
-    )
+    media_writer = get_media_repository(media_db)
     return media_writer.add_media_with_keywords(
         url=url,
         title=title,
@@ -629,7 +625,7 @@ async def run_watchlist_job(
                 managed_media_database(
                     client_id=str(user_id),
                     db_path=media_db_path,
-                    initialize=False,
+                    initialize=True,
                     suppress_close_exceptions=_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS,
                 )
             )

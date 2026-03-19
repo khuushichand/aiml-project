@@ -2,6 +2,7 @@
 
 import contextlib
 from collections.abc import Iterator
+from typing import Any, Protocol
 
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import (
     MediaRepository,
@@ -21,12 +22,19 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import (
 )
 
 
+class MediaWriterLike(Protocol):
+    """Structural contract for repository-like media writers."""
+
+    def add_media_with_keywords(self, **kwargs: Any) -> tuple[Any, Any, Any]:
+        """Persist media content and return the legacy result tuple."""
+
+
 def create_media_database(
     client_id: str,
     *,
     db_path: str | None = None,
-    backend=None,
-    config=None,
+    backend: Any = None,
+    config: Any = None,
 ) -> MediaDbLike:
     """Create a MediaDatabase using the shared content runtime defaults."""
     from tldw_Server_API.app.core.DB_Management import DB_Manager
@@ -80,8 +88,12 @@ def managed_media_database(
             db.close_connection()
 
 
-def get_media_repository(db: MediaDbLike) -> MediaRepository:
-    """Return the repository-backed media ingest interface for a legacy DB session."""
+def get_media_repository(db: MediaDbLike | MediaWriterLike) -> MediaRepository | MediaWriterLike:
+    """Return a repository-backed media ingest interface for DB sessions or writer doubles."""
+    add_media = getattr(db, "add_media_with_keywords", None)
+    transaction = getattr(db, "transaction", None)
+    if callable(add_media) and not callable(transaction):
+        return db
     return MediaRepository.from_legacy_db(db)
 
 
@@ -89,6 +101,7 @@ __all__ = [
     "MediaDbFactory",
     "MediaDbRuntimeConfig",
     "MediaDbSession",
+    "MediaWriterLike",
     "MediaRepository",
     "create_media_database",
     "managed_media_database",

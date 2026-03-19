@@ -239,11 +239,7 @@ def _ingest_connector_media(
     Lightweight test doubles that only expose ``add_media_with_keywords`` keep
     using that method directly so worker tests can stay narrow.
     """
-    media_writer = (
-        get_media_repository(media_db)
-        if hasattr(media_db, "backend") or hasattr(media_db, "db_path")
-        else media_db
-    )
+    media_writer = get_media_repository(media_db)
     return media_writer.add_media_with_keywords(
         url=url,
         title=title,

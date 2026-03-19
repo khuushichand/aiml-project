@@ -104,7 +104,24 @@ def upsert_transcript(
     whisper_model: str,
     created_at: str | None = None,
 ) -> dict[str, Any]:
-    """Create or update a transcript row for a media/model pair."""
+    """Create or update a transcript row for one media/model pair.
+
+    Args:
+        db_instance: Database-like media store handle.
+        media_id: Media row identifier associated with the transcript.
+        transcription: Transcript content to persist.
+        whisper_model: Transcription model identifier.
+        created_at: Optional created-at timestamp override.
+
+    Returns:
+        Metadata for the created or updated transcript row.
+
+    Raises:
+        TypeError: If ``media_id`` is not an integer.
+        InputError: If required transcript inputs are missing.
+        ConflictError: If optimistic concurrency detects a conflicting update.
+        DatabaseError: If the underlying database write fails.
+    """
     db_instance = require_media_database_like(
         db_instance,
         error_message="db_instance required.",

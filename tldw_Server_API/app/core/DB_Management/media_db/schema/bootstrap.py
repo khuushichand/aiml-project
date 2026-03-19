@@ -1,5 +1,7 @@
 """Backend-dispatched schema bootstrap entrypoint for Media DB."""
 
+from typing import Protocol
+
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.schema.backends.postgres import (
     initialize_postgres_schema,
@@ -9,7 +11,13 @@ from tldw_Server_API.app.core.DB_Management.media_db.schema.backends.sqlite impo
 )
 
 
-def ensure_media_schema(db) -> None:
+class _SchemaBootstrapDb(Protocol):
+    """Minimal interface required for backend-dispatched schema bootstrap."""
+
+    backend_type: BackendType
+
+
+def ensure_media_schema(db: _SchemaBootstrapDb) -> None:
     """Dispatch schema bootstrap to the active backend implementation."""
 
     if db.backend_type == BackendType.SQLITE:

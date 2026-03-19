@@ -142,8 +142,52 @@ def test_add_media_with_keywords_uses_media_repository_for_media_db_sessions(mon
     ]
 
 
-def test_create_media_database_delegates_to_runtime_factory(monkeypatch):
+def test_add_media_with_keywords_routes_wrapper_objects_through_repository_factory(monkeypatch):
+
+    class _WrapperDb:
+        pass
+
+    class _FakeRepo:
+        def __init__(self):
+            self.calls = []
+
+        def add_media_with_keywords(self, **kwargs):
+            self.calls.append(kwargs)
+            return 34, "repo-uuid", "stored"
+
+    fake_repo = _FakeRepo()
+    wrapper_db = _WrapperDb()
+
+    monkeypatch.setattr(DB_Manager, "get_media_repository", lambda db: fake_repo, raising=False)
+
+    def _fake_require_db_instance(args, kwargs, func_name):
+        kwargs.pop("db_instance", None)
+        return wrapper_db
+
+    monkeypatch.setattr(DB_Manager, "_require_db_instance", _fake_require_db_instance, raising=False)
+
+    result = DB_Manager.add_media_with_keywords(
+        db_instance=wrapper_db,
+        title="Wrapper Routed",
+        media_type="text",
+        content="body",
+        keywords=["k2"],
+    )
+
+    assert result == (34, "repo-uuid", "stored")
+    assert fake_repo.calls == [
+        {
+            "title": "Wrapper Routed",
+            "media_type": "text",
+            "content": "body",
+            "keywords": ["k2"],
+        }
+    ]
+
+
+def test_create_media_database_delegates_to_runtime_factory(monkeypatch, tmp_path):
     captured = {}
+    default_db_path = str(tmp_path / "default-media.db")
 
     def _fake_runtime_create_media_database(client_id, **kwargs):
         captured["client_id"] = client_id
@@ -171,7 +215,7 @@ def test_create_media_database_delegates_to_runtime_factory(monkeypatch):
     monkeypatch.setattr(
         DB_Manager,
         "single_user_db_path",
-        "/tmp/default-media.db",
+        default_db_path,
         raising=False,
     )
 
@@ -182,7 +226,7 @@ def test_create_media_database_delegates_to_runtime_factory(monkeypatch):
 
     assert result == "db-instance"
     assert captured["client_id"] == "client-9"
-    assert captured["runtime"].default_db_path == "/tmp/default-media.db"
+    assert captured["runtime"].default_db_path == default_db_path
     assert captured["runtime"].postgres_content_mode is True
     assert captured["config"] is DB_Manager.single_user_config
 

@@ -14,7 +14,7 @@ def _runtime_config(
     *,
     postgres_content_mode: bool,
     backend_loader=None,
-    default_db_path: str = "/tmp/media.db",
+    default_db_path: str = "media.db",
 ):
     cfg = configparser.ConfigParser()
     return runtime_factory.MediaDbRuntimeConfig(
@@ -48,7 +48,7 @@ def test_create_media_database_sqlite_uses_default_path_and_no_backend(monkeypat
     assert isinstance(db, StubMediaDatabase)
     assert StubMediaDatabase.calls == [
         {
-            "db_path": "/tmp/media.db",
+            "db_path": "media.db",
             "client_id": "client-1",
             "backend": None,
             "config": runtime.default_config,
@@ -71,14 +71,14 @@ def test_create_media_database_sqlite_preserves_explicit_backend(monkeypatch):
 
     runtime_factory.create_media_database(
         "client-2",
-        db_path="/tmp/explicit.db",
+        db_path="explicit.db",
         backend=explicit_backend,
         runtime=runtime,
     )
 
     assert StubMediaDatabase.calls == [
         {
-            "db_path": "/tmp/explicit.db",
+            "db_path": "explicit.db",
             "client_id": "client-2",
             "backend": explicit_backend,
             "config": runtime.default_config,

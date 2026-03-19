@@ -208,7 +208,7 @@ async def run_media_ingest_adapter(config: dict[str, Any], context: dict[str, An
                         db_path=_mdb_path,
                         initialize=False,
                     ) as mdb:
-                        media_id, media_uuid, msg = get_media_repository(mdb).add_media_with_keywords(
+                        media_id, _, msg = get_media_repository(mdb).add_media_with_keywords(
                             url=uri,
                             title=title,
                             media_type=media_type,

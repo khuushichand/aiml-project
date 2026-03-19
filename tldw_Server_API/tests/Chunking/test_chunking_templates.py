@@ -305,8 +305,9 @@ class TestTemplateInitialization:
         assert academic["is_builtin"] is True
         assert "research" in academic["tags"]
 
-    def test_initialize_chunking_templates_uses_managed_media_database_for_owned_db(self, monkeypatch):
+    def test_initialize_chunking_templates_uses_managed_media_database_for_owned_db(self, monkeypatch, tmp_path):
         events = []
+        db_path = str(tmp_path / "chunking-templates.db")
 
         class FakeDb:
             def seed_builtin_templates(self, templates):
@@ -337,20 +338,21 @@ class TestTemplateInitialization:
         )
 
         count = template_init.initialize_chunking_templates(
-            db_path="/tmp/chunking-templates.db",
+            db_path=db_path,
             client_id="template-test",
         )
 
         assert count == 1
         assert events == [
-            ("managed", {"client_id": "template-test", "db_path": "/tmp/chunking-templates.db", "initialize": False}),
+            ("managed", {"client_id": "template-test", "db_path": db_path, "initialize": False}),
             "enter",
             ("seed", [{"name": "built-in", "template": {"name": "built-in"}}]),
             "exit",
         ]
 
-    def test_update_builtin_templates_uses_managed_media_database_for_owned_db(self, monkeypatch):
+    def test_update_builtin_templates_uses_managed_media_database_for_owned_db(self, monkeypatch, tmp_path):
         events = []
+        db_path = str(tmp_path / "chunking-templates.db")
 
         class FakeDb:
             def get_chunking_template(self, name):
@@ -396,21 +398,22 @@ class TestTemplateInitialization:
         )
 
         count = template_init.update_builtin_templates(
-            db_path="/tmp/chunking-templates.db",
+            db_path=db_path,
             client_id="template-test",
         )
 
         assert count == 1
         assert events == [
-            ("managed", {"client_id": "template-test", "db_path": "/tmp/chunking-templates.db", "initialize": False}),
+            ("managed", {"client_id": "template-test", "db_path": db_path, "initialize": False}),
             "enter",
             ("get", "built-in"),
             ("update", "built-in"),
             "exit",
         ]
 
-    def test_ensure_templates_initialized_uses_managed_media_database_for_existing_check(self, monkeypatch):
+    def test_ensure_templates_initialized_uses_managed_media_database_for_existing_check(self, monkeypatch, tmp_path):
         events = []
+        db_path = str(tmp_path / "chunking-templates.db")
 
         class FakeDb:
             def list_chunking_templates(self, **kwargs):
@@ -436,11 +439,11 @@ class TestTemplateInitialization:
             lambda client_id, **kwargs: FakeManagedDbContext(client_id=client_id, **kwargs),
         )
 
-        result = template_init.ensure_templates_initialized(db_path="/tmp/chunking-templates.db")
+        result = template_init.ensure_templates_initialized(db_path=db_path)
 
         assert result is True
         assert events == [
-            ("managed", {"client_id": "system", "db_path": "/tmp/chunking-templates.db", "initialize": False}),
+            ("managed", {"client_id": "system", "db_path": db_path, "initialize": False}),
             "enter",
             ("list", {"include_builtin": True, "include_custom": False}),
             "exit",

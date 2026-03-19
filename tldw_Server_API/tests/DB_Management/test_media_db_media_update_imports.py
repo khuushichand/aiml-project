@@ -1,7 +1,11 @@
 import importlib
 
+import pytest
+
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_state
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
+
+pytestmark = pytest.mark.unit
 
 
 def test_media_update_lib_imports_check_media_exists_from_legacy_state(

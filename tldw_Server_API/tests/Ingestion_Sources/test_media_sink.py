@@ -48,7 +48,6 @@ def test_media_sink_creates_media_via_repository_api(monkeypatch):
         media_sink,
         "get_media_repository",
         lambda media_db: _FakeMediaRepository(),
-        raising=False,
     )
 
     result = media_sink.apply_media_change(

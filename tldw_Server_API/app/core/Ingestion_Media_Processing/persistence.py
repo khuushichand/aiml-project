@@ -108,9 +108,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _resolve_media_writer(db_instance: Any) -> Any:
-    if hasattr(db_instance, "backend") or hasattr(db_instance, "db_path"):
-        return get_media_repository(db_instance)
-    return db_instance
+    return get_media_repository(db_instance)
 
 
 def _with_media_db_session(

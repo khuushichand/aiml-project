@@ -171,7 +171,7 @@ async def test_pipeline_uses_managed_media_database_when_persisting(monkeypatch)
     assert len(fake_repo.calls) >= 1
     assert len(managed_calls) == 1
     assert managed_calls[0]["client_id"] == str(user_id)
-    assert managed_calls[0]["initialize"] is False
+    assert managed_calls[0]["initialize"] is True
     assert managed_calls[0]["kwargs"]["db_path"] == str(DatabasePaths.get_media_db_path(user_id))
     assert "suppress_close_exceptions" in managed_calls[0]["kwargs"]
 

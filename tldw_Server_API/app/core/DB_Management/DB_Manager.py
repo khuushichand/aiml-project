@@ -660,11 +660,7 @@ def import_obsidian_note_to_db(*args, **kwargs):
 def add_media_with_keywords(*args, **kwargs):
     if db_type in SQL_CONTENT_BACKENDS:
         db_instance: Any = _require_db_instance(args, kwargs, 'add_media_with_keywords')
-        media_writer = (
-            get_media_repository(db_instance)
-            if hasattr(db_instance, "backend") or hasattr(db_instance, "db_path")
-            else db_instance
-        )
+        media_writer = get_media_repository(db_instance)
         return media_writer.add_media_with_keywords(**kwargs)
     elif db_type == 'elasticsearch':
         _raise_elasticsearch_not_supported("add_media_with_keywords")

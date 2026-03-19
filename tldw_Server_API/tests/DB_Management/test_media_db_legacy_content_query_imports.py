@@ -1,7 +1,11 @@
 import importlib
 
+import pytest
+
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_content_queries
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
+
+pytestmark = pytest.mark.unit
 
 
 def test_legacy_content_query_callers_no_longer_depend_on_media_db_v2_exports(

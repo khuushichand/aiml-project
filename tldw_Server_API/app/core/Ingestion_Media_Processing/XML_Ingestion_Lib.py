@@ -172,14 +172,14 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
                 overwrite=False
             )
 
-        return f"XML file '{display_name}' import complete. Database result: {result}"
-
     except getattr(DET, "ParseError", ValueError) as e:  # type: ignore[arg-type]
         logging.error(f"XML parsing error: {str(e)}")
         return f"Error parsing XML file: {str(e)}"
     except Exception as e:
         logging.error(f"Error processing XML file: {str(e)}")
         return f"Error processing XML file: {str(e)}"
+    else:
+        return f"XML file '{display_name}' import complete. Database result: {result}"
 
 #
 # End of XML_Ingestion_Lib.py

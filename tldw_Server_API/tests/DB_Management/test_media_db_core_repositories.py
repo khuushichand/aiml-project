@@ -1,5 +1,7 @@
 from contextlib import contextmanager
 
+import pytest
+
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
     upsert_transcript,
@@ -32,6 +34,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_reposito
 )
 
 
+@pytest.mark.unit
 def test_media_database_add_media_with_keywords_delegates_to_media_repository(monkeypatch) -> None:
     db = MediaDatabase(db_path=":memory:", client_id="media-delegate")
     sentinel = (321, "repo-uuid", "delegated")
@@ -83,6 +86,7 @@ def test_media_database_add_media_with_keywords_delegates_to_media_repository(mo
         db.close_connection()
 
 
+@pytest.mark.unit
 def test_ingest_article_wrapper_uses_media_repository(monkeypatch) -> None:
     db = MediaDatabase(db_path=":memory:", client_id="article-wrapper")
     sentinel = (98, "article-uuid", "article delegated")
@@ -137,6 +141,7 @@ def test_ingest_article_wrapper_uses_media_repository(monkeypatch) -> None:
         db.close_connection()
 
 
+@pytest.mark.unit
 def test_import_obsidian_note_wrapper_uses_media_repository(monkeypatch) -> None:
     db = MediaDatabase(db_path=":memory:", client_id="obsidian-wrapper")
     sentinel = (77, "obsidian-uuid", "obsidian delegated")
@@ -188,6 +193,7 @@ def test_import_obsidian_note_wrapper_uses_media_repository(monkeypatch) -> None
         db.close_connection()
 
 
+@pytest.mark.unit
 def test_get_document_version_wrapper_uses_document_versions_repository(monkeypatch) -> None:
     db = MediaDatabase(db_path=":memory:", client_id="version-wrapper")
     sentinel = {"media_id": 11, "version_number": 2, "content": "delegated"}
@@ -228,6 +234,7 @@ def test_get_document_version_wrapper_uses_document_versions_repository(monkeypa
         db.close_connection()
 
 
+@pytest.mark.integration
 def test_legacy_read_wrappers_round_trip_transcripts_and_prompts() -> None:
     db = MediaDatabase(db_path=":memory:", client_id="legacy-read-wrappers")
     media_repo = MediaRepository.from_legacy_db(db)
@@ -268,6 +275,7 @@ def test_legacy_read_wrappers_round_trip_transcripts_and_prompts() -> None:
         db.close_connection()
 
 
+@pytest.mark.integration
 def test_legacy_state_wrappers_round_trip_exists_and_processing_flags() -> None:
     db = MediaDatabase(db_path=":memory:", client_id="legacy-state-wrappers")
     media_repo = MediaRepository.from_legacy_db(db)
@@ -317,6 +325,7 @@ def test_legacy_state_wrappers_round_trip_exists_and_processing_flags() -> None:
         db.close_connection()
 
 
+@pytest.mark.integration
 def test_media_repository_add_text_media_creates_row() -> None:
     db = MediaDatabase(db_path=":memory:", client_id="media-repo")
     repo = MediaRepository.from_legacy_db(db)
@@ -335,6 +344,7 @@ def test_media_repository_add_text_media_creates_row() -> None:
         db.close_connection()
 
 
+@pytest.mark.integration
 def test_document_versions_repository_returns_latest_version() -> None:
     db = MediaDatabase(db_path=":memory:", client_id="doc-repo")
     media_repo = MediaRepository.from_legacy_db(db)
@@ -356,6 +366,7 @@ def test_document_versions_repository_returns_latest_version() -> None:
         db.close_connection()
 
 
+@pytest.mark.integration
 def test_document_versions_repository_create_uses_transaction_context(monkeypatch) -> None:
     db = MediaDatabase(db_path=":memory:", client_id="doc-repo-transaction")
     media_repo = MediaRepository.from_legacy_db(db)
@@ -392,6 +403,7 @@ def test_document_versions_repository_create_uses_transaction_context(monkeypatc
         db.close_connection()
 
 
+@pytest.mark.integration
 def test_chunks_repository_batch_insert_generates_unique_chunk_ids() -> None:
     db = MediaDatabase(db_path=":memory:", client_id="chunk-repo")
     media_repo = MediaRepository.from_legacy_db(db)

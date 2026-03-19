@@ -133,8 +133,10 @@ from tldw_Server_API.app.services import tts_history_cleanup_service
 from tldw_Server_API.app.services import web_scraping_service
 
 
-def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch):
+def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch, tmp_path):
     captured = {}
+    default_db_path = str(tmp_path / "api-media.db")
+    override_db_path = str(tmp_path / "override.db")
 
     def _fake_runtime_create_media_database(client_id, **kwargs):
         captured["client_id"] = client_id
@@ -148,20 +150,20 @@ def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch):
         _fake_runtime_create_media_database,
         raising=False,
     )
-    monkeypatch.setattr(DB_Manager, "single_user_db_path", "/tmp/api-media.db", raising=False)
+    monkeypatch.setattr(DB_Manager, "single_user_db_path", default_db_path, raising=False)
     monkeypatch.setattr(DB_Manager, "single_user_config", cfg, raising=False)
     monkeypatch.setattr(DB_Manager, "_POSTGRES_CONTENT_MODE", True, raising=False)
     monkeypatch.setattr(DB_Manager, "_ensure_content_backend_loaded", lambda: "backend-sentinel", raising=False)
 
     result = media_db_api.create_media_database(
         "client-api",
-        db_path="/tmp/override.db",
+        db_path=override_db_path,
     )
 
     assert result == "db-instance"
     assert captured["client_id"] == "client-api"
-    assert captured["db_path"] == "/tmp/override.db"
-    assert captured["runtime"].default_db_path == "/tmp/api-media.db"
+    assert captured["db_path"] == override_db_path
+    assert captured["runtime"].default_db_path == default_db_path
     assert captured["runtime"].default_config is cfg
     assert captured["runtime"].postgres_content_mode is True
 
@@ -1067,8 +1069,9 @@ def test_tts_jobs_worker_imports_create_media_database_from_media_db_api(monkeyp
     assert "MediaDatabase" not in module.__dict__
 
 
-def test_media_db_api_managed_media_database_initializes_and_closes(monkeypatch):
+def test_media_db_api_managed_media_database_initializes_and_closes(monkeypatch, tmp_path):
     events = []
+    db_path = str(tmp_path / "managed.db")
 
     class _FakeDb:
         def initialize_db(self):
@@ -1085,12 +1088,12 @@ def test_media_db_api_managed_media_database_initializes_and_closes(monkeypatch)
 
     monkeypatch.setattr(media_db_api, "create_media_database", _fake_create_media_database)
 
-    with media_db_api.managed_media_database("managed-client", db_path="/tmp/managed.db") as db:
+    with media_db_api.managed_media_database("managed-client", db_path=db_path) as db:
         assert db is fake_db
         events.append("body")
 
     assert events == [
-        ("create", "managed-client", "/tmp/managed.db"),
+        ("create", "managed-client", db_path),
         "initialize",
         "body",
         "close",
@@ -1128,6 +1131,7 @@ def test_media_db_api_managed_media_database_suppresses_selected_lifecycle_error
 async def test_users_db_get_user_media_db_uses_media_db_api_factory(monkeypatch):
     captured = {}
     sentinel = object()
+    db_path = "users-media.db"
 
     def _fake_create_media_database(client_id, **kwargs):
         captured["client_id"] = client_id
@@ -1137,7 +1141,7 @@ async def test_users_db_get_user_media_db_uses_media_db_api_factory(monkeypatch)
     def _raise_legacy_factory(*args, **kwargs):  # noqa: ARG001
         raise AssertionError("legacy DB_Manager factory should not be used")
 
-    monkeypatch.setattr(Users_DB, "get_user_db_path", lambda *_args, **_kwargs: "/tmp/users-media.db")
+    monkeypatch.setattr(Users_DB, "get_user_db_path", lambda *_args, **_kwargs: db_path)
     monkeypatch.setattr(media_db_api, "create_media_database", _fake_create_media_database)
     monkeypatch.setattr(DB_Manager, "create_media_database", _raise_legacy_factory)
 
@@ -1145,4 +1149,4 @@ async def test_users_db_get_user_media_db_uses_media_db_api_factory(monkeypatch)
 
     assert result is sentinel
     assert captured["client_id"] == "42"
-    assert captured["db_path"] == "/tmp/users-media.db"
+    assert captured["db_path"] == db_path

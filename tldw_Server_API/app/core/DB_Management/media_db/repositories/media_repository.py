@@ -5,6 +5,8 @@ import json
 import sqlite3
 from typing import Any
 
+from loguru import logger
+
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
     media_dedupe_url_candidates,
@@ -22,16 +24,6 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime.noncritical import 
     MEDIA_NONCRITICAL_EXCEPTIONS,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
-
-try:
-    from loguru import logger
-
-    logging = logger
-except ImportError:  # pragma: no cover - defensive fallback
-    import logging as _stdlib_logging
-
-    logger = _stdlib_logging.getLogger("media_repository")
-    logging = logger
 
 
 def _load_legacy_media_support():
@@ -74,7 +66,12 @@ class MediaRepository:
         visibility: str | None = None,
         owner_user_id: int | None = None,
     ) -> tuple[int | None, str | None, str]:
-        """Add or update media while the legacy API migrates behind repository seams."""
+        """Add or update media while the legacy API migrates behind repository seams.
+
+        This intentionally centralizes the transitional compatibility logic in one
+        place while callers migrate off the legacy shim and onto repository
+        helpers.
+        """
         db = self.session
         (
             collections_db_cls,
@@ -123,7 +120,7 @@ class MediaRepository:
 
         final_chunk_status = "completed" if chunks is not None else "pending"
 
-        logging.info("add_media_with_keywords: url={}, title={}, client={}", url, title, client_id)
+        logger.info("add_media_with_keywords: url={}, title={}, client={}", url, title, client_id)
         try:
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import (
                 get_topic_monitoring_service,
@@ -156,13 +153,13 @@ class MediaRepository:
                     scope_id=uid,
                 )
         except noncritical_exceptions as exc:
-            logging.warning(
+            logger.warning(
                 "Topic monitoring unavailable during media ingest for url {}: {}",
                 url,
                 exc,
             )
-        except Exception as exc:
-            logging.warning(
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            logger.warning(
                 "Topic monitoring failed unexpectedly during media ingest for url {}: {}",
                 url,
                 exc,
@@ -222,7 +219,7 @@ class MediaRepository:
             created = db._get_current_utc_timestamp_str()
             for idx, ch in enumerate(chunks):
                 if not isinstance(ch, dict) or ch.get("text") is None:
-                    logging.warning("Skipping invalid chunk index {} for media_id {}", idx, media_id)
+                    logger.warning("Skipping invalid chunk index {} for media_id {}", idx, media_id)
                     continue
 
                 chunk_uuid = db._generate_uuid()
@@ -321,7 +318,7 @@ class MediaRepository:
 
                     if overwrite:
                         if content_hash == existing_hash:
-                            logging.info(
+                            logger.info(
                                 f"Media content for ID {media_id} is identical. Updating metadata/chunks only."
                             )
 
@@ -333,7 +330,7 @@ class MediaRepository:
                             )
                             chunk_status_update_needed = chunks is not None
                             if chunk_status_update_needed or source_hash_update_needed:
-                                logging.info(
+                                logger.info(
                                     f"Updating media metadata for identical content id={media_id}."
                                 )
                                 new_ver = current_ver + 1
@@ -454,7 +451,7 @@ class MediaRepository:
                                     backend=db.backend,
                                 ).mark_highlights_stale_if_content_changed(media_id, content_hash)
                         except noncritical_exceptions as anchoring_error:
-                            logging.debug(
+                            logger.debug(
                                 f"Highlight re-anchoring hook failed (non-fatal): {anchoring_error}"
                             )
                         try:
@@ -473,7 +470,7 @@ class MediaRepository:
                         and content_hash == existing_hash
                     )
                     if is_canonicalisation:
-                        logging.info(f"Canonicalizing URL for media_id {media_id} to {url}")
+                        logger.info(f"Canonicalizing URL for media_id {media_id} to {url}")
                         new_ver = current_ver + 1
                         canon_cursor = _exec(
                             "UPDATE Media SET url = ?, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND version = ?",
@@ -511,11 +508,11 @@ class MediaRepository:
                                 {"last_modified": now, "touched": True},
                             )
                         else:
-                            logging.debug(
+                            logger.debug(
                                 f"No rows updated when touching media {media_id}; possible version change."
                             )
                     except noncritical_exceptions as touch_error:
-                        logging.debug(f"Non-fatal: failed to touch media {media_id}: {touch_error}")
+                        logger.debug(f"Non-fatal: failed to touch media {media_id}: {touch_error}")
 
                     return media_id, media_uuid, f"Media '{title}' already exists. Overwrite not enabled."
 
@@ -732,7 +729,7 @@ class MediaRepository:
                                         (int(parent_id), now_ts, client_id, int(child_id)),
                                     )
                             except noncritical_exceptions as parent_error:
-                                logging.warning(
+                                logger.warning(
                                     f"Structure index parent-link population failed (non-fatal): {parent_error}"
                                 )
 
@@ -806,20 +803,20 @@ class MediaRepository:
                                 )
                                 order += 1
                         except noncritical_exceptions as paragraph_error:
-                            logging.warning(
+                            logger.warning(
                                 f"Paragraph index population failed (non-fatal): {paragraph_error}"
                             )
                     except noncritical_exceptions as structure_error:
-                        logging.warning(
+                        logger.warning(
                             f"Structure index population failed (non-fatal): {structure_error}"
                         )
                 if chunk_options:
-                    logging.info("chunk_options ignored (placeholder): {}", chunk_options)
+                    logger.info("chunk_options ignored (placeholder): {}", chunk_options)
 
                 return media_id, media_uuid, f"Media '{title}' added."
 
         except (InputError, ConflictError, sqlite3.IntegrityError) as exc:
-            logging.exception(f"Transaction failed, rolling back: {type(exc).__name__}")
+            logger.exception(f"Transaction failed, rolling back: {type(exc).__name__}")
             raise
 
     def add_text_media(

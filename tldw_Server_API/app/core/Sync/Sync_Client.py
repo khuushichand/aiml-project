@@ -13,6 +13,7 @@ from loguru import logger
 # Local Imports
 try:
     from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+    from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
     from tldw_Server_API.app.core.DB_Management.media_db.errors import (
         ConflictError,
         DatabaseError,
@@ -169,7 +170,9 @@ class ClientSyncEngine:
         default_headers: Optional[dict[str, str]] = None,
     ):
         if not _is_media_db_instance(db_instance):
-             raise TypeError("db_instance must be a valid Database object.")
+            raise TypeError("db_instance must be a valid Database object.")
+        if getattr(db_instance, "backend_type", None) != BackendType.SQLITE:
+            raise TypeError("ClientSyncEngine currently supports only SQLite-backed media databases.")
 
         self.db = db_instance
         self.server_api_url = server_api_url.rstrip('/') # Ensure no trailing slash

@@ -8,6 +8,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.schema.bootstrap import ens
 from tldw_Server_API.app.core.DB_Management.media_db.schema import bootstrap as bootstrap_module
 
 
+@pytest.mark.unit
 def test_ensure_media_schema_dispatches_sqlite(monkeypatch) -> None:
     db = SimpleNamespace(backend_type=BackendType.SQLITE)
     calls: list[object] = []
@@ -24,6 +25,7 @@ def test_ensure_media_schema_dispatches_sqlite(monkeypatch) -> None:
     assert calls == [db]
 
 
+@pytest.mark.unit
 def test_ensure_media_schema_dispatches_postgres(monkeypatch) -> None:
     db = SimpleNamespace(backend_type=BackendType.POSTGRESQL)
     calls: list[object] = []
@@ -40,6 +42,7 @@ def test_ensure_media_schema_dispatches_postgres(monkeypatch) -> None:
     assert calls == [db]
 
 
+@pytest.mark.unit
 def test_initialize_schema_uses_bootstrap_entrypoint(monkeypatch) -> None:
     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.SQLITE
@@ -52,6 +55,7 @@ def test_initialize_schema_uses_bootstrap_entrypoint(monkeypatch) -> None:
     assert calls == [db]
 
 
+@pytest.mark.integration
 def test_ensure_media_schema_keeps_sqlite_schema_intact() -> None:
     db = MediaDatabase(db_path=":memory:", client_id="schema-bootstrap")
     try:

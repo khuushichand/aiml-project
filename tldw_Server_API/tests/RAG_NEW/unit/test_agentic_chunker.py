@@ -188,7 +188,6 @@ def test_get_media_db_for_structure_uses_shared_factory(monkeypatch):
 
     monkeypatch.setattr(ac, "_STRUCT_DB", None)
     monkeypatch.setattr(ac, "create_media_database", lambda client_id, **kwargs: captured.update({"client_id": client_id, **kwargs}) or "db-sentinel")
-    monkeypatch.setitem(ac.__dict__, "_STRUCT_DB", None)
     monkeypatch.setattr(
         "tldw_Server_API.app.core.config.load_comprehensive_config",
         lambda: {"stub": True},
