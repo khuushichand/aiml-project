@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -30,7 +30,6 @@ from tldw_Server_API.app.api.v1.schemas.character_memory_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
-    ConflictError,
     InputError,
 )
 
@@ -78,7 +77,7 @@ def get_or_create_character_persona_profile(
             "mode": "persistent_scoped",
             "is_active": True,
         })
-    except (ConflictError, Exception) as exc:
+    except Exception as exc:
         # Race condition: another request may have created it
         existing = db.get_persona_profile(persona_id, user_id=user_id)
         if existing:
@@ -90,6 +89,18 @@ def get_or_create_character_persona_profile(
         ) from exc
 
     return persona_id
+
+
+def _fetch_memory_by_id(
+    db: CharactersRAGDB, user_id: str, persona_id: str, memory_id: str, character_id: str,
+) -> CharacterMemoryResponse:
+    """Fetch a single memory entry by ID or raise 404."""
+    row = db.get_persona_memory_entry_by_id(
+        entry_id=memory_id, user_id=user_id, persona_id=persona_id,
+    )
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
+    return _row_to_response(row, character_id)
 
 
 def _row_to_response(row: dict[str, Any], character_id: str) -> CharacterMemoryResponse:
@@ -150,8 +161,15 @@ async def list_character_memories(
         limit=limit,
         offset=offset,
     )
+    total_count = db.count_persona_memory_entries(
+        user_id=user_id,
+        persona_id=persona_id,
+        memory_type=memory_type,
+        include_archived=include_archived,
+        include_deleted=False,
+    )
     memories = [_row_to_response(r, character_id) for r in rows]
-    return CharacterMemoryListResponse(memories=memories, total=len(memories))
+    return CharacterMemoryListResponse(memories=memories, total=total_count)
 
 
 @router.post(
@@ -185,29 +203,7 @@ async def create_character_memory(
     except InputError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    # Fetch back for response
-    rows = db.list_persona_memory_entries(
-        user_id=user_id,
-        persona_id=persona_id,
-        include_archived=True,
-        include_deleted=False,
-        limit=1000,
-    )
-    for r in rows:
-        if r["id"] == entry_id:
-            return _row_to_response(r, character_id)
-
-    # Fallback — shouldn't happen
-    return CharacterMemoryResponse(
-        id=entry_id,
-        character_id=character_id,
-        memory_type=body.memory_type,
-        content=body.content,
-        salience=body.salience,
-        archived=False,
-        created_at="",
-        last_modified="",
-    )
+    return _fetch_memory_by_id(db, user_id, persona_id, entry_id, character_id)
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +252,8 @@ async def extract_character_memories_endpoint(
     api_endpoint = body.provider or "openai"
     model = body.model
 
-    # Run extraction in thread (it's synchronous)
-    new_memories = await asyncio.get_event_loop().run_in_executor(
+    # Run extraction in thread — returns ExtractionResult with dedup stats
+    extraction = await asyncio.get_running_loop().run_in_executor(
         None,
         lambda: extract_character_memories(
             messages=messages,
@@ -269,10 +265,9 @@ async def extract_character_memories_endpoint(
         ),
     )
 
-    # Persist
-    total_parsed = len(new_memories)  # after dedup inside extract_character_memories
+    # Persist unique memories
     created: list[CharacterMemoryResponse] = []
-    for mem in new_memories:
+    for mem in extraction.unique:
         try:
             entry_id = db.add_persona_memory_entry({
                 "persona_id": persona_id,
@@ -298,7 +293,7 @@ async def extract_character_memories_endpoint(
 
     return CharacterMemoryExtractResponse(
         extracted=len(created),
-        skipped_duplicates=total_parsed - len(created),
+        skipped_duplicates=extraction.duplicates_skipped,
         memories=created,
     )
 
@@ -347,13 +342,7 @@ async def update_character_memory(
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
 
-    rows = db.list_persona_memory_entries(
-        user_id=user_id, persona_id=persona_id, include_archived=True, limit=1000,
-    )
-    for r in rows:
-        if r["id"] == memory_id:
-            return _row_to_response(r, character_id)
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found after update")
+    return _fetch_memory_by_id(db, user_id, persona_id, memory_id, character_id)
 
 
 @router.delete(
@@ -410,10 +399,4 @@ async def archive_character_memory(
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
 
-    rows = db.list_persona_memory_entries(
-        user_id=user_id, persona_id=persona_id, include_archived=True, limit=1000,
-    )
-    for r in rows:
-        if r["id"] == memory_id:
-            return _row_to_response(r, character_id)
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found after archive toggle")
+    return _fetch_memory_by_id(db, user_id, persona_id, memory_id, character_id)

@@ -1986,7 +1986,7 @@ def _maybe_trigger_character_memory_extraction(
             if not messages:
                 return
 
-            new_memories = extract_character_memories(
+            extraction = extract_character_memories(
                 messages=messages,
                 char_name=char_name,
                 user_name=user_name,
@@ -1994,7 +1994,7 @@ def _maybe_trigger_character_memory_extraction(
                 api_endpoint=provider,
                 model=model,
             )
-            for mem in new_memories:
+            for mem in extraction.unique:
                 try:
                     db.add_persona_memory_entry({
                         "persona_id": persona_id,
@@ -2006,10 +2006,10 @@ def _maybe_trigger_character_memory_extraction(
                     })
                 except Exception as exc:
                     logger.debug("Failed to persist auto-extracted memory: {}", exc)
-            if new_memories:
+            if extraction.unique:
                 logger.info(
                     "Auto-extracted {} character memories for chat {} (char={})",
-                    len(new_memories), chat_id, char_name,
+                    len(extraction.unique), chat_id, char_name,
                 )
         except Exception as exc:
             logger.warning("Background character memory extraction failed: {}", exc)

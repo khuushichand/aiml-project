@@ -183,6 +183,16 @@ def deduplicate_memories(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+class ExtractionResult:
+    """Result of memory extraction with dedup stats."""
+    __slots__ = ("unique", "total_parsed", "duplicates_skipped")
+
+    def __init__(self, unique: list[dict[str, Any]], total_parsed: int, duplicates_skipped: int):
+        self.unique = unique
+        self.total_parsed = total_parsed
+        self.duplicates_skipped = duplicates_skipped
+
+
 def extract_character_memories(
     messages: list[dict[str, Any]],
     char_name: str,
@@ -193,10 +203,10 @@ def extract_character_memories(
     api_key: str | None = None,
     model: str | None = None,
     app_config: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
+) -> ExtractionResult:
     """Run extraction end-to-end: build prompt → call LLM → parse → dedup.
 
-    Returns a list of unique new memory dicts (``category``, ``content``, ``salience``).
+    Returns an ``ExtractionResult`` with unique memories and dedup stats.
     Uses ``chat_api_call`` from the chat orchestrator.
     """
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
@@ -219,15 +229,18 @@ def extract_character_memories(
         )
     except Exception:
         logger.exception("Character memory extraction LLM call failed")
-        return []
+        return ExtractionResult(unique=[], total_parsed=0, duplicates_skipped=0)
 
     # ``chat_api_call`` returns the response text (or a streaming iterator).
     raw_text = result if isinstance(result, str) else str(result)
 
     parsed = parse_extraction_response(raw_text)
     unique = deduplicate_memories(parsed, existing_memories)
+    duplicates_skipped = len(parsed) - len(unique)
     logger.info(
-        "Character memory extraction: parsed={}, unique={} (for {}/{})",
-        len(parsed), len(unique), char_name, user_name,
+        "Character memory extraction: parsed={}, unique={}, dupes={} (for {}/{})",
+        len(parsed), len(unique), duplicates_skipped, char_name, user_name,
     )
-    return unique
+    return ExtractionResult(
+        unique=unique, total_parsed=len(parsed), duplicates_skipped=duplicates_skipped,
+    )
