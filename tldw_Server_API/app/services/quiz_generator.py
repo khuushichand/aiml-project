@@ -641,7 +641,6 @@ async def generate_quiz_from_sources(
         db=db,
         media_db=media_db,
     )
-    content = _build_content_from_evidence(evidence)
 
     normalized_types = _coerce_question_types(question_types)
     focus_instruction = ""
@@ -674,6 +673,8 @@ async def generate_quiz_from_sources(
             primary_media_id=primary_media_id,
             workspace_tag=workspace_tag,
         )
+
+    content = _build_content_from_evidence(evidence)
 
     prompt = QUIZ_GENERATION_PROMPT.format(
         num_questions=num_questions,

@@ -1,7 +1,9 @@
 import uuid
+from unittest.mock import Mock
 
 import pytest
 
+from tldw_Server_API.app.services import quiz_generator
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.quiz_generator import (
@@ -74,3 +76,44 @@ def test_build_test_mode_questions_prefers_evidence_source_identity() -> None:
     assert citation["source_type"] == "note"
     assert citation["source_id"] == "note-b"
     assert citation["quote"] == "Beta evidence should keep its own citation identity."
+
+
+@pytest.mark.asyncio
+async def test_generate_quiz_from_sources_uses_test_mode_fallback_for_metadata_only_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setattr(
+        quiz_generator,
+        "resolve_quiz_sources",
+        lambda *_args, **_kwargs: [{"source_type": "note", "source_id": "note-meta", "text": ""}],
+    )
+    monkeypatch.setattr(
+        quiz_generator,
+        "_resolve_generated_quiz_metadata",
+        lambda **_kwargs: ("Metadata Fallback Quiz", "Generated from metadata-only evidence."),
+    )
+    monkeypatch.setattr(
+        quiz_generator,
+        "_persist_generated_quiz",
+        lambda **kwargs: {
+            "quiz": {
+                "title": kwargs["quiz_title"],
+                "description": kwargs["quiz_description"],
+                "workspace_tag": kwargs["workspace_tag"],
+            },
+            "questions": kwargs["questions"],
+        },
+    )
+
+    result = await generate_quiz_from_sources(
+        db=Mock(),
+        media_db=Mock(),
+        sources=[{"source_type": "note", "source_id": "note-meta"}],
+        num_questions=1,
+        question_types=["multiple_choice"],
+        workspace_tag="workspace:test",
+    )
+
+    assert result["quiz"]["workspace_tag"] == "workspace:test"
+    assert result["questions"][0]["source_citations"][0]["quote"] == "Study point from note:note-meta."
