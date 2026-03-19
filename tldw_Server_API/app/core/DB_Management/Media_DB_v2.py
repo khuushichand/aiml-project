@@ -18398,11 +18398,11 @@ def get_unprocessed_media(db_instance: MediaDatabase) -> list[dict]:
 
 def mark_media_as_processed(db_instance: MediaDatabase, media_id: int):
     """
-    Marks a media item's vector processing status as complete (`vector_processing = 1`).
+    Marks a media item's embeddings state as complete.
 
     The Media table enforces versioned updates through sync triggers, so this helper
-    must advance `version`, refresh `last_modified`, and emit a sync event alongside
-    the status flip.
+    must advance `version`, refresh `last_modified`, clear stale embeddings error
+    state in `chunking_status`, and emit a sync event alongside the status flip.
 
     Args:
         db_instance (MediaDatabase): An initialized Database instance.
@@ -18432,16 +18432,18 @@ def mark_media_as_processed(db_instance: MediaDatabase, media_id: int):
             now = db_instance._get_current_utc_timestamp_str()
             payload = {
                 "last_modified": now,
+                "chunking_status": "completed",
                 "vector_processing": 1,
             }
 
             cursor = db_instance._execute_with_connection(
                 conn,
                 (
-                    "UPDATE Media SET last_modified = ?, version = ?, client_id = ?, vector_processing = ? "
+                    "UPDATE Media SET last_modified = ?, version = ?, client_id = ?, chunking_status = ?, "
+                    "vector_processing = ? "
                     "WHERE id = ? AND version = ?"
                 ),
-                (now, next_version, db_instance.client_id, 1, media_id, current_version),
+                (now, next_version, db_instance.client_id, "completed", 1, media_id, current_version),
             )
             if cursor.rowcount == 0:
                 raise ConflictError("Media", media_id)  # noqa: TRY301

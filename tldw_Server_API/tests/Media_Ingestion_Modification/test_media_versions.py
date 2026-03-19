@@ -832,6 +832,26 @@ class TestMediaListDetailEndpoints:
         assert response.status_code == status.HTTP_200_OK
         assert response.json()["processing"]["vector_processing_status"] == 1
 
+    def test_mark_media_as_processed_clears_stale_embeddings_error_status(self):
+
+        """Successful embeddings retries should clear prior embeddings_error state."""
+        doc_id = self.media_ids["document"]
+        self.db.mark_embeddings_error(doc_id, "stale failure")
+        before = self.db.execute_query(
+            "SELECT version, vector_processing, chunking_status FROM Media WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+
+        mark_media_as_processed(self.db, doc_id)
+
+        after = self.db.execute_query(
+            "SELECT version, vector_processing, chunking_status FROM Media WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        assert after["vector_processing"] == 1
+        assert after["chunking_status"] == "completed"
+        assert after["version"] == before["version"] + 1
+
     def test_get_media_item_video(self):
 
         """Test retrieving details of a video media item."""

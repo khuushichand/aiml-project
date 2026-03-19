@@ -96,5 +96,5 @@ def test_admin_reset_masks_internal_errors(mocker):
 
     app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
-    assert resp.status_code == 400
+    assert resp.status_code == 500
     assert resp.json() == {"detail": "Failed to reset setup flags."}

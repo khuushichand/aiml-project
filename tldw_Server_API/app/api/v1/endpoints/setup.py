@@ -359,7 +359,7 @@ async def update_setup_config(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to write configuration via setup endpoint")
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to persist setup configuration.",
         ) from exc
 
@@ -431,7 +431,7 @@ async def reset_setup_flags(
     except Exception as exc:
         logger.exception("Failed to reset setup flags")
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to reset setup flags.",
         ) from exc
 

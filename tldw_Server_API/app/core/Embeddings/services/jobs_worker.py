@@ -743,8 +743,6 @@ async def _handle_storage_job(
             f"(user_id={user_id}, media_id={media_id}): {exc}"
         )
 
-    _mark_media_embeddings_complete(user_id=user_id, media_id=int(media_id))
-
     result = {
         "embedding_count": len(embeddings),
         "chunks_processed": len(chunks),
@@ -826,8 +824,6 @@ async def _handle_content_job(
                 backoff_seconds = None
         raise EmbeddingsJobError(str(error), retryable=retryable, backoff_seconds=backoff_seconds)
 
-    _mark_media_embeddings_complete(user_id=user_id, media_id=int(media_id))
-
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
     except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
@@ -842,7 +838,6 @@ async def _handle_content_job(
         "embedding_model": embedding_model,
         "embedding_provider": embedding_provider,
     }
-    _update_root_job(root_uuid, status="completed", result=payload_result)
     return payload_result
 
 
@@ -978,7 +973,6 @@ async def _handle_custom_content_job(
         "embedding_model": embedding_model,
         "embedding_provider": embedding_provider,
     }
-    _update_root_job(root_uuid, status="completed", result=result)
     return result
 
 
@@ -1020,7 +1014,7 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
 
     try:
         if job_type == _CONTENT_JOB_TYPE:
-            return await _handle_content_job(
+            result = await _handle_content_job(
                 job,
                 payload,
                 media_id=media_id,
@@ -1031,6 +1025,10 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
                 chunk_overlap=chunk_overlap,
                 root_uuid=root_uuid,
             )
+            _update_root_job(root_uuid, status="completed", result=result)
+            if _should_track_media_state(job_type, payload):
+                _mark_media_embeddings_complete(user_id=user_id, media_id=media_id)
+            return result
 
         if job_type == _EMBEDDINGS_CHUNKING_JOB_TYPE:
             result, skip = await _handle_chunking_job(
@@ -1043,8 +1041,6 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
                 root_uuid=root_uuid,
             )
             if skip:
-                if _should_track_media_state(job_type, payload):
-                    _mark_media_embeddings_complete(user_id=user_id, media_id=media_id)
                 payload_result = {
                     "embedding_count": 0,
                     "chunks_processed": 0,
@@ -1053,6 +1049,8 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
                     "total_chunks": 0,
                 }
                 _update_root_job(root_uuid, status="completed", result=payload_result)
+                if _should_track_media_state(job_type, payload):
+                    _mark_media_embeddings_complete(user_id=user_id, media_id=media_id)
                 return result
             _enqueue_stage_job(
                 job=job,
@@ -1113,6 +1111,8 @@ async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
                 root_uuid=root_uuid,
             )
             _update_root_job(root_uuid, status="completed", result=result)
+            if _should_track_media_state(job_type, payload):
+                _mark_media_embeddings_complete(user_id=user_id, media_id=media_id)
             return result
 
         raise EmbeddingsJobError(
