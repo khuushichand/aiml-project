@@ -7,7 +7,7 @@ import pytest
 
 from tldw_Server_API.app.core.AuthNZ.migrations import (
     migration_001_create_users_table,
-    migration_072_create_sharing_tables,
+    migration_077_create_sharing_tables,
 )
 
 
@@ -51,7 +51,7 @@ def sharing_db():
         "INSERT INTO users (id, username, email, password_hash) VALUES (2, 'bob', 'bob@test.com', 'hash')"
     )
     conn.commit()
-    migration_072_create_sharing_tables(conn)
+    migration_077_create_sharing_tables(conn)
     yield conn
     conn.close()
 

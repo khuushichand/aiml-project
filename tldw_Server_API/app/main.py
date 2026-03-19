@@ -1218,6 +1218,8 @@ else:
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
+    # Sharing Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.sharing import router as sharing_router
     from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
@@ -5796,6 +5798,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     except _IMPORT_EXCEPTIONS as _chatbooks_min_err:
         logger.debug(f"Skipping chatbooks router in minimal test app: {_chatbooks_min_err}")
+    # Sharing endpoints (workspace sharing, tokens, admin)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sharing import router as sharing_router
+
+        app.include_router(sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])
+    except _IMPORT_EXCEPTIONS as _sharing_min_err:
+        logger.debug("Skipping sharing router in minimal test app: {}", _sharing_min_err)
     # Personalization scaffold endpoints (opt-in/profile/memories) needed for unit tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.personalization import router as personalization_router
@@ -6698,6 +6707,7 @@ else:
         )
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
+    _include_if_enabled("sharing", sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])
     _include_if_enabled("llm", mlx_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
     _include_if_enabled("llm", llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
     _include_if_enabled("llm", messages_router, prefix=f"{API_V1_PREFIX}", tags=["messages"])

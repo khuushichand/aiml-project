@@ -473,6 +473,21 @@ async def get_chacha_db_for_user(current_user: User = Depends(get_request_user))
     return db_instance
 
 
+async def get_chacha_db_for_owner(owner_user_id: int) -> CharactersRAGDB:
+    """
+    Return a CharactersRAGDB for an arbitrary user (the workspace owner).
+
+    Used by the sharing module to read sources from the owner's DB
+    while the accessor chats with their own DB.
+    """
+    if not isinstance(owner_user_id, int):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid owner_user_id.",
+        )
+    return await _get_or_init_db_instance(owner_user_id, str(owner_user_id))
+
+
 def close_all_chacha_db_instances():
     """Closes all cached ChaChaNotesDB connections. Useful for application shutdown."""
     with _chacha_db_lock:
