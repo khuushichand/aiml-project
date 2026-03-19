@@ -151,6 +151,40 @@ const fetchLiveMediaDetail = async (
   return payload as Record<string, unknown>
 }
 
+const getWorkspaceProbeProcessingDetail = (
+  mediaId: number,
+  detailPayload: Record<string, unknown>,
+): Record<string, unknown> => {
+  const processing = detailPayload.processing
+  if (!processing || typeof processing !== "object") {
+    throw new Error(
+      `GET /api/v1/media/${mediaId} returned no processing payload: ${JSON.stringify(
+        detailPayload,
+      )}`,
+    )
+  }
+
+  const processingRecord = processing as Record<string, unknown>
+  const hasChunkingStatus = Object.prototype.hasOwnProperty.call(
+    processingRecord,
+    "chunking_status",
+  )
+  const hasVectorProcessingStatus = Object.prototype.hasOwnProperty.call(
+    processingRecord,
+    "vector_processing_status",
+  )
+
+  if (!hasChunkingStatus || !hasVectorProcessingStatus) {
+    throw new Error(
+      `GET /api/v1/media/${mediaId} omitted workspace readiness fields. The audited backend should include processing.chunking_status and processing.vector_processing_status even before embeddings complete. This usually means the local backend is stale or not running the current branch. Payload: ${JSON.stringify(
+        detailPayload,
+      )}`,
+    )
+  }
+
+  return processingRecord
+}
+
 const createLiveWorkspaceProbeSource = async (
   title: string,
   content: string,
@@ -222,14 +256,13 @@ const createLiveWorkspaceProbeSource = async (
   ).toBeTruthy()
 
   let liveMediaDetail = await fetchLiveMediaDetail(mediaId)
+  getWorkspaceProbeProcessingDetail(mediaId, liveMediaDetail)
   await expect
     .poll(
       async () => {
         liveMediaDetail = await fetchLiveMediaDetail(mediaId)
-        return (
-          (liveMediaDetail.processing as Record<string, unknown> | undefined)
-            ?.vector_processing_status ?? null
-        )
+        return getWorkspaceProbeProcessingDetail(mediaId, liveMediaDetail)
+          .vector_processing_status ?? null
       },
       {
         timeout: 60_000,
