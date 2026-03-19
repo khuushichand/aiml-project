@@ -145,3 +145,46 @@ def test_hosted_production_compose_is_standalone_and_keeps_postgres_internal():
         in caddy_volumes,
         "expected caddy service to mount the production Caddyfile sample",
     )
+
+
+def test_hosted_production_local_postgres_overlay_adds_internal_postgres_service():
+    text = Path("Dockerfiles/docker-compose.hosted-saas-prod.local-postgres.yml").read_text(
+        encoding="utf-8"
+    )
+    data = yaml.safe_load(text)
+    _require(isinstance(data, dict), "expected hosted production fallback overlay to parse as a mapping")
+
+    services = data.get("services", {})
+    _require(
+        "postgres" in services,
+        "expected fallback overlay to define postgres service",
+    )
+    _require(
+        "app" in services,
+        "expected fallback overlay to override app service dependencies",
+    )
+    _require(
+        "caddy" not in services and "webui" not in services and "redis" not in services,
+        "expected fallback overlay to add only postgres and app overrides",
+    )
+
+    postgres_service = services["postgres"]
+    _require(
+        postgres_service.get("ports", []) == [],
+        "expected fallback postgres to avoid public host ports",
+    )
+    _require(
+        postgres_service.get("expose", []) == ["5432"],
+        "expected fallback postgres to expose port 5432 internally",
+    )
+    _require(
+        any("TLDW_POSTGRES_DATA_DIR" in volume for volume in postgres_service.get("volumes", [])),
+        "expected fallback postgres to use TLDW_POSTGRES_DATA_DIR bind mount",
+    )
+
+    app_service = services["app"]
+    depends_on = app_service.get("depends_on", {})
+    _require(
+        "postgres" in depends_on,
+        "expected fallback overlay to add postgres dependency to app",
+    )
