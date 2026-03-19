@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   applyAttachedResearchContextEdits,
+  buildResearchFollowUpPrompt,
   clearAttachedResearchContext,
   deriveAttachedResearchContext,
   isDeepResearchCompletionMetadata,
@@ -124,6 +125,16 @@ describe("research-chat-context", () => {
       })
     ).toBe(false)
     expect(isDeepResearchCompletionMetadata(null)).toBe(false)
+  })
+
+  it("builds a deterministic follow-up prompt from the run query", () => {
+    expect(buildResearchFollowUpPrompt("Battery recycling supply chain")).toBe(
+      "Follow up on this research: Battery recycling supply chain"
+    )
+    expect(
+      buildResearchFollowUpPrompt("  Battery   recycling   supply chain  ")
+    ).toBe("Follow up on this research: Battery recycling supply chain")
+    expect(buildResearchFollowUpPrompt("   ")).toBe("Follow up on this research")
   })
 
   it("sanitizes and applies attached research context edits without mutating identity fields", () => {

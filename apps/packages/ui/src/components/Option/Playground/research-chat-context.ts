@@ -5,6 +5,7 @@ import { buildChatLinkedResearchPath } from "./research-run-status"
 const MAX_ATTACHED_RESEARCH_CLAIMS = 5
 const MAX_ATTACHED_RESEARCH_UNRESOLVED_QUESTIONS = 5
 const MAX_ATTACHED_RESEARCH_HISTORY = 3
+const RESEARCH_FOLLOW_UP_PROMPT_PREFIX = "Follow up on this research:"
 
 type RecordLike = Record<string, unknown>
 
@@ -43,6 +44,16 @@ const asNonNegativeInteger = (value: unknown): number | null => {
     return Math.trunc(value)
   }
   return null
+}
+
+export const buildResearchFollowUpPrompt = (query: string): string => {
+  const normalizedQuery = query
+    .trim()
+    .replace(/\s+/g, " ")
+
+  return normalizedQuery.length > 0
+    ? `${RESEARCH_FOLLOW_UP_PROMPT_PREFIX} ${normalizedQuery}`
+    : "Follow up on this research"
 }
 
 const getOutlineSections = (outline: unknown): unknown[] => {
