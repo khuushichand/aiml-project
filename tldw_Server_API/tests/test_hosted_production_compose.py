@@ -227,27 +227,3 @@ def test_hosted_production_runbook_documents_prod_and_fallback_topology():
         "Stripe test mode" in text or "staging" in text.lower(),
         "expected production runbook to keep live Stripe proof in staging",
     )
-
-    profile_text = Path("Docs/Published/Deployment/Hosted_SaaS_Profile.md").read_text(
-        encoding="utf-8"
-    )
-    _require(
-        "Hosted_Production_Runbook.md" in profile_text,
-        "expected hosted profile to reference the production runbook",
-    )
-
-    staging_text = Path("Docs/Published/Deployment/Hosted_Staging_Runbook.md").read_text(
-        encoding="utf-8"
-    )
-    _require(
-        "Hosted_Production_Runbook.md" in staging_text,
-        "expected hosted staging runbook to reference the production runbook",
-    )
-
-    first_time_text = Path("Docs/Published/Deployment/First_Time_Production_Setup.md").read_text(
-        encoding="utf-8"
-    )
-    _require(
-        "Hosted_Production_Runbook.md" in first_time_text,
-        "expected first-time production setup guide to reference the production runbook",
-    )

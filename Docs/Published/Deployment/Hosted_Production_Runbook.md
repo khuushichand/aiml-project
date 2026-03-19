@@ -6,11 +6,10 @@ Audience: operators cutting over the first paid hosted SaaS deployment
 This runbook is the canonical production path for the hosted SaaS launch profile. It is intentionally narrower than the staging runbook: production validation should prove the stable topology, not repeat the Stripe billing mutation checks that belong in staging.
 
 Related documents
-- Hosted SaaS profile: `Docs/Published/Deployment/Hosted_SaaS_Profile.md`
-- Hosted staging runbook: `Docs/Published/Deployment/Hosted_Staging_Runbook.md`
 - Hosted Stripe test-mode runbook: `Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md`
 - Hosted staging operations runbook: `Docs/Operations/Hosted_Staging_Operations_Runbook.md`
 - Production Caddy sample: `Helper_Scripts/Samples/Caddy/Caddyfile.hosted-saas.prod.compose`
+- Hosted profile and staging deployment runbooks live in the private hosted repo
 
 ## 1) Prepare the production env file
 

@@ -45,3 +45,32 @@ def test_public_docs_pipeline_declares_hosted_material_private() -> None:
         "Hosted_Production_Runbook.md" not in mkdocs_config,
         "expected mkdocs nav to avoid hosted private runbooks",
     )
+
+
+def test_public_docs_do_not_point_self_host_users_to_hosted_runbooks() -> None:
+    first_time_setup = Path("Docs/Published/Deployment/First_Time_Production_Setup.md").read_text(
+        encoding="utf-8"
+    )
+    staging_ops = Path("Docs/Operations/Hosted_Staging_Operations_Runbook.md").read_text(
+        encoding="utf-8"
+    )
+    stripe_ops = Path("Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md").read_text(
+        encoding="utf-8"
+    )
+
+    _require(
+        "Hosted_SaaS_Profile.md" not in first_time_setup,
+        "expected self-host production setup guide to avoid hosted SaaS profile links",
+    )
+    _require(
+        "Hosted_Production_Runbook.md" not in first_time_setup,
+        "expected self-host production setup guide to avoid hosted production runbook links",
+    )
+    _require(
+        "Hosted_Staging_Runbook.md" not in stripe_ops,
+        "expected hosted Stripe ops doc to avoid public hosted staging runbook links",
+    )
+    _require(
+        "Hosted_Production_Runbook.md" not in staging_ops,
+        "expected hosted staging ops doc to avoid public hosted production runbook links",
+    )
