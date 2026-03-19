@@ -50,6 +50,25 @@ def test_create_household_draft_endpoint(client: TestClient) -> None:
     assert payload["status"] == "draft"
 
 
+def test_list_household_drafts_endpoint_returns_owned_drafts(client: TestClient) -> None:
+    first = client.post(
+        "/api/v1/guardian/wizard/drafts",
+        json={"name": "Home", "mode": "family"},
+    )
+    second = client.post(
+        "/api/v1/guardian/wizard/drafts",
+        json={"name": "School", "mode": "family"},
+    )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+
+    response = client.get("/api/v1/guardian/wizard/drafts")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert [row["name"] for row in payload] == ["School", "Home"]
+
+
 def test_member_relationship_and_plan_endpoints(client: TestClient) -> None:
     draft_res = client.post(
         "/api/v1/guardian/wizard/drafts",
@@ -136,6 +155,45 @@ def test_resend_pending_invites_endpoint(client: TestClient) -> None:
     assert payload["resent_count"] == 1
     assert payload["skipped_count"] == 0
     assert payload["resent_user_ids"] == ["child-1"]
+
+
+def test_resend_household_member_invite_endpoint_marks_invite_sent(client: TestClient) -> None:
+    draft_res = client.post(
+        "/api/v1/guardian/wizard/drafts",
+        json={"name": "Invite Resend Home", "mode": "family"},
+    )
+    assert draft_res.status_code == 201, draft_res.text
+    draft_id = draft_res.json()["id"]
+
+    dependent_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={
+            "role": "dependent",
+            "display_name": "Alex",
+            "email": "alex@example.com",
+            "invite_required": True,
+            "account_mode": "invite_new",
+            "provisioning_status": "not_started",
+        },
+    )
+    assert dependent_member.status_code == 201, dependent_member.text
+    member_id = dependent_member.json()["id"]
+
+    provision_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members/{member_id}/invite/provision",
+    )
+    assert provision_res.status_code == 201, provision_res.text
+    invite_id = provision_res.json()["id"]
+
+    resend_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/invites/{invite_id}/resend",
+    )
+    assert resend_res.status_code == 200, resend_res.text
+    payload = resend_res.json()
+
+    assert payload["status"] == "sent"
+    assert payload["resend_count"] == 1
+    assert payload["last_sent_at"] is not None
 
 
 def test_relationship_mapping_allows_invite_first_dependent_without_runtime_relationship(
@@ -235,6 +293,133 @@ def test_save_guardrail_plan_allows_invite_first_dependent_without_resolved_user
     assert payload["dependent_member_draft_id"] == dependent_member.json()["id"]
     assert payload["dependent_user_id"] is None
     assert payload["status"] == "queued"
+
+
+def test_tracker_endpoint_returns_row_level_blockers_and_actions_for_expired_invite(
+    client: TestClient,
+) -> None:
+    draft_res = client.post(
+        "/api/v1/guardian/wizard/drafts",
+        json={"name": "Tracker Home", "mode": "family"},
+    )
+    assert draft_res.status_code == 201, draft_res.text
+    draft_id = draft_res.json()["id"]
+
+    guardian_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={"role": "guardian", "display_name": "Parent", "user_id": "guardian-1"},
+    )
+    dependent_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={
+            "role": "dependent",
+            "display_name": "Alex",
+            "email": "alex@example.com",
+            "invite_required": True,
+            "account_mode": "invite_new",
+            "provisioning_status": "not_started",
+        },
+    )
+    assert guardian_member.status_code == 201, guardian_member.text
+    assert dependent_member.status_code == 201, dependent_member.text
+    member_id = dependent_member.json()["id"]
+
+    relationship_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/relationships",
+        json={
+            "guardian_member_draft_id": guardian_member.json()["id"],
+            "dependent_member_draft_id": member_id,
+            "relationship_type": "parent",
+            "dependent_visible": True,
+        },
+    )
+    assert relationship_res.status_code == 201, relationship_res.text
+    relationship_id = relationship_res.json()["id"]
+
+    plan_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/plans",
+        json={
+            "dependent_member_draft_id": member_id,
+            "relationship_draft_id": relationship_id,
+            "template_id": "default-child-safe",
+            "overrides": {"notify_context": "snippet"},
+        },
+    )
+    assert plan_res.status_code == 201, plan_res.text
+
+    provision_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members/{member_id}/invite/provision",
+    )
+    assert provision_res.status_code == 201, provision_res.text
+    invite_id = provision_res.json()["id"]
+
+    db = client.app.state.guardian_db
+    assert db.update_household_member_invite_status(
+        invite_id,
+        status="expired",
+        expires_at="2026-03-18T00:00:00+00:00",
+    )
+
+    tracker_res = client.get(f"/api/v1/guardian/wizard/drafts/{draft_id}/tracker")
+    assert tracker_res.status_code == 200, tracker_res.text
+    payload = tracker_res.json()
+    item = payload["items"][0]
+
+    assert item["invite_status"] == "expired"
+    assert "invite_expired" in item["blocker_codes"]
+    assert "reissue_invite" in item["available_actions"]
+
+
+def test_reissue_invite_endpoint_rotates_token_and_revokes_old_invite(
+    client: TestClient,
+) -> None:
+    draft_res = client.post(
+        "/api/v1/guardian/wizard/drafts",
+        json={"name": "Reissue Home", "mode": "family"},
+    )
+    assert draft_res.status_code == 201, draft_res.text
+    draft_id = draft_res.json()["id"]
+
+    dependent_member = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members",
+        json={
+            "role": "dependent",
+            "display_name": "Alex",
+            "email": "alex@example.com",
+            "invite_required": True,
+            "account_mode": "invite_new",
+            "provisioning_status": "not_started",
+        },
+    )
+    assert dependent_member.status_code == 201, dependent_member.text
+    member_id = dependent_member.json()["id"]
+
+    provision_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/members/{member_id}/invite/provision",
+    )
+    assert provision_res.status_code == 201, provision_res.text
+    original_invite = provision_res.json()
+    invite_id = original_invite["id"]
+
+    db = client.app.state.guardian_db
+    assert db.update_household_member_invite_status(
+        invite_id,
+        status="expired",
+        expires_at="2026-03-18T00:00:00+00:00",
+    )
+
+    reissue_res = client.post(
+        f"/api/v1/guardian/wizard/drafts/{draft_id}/invites/{invite_id}/reissue",
+    )
+    assert reissue_res.status_code == 200, reissue_res.text
+    payload = reissue_res.json()
+
+    revoked_invite = db.get_household_member_invite(invite_id)
+
+    assert revoked_invite is not None
+    assert revoked_invite["status"] == "revoked"
+    assert payload["status"] == "ready"
+    assert payload["invite_token"] != original_invite["invite_token"]
 
 
 def test_get_latest_household_draft_endpoint_returns_most_recent(client: TestClient) -> None:

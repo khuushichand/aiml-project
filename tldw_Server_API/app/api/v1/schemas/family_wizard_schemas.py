@@ -35,6 +35,15 @@ WizardRelationshipDraftStatus = Literal[
     "declined",
     "revoked",
 ]
+WizardInviteStatus = Literal[
+    "not_started",
+    "ready",
+    "sent",
+    "accepted",
+    "expired",
+    "revoked",
+    "failed",
+]
 
 
 class HouseholdDraftCreate(BaseModel):
@@ -163,6 +172,7 @@ class ActivationSummaryResponse(BaseModel):
 
 class ResendPendingInvitesRequest(BaseModel):
     dependent_user_ids: list[str] = Field(default_factory=list)
+    member_draft_ids: list[str] = Field(default_factory=list)
 
 
 class ResendPendingInvitesResponse(BaseModel):
@@ -171,3 +181,52 @@ class ResendPendingInvitesResponse(BaseModel):
     skipped_count: int = Field(..., ge=0)
     resent_user_ids: list[str] = Field(default_factory=list)
     skipped_user_ids: list[str] = Field(default_factory=list)
+    resent_member_draft_ids: list[str] = Field(default_factory=list)
+    skipped_member_draft_ids: list[str] = Field(default_factory=list)
+
+
+class HouseholdMemberInviteResponse(BaseModel):
+    id: str
+    household_draft_id: str
+    member_draft_id: str
+    status: WizardInviteStatus
+    delivery_channel: str
+    delivery_target: str | None = None
+    invite_token: str
+    resend_count: int = Field(..., ge=0)
+    last_sent_at: str | None = None
+    accepted_at: str | None = None
+    expires_at: str | None = None
+    revoked_at: str | None = None
+    failure_reason: str | None = None
+    created_at: str
+    updated_at: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class HouseholdInviteTrackerItemResponse(BaseModel):
+    member_draft_id: str
+    display_name: str
+    account_mode: WizardAccountMode
+    dependent_user_id: str | None = None
+    relationship_draft_id: str | None = None
+    relationship_status: WizardRelationshipDraftStatus | None = None
+    plan_draft_id: str | None = None
+    plan_status: WizardPlanStatus | None = None
+    invite_id: str | None = None
+    invite_status: WizardInviteStatus = "not_started"
+    invite_delivery_channel: str | None = None
+    invite_delivery_target: str | None = None
+    invite_last_sent_at: str | None = None
+    invite_accepted_at: str | None = None
+    invite_expires_at: str | None = None
+    blocker_codes: list[str] = Field(default_factory=list)
+    available_actions: list[str] = Field(default_factory=list)
+
+
+class HouseholdInviteTrackerResponse(BaseModel):
+    household_draft_id: str
+    active_count: int = Field(..., ge=0)
+    pending_count: int = Field(..., ge=0)
+    failed_count: int = Field(..., ge=0)
+    items: list[HouseholdInviteTrackerItemResponse] = Field(default_factory=list)

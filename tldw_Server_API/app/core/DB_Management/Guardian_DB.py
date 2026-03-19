@@ -2494,6 +2494,26 @@ class GuardianDB:
             finally:
                 conn.close()
 
+    def _household_member_invite_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "household_draft_id": row["household_draft_id"],
+            "member_draft_id": row["member_draft_id"],
+            "status": row["status"],
+            "delivery_channel": row["delivery_channel"],
+            "delivery_target": row["delivery_target"],
+            "invite_token": row["invite_token"],
+            "resend_count": row["resend_count"],
+            "last_sent_at": row["last_sent_at"],
+            "accepted_at": row["accepted_at"],
+            "expires_at": row["expires_at"],
+            "revoked_at": row["revoked_at"],
+            "failure_reason": row["failure_reason"],
+            "metadata": self._loads_json_or_default(row["metadata"], None),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
     def create_household_member_invite(
         self,
         household_draft_id: str,
@@ -2540,24 +2560,152 @@ class GuardianDB:
                 ).fetchone()
                 if not row:
                     return None
-                return {
-                    "id": row["id"],
-                    "household_draft_id": row["household_draft_id"],
-                    "member_draft_id": row["member_draft_id"],
-                    "status": row["status"],
-                    "delivery_channel": row["delivery_channel"],
-                    "delivery_target": row["delivery_target"],
-                    "invite_token": row["invite_token"],
-                    "resend_count": row["resend_count"],
-                    "last_sent_at": row["last_sent_at"],
-                    "accepted_at": row["accepted_at"],
-                    "expires_at": row["expires_at"],
-                    "revoked_at": row["revoked_at"],
-                    "failure_reason": row["failure_reason"],
-                    "metadata": self._loads_json_or_default(row["metadata"], None),
-                    "created_at": row["created_at"],
-                    "updated_at": row["updated_at"],
-                }
+                return self._household_member_invite_from_row(row)
+            finally:
+                conn.close()
+
+    def list_household_member_invites(
+        self,
+        household_draft_id: str,
+        member_draft_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                if member_draft_id:
+                    rows = conn.execute(
+                        """SELECT * FROM guardian_household_member_invites
+                           WHERE household_draft_id = ? AND member_draft_id = ?
+                           ORDER BY created_at DESC""",
+                        (household_draft_id, member_draft_id),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """SELECT * FROM guardian_household_member_invites
+                           WHERE household_draft_id = ?
+                           ORDER BY created_at DESC""",
+                        (household_draft_id,),
+                    ).fetchall()
+                return [self._household_member_invite_from_row(row) for row in rows]
+            finally:
+                conn.close()
+
+    def get_latest_household_member_invite_for_member(
+        self,
+        member_draft_id: str,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """SELECT * FROM guardian_household_member_invites
+                       WHERE member_draft_id = ?
+                       ORDER BY created_at DESC
+                       LIMIT 1""",
+                    (member_draft_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return self._household_member_invite_from_row(row)
+            finally:
+                conn.close()
+
+    def update_household_member_invite_status(
+        self,
+        invite_id: str,
+        *,
+        status: str,
+        last_sent_at: str | None = None,
+        accepted_at: str | None = None,
+        expires_at: str | None = None,
+        revoked_at: str | None = None,
+        failure_reason: str | None = None,
+        increment_resend_count: bool = False,
+    ) -> bool:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                current = conn.execute(
+                    """SELECT resend_count
+                       FROM guardian_household_member_invites
+                       WHERE id = ?""",
+                    (invite_id,),
+                ).fetchone()
+                if not current:
+                    return False
+                resend_count = int(current["resend_count"] or 0)
+                resolved_last_sent_at = last_sent_at
+                if increment_resend_count:
+                    resend_count += 1
+                    if resolved_last_sent_at is None:
+                        resolved_last_sent_at = now
+                result = conn.execute(
+                    """UPDATE guardian_household_member_invites
+                       SET status = ?,
+                           resend_count = ?,
+                           last_sent_at = COALESCE(?, last_sent_at),
+                           accepted_at = COALESCE(?, accepted_at),
+                           expires_at = COALESCE(?, expires_at),
+                           revoked_at = COALESCE(?, revoked_at),
+                           failure_reason = ?,
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (
+                        status,
+                        resend_count,
+                        resolved_last_sent_at,
+                        accepted_at,
+                        expires_at,
+                        revoked_at,
+                        failure_reason,
+                        now,
+                        invite_id,
+                    ),
+                )
+                return (result.rowcount or 0) > 0
+            finally:
+                conn.close()
+
+    def reissue_household_member_invite(self, invite_id: str) -> str:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """SELECT * FROM guardian_household_member_invites
+                       WHERE id = ?""",
+                    (invite_id,),
+                ).fetchone()
+                if not row:
+                    raise ValueError("Invite not found")
+                conn.execute(
+                    """UPDATE guardian_household_member_invites
+                       SET status = 'revoked',
+                           revoked_at = ?,
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (now, now, invite_id),
+                )
+                replacement_id = _new_id()
+                conn.execute(
+                    """INSERT INTO guardian_household_member_invites
+                    (id, household_draft_id, member_draft_id, status, delivery_channel,
+                     delivery_target, invite_token, resend_count, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, 'ready', ?, ?, ?, 0, ?, ?, ?)""",
+                    (
+                        replacement_id,
+                        row["household_draft_id"],
+                        row["member_draft_id"],
+                        row["delivery_channel"],
+                        row["delivery_target"],
+                        _new_id(),
+                        row["metadata"],
+                        now,
+                        now,
+                    ),
+                )
+                return replacement_id
             finally:
                 conn.close()
 
