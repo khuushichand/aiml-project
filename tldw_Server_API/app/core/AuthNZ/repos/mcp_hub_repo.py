@@ -446,6 +446,16 @@ class McpHubRepo:
         return out
 
     @staticmethod
+    def _normalize_governance_pack_trust_policy_row(
+        row: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        out = dict(row)
+        out["policy_document"] = _load_json_dict(out.pop("policy_document_json", None))
+        return out
+
+    @staticmethod
     def _normalize_governance_pack_object_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -945,6 +955,52 @@ class McpHubRepo:
             self._normalize_governance_pack_source_candidate_row(self._row_to_dict(row)) or {}
             for row in rows
         ]
+
+    async def get_governance_pack_trust_policy(self) -> dict[str, Any]:
+        row = await self.db_pool.fetchone(
+            """
+            SELECT id, policy_document_json, updated_by, updated_at
+            FROM mcp_governance_pack_trust_policy
+            WHERE id = 1
+            """
+        )
+        if not row:
+            return {
+                "id": 1,
+                "policy_document": {},
+                "updated_by": None,
+                "updated_at": None,
+            }
+        return self._normalize_governance_pack_trust_policy_row(self._row_to_dict(row)) or {}
+
+    async def upsert_governance_pack_trust_policy(
+        self,
+        *,
+        policy_document: dict[str, Any],
+        actor_id: int | None,
+        conn: Any | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
+        query = """
+            INSERT INTO mcp_governance_pack_trust_policy (
+                id, policy_document_json, updated_by, updated_at
+            ) VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                policy_document_json = excluded.policy_document_json,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """
+        params = (
+            json.dumps(policy_document or {}),
+            actor_id,
+            ts,
+        )
+        if conn is None:
+            await self.db_pool.execute(query, params)
+        else:
+            await self._conn_execute(conn, query, params)
+        return await self.get_governance_pack_trust_policy()
 
     async def create_governance_pack_upgrade(
         self,

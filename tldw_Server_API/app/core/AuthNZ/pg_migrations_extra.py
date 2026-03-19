@@ -714,6 +714,17 @@ _CREATE_MCP_HUB_TABLES = [
     ),
     (
         """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_trust_policy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            updated_by INTEGER NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        """
         CREATE TABLE IF NOT EXISTS mcp_approval_decisions (
             id SERIAL PRIMARY KEY,
             approval_policy_id INTEGER NULL REFERENCES mcp_approval_policies(id) ON DELETE SET NULL,

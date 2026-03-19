@@ -4227,6 +4227,24 @@ def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection
     logger.info("Migration 078: Added governance-pack source provenance schema")
 
 
+def migration_079_add_governance_pack_trust_policy(conn: sqlite3.Connection) -> None:
+    """Add deployment-wide governance-pack trust-policy storage."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_trust_policy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.commit()
+    logger.info("Migration 079: Added governance-pack trust policy schema")
+
+
 def rollback_077_drop_sharing_tables(conn: sqlite3.Connection) -> None:
     """Rollback migration 077 by dropping sharing tables."""
     conn.execute("DROP TABLE IF EXISTS sharing_config")
@@ -4560,6 +4578,11 @@ def get_authnz_migrations() -> list[Migration]:
             78,
             "Add governance-pack source provenance",
             migration_078_add_governance_pack_source_provenance,
+        ),
+        Migration(
+            79,
+            "Add governance-pack trust policy",
+            migration_079_add_governance_pack_trust_policy,
         ),
     ]
 

@@ -49,6 +49,8 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     GovernancePackUpgradeExecutionResponse,
     GovernancePackUpgradeHistoryEntryResponse,
     GovernancePackSummaryResponse,
+    GovernancePackTrustPolicyRequest,
+    GovernancePackTrustPolicyResponse,
     GovernanceAuditFindingListResponse,
     MCPHubDeleteResponse,
     McpCredentialSlotStatusResponse,
@@ -95,6 +97,9 @@ from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
     GovernancePackUpgradeConflictError,
     GovernancePackUpgradeStaleError,
     McpHubGovernancePackService,
+)
+from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+    McpHubGovernancePackTrustService,
 )
 from tldw_Server_API.app.services.mcp_credential_broker_service import (
     McpCredentialBrokerService,
@@ -155,6 +160,14 @@ async def get_mcp_hub_governance_pack_service() -> McpHubGovernancePackService:
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
     return McpHubGovernancePackService(repo=repo)
+
+
+async def get_mcp_hub_governance_pack_trust_service() -> McpHubGovernancePackTrustService:
+    """Resolve governance-pack trust service with MCP Hub storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpHubGovernancePackTrustService(repo=repo)
 
 
 async def get_mcp_hub_capability_adapter_service() -> McpHubCapabilityAdapterService:
@@ -1654,6 +1667,34 @@ async def list_governance_packs(
         )
     rows = _dedupe_rows(rows)
     return [GovernancePackSummaryResponse.model_validate(row) for row in rows]
+
+
+@router.get(
+    "/governance-packs/trust-policy",
+    response_model=GovernancePackTrustPolicyResponse,
+)
+async def get_governance_pack_trust_policy(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackTrustService = Depends(get_mcp_hub_governance_pack_trust_service),
+) -> GovernancePackTrustPolicyResponse:
+    """Return the deployment-wide governance-pack trust policy."""
+    _require_mutation_permission(principal)
+    return GovernancePackTrustPolicyResponse.model_validate(await svc.get_policy())
+
+
+@router.put(
+    "/governance-packs/trust-policy",
+    response_model=GovernancePackTrustPolicyResponse,
+)
+async def update_governance_pack_trust_policy(
+    payload: GovernancePackTrustPolicyRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackTrustService = Depends(get_mcp_hub_governance_pack_trust_service),
+) -> GovernancePackTrustPolicyResponse:
+    """Update the deployment-wide governance-pack trust policy."""
+    _require_mutation_permission(principal)
+    updated = await svc.update_policy(payload.model_dump(), actor_id=principal.user_id)
+    return GovernancePackTrustPolicyResponse.model_validate(updated)
 
 
 @router.get(

@@ -963,3 +963,25 @@ class GovernancePackImportResponse(BaseModel):
     imported_object_counts: dict[str, int] = Field(default_factory=dict)
     blocked_objects: list[str] = Field(default_factory=list)
     report: GovernancePackDryRunReportResponse
+
+
+class GovernancePackTrustPolicyRequest(BaseModel):
+    allow_local_path_sources: bool = False
+    allowed_local_roots: list[str] = Field(default_factory=list)
+    allow_git_sources: bool = False
+    allowed_git_hosts: list[str] = Field(default_factory=list)
+    allowed_git_repositories: list[str] = Field(default_factory=list)
+    allowed_git_ref_kinds: list[str] = Field(default_factory=list)
+    require_git_signature_verification: bool = False
+    trusted_git_key_fingerprints: list[str] = Field(default_factory=list)
+
+
+class GovernancePackTrustPolicyResponse(BaseModel):
+    allow_local_path_sources: bool = False
+    allowed_local_roots: list[str] = Field(default_factory=list)
+    allow_git_sources: bool = False
+    allowed_git_hosts: list[str] = Field(default_factory=list)
+    allowed_git_repositories: list[str] = Field(default_factory=list)
+    allowed_git_ref_kinds: list[str] = Field(default_factory=list)
+    require_git_signature_verification: bool = False
+    trusted_git_key_fingerprints: list[str] = Field(default_factory=list)

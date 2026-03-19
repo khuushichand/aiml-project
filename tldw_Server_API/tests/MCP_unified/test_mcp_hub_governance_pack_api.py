@@ -350,11 +350,38 @@ class _FakeGovernancePackService:
         return list(self.upgrade_history)
 
 
+class _FakeGovernancePackTrustService:
+    def __init__(self) -> None:
+        self.policy = {
+            "allow_local_path_sources": True,
+            "allowed_local_roots": ["/srv/packs"],
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/researcher-pack"],
+            "allowed_git_ref_kinds": ["commit", "tag"],
+            "require_git_signature_verification": True,
+            "trusted_git_key_fingerprints": ["ABCD1234"],
+        }
+        self.update_calls: list[dict[str, object]] = []
+
+    async def get_policy(self) -> dict[str, object]:
+        return dict(self.policy)
+
+    async def update_policy(self, policy: dict[str, object], *, actor_id: int | None) -> dict[str, object]:
+        self.update_calls.append({"policy": dict(policy), "actor_id": actor_id})
+        self.policy = {
+            **self.policy,
+            **dict(policy),
+        }
+        return dict(self.policy)
+
+
 def _build_app(
     principal: AuthPrincipal,
     *,
     policy_service: _FakePolicyService | None = None,
     governance_service: _FakeGovernancePackService | None = None,
+    trust_service: _FakeGovernancePackTrustService | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_hub_management.router, prefix="/api/v1")
@@ -368,6 +395,9 @@ def _build_app(
     )
     app.dependency_overrides[mcp_hub_management.get_mcp_hub_governance_pack_service] = (
         lambda: governance_service or _FakeGovernancePackService()
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_governance_pack_trust_service] = (
+        lambda: trust_service or _FakeGovernancePackTrustService()
     )
     return app
 
@@ -808,3 +838,37 @@ def test_governance_pack_list_and_detail_include_provenance() -> None:
     assert detail_payload["pack_content_digest"] == "b" * 64
     assert detail_payload["imported_objects"][0]["source_object_id"] == "researcher.profile"
     assert detail_payload["imported_objects"][1]["object_type"] == "policy_assignment"
+
+
+def test_governance_pack_trust_policy_round_trip() -> None:
+    trust_service = _FakeGovernancePackTrustService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE]),
+        trust_service=trust_service,
+    )
+
+    with TestClient(app) as client:
+        get_resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
+        put_resp = client.put(
+            "/api/v1/mcp/hub/governance-packs/trust-policy",
+            json={
+                "allow_local_path_sources": True,
+                "allowed_local_roots": ["/srv/trusted-packs"],
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/researcher-pack"],
+                "allowed_git_ref_kinds": ["tag"],
+                "require_git_signature_verification": True,
+                "trusted_git_key_fingerprints": ["EFGH5678"],
+            },
+        )
+
+    assert get_resp.status_code == 200
+    assert get_resp.json()["allowed_local_roots"] == ["/srv/packs"]
+
+    assert put_resp.status_code == 200
+    payload = put_resp.json()
+    assert payload["allowed_local_roots"] == ["/srv/trusted-packs"]
+    assert payload["allowed_git_ref_kinds"] == ["tag"]
+    assert payload["require_git_signature_verification"] is True
+    assert trust_service.update_calls[0]["actor_id"] == 7
