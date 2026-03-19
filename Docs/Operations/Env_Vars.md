@@ -355,6 +355,10 @@ The following env vars are retained as **deprecated compatibility knobs** during
 - `JWT_SECRET_KEY`: JWT signing secret (>=32 chars). Required for `multi_user` in production.
 - `ACCESS_TOKEN_EXPIRE_MINUTES`: Access token lifetime (default 30).
 - `REFRESH_TOKEN_EXPIRE_DAYS`: Refresh token lifetime (default 7).
+- `PUBLIC_WEB_BASE_URL`: Public web app origin used for hosted auth links (for example `https://app.example.com`). When unset, auth emails fall back to `BASE_URL`.
+- `PUBLIC_PASSWORD_RESET_PATH`: Public hosted path for password reset completion (default `/auth/reset-password`).
+- `PUBLIC_EMAIL_VERIFICATION_PATH`: Public hosted path for email verification completion (default `/auth/verify-email`).
+- `PUBLIC_MAGIC_LINK_PATH`: Public hosted path for magic-link sign-in completion (default `/auth/magic-link`).
 - `REDIS_URL`: Optional Redis URL for sessions (`redis://` or `rediss://`).
 - `ENABLE_REGISTRATION`: Enable user registration (`true|false`).
 - `REQUIRE_REGISTRATION_CODE`: Require code to register (`true|false`).
@@ -380,7 +384,7 @@ The following env vars are retained as **deprecated compatibility knobs** during
 - `REDIS_ENABLED`: Boolean hint used in logs/metrics reporting.
 
 Config file support (optional):
-- Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).
+- Section `[AuthNZ]` in `Config_Files/config.txt` can define: `auth_mode`, `database_url`, `jwt_secret_key`, `single_user_api_key`, `enable_registration`, `require_registration_code`, `rate_limit_enabled`, `rate_limit_per_minute`, `rate_limit_burst`, `access_token_expire_minutes`, `refresh_token_expire_days`, `public_web_base_url`, `public_password_reset_path`, `public_email_verification_path`, `public_magic_link_path`, `redis_url`, plus security alert keys (`security_alerts_enabled`, `security_alert_min_severity`, `security_alert_file_path`, `security_alert_webhook_url`, `security_alert_webhook_headers`, `security_alert_email_to`, `security_alert_email_from`, `security_alert_email_subject_prefix`, `security_alert_smtp_host`, `security_alert_smtp_port`, `security_alert_smtp_starttls`, `security_alert_smtp_username`, `security_alert_smtp_password`, `security_alert_smtp_timeout`, `security_alert_file_min_severity`, `security_alert_webhook_min_severity`, `security_alert_email_min_severity`).
 - Section `[Image-Generation]` in `Config_Files/config.txt` can define:
   - General: `default_backend`, `enabled_backends`
   - Limits: `max_width`, `max_height`, `max_pixels`, `max_steps`, `max_prompt_length`, `inline_max_bytes`

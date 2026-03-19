@@ -383,6 +383,52 @@ class EmailService:
 
         logger.info(f"EmailService initialized with provider: {self.provider}")
 
+    def _read_setting_text(self, env_name: str, default: Optional[str] = None) -> Optional[str]:
+        """Read a string setting from env first, then from the settings object."""
+        env_value = os.getenv(env_name)
+        if env_value is not None:
+            stripped = env_value.strip()
+            return stripped or default
+
+        settings_value = getattr(self.settings, env_name, None)
+        if isinstance(settings_value, str):
+            stripped = settings_value.strip()
+            return stripped or default
+
+        return default
+
+    @staticmethod
+    def _normalize_public_path(path: str) -> str:
+        normalized = str(path or "").strip() or "/"
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+        return normalized
+
+    def _resolve_public_web_base_url(
+        self,
+        *,
+        base_url: Optional[str],
+        hosted_default_path: str,
+        legacy_default_path: str,
+        configured_public_path: Optional[str],
+        token: str,
+    ) -> str:
+        if base_url is not None:
+            resolved_base = base_url.rstrip("/")
+            resolved_path = self._normalize_public_path(configured_public_path or legacy_default_path)
+            return f"{resolved_base}{resolved_path}?token={token}"
+
+        public_web_base_url = self._read_setting_text("PUBLIC_WEB_BASE_URL")
+        if public_web_base_url:
+            resolved_path = self._normalize_public_path(
+                configured_public_path or hosted_default_path
+            )
+            return f"{public_web_base_url.rstrip('/')}{resolved_path}?token={token}"
+
+        fallback_base_url = self._read_setting_text("BASE_URL", "http://localhost:8000")
+        resolved_path = self._normalize_public_path(legacy_default_path)
+        return f"{str(fallback_base_url).rstrip('/')}{resolved_path}?token={token}"
+
     async def send_email(
         self,
         to_email: str,
@@ -592,8 +638,13 @@ class EmailService:
         Returns:
             True if sent successfully
         """
-        base_url = base_url or os.getenv("BASE_URL", "http://localhost:8000")
-        reset_link = f"{base_url}/auth/reset-password?token={reset_token}"
+        reset_link = self._resolve_public_web_base_url(
+            base_url=base_url,
+            hosted_default_path="/auth/reset-password",
+            legacy_default_path="/auth/reset-password",
+            configured_public_path=self._read_setting_text("PUBLIC_PASSWORD_RESET_PATH"),
+            token=reset_token,
+        )
 
         template_data = {
             "app_name": self.app_name,
@@ -622,9 +673,13 @@ class EmailService:
         base_url: Optional[str] = None
     ) -> bool:
         """Send email verification email"""
-
-        base_url = base_url or os.getenv("BASE_URL", "http://localhost:8000")
-        verification_link = f"{base_url}/auth/verify-email?token={verification_token}"
+        verification_link = self._resolve_public_web_base_url(
+            base_url=base_url,
+            hosted_default_path="/auth/verify-email",
+            legacy_default_path="/auth/verify-email",
+            configured_public_path=self._read_setting_text("PUBLIC_EMAIL_VERIFICATION_PATH"),
+            token=verification_token,
+        )
 
         template_data = {
             "app_name": self.app_name,
@@ -654,11 +709,13 @@ class EmailService:
         link_path: Optional[str] = None,
     ) -> bool:
         """Send magic link sign-in email."""
-        base_url = base_url or os.getenv("BASE_URL", "http://localhost:8000")
-        normalized_path = str(link_path or "/magic-link").strip() or "/magic-link"
-        if not normalized_path.startswith("/"):
-            normalized_path = f"/{normalized_path}"
-        magic_link = f"{base_url.rstrip('/')}{normalized_path}?token={magic_token}"
+        magic_link = self._resolve_public_web_base_url(
+            base_url=base_url,
+            hosted_default_path="/auth/magic-link",
+            legacy_default_path="/magic-link",
+            configured_public_path=link_path or self._read_setting_text("PUBLIC_MAGIC_LINK_PATH"),
+            token=magic_token,
+        )
 
         user_label = f" {username}" if username else ""
         template_data = {
