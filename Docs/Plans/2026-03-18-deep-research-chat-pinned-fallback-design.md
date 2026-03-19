@@ -136,6 +136,17 @@ The main improvement is visual separation:
 - pinned default first
 - recent recall second
 
+### Structural requirement
+
+The pinned-only fallback should not remain one mixed flex row with extra labels.
+
+Require two distinct presentational containers when both pinned and history exist:
+
+- one dedicated pinned mini-card container
+- one separate recent-history container
+
+Those containers should be individually testable so the layout contract is enforceable.
+
 ## Error Handling
 
 - if pinned restore/unpin actions fail, degrade the same way current attachment actions do
@@ -152,6 +163,7 @@ The main improvement is visual separation:
 - `Unpin` clears only the pinned slot
 - pinned mini-card and recent-history block render separately when both exist
 - active attachment flow remains unchanged
+- acceptance tests should render the real fallback UI, not only mocked `PlaygroundForm` prop wiring
 
 ### Backend
 

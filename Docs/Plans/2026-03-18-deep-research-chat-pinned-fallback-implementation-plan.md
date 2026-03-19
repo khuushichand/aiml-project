@@ -14,15 +14,19 @@
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx`
+- Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.pinned-fallback.test.tsx`
 
 **Step 1: Write the failing test**
 
-Add tests that prove:
+In the new real-form fallback test, add coverage that proves:
 
 - pinned-only no-active fallback renders a dedicated pinned mini-card surface
 - `Use now` restores pinned into active
 - `Unpin` clears only the pinned slot
+- `Open in Research` points at the pinned run URL
 - pinned and recent-history sections render separately when both exist
+
+In the existing mocked `Playground` integration test, add only the minimal wiring coverage needed to prove the correct pinned/history state reaches the form surface.
 
 **Step 2: Run test to verify it fails**
 
@@ -30,6 +34,7 @@ Run:
 
 ```bash
 ./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.pinned-fallback.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx
 ```
 
@@ -43,6 +48,7 @@ Do not implement production code yet.
 
 ```bash
 git add \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.pinned-fallback.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx
 git commit -m "test(chat): cover pinned research fallback"
 ```
@@ -64,6 +70,9 @@ In `PlaygroundForm.tsx`:
   - `Open in Research`
   - `Unpin`
 - if history exists too, render it as a separate block below the pinned mini-card
+- use distinct containers or test ids for:
+  - the pinned mini-card
+  - the recent-history block
 
 **Step 2: Reuse existing callbacks**
 
@@ -108,6 +117,8 @@ Add assertions for the new pinned fallback strings, such as:
 - `Use now`
 - default-context explanation copy
 
+This is secondary coverage only. Do not rely on the guard test as the main acceptance test for interactive fallback behavior.
+
 **Step 2: Run the guard test**
 
 Run:
@@ -138,6 +149,7 @@ Run:
 
 ```bash
 ./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.pinned-fallback.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts \
   apps/packages/ui/src/components/Option/Playground/__tests__/AttachedResearchContextChip.test.tsx
