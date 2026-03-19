@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 WizardHouseholdMode = Literal["family", "institutional"]
@@ -230,3 +230,35 @@ class HouseholdInviteTrackerResponse(BaseModel):
     pending_count: int = Field(..., ge=0)
     failed_count: int = Field(..., ge=0)
     items: list[HouseholdInviteTrackerItemResponse] = Field(default_factory=list)
+
+
+class HouseholdInvitePreviewResponse(BaseModel):
+    invite_id: str
+    household_draft_id: str
+    member_draft_id: str
+    household_name: str
+    dependent_display_name: str
+    invite_status: WizardInviteStatus
+    expires_at: str | None = None
+    requires_registration: bool = True
+
+
+class HouseholdInviteAcceptRegisterRequest(BaseModel):
+    token: str = Field(..., min_length=8)
+    username: str = Field(..., min_length=3, max_length=50, pattern="^[a-zA-Z0-9_-]+$")
+    email: EmailStr
+    password: str = Field(..., min_length=10)
+
+
+class HouseholdInviteAcceptClaimRequest(BaseModel):
+    token: str = Field(..., min_length=8)
+
+
+class HouseholdInviteAcceptResponse(BaseModel):
+    household_draft_id: str
+    member_draft_id: str
+    invite_id: str
+    user_id: str
+    relationship_id: str | None = None
+    materialized_plan_count: int = Field(..., ge=0)
+    was_existing_user: bool

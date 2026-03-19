@@ -2494,6 +2494,24 @@ class GuardianDB:
             finally:
                 conn.close()
 
+    def resolve_household_member_draft_user(self, member_id: str, user_id: str) -> bool:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                result = conn.execute(
+                    """UPDATE guardian_household_member_drafts
+                       SET user_id = ?,
+                           invite_status = 'accepted',
+                           provisioning_status = 'accepted',
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (str(user_id), now, member_id),
+                )
+                return (result.rowcount or 0) > 0
+            finally:
+                conn.close()
+
     def _household_member_invite_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": row["id"],
@@ -2528,6 +2546,15 @@ class GuardianDB:
         with self._lock:
             conn = self._connect()
             try:
+                household_row = conn.execute(
+                    """SELECT owner_user_id
+                       FROM guardian_household_drafts
+                       WHERE id = ?""",
+                    (household_draft_id,),
+                ).fetchone()
+                if not household_row:
+                    raise ValueError("Household draft not found")
+                invite_token = f"{household_row['owner_user_id']}.{invite_id}.{_new_id()}"
                 conn.execute(
                     """INSERT INTO guardian_household_member_invites
                     (id, household_draft_id, member_draft_id, status, delivery_channel,
@@ -2540,7 +2567,7 @@ class GuardianDB:
                         status,
                         delivery_channel,
                         delivery_target,
-                        _new_id(),
+                        invite_token,
                         json.dumps(metadata) if metadata else None,
                         now,
                         now,
@@ -2557,6 +2584,21 @@ class GuardianDB:
                 row = conn.execute(
                     "SELECT * FROM guardian_household_member_invites WHERE id = ?",
                     (invite_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return self._household_member_invite_from_row(row)
+            finally:
+                conn.close()
+
+    def get_household_member_invite_by_token(self, invite_token: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """SELECT * FROM guardian_household_member_invites
+                       WHERE invite_token = ?""",
+                    (invite_token,),
                 ).fetchone()
                 if not row:
                     return None
@@ -2688,6 +2730,14 @@ class GuardianDB:
                     (now, now, invite_id),
                 )
                 replacement_id = _new_id()
+                household_row = conn.execute(
+                    """SELECT owner_user_id
+                       FROM guardian_household_drafts
+                       WHERE id = ?""",
+                    (row["household_draft_id"],),
+                ).fetchone()
+                if not household_row:
+                    raise ValueError("Household draft not found")
                 conn.execute(
                     """INSERT INTO guardian_household_member_invites
                     (id, household_draft_id, member_draft_id, status, delivery_channel,
@@ -2699,7 +2749,7 @@ class GuardianDB:
                         row["member_draft_id"],
                         row["delivery_channel"],
                         row["delivery_target"],
-                        _new_id(),
+                        f"{household_row['owner_user_id']}.{replacement_id}.{_new_id()}",
                         row["metadata"],
                         now,
                         now,
@@ -2985,6 +3035,25 @@ class GuardianDB:
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
+            finally:
+                conn.close()
+
+    def resolve_guardrail_plan_drafts_for_member(
+        self,
+        member_draft_id: str,
+        dependent_user_id: str,
+    ) -> int:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                result = conn.execute(
+                    """UPDATE guardian_guardrail_plan_drafts
+                       SET dependent_user_id = ?, updated_at = ?
+                       WHERE dependent_member_draft_id = ?""",
+                    (str(dependent_user_id), now, member_draft_id),
+                )
+                return result.rowcount or 0
             finally:
                 conn.close()
 

@@ -3,9 +3,15 @@ Family Guardrails Wizard API endpoints.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from tldw_Server_API.app.api.v1.API_Deps.guardian_deps import get_guardian_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_registration_service_dep
+from tldw_Server_API.app.api.v1.API_Deps.guardian_deps import (
+    get_guardian_db_for_user,
+    get_guardian_db_for_user_id,
+)
 from tldw_Server_API.app.api.v1.schemas.family_wizard_schemas import (
     ActivationSummaryItem,
     ActivationSummaryResponse,
@@ -15,6 +21,10 @@ from tldw_Server_API.app.api.v1.schemas.family_wizard_schemas import (
     HouseholdDraftSnapshotResponse,
     HouseholdDraftResponse,
     HouseholdDraftUpdate,
+    HouseholdInviteAcceptClaimRequest,
+    HouseholdInviteAcceptRegisterRequest,
+    HouseholdInviteAcceptResponse,
+    HouseholdInvitePreviewResponse,
     HouseholdInviteTrackerItemResponse,
     HouseholdInviteTrackerResponse,
     HouseholdMemberDraftCreate,
@@ -28,6 +38,9 @@ from tldw_Server_API.app.api.v1.schemas.family_wizard_schemas import (
 from tldw_Server_API.app.api.v1.schemas.guardian_schemas import DetailResponse
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Guardian_DB import GuardianDB
+from tldw_Server_API.app.core.Moderation.family_wizard_materializer import (
+    materialize_pending_plans_for_relationship,
+)
 
 router = APIRouter()
 
@@ -167,6 +180,93 @@ def _tracker_item_from_rows(
     )
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _guardian_db_for_invite_token(token: str) -> GuardianDB:
+    owner_user_id, separator, _ = token.partition(".")
+    if not owner_user_id or not separator:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    return get_guardian_db_for_user_id(owner_user_id)
+
+
+def _complete_household_invite_acceptance(
+    db: GuardianDB,
+    invite: dict,
+    resolved_user_id: str,
+    *,
+    was_existing_user: bool,
+) -> HouseholdInviteAcceptResponse:
+    member = db.get_household_member_draft(invite["member_draft_id"])
+    household = db.get_household_draft(invite["household_draft_id"])
+    if not member or not household:
+        raise HTTPException(status_code=404, detail="Invite member draft not found")
+
+    relationship_draft = next(
+        (
+            row
+            for row in db.list_relationship_drafts(household["id"])
+            if row["dependent_member_draft_id"] == member["id"]
+        ),
+        None,
+    )
+    relationship_id: str | None = relationship_draft.get("relationship_id") if relationship_draft else None
+    if relationship_draft:
+        guardian_member = db.get_household_member_draft(relationship_draft["guardian_member_draft_id"])
+        if not guardian_member or not guardian_member.get("user_id"):
+            raise HTTPException(status_code=409, detail="Guardian member draft is not provisioned")
+        if not relationship_id:
+            try:
+                relationship = db.create_relationship(
+                    guardian_user_id=guardian_member["user_id"],
+                    dependent_user_id=resolved_user_id,
+                    relationship_type=relationship_draft["relationship_type"],
+                    dependent_visible=relationship_draft["dependent_visible"],
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            relationship_id = relationship.id
+        db.accept_relationship(relationship_id)
+        db.link_relationship_draft(
+            relationship_draft_id=relationship_draft["id"],
+            relationship_id=relationship_id,
+            status="active",
+        )
+
+    db.resolve_household_member_draft_user(member["id"], resolved_user_id)
+    db.resolve_guardrail_plan_drafts_for_member(member["id"], resolved_user_id)
+    db.update_household_member_invite_status(
+        invite["id"],
+        status="accepted",
+        accepted_at=_now_iso(),
+    )
+
+    materialized_plan_count = 0
+    if relationship_id:
+        result = materialize_pending_plans_for_relationship(
+            db=db,
+            relationship_id=relationship_id,
+            actor_user_id=resolved_user_id,
+        )
+        materialized_plan_count = int(result.get("materialized_count", 0))
+
+    db.update_household_draft(
+        household["id"],
+        status="active" if materialized_plan_count > 0 else "invites_pending",
+    )
+
+    return HouseholdInviteAcceptResponse(
+        household_draft_id=household["id"],
+        member_draft_id=member["id"],
+        invite_id=invite["id"],
+        user_id=resolved_user_id,
+        relationship_id=relationship_id,
+        materialized_plan_count=materialized_plan_count,
+        was_existing_user=was_existing_user,
+    )
+
+
 def _require_owned_draft(db: GuardianDB, draft_id: str, user_id: str) -> dict:
     draft = db.get_household_draft(draft_id)
     if not draft:
@@ -206,6 +306,91 @@ def list_household_drafts(
     """List owned household wizard drafts ordered by most recently updated."""
     drafts = db.list_household_drafts(_user_id(user))
     return [_household_from_row(row) for row in drafts]
+
+
+@router.get(
+    "/wizard/invites/preview",
+    response_model=HouseholdInvitePreviewResponse,
+)
+def preview_household_invite(
+    token: str,
+):
+    """Return public preview data for a household invite token."""
+    db = _guardian_db_for_invite_token(token)
+    invite = db.get_household_member_invite_by_token(token)
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    member = db.get_household_member_draft(invite["member_draft_id"])
+    household = db.get_household_draft(invite["household_draft_id"])
+    if not member or not household:
+        raise HTTPException(status_code=404, detail="Invite context not found")
+    return HouseholdInvitePreviewResponse(
+        invite_id=invite["id"],
+        household_draft_id=invite["household_draft_id"],
+        member_draft_id=invite["member_draft_id"],
+        household_name=household["name"],
+        dependent_display_name=member["display_name"],
+        invite_status=invite["status"],
+        expires_at=invite.get("expires_at"),
+        requires_registration=not bool(member.get("user_id")),
+    )
+
+
+@router.post(
+    "/wizard/invites/accept/register",
+    response_model=HouseholdInviteAcceptResponse,
+)
+async def accept_household_invite_register(
+    body: HouseholdInviteAcceptRegisterRequest,
+    registration_service=Depends(get_registration_service_dep),
+):
+    """Create a new dependent account from an invite token and materialize queued plans."""
+    db = _guardian_db_for_invite_token(body.token)
+    invite = db.get_household_member_invite_by_token(body.token)
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite["status"] not in ("ready", "sent"):
+        raise HTTPException(status_code=410, detail="Invite is no longer redeemable")
+    member = db.get_household_member_draft(invite["member_draft_id"])
+    if not member:
+        raise HTTPException(status_code=404, detail="Invite member draft not found")
+
+    user_info = await registration_service.register_user(
+        username=body.username,
+        email=str(body.email).lower(),
+        password=body.password,
+        registration_code=None,
+    )
+    resolved_user_id = str(user_info["user_id"])
+    return _complete_household_invite_acceptance(
+        db,
+        invite,
+        resolved_user_id,
+        was_existing_user=False,
+    )
+
+
+@router.post(
+    "/wizard/invites/accept/claim",
+    response_model=HouseholdInviteAcceptResponse,
+)
+def accept_household_invite_claim(
+    body: HouseholdInviteAcceptClaimRequest,
+    user: User = Depends(get_request_user),
+):
+    """Claim a household invite using the currently authenticated account."""
+    db = _guardian_db_for_invite_token(body.token)
+    invite = db.get_household_member_invite_by_token(body.token)
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite["status"] not in ("ready", "sent"):
+        raise HTTPException(status_code=410, detail="Invite is no longer redeemable")
+    return _complete_household_invite_acceptance(
+        db,
+        invite,
+        str(user.id),
+        was_existing_user=True,
+    )
 
 
 @router.get("/wizard/drafts/latest", response_model=HouseholdDraftResponse)
