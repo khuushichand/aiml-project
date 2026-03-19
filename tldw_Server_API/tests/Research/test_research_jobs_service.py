@@ -26,6 +26,54 @@ class _RecordingJobs:
         return True
 
 
+def _set_user_db_base(monkeypatch: pytest.MonkeyPatch, base_dir) -> str | None:
+    from tldw_Server_API.app.core.config import settings
+
+    previous = settings.get("USER_DB_BASE_DIR")
+    settings.USER_DB_BASE_DIR = str(base_dir)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    return previous
+
+
+def _restore_user_db_base(previous: str | None) -> None:
+    from tldw_Server_API.app.core.config import settings
+
+    if previous is not None:
+        settings.USER_DB_BASE_DIR = previous
+        return
+    try:
+        del settings.USER_DB_BASE_DIR
+    except AttributeError:
+        pass
+
+
+def _seed_chat_thread(*, owner_user_id: str, chat_db_path) -> str:
+    from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    chat_db = CharactersRAGDB(str(chat_db_path), client_id=owner_user_id)
+    character_id = chat_db.add_character_card(
+        {
+            "name": DEFAULT_CHARACTER_NAME,
+            "description": "Research thread helper",
+            "personality": "Helpful",
+            "scenario": "Research follow-up testing",
+            "system_prompt": "You are a research assistant.",
+            "first_message": "Hello",
+            "creator_notes": "Created by deep research tests",
+        }
+    )
+    chat_id = chat_db.add_conversation(
+        {
+            "character_id": character_id,
+            "title": "Deep Research Chat",
+            "client_id": owner_user_id,
+        }
+    )
+    assert chat_id is not None
+    return chat_id
+
+
 def test_create_session_enqueues_planning_job(tmp_path):
     from tldw_Server_API.app.core.Research.service import ResearchService
 
@@ -92,6 +140,155 @@ def test_create_session_persists_chat_handoff_linkage(tmp_path):
     assert handoff.handoff_status == "pending"
     assert handoff.delivered_chat_message_id is None
     assert handoff.delivered_notification_id is None
+
+
+def test_create_session_persists_follow_up_json(tmp_path):
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 15, "uuid": "job-15", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+
+    session = service.create_session(
+        owner_user_id="1",
+        query="Investigate regulatory timeline",
+        source_policy="balanced",
+        autonomy_mode="checkpointed",
+        follow_up={
+            "question": "What should the next research run check?",
+            "background": {
+                "question": "What did the attached research conclude?",
+                "outline": [{"title": "Evidence gap", "focus_area": "background"}],
+                "key_claims": [
+                    {
+                        "claim_id": "clm_1",
+                        "text": "The attached run did not resolve the gap.",
+                    }
+                ],
+                "unresolved_questions": ["Which claim still needs verification?"],
+                "verification_summary": {
+                    "supported_claim_count": 1,
+                    "unsupported_claim_count": 0,
+                },
+                "source_trust_summary": {
+                    "high_trust_count": 1,
+                    "low_trust_count": 0,
+                },
+            },
+        },
+    )
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    stored = db.get_session(session.id)
+
+    assert stored is not None
+    assert stored.follow_up_json["question"] == "What should the next research run check?"
+    assert stored.follow_up_json["background"]["outline"][0]["title"] == "Evidence gap"
+
+
+def test_create_session_rejects_invalid_chat_handoff_chat_id(tmp_path):
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 16, "uuid": "job-16", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+
+    with pytest.raises(ValueError):
+        service.create_session(
+            owner_user_id="1",
+            query="Investigate regulatory timeline",
+            source_policy="balanced",
+            autonomy_mode="checkpointed",
+            chat_handoff={"chat_id": ""},
+        )
+
+
+def test_create_session_rejects_foreign_chat_handoff_chat_id(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_dbs")
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 17, "uuid": "job-17", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+
+    try:
+        owned_chat_id = _seed_chat_thread(
+            owner_user_id="1",
+            chat_db_path=DatabasePaths.get_chacha_db_path("1"),
+        )
+        foreign_chat_id = _seed_chat_thread(
+            owner_user_id="2",
+            chat_db_path=DatabasePaths.get_chacha_db_path("2"),
+        )
+
+        owned_session = service.create_session(
+            owner_user_id="1",
+            query="Investigate regulatory timeline",
+            source_policy="balanced",
+            autonomy_mode="checkpointed",
+            chat_handoff={"chat_id": owned_chat_id},
+        )
+        assert owned_session.owner_user_id == "1"
+
+        with pytest.raises(ValueError):
+            service.create_session(
+                owner_user_id="1",
+                query="Investigate regulatory timeline",
+                source_policy="balanced",
+                autonomy_mode="checkpointed",
+                chat_handoff={"chat_id": foreign_chat_id},
+            )
+    finally:
+        _restore_user_db_base(previous_user_db_base)
+
+
+def test_create_session_rejects_unknown_chat_handoff_chat_id(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_dbs")
+
+    class DummyJobs:
+        def create_job(self, **kwargs):
+            return {"id": 18, "uuid": "job-18", "status": "queued"}
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=DummyJobs(),
+    )
+
+    try:
+        with pytest.raises(ValueError):
+            service.create_session(
+                owner_user_id="1",
+                query="Investigate regulatory timeline",
+                source_policy="balanced",
+                autonomy_mode="checkpointed",
+                chat_handoff={"chat_id": "chat_missing"},
+            )
+    finally:
+        _restore_user_db_base(previous_user_db_base)
 
 
 def test_create_session_without_chat_handoff_has_no_linkage(tmp_path):

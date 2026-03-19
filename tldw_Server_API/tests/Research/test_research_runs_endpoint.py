@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
@@ -175,6 +176,115 @@ def test_create_research_run_passes_provider_overrides():
         )
         assert create_resp.status_code == 200
         assert create_resp.json()["id"] == "rs_2"
+
+
+def test_create_research_run_passes_follow_up_payload_to_service():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def create_session(self, **kwargs):
+            assert kwargs["chat_handoff"]["chat_id"] == "chat_123"
+            assert kwargs["follow_up"]["question"] == "What should we check next?"
+            assert kwargs["follow_up"]["background"]["outline"][0]["title"] == "Evidence gap"
+            return {
+                "id": "rs_3",
+                "status": "queued",
+                "phase": "drafting_plan",
+                "control_state": "running",
+                "progress_percent": None,
+                "progress_message": None,
+                "active_job_id": "12",
+                "latest_checkpoint_id": None,
+            }
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/research/runs",
+            json={
+                "query": "What should we check next?",
+                "chat_handoff": {"chat_id": "chat_123"},
+                "follow_up": {
+                    "question": "What should we check next?",
+                    "background": {
+                        "question": "What did the attached research conclude?",
+                        "outline": [{"title": "Evidence gap", "focus_area": "background"}],
+                        "key_claims": [
+                            {
+                                "claim_id": "clm_1",
+                                "text": "The evidence gap remains unresolved.",
+                            }
+                        ],
+                        "unresolved_questions": ["Which claim needs verification next?"],
+                        "verification_summary": {
+                            "supported_claim_count": 1,
+                            "unsupported_claim_count": 0,
+                        },
+                        "source_trust_summary": {
+                            "high_trust_count": 1,
+                            "low_trust_count": 0,
+                        },
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "rs_3"
+
+
+def test_research_run_create_request_rejects_malformed_follow_up_background():
+    from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import ResearchRunCreateRequest
+
+    with pytest.raises(ValidationError):
+        ResearchRunCreateRequest.model_validate(
+            {
+                "query": "What should we check next?",
+                "follow_up": {
+                    "question": "What should we check next?",
+                    "background": {
+                        "question": "Seed context",
+                        "outline": "not-a-list",
+                    },
+                },
+            }
+        )
+
+
+def test_research_run_create_request_rejects_oversized_follow_up_background():
+    from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import ResearchRunCreateRequest
+
+    with pytest.raises(ValidationError):
+        ResearchRunCreateRequest.model_validate(
+            {
+                "query": "What should we check next?",
+                "follow_up": {
+                    "question": "What should we check next?",
+                    "background": {
+                        "question": "Seed context",
+                        "outline": [
+                            {"title": f"Section {index}", "focus_area": "background"}
+                            for index in range(8)
+                        ],
+                        "key_claims": [],
+                        "unresolved_questions": [],
+                        "verification_summary": {
+                            "supported_claim_count": 1,
+                            "unsupported_claim_count": 0,
+                        },
+                        "source_trust_summary": {
+                            "high_trust_count": 1,
+                            "low_trust_count": 0,
+                        },
+                    },
+                },
+            }
+        )
 
 
 def test_list_research_runs_endpoint_returns_recent_created_runs():
