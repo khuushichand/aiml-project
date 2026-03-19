@@ -19,6 +19,11 @@ export type DeepResearchCompletionMetadata = {
   kind: "completion_handoff"
 }
 
+export type ResearchFollowUpTarget = {
+  run_id: string
+  query: string
+}
+
 export type AttachedResearchContextEdits = Partial<AttachedResearchContext>
 
 export type AttachedResearchContextState = {

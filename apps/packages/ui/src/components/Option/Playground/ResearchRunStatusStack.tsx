@@ -1,6 +1,7 @@
 import React from "react"
 
 import type { ChatLinkedResearchRun } from "@/services/tldw/TldwApiClient"
+import type { ResearchFollowUpTarget } from "./research-chat-context"
 
 import {
   CHAT_LINKED_RESEARCH_VISIBLE_TERMINAL_ROWS,
@@ -13,6 +14,7 @@ import {
 type ResearchRunStatusStackProps = {
   runs: ChatLinkedResearchRun[]
   onUseInChat?: (run: ChatLinkedResearchRun) => void
+  onFollowUp?: (target: ResearchFollowUpTarget) => void
 }
 
 const STATUS_BADGE_CLASSNAME: Record<string, string> = {
@@ -26,7 +28,8 @@ const STATUS_BADGE_CLASSNAME: Record<string, string> = {
 
 export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
   runs,
-  onUseInChat
+  onUseInChat,
+  onFollowUp
 }) => {
   const [showAllTerminal, setShowAllTerminal] = React.useState(false)
   const orderedRuns = React.useMemo(() => orderChatLinkedResearchRuns(runs), [runs])
@@ -78,13 +81,27 @@ export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
                   {run.status === "completed" && (
-                    <button
-                      type="button"
-                      className="text-sm font-medium text-text hover:text-primary"
-                      onClick={() => onUseInChat?.(run)}
-                    >
-                      Use in Chat
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="text-sm font-medium text-text hover:text-primary"
+                        onClick={() => onUseInChat?.(run)}
+                      >
+                        Use in Chat
+                      </button>
+                      <button
+                        type="button"
+                        className="text-sm font-medium text-text hover:text-primary"
+                        onClick={() =>
+                          onFollowUp?.({
+                            run_id: run.run_id,
+                            query: run.query
+                          })
+                        }
+                      >
+                        Follow up
+                      </button>
+                    </>
                   )}
                   <a
                     href={buildChatLinkedResearchPath(run.run_id)}

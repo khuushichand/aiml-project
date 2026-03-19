@@ -230,6 +230,7 @@ type Props = {
   onClearMessageSteering?: () => void
   metadataExtra?: Record<string, unknown>
   onUseInChat?: () => void
+  onFollowUp?: () => void
   onRegenerateImage?: (payload: {
     messageId?: string
     imageIndex: number
@@ -459,6 +460,7 @@ export const PlaygroundMessage = (props: Props) => {
     return isDeepResearchCompletionMetadata(candidate) ? candidate : null
   }, [props.metadataExtra])
   const showUseInChat = Boolean(props.onUseInChat && deepResearchCompletion)
+  const showFollowUp = Boolean(props.onFollowUp && deepResearchCompletion)
   const isImageGenerationAssistantEvent =
     props.isBot &&
     Boolean(imageGenerationMetadata?.request) &&
@@ -2449,15 +2451,28 @@ export const PlaygroundMessage = (props: Props) => {
               </div>
             )}
 
-          {showUseInChat && (
+          {(showUseInChat || showFollowUp) && (
             <div className="mt-3 flex">
-              <button
-                type="button"
-                className="rounded-full border border-border/70 bg-surface px-3 py-1 text-sm font-medium text-text transition hover:border-primary/50 hover:text-primary"
-                onClick={props.onUseInChat}
-              >
-                Use in Chat
-              </button>
+              <div className="flex items-center gap-2">
+                {showUseInChat && (
+                  <button
+                    type="button"
+                    className="rounded-full border border-border/70 bg-surface px-3 py-1 text-sm font-medium text-text transition hover:border-primary/50 hover:text-primary"
+                    onClick={props.onUseInChat}
+                  >
+                    Use in Chat
+                  </button>
+                )}
+                {showFollowUp && (
+                  <button
+                    type="button"
+                    className="rounded-full border border-border/70 bg-surface px-3 py-1 text-sm font-medium text-text transition hover:border-primary/50 hover:text-primary"
+                    onClick={props.onFollowUp}
+                  >
+                    Follow up
+                  </button>
+                )}
+              </div>
             </div>
           )}
 

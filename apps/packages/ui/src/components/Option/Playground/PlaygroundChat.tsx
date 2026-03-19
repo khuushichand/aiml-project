@@ -31,7 +31,8 @@ import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
 import {
   deriveAttachedResearchContext,
   isDeepResearchCompletionMetadata,
-  type AttachedResearchContext
+  type AttachedResearchContext,
+  type ResearchFollowUpTarget
 } from "./research-chat-context"
 import {
   IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
@@ -68,6 +69,7 @@ type PlaygroundChatProps = {
   matchedMessageIndices?: Set<number>
   activeSearchMessageIndex?: number | null
   onAttachResearchContext?: (context: AttachedResearchContext) => void
+  onPrepareResearchFollowUp?: (target: ResearchFollowUpTarget) => void
 }
 
 const PerModelMiniComposer: React.FC<{
@@ -163,7 +165,8 @@ export const PlaygroundChat = ({
   searchQuery,
   matchedMessageIndices,
   activeSearchMessageIndex = null,
-  onAttachResearchContext
+  onAttachResearchContext,
+  onPrepareResearchFollowUp
 }: PlaygroundChatProps) => {
   const { t } = useTranslation(["playground", "common"])
   const notification = useAntdNotification()
@@ -341,6 +344,25 @@ export const PlaygroundChat = ({
       }
     },
     [handleAttachResearchRun]
+  )
+  const buildMessageFollowUpHandler = React.useCallback(
+    (metadataExtra?: Record<string, unknown>) => {
+      const completion = isDeepResearchCompletionMetadata(
+        metadataExtra?.deep_research_completion
+      )
+        ? metadataExtra.deep_research_completion
+        : null
+      if (!completion || !onPrepareResearchFollowUp) {
+        return undefined
+      }
+      return () => {
+        onPrepareResearchFollowUp({
+          run_id: completion.run_id,
+          query: completion.query
+        })
+      }
+    },
+    [onPrepareResearchFollowUp]
   )
   const showSelectedServerChatLoadFailure =
     messages.length === 0 &&
@@ -978,6 +1000,7 @@ export const PlaygroundChat = ({
           onUseInChat={(run) => {
             void handleAttachResearchRun(run.run_id, run.query)
           }}
+          onFollowUp={onPrepareResearchFollowUp}
         />
         {blocks.map((block, blockIndex) => {
           if (block.kind === "single") {
@@ -1042,6 +1065,7 @@ export const PlaygroundChat = ({
                 pinned={Boolean(message.pinned)}
                 metadataExtra={message.metadataExtra}
                 onUseInChat={buildMessageUseInChatHandler(message.metadataExtra)}
+                onFollowUp={buildMessageFollowUpHandler(message.metadataExtra)}
                 discoSkillComment={message.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -1340,6 +1364,7 @@ export const PlaygroundChat = ({
                 pinned={Boolean(userMessage.pinned)}
                 metadataExtra={userMessage.metadataExtra}
                 onUseInChat={buildMessageUseInChatHandler(userMessage.metadataExtra)}
+                onFollowUp={buildMessageFollowUpHandler(userMessage.metadataExtra)}
                 discoSkillComment={userMessage.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -1957,6 +1982,7 @@ export const PlaygroundChat = ({
                         pinned={Boolean(message.pinned)}
                         metadataExtra={message.metadataExtra}
                         onUseInChat={buildMessageUseInChatHandler(message.metadataExtra)}
+                        onFollowUp={buildMessageFollowUpHandler(message.metadataExtra)}
                         discoSkillComment={message.discoSkillComment}
                         historyId={stableHistoryId ?? undefined}
                         conversationInstanceId={conversationInstanceId}
