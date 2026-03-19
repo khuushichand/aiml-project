@@ -5,6 +5,8 @@ Audience: operators standing up the first hosted SaaS staging environment
 
 This runbook is the canonical path for staging the hosted SaaS launch profile. It assumes the same-origin public topology defined in `Hosted_SaaS_Profile.md`: public frontend and API behind one reverse proxy, multi-user AuthNZ on PostgreSQL, and Stripe test mode for billing verification.
 
+Production cutover guidance now lives in `Docs/Published/Deployment/Hosted_Production_Runbook.md`. Keep billing mutation proof in staging and treat production validation as a non-mutating topology check.
+
 ## 1) Prepare the staging env file
 
 Copy the example file and replace every placeholder secret before launching:
@@ -138,6 +140,8 @@ After the stack is healthy:
 1. configure Stripe test mode secrets and webhook destination for the public staging URL
 2. run the hosted staging preflight and smoke checks
 3. verify signup, login, `/account`, `/billing`, checkout, portal return, and cancel/downgrade flows
+
+Use the staging Stripe proof as the source of truth before you cut over production. The production runbook does not repeat those live billing checks.
 
 Treat this runbook as the baseline for hosted staging. If you need a different topology, update the hosted profile first rather than mutating staging ad hoc.
 

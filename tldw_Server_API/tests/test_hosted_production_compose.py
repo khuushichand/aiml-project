@@ -196,3 +196,58 @@ def test_hosted_production_local_postgres_overlay_adds_internal_postgres_service
         "postgres" in depends_on,
         "expected fallback overlay to add postgres dependency to app",
     )
+
+
+def test_hosted_production_runbook_documents_prod_and_fallback_topology():
+    text = Path("Docs/Published/Deployment/Hosted_Production_Runbook.md").read_text(
+        encoding="utf-8"
+    )
+
+    _require(
+        "docker-compose.hosted-saas-prod.yml" in text,
+        "expected production runbook to reference the standalone prod compose file",
+    )
+    _require(
+        "docker-compose.hosted-saas-prod.local-postgres.yml" in text,
+        "expected production runbook to reference the local-postgres fallback overlay",
+    )
+    _require(
+        "tldw_Server_API/Config_Files/.env.hosted-production.example" in text,
+        "expected production runbook to reference the production env template",
+    )
+    _require(
+        "tldw_Server_API/Config_Files/.env.hosted-production" in text,
+        "expected production runbook to use a real production env file",
+    )
+    _require(
+        "Caddyfile.hosted-saas.prod.compose" in text,
+        "expected production runbook to reference the production Caddy sample",
+    )
+    _require(
+        "Stripe test mode" in text or "staging" in text.lower(),
+        "expected production runbook to keep live Stripe proof in staging",
+    )
+
+    profile_text = Path("Docs/Published/Deployment/Hosted_SaaS_Profile.md").read_text(
+        encoding="utf-8"
+    )
+    _require(
+        "Hosted_Production_Runbook.md" in profile_text,
+        "expected hosted profile to reference the production runbook",
+    )
+
+    staging_text = Path("Docs/Published/Deployment/Hosted_Staging_Runbook.md").read_text(
+        encoding="utf-8"
+    )
+    _require(
+        "Hosted_Production_Runbook.md" in staging_text,
+        "expected hosted staging runbook to reference the production runbook",
+    )
+
+    first_time_text = Path("Docs/Published/Deployment/First_Time_Production_Setup.md").read_text(
+        encoding="utf-8"
+    )
+    _require(
+        "Hosted_Production_Runbook.md" in first_time_text,
+        "expected first-time production setup guide to reference the production runbook",
+    )

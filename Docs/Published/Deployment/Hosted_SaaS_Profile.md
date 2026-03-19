@@ -5,6 +5,7 @@ Audience: operators preparing the first cloud-managed customer-facing deployment
 
 Related documents
 - Hosted staging runbook: `Docs/Published/Deployment/Hosted_Staging_Runbook.md`
+- Hosted production runbook: `Docs/Published/Deployment/Hosted_Production_Runbook.md`
 - Hosted Stripe test-mode runbook: `Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md`
 - Hosted staging operations runbook: `Docs/Operations/Hosted_Staging_Operations_Runbook.md`
 
@@ -60,6 +61,7 @@ Recommended supporting settings:
 ## 5) Release-gate verification
 
 For the canonical same-origin staging topology, start with `Docs/Published/Deployment/Hosted_Staging_Runbook.md` and use its compose overlay plus env-file validation flow.
+For the first paid production cutover, use `Docs/Published/Deployment/Hosted_Production_Runbook.md` and the standalone hosted production compose files.
 
 Run these checks before calling a hosted environment launch-ready:
 

@@ -12,6 +12,7 @@ Related documents
 - Metrics and Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 - Hosted SaaS launch profile: `Docs/Published/Deployment/Hosted_SaaS_Profile.md`
 - Hosted SaaS staging runbook: `Docs/Published/Deployment/Hosted_Staging_Runbook.md`
+- Hosted SaaS production runbook: `Docs/Published/Deployment/Hosted_Production_Runbook.md`
 - Environment variables reference: `Env_Vars.md`
 - General installation (local/dev): `Docs/Getting_Started/README.md`
 - Production hardening checklist: `Docs/User_Guides/Server/Production_Hardening_Checklist.md`
@@ -56,6 +57,7 @@ Production guidance for Compose deployments:
 - Configure `ALLOWED_ORIGINS` explicitly for your public domain(s).
 - For the hosted SaaS launch profile, lock `PUBLIC_WEB_BASE_URL` and billing redirect allowlists to the public app origin.
 - For the canonical hosted staging deployment, use `Dockerfiles/docker-compose.hosted-saas-staging.yml` via `Docs/Published/Deployment/Hosted_Staging_Runbook.md`.
+- For the canonical hosted production deployment, use `Dockerfiles/docker-compose.hosted-saas-prod.yml` via `Docs/Published/Deployment/Hosted_Production_Runbook.md`.
 
 ## 4) Option B - Bare-Metal (systemd + Nginx)
 

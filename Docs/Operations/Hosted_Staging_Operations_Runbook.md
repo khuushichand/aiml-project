@@ -5,6 +5,8 @@ Audience: operators supporting the hosted staging environment before first paid 
 
 This runbook covers backups, restore drills, monitoring, and the minimum support posture for hosted staging. It is intentionally narrow: the goal is to prove the launch surface can be operated safely, not to document every possible production topology.
 
+Production cutover and rollback guidance now lives in `Docs/Published/Deployment/Hosted_Production_Runbook.md`. Keep live Stripe proof in staging and use production for non-mutating topology validation only.
+
 ## 1) Backup coverage
 
 Hosted staging has two state classes:
