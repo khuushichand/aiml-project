@@ -3,405 +3,298 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>tldw — Open-Source Research Assistant &amp; Media Analysis Platform</title>
-  <meta name="description" content="tldw is a self-hosted, privacy-first research assistant that ingests media, transcribes audio, runs hybrid RAG search, and chats with 16+ LLM providers." />
+  <title>tldw | Open-source research assistant and media analysis platform</title>
+  <meta
+    name="description"
+    content="tldw is the open-source, self-hosted research assistant for media ingestion, transcription, Unified RAG, OpenAI-compatible APIs, and privacy-first knowledge work."
+  />
   <meta name="author" content="tldw Project Contributors" />
-  <meta name="theme-color" content="#0b0b0c" />
-  <meta property="og:title" content="tldw — Open-Source Research Assistant &amp; Media Analysis Platform" />
-  <meta property="og:description" content="Self-hosted research assistant: ingest media, transcribe, search with hybrid RAG, and chat with 16+ LLM providers. Privacy-first, no telemetry." />
-  <meta property="og:image" content="https://raw.githubusercontent.com/rmusser01/tldw_server/main/Docs/Website/hero-tldw-server.png" />
+  <meta name="theme-color" content="#0d1117" />
+  <meta property="og:title" content="tldw | Open-source research assistant and media analysis platform" />
+  <meta
+    property="og:description"
+    content="Self-hosted research infrastructure for transcription, Unified RAG, OpenAI-compatible APIs, and privacy-first knowledge workflows."
+  />
+  <meta
+    property="og:image"
+    content="https://raw.githubusercontent.com/rmusser01/tldw_server/main/Docs/Website/hero-tldw-server.png"
+  />
   <meta property="og:url" content="https://tldwproject.com" />
   <meta property="og:type" content="website" />
   <link rel="canonical" href="https://tldwproject.com" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' stop-color='%23a855f7'/><stop offset='100%25' stop-color='%2322d3ee'/></linearGradient></defs><rect width='64' height='64' rx='12' fill='%230b0b0c'/><path d='M12 44h40M12 20h40' stroke='url(%23g)' stroke-width='4' stroke-linecap='round'/></svg>">
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "tldw",
-    "applicationCategory": "ResearchApplication",
-    "operatingSystem": "Linux, macOS, Windows",
-    "url": "https://tldwproject.com",
-    "downloadUrl": "https://github.com/rmusser01/tldw_server",
-    "softwareVersion": "0.1.21",
-    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
-    "description": "Self-hosted, privacy-first research assistant and media analysis platform. Ingest media, transcribe audio, run hybrid RAG search, and chat with 16+ LLM providers.",
-    "offers": { "@type": "Offer", "price": "0" }
-  }
-  </script>
-  <style>
-    :root{
-      --bg:#0b0b0c; /* near-black */
-      --panel:#0f0f12; /* panels */
-      --muted:#a1a1aa; /* zinc-400 */
-      --text:#e5e7eb; /* zinc-200 */
-      --brand:#a855f7; /* fuchsia-500 */
-      --brand-2:#22d3ee; /* cyan-400 */
-      --ring:rgba(255,255,255,.12);
-    }
-    *{box-sizing:border-box}
-    html{scroll-behavior:smooth}
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;-webkit-font-smoothing:antialiased}
-    a{color:inherit;text-decoration:none}
-    img{max-width:100%;display:block}
-    .container{max-width:1100px;margin:0 auto;padding:0 16px}
-    /* NAV */
-    .navbar{position:fixed;inset:0 0 auto 0;backdrop-filter:saturate(1.2) blur(8px);background:rgba(0,0,0,.4);border-bottom:1px solid var(--ring);z-index:50}
-    .nav-row{display:flex;align-items:center;justify-content:space-between;padding:12px 16px}
-    .brand{display:inline-flex;align-items:center;gap:10px;font-weight:600}
-    .brand-badge{width:24px;height:24px;border-radius:8px;background:conic-gradient(from 200deg at 50% 50%, var(--brand), var(--brand-2), #7c3aed, var(--brand));box-shadow:0 0 24px rgba(168,85,247,.45)}
-    .nav-links{display:none;gap:20px}
-    .nav-links a{font-size:14px;color:#d1d5db}
-    .nav-links a:hover{color:white}
-    @media (min-width:768px){.nav-links{display:flex}}
-
-    /* HERO */
-    .hero{position:relative;min-height:92vh;padding-top:72px;display:flex;align-items:flex-end;overflow:hidden;}
-    .hero-bg{position:absolute;inset:0;background:center/cover no-repeat url('hero-tldw-server.png');}
-    /* Show more of the image on wider screens (less zoom) */
-    @media (min-width:900px){
-      .hero-bg{background-size:contain;background-position:50% 40%;background-color:#0b0b0c}
-    }
-    .hero-overlay{
-      position:absolute;inset:0;
-      background:
-        radial-gradient(60% 40% at 50% 0%, rgba(139,92,246,.25), transparent 70%),
-        radial-gradient(30% 30% at 80% 40%, rgba(34,211,238,.25), transparent 70%),
-        radial-gradient(40% 40% at 20% 80%, rgba(236,72,153,.20), transparent 70%),
-        linear-gradient(to top, rgba(0,0,0,.9), rgba(0,0,0,.55), rgba(0,0,0,.15));
-    }
-    .hero-inner{position:relative;z-index:1;padding:0 0 64px 0}
-    .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--ring);background:rgba(0,0,0,.45);backdrop-filter:blur(6px);border-radius:999px;padding:6px 10px;color:#cbd5e1;font-size:12px}
-    .dot{width:8px;height:8px;border-radius:999px;background:var(--brand);box-shadow:0 0 0 0 rgba(168,85,247,.7);animation:pulse 2s infinite}
-    @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(168,85,247,.7)}70%{box-shadow:0 0 0 12px rgba(168,85,247,0)}100%{box-shadow:0 0 0 0 rgba(168,85,247,0)}}
-    h1{margin:10px 0 0 0;font-size:42px;line-height:1.1;letter-spacing:-.02em}
-    h2,h3{letter-spacing:-.01em}
-    .lead{max-width:700px;color:#d4d4d8}
-    .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px}
-    .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:16px;font-weight:600;border:1px solid transparent;transition:background .15s ease, transform .15s ease, box-shadow .15s ease}
-    .btn-primary{background:#fff;color:#000;box-shadow:0 2px 8px rgba(255,255,255,.1)}
-    .btn-primary:hover{background:#e5e5e5;transform:translateY(-1px);box-shadow:0 4px 12px rgba(255,255,255,.15)}
-    .btn-ghost{border-color:var(--ring);background:rgba(255,255,255,.06);color:white}
-    .btn-ghost:hover{background:rgba(255,255,255,.10);transform:translateY(-1px)}
-
-    /* Focus styles */
-    .btn:focus-visible,.nav-links a:focus-visible,.copy-btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:8px}
-
-    /* SECTIONS */
-    section{border-top:1px solid var(--ring)}
-    .section{padding:64px 0;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00))}
-    .section .grid{display:grid;gap:24px}
-    @media (min-width:900px){.section .grid{grid-template-columns:3fr 2fr}}
-    .panel{border:1px solid var(--ring);background:linear-gradient(160deg, #121217, #0b0b0c);border-radius:16px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
-
-    /* Code blocks */
-    .code-block{position:relative;border:1px solid var(--ring);border-radius:12px;overflow:hidden;margin-bottom:16px}
-    .code-header{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:rgba(255,255,255,.04);border-bottom:1px solid var(--ring);font-size:12px;color:var(--muted)}
-    .code-block pre{margin:0;padding:14px;overflow-x:auto;font-size:13px;line-height:1.5;color:#e2e8f0;font-family:'SF Mono',SFMono-Regular,ui-monospace,Menlo,Consolas,monospace;background:transparent}
-    .copy-btn{background:rgba(255,255,255,.08);border:1px solid var(--ring);color:#d1d5db;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;transition:background .15s ease}
-    .copy-btn:hover{background:rgba(255,255,255,.15)}
-    .copy-btn.copied{color:var(--brand-2)}
-
-    /* Features */
-    .features{display:grid;gap:16px;margin-top:24px}
-    @media (min-width:900px){.features{grid-template-columns:repeat(3,1fr)}}
-    .card{border:1px solid var(--ring);background:rgba(255,255,255,0.04);border-radius:16px;padding:18px}
-    .card strong{color:#f0f0f5}
-    .muted{color:var(--muted)}
-    p{margin:0 0 12px 0}
-    p:last-child{margin-bottom:0}
-
-    /* FAQ */
-    .faq{display:grid;gap:16px;margin-top:16px}
-    @media (min-width:900px){.faq{grid-template-columns:repeat(2,1fr)}}
-
-    /* Community */
-    .community-buttons{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:24px}
-    .community-buttons .btn{gap:8px}
-    .btn-zulip{background:var(--brand-2);color:#000;border-color:var(--brand-2)}
-    .btn-zulip:hover{background:#06b6d4;transform:translateY(-1px)}
-
-    /* Footer */
-    footer{border-top:1px solid var(--ring);padding:36px 0;color:#a1a1aa}
-
-    /* Reveal on view */
-    .reveal{opacity:1;transform:none}
-    .js .reveal{opacity:0;transform:translateY(10px);transition:opacity .5s ease, transform .5s ease}
-    .js .reveal.show{opacity:1;transform:none}
-
-    /* Respect motion */
-    @media (prefers-reduced-motion: reduce){
-      html{scroll-behavior:auto}
-      .dot{animation:none}
-      .js .reveal{transition:none}
-    }
-
-    /* Accessibility */
-    .skip{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}
-    .skip:focus{left:16px;top:16px;width:auto;height:auto;background:black;color:white;border:1px solid var(--ring);border-radius:8px;padding:6px 10px;z-index:100}
-  </style>
+  <link rel="stylesheet" href="./assets/marketing.css" />
 </head>
-<body>
-  <a href="#main" class="skip">Skip to content</a>
+<body class="marketing-body theme-oss">
+  <a class="skip" href="#main">Skip to content</a>
 
-  <!-- NAVBAR -->
-  <header class="navbar">
-    <div class="container nav-row">
-      <a class="brand" href="#top">
-        <span class="brand-badge" aria-hidden="true"></span>
-        <span>tldw</span>
+  <header class="site-header">
+    <div class="container header-row">
+      <a class="brand" href="#hero" aria-label="tldw homepage">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-copy">
+          <span class="brand-name">tldw</span>
+          <span class="brand-tag">Open-source research infrastructure</span>
+        </span>
       </a>
+
       <nav class="nav-links" aria-label="Primary">
-        <a href="#cta">Get Started</a>
-        <a href="#about">About</a>
-        <a href="#features">Features</a>
-        <a href="#faq">FAQ</a>
-        <a href="#community">Community</a>
+        <a href="#whats-new">What's New</a>
+        <a href="#capabilities">Capabilities</a>
+        <a href="#quickstart">Quickstart</a>
+        <a href="https://github.com/rmusser01/tldw_server/tree/main/Docs" target="_blank" rel="noreferrer">Docs</a>
         <a href="https://github.com/rmusser01/tldw_server" target="_blank" rel="noreferrer">GitHub</a>
+        <a class="nav-subtle" href="https://vademhq.com">VademHQ</a>
       </nav>
     </div>
   </header>
 
-  <!-- HERO -->
-  <section id="top" class="hero" aria-label="Hero with background image of a teen reading the Primer beside a canal at night">
-    <div class="hero-bg" role="img" aria-label="Cyberpunk night city with canal; teen reading an illuminated book on a bench."></div>
-    <div class="hero-overlay" aria-hidden="true"></div>
-    <div class="container hero-inner reveal">
-      <div class="pill"><span class="dot" aria-hidden="true"></span> v0.1.21 · Inspired by <em>The Diamond Age</em></div>
-      <h1>Your personal research assistant. Self-hosted. Privacy-first.</h1>
-      <p class="lead">Ingest video, audio, PDFs, and documents. Transcribe with state-of-the-art models. Search with hybrid RAG. Chat with 16+ LLM providers. All running on your hardware, under your control.</p>
-      <div class="actions">
-        <a class="btn btn-primary" href="#cta">Get Started
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-        </a>
-        <a class="btn btn-ghost" href="https://github.com/rmusser01/tldw_server" target="_blank" rel="noreferrer">
-          View on GitHub
-        </a>
-      </div>
-    </div>
-  </section>
-
   <main id="main">
-
-  <!-- QUICK START -->
-  <section id="cta" class="section" aria-labelledby="cta-title">
-    <div class="container">
-      <div class="reveal">
-        <h2 id="cta-title" style="margin:0 0 6px 0;font-size:28px">Quick Start</h2>
-        <p class="muted" style="max-width:60ch;margin-bottom:24px">Get tldw running with the WebUI in under a minute. The default path is the Docker single-user + WebUI setup; local/manual flows are for contributors and debugging.</p>
-      </div>
-      <div class="reveal">
-        <div class="code-block">
-          <div class="code-header">
-            <span>Recommended: Docker + WebUI</span>
-            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart" aria-label="Copy default Docker and WebUI quickstart command">Copy</button>
+    <section id="hero" class="hero-shell hero-oss">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">v0.1.26 beta · Self-hosted by default · No telemetry</p>
+          <h1>Open-source research assistant for media, transcripts, and messy knowledge work.</h1>
+          <p class="hero-lede">
+            Ingest audio, video, documents, and web pages. Transcribe, search, retrieve, and reason across them with
+            Unified RAG, OpenAI-compatible APIs, and infrastructure you control.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#quickstart">Get Started</a>
+            <a class="button button-secondary" href="https://github.com/rmusser01/tldw_server" target="_blank" rel="noreferrer">
+              View on GitHub
+            </a>
           </div>
-          <pre><code>git clone https://github.com/rmusser01/tldw_server.git
-cd tldw_server
-make quickstart</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">This launches the Docker single-user setup with the API on <code>http://localhost:8000</code> and WebUI on <code>http://localhost:8080</code>.</p>
-        </div>
-        <div class="code-block">
-          <div class="code-header">
-            <span>API-Only Docker</span>
-            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart-docker" aria-label="Copy API-only Docker quickstart command">Copy</button>
-          </div>
-          <pre><code>git clone https://github.com/rmusser01/tldw_server.git
-cd tldw_server
-make quickstart-docker</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">Use this when you want the production-style API setup without the WebUI.</p>
-        </div>
-        <div class="code-block">
-          <div class="code-header">
-            <span>Public/Team Deployment</span>
-          </div>
-          <p class="muted" style="font-size:13px;margin:14px">For teams or public deployments, use the <a href="https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md" style="color:var(--brand-2)">multi-user + Postgres guide</a> rather than the single-user quickstart.</p>
-        </div>
-        <div class="code-block">
-          <div class="code-header">
-            <span>Explicit Docker + WebUI Command</span>
-            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart-docker-webui" aria-label="Copy Docker API plus WebUI command">Copy</button>
-          </div>
-          <pre><code>git clone https://github.com/rmusser01/tldw_server.git
-cd tldw_server
-make quickstart-docker-webui</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">This is the full-stack target that <code>make quickstart</code> now uses by default.</p>
-        </div>
-        <div class="code-block">
-          <div class="code-header">
-            <span>Manual Setup (Development)</span>
-            <button class="copy-btn" data-code="git clone https://github.com/rmusser01/tldw_server.git&#10;cd tldw_server&#10;make quickstart-install" aria-label="Copy local development setup command">Copy</button>
-          </div>
-          <pre><code>git clone https://github.com/rmusser01/tldw_server.git
-cd tldw_server
-make quickstart-install</code></pre>
-          <p class="muted" style="font-size:13px;margin-top:10px">Keep this path for local API development and contributor workflows. Pair it with local WebUI development only when you need a dev server.</p>
-        </div>
-        <p class="muted" style="font-size:14px">API docs at <a href="http://127.0.0.1:8000/docs" style="color:var(--brand-2)">localhost:8000/docs</a> · Quickstart wizard at <a href="http://127.0.0.1:8000/api/v1/config/quickstart" style="color:var(--brand-2)">localhost:8000/api/v1/config/quickstart</a></p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ABOUT -->
-  <section id="about" class="section" aria-labelledby="about-title">
-    <div class="container">
-      <div class="grid">
-        <div class="reveal">
-          <h2 id="about-title" style="margin:0 0 6px 0;font-size:24px">What is tldw?</h2>
-          <p class="muted"><strong style="color:var(--text)">tldw</strong> (Too Long; Didn't Watch) is an open-source research assistant and media analysis platform. It helps you ingest, transcribe, analyze, and interact with video, audio, PDFs, ebooks, and web pages through a powerful REST API and web interface.</p>
-          <p class="muted">The project draws inspiration from <em>The Young Lady's Illustrated Primer</em> in Neal Stephenson's <em>The Diamond Age</em> — a personal knowledge assistant that helps you learn and research at your own pace. While we can't replicate the Primer, tldw is a practical step toward that vision.</p>
-          <p class="muted">Everything runs on your infrastructure. No telemetry, no data collection, no cloud lock-in. You own your data and control every aspect of the system.</p>
-        </div>
-        <div class="panel reveal">
-          <ul style="margin:0;padding:0;list-style:none;display:grid;gap:12px;font-size:14px">
-            <li><strong style="color:var(--brand)">25 LLM Providers</strong> — OpenAI, Anthropic, Google Gemini, Cohere, DeepSeek, Groq, Mistral, OpenRouter, HuggingFace, Qwen, plus Ollama, llama.cpp, vLLM, Kobold.cpp, MLX, and more</li>
-            <li><strong style="color:var(--brand)">15+ Media Formats</strong> — Video, audio, PDF, EPUB, DOCX, HTML, XML, email, and MediaWiki dumps. yt-dlp for 1,000+ sites. OCR and visual document processing</li>
-            <li><strong style="color:var(--brand)">7 STT Engines</strong> — faster_whisper, NeMo Parakeet/Canary, Qwen3-ASR, VibeVoice-ASR with real-time WebSocket streaming and diarization</li>
-            <li><strong style="color:var(--brand)">18 TTS Engines</strong> — OpenAI, ElevenLabs, Kokoro, Dia, Chatterbox, VibeVoice, NeuTTS, and more. Voice cloning, emotion control, and streaming synthesis</li>
-            <li><strong style="color:var(--brand)">Hybrid RAG Pipeline</strong> — BM25 + vector fusion, semantic caching, HyDE, query expansion, cross-encoder reranking, faithfulness scoring, regression detection, and batch checkpointing</li>
-            <li><strong style="color:var(--brand)">6 Evaluation Types</strong> — G-Eval, RAG eval, proposition checking, response quality, OCR quality, and embeddings A/B testing with batch processing and webhooks</li>
-            <li><strong style="color:var(--brand)">Character Chat</strong> — SillyTavern V2 cards with PNG export, world books, 20+ prompt formats, chatbooks, prompt library, and notebook notes</li>
-            <li><strong style="color:var(--brand)">11 MCP Modules</strong> — Knowledge, media, notes, chats, characters, prompts, flashcards, quizzes, slides, and kanban with JWT/RBAC and Prometheus metrics</li>
-            <li><strong style="color:var(--brand)">Multi-Provider Search</strong> — Google, Brave, DuckDuckGo, SearXNG, and arXiv with LLM-powered result aggregation and full content scraping</li>
+          <ul class="pill-row" aria-label="Trust markers">
+            <li>Self-hosted</li>
+            <li>Open-source</li>
+            <li>OpenAI-compatible</li>
+            <li>Privacy-first</li>
           </ul>
         </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- FEATURES -->
-  <section id="features" class="section" aria-labelledby="features-title">
-    <div class="container">
-      <h2 id="features-title" style="margin:0 0 8px 0;font-size:24px">Features</h2>
-      <p class="muted" style="max-width:60ch">A modular platform that covers the full research workflow — from ingestion to insight.</p>
-      <div class="features">
-        <div class="card reveal">
-          <strong>Media Ingestion</strong>
-          <p class="muted">Ingest video, audio, PDF, EPUB, DOCX, HTML, Markdown, and XML. Built-in yt-dlp integration downloads from 1,000+ sites with automatic metadata extraction.</p>
-        </div>
-        <div class="card reveal">
-          <strong>Transcription &amp; TTS</strong>
-          <p class="muted">Transcribe with faster_whisper, NVIDIA NeMo (Parakeet, Canary), or Qwen2Audio. Real-time streaming over WebSocket. Text-to-speech via OpenAI-compatible API and local Kokoro ONNX.</p>
-        </div>
-        <div class="card reveal">
-          <strong>RAG Search</strong>
-          <p class="muted">Hybrid retrieval combining SQLite FTS5 full-text search with ChromaDB vector embeddings, BM25 scoring, and cross-encoder re-ranking for high-accuracy results.</p>
-        </div>
-        <div class="card reveal">
-          <strong>OpenAI-Compatible APIs</strong>
-          <p class="muted">Drop-in replacements for Chat Completions, Audio Transcription, Embeddings, and TTS endpoints. Use your existing client libraries without changes.</p>
-        </div>
-        <div class="card reveal">
-          <strong>Privacy-First</strong>
-          <p class="muted">Self-hosted with zero telemetry. Run models locally with llama.cpp, Ollama, or vLLM. All data stays in your SQLite or PostgreSQL databases. Bring your own keys.</p>
-        </div>
-        <div class="card reveal">
-          <strong>Character Chat &amp; Prompts</strong>
-          <p class="muted">SillyTavern-compatible character cards with V2 PNG export. Prompt library with import/export. Notebook-style note-taking. Chat history search and management.</p>
-        </div>
+        <aside class="hero-aside">
+          <div class="hero-panel hero-panel-image">
+            <img
+              src="./hero-tldw-server.png"
+              alt="Illustrative cyberpunk scene used by the tldw project"
+              class="hero-image"
+            />
+          </div>
+          <div class="hero-stat-grid">
+            <article class="stat-card">
+              <span class="stat-label">Current stack</span>
+              <strong>FastAPI + Next.js WebUI</strong>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">API surface</span>
+              <strong>Chat, audio, embeddings, evals</strong>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Core promise</span>
+              <strong>Your data, your models, your infrastructure</strong>
+            </article>
+          </div>
+        </aside>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- FAQ -->
-  <section id="faq" class="section" aria-labelledby="faq-title">
-    <div class="container">
-      <h2 id="faq-title" style="margin:0 0 8px 0;font-size:24px">FAQ</h2>
-      <div class="faq">
-        <div class="card reveal">
-          <p><strong>Is this production-ready?</strong></p>
-          <p class="muted">tldw is in active development (v0.1.x). The API surface is stabilizing but may still change. It's suitable for personal research use, home labs, and development environments. We welcome early adopters and contributors who are comfortable with a fast-moving project.</p>
+    <section id="whats-new" class="section-shell">
+      <div class="container">
+        <div class="section-heading">
+          <p class="section-kicker">Recent progress</p>
+          <h2>What's New</h2>
+          <p>
+            The homepage should show momentum, not wishcasting. These are the highest-signal updates from the recent
+            releases.
+          </p>
         </div>
-        <div class="card reveal">
-          <p><strong>How is my data handled?</strong></p>
-          <p class="muted">All data stays local in SQLite databases (or your own PostgreSQL). There is no telemetry, no analytics, no phone-home behavior. You control ingestion, storage, and deletion. API keys are stored in local config files or environment variables — never transmitted to us.</p>
-        </div>
-        <div class="card reveal">
-          <p><strong>Which models are supported?</strong></p>
-          <p class="muted">16+ providers including OpenAI, Anthropic, Google, Cohere, DeepSeek, Groq, Mistral, OpenRouter, HuggingFace, and Qwen. Local options include llama.cpp, Kobold.cpp, Ollama, vLLM, TabbyAPI, and any OpenAI-compatible endpoint.</p>
-        </div>
-        <div class="card reveal">
-          <p><strong>How can I contribute?</strong></p>
-          <p class="muted">Check out the <a href="https://github.com/rmusser01/tldw_server/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22" style="color:var(--brand-2)" target="_blank" rel="noreferrer">good first issues</a> on GitHub to contribute and discuss with the community. The project follows the GPL-3.0 license and welcomes contributions of all kinds.</p>
-        </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- COMMUNITY -->
-  <section id="community" class="section" aria-labelledby="community-title">
-    <div class="container" style="text-align:center">
-      <div class="reveal">
-        <h2 id="community-title" style="margin:0 0 8px 0;font-size:24px">Community</h2>
-        <p class="muted" style="max-width:50ch;margin:0 auto 8px auto">Join the conversation, get help, share ideas, and help shape the project.</p>
-        <div class="community-buttons">
-          <a class="btn btn-zulip" href="https://tldwproject.zulipchat.com" target="_blank" rel="noreferrer">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.5 6.5C4.5 5.12 5.62 4 7 4h10c1.38 0 2.5 1.12 2.5 2.5S18.38 9 17 9H7C5.62 9 4.5 7.88 4.5 6.5zm0 11C4.5 16.12 5.62 15 7 15h10c1.38 0 2.5 1.12 2.5 2.5S18.38 20 17 20H7c-1.38 0-2.5-1.12-2.5-2.5zM7 10l10 4H7v-4z"/></svg>
-            Zulip
-          </a>
-          <a class="btn btn-ghost" href="https://github.com/rmusser01/tldw_server" target="_blank" rel="noreferrer">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0 0 22 12.017C22 6.484 17.522 2 12 2z"/></svg>
-            GitHub
-          </a>
+        <div class="card-grid card-grid-compact">
+          <article class="card">
+            <p class="card-eyebrow">Product surface</p>
+            <h3>FastAPI + Next.js WebUI</h3>
+            <p>The project now centers on a production-minded API stack and the newer web client instead of legacy UI paths.</p>
+          </article>
+          <article class="card">
+            <p class="card-eyebrow">Developer ergonomics</p>
+            <h3>OpenAI-compatible APIs</h3>
+            <p>Chat, audio, embeddings, and evals can plug into existing clients without inventing a one-off protocol.</p>
+          </article>
+          <article class="card">
+            <p class="card-eyebrow">Retrieval and quality</p>
+            <h3>Unified RAG + evaluations</h3>
+            <p>Hybrid search, reranking, and evaluation now read like one system instead of disconnected tools.</p>
+          </article>
+          <article class="card">
+            <p class="card-eyebrow">Speech stack</p>
+            <h3>Expanded audio stack</h3>
+            <p>Real-time STT, streaming TTS, voice catalog support, and a deeper multi-provider speech layer.</p>
+          </article>
+          <article class="card">
+            <p class="card-eyebrow">Protocol layer</p>
+            <h3>MCP Unified</h3>
+            <p>JWT/RBAC-aware MCP tooling, health, metrics, and execution surfaces that fit the rest of the platform.</p>
+          </article>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
+    <section id="capabilities" class="section-shell section-muted">
+      <div class="container">
+        <div class="section-heading">
+          <p class="section-kicker">Core capabilities</p>
+          <h2>Built for the full research loop</h2>
+          <p>
+            tldw is not just a transcript viewer or a thin chat wrapper. It is an open-source research assistant that
+            keeps ingestion, retrieval, and analysis on the same footing.
+          </p>
+        </div>
+
+        <div class="card-grid">
+          <article class="card">
+            <h3>Ingest almost anything</h3>
+            <p>Video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, and web content from thousands of sources.</p>
+          </article>
+          <article class="card">
+            <h3>Transcribe and synthesize speech</h3>
+            <p>Real-time and file-based speech workflows across multiple STT and TTS providers with local options included.</p>
+          </article>
+          <article class="card">
+            <h3>Search with Unified RAG</h3>
+            <p>Hybrid BM25 and vector retrieval, reranking, and a retrieval model built for actual research workloads.</p>
+          </article>
+          <article class="card">
+            <h3>Use local or hosted models</h3>
+            <p>Run local stacks or bring commercial providers behind one OpenAI-compatible interface.</p>
+          </article>
+          <article class="card">
+            <h3>Keep artifacts, prompts, and notes together</h3>
+            <p>Chatbooks, prompt tooling, notes, flashcards, and research outputs all stay connected instead of getting scattered.</p>
+          </article>
+          <article class="card">
+            <h3>Operate on infrastructure you control</h3>
+            <p>Self-hosted defaults, privacy-first posture, and no telemetry baked into the public story.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="self-hosting" class="section-shell">
+      <div class="container split-layout">
+        <div class="section-heading">
+          <p class="section-kicker">Why self-host</p>
+          <h2>Privacy should not depend on someone else's SaaS roadmap.</h2>
+          <p>
+            tldw is designed for people who want a serious research tool without handing source material, voice data,
+            or internal knowledge workflows to an opaque third party.
+          </p>
+        </div>
+
+        <div class="note-stack">
+          <article class="note-card">
+            <h3>Keep your data local</h3>
+            <p>Store transcripts, notes, and artifacts on infrastructure you administer instead of whatever a default cloud keeps around.</p>
+          </article>
+          <article class="note-card">
+            <h3>No telemetry by default</h3>
+            <p>The product story stays consistent with the project story: your work is not a data-harvesting side effect.</p>
+          </article>
+          <article class="note-card">
+            <h3>Audit what you run</h3>
+            <p>Open-source code, explicit configuration, and documented deployment profiles make the system inspectable.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="quickstart" class="section-shell section-muted">
+      <div class="container">
+        <div class="section-heading">
+          <p class="section-kicker">Quickstart</p>
+          <h2>Get a working stack up fast</h2>
+          <p>The default path should stay practical: the Docker single-user + WebUI setup most people actually want.</p>
+        </div>
+
+        <div class="code-grid">
+          <article class="code-block">
+            <div class="code-bar">
+              <span>Recommended: Docker + WebUI</span>
+              <button class="copy-button" type="button" data-copy-target="quickstart-main">Copy</button>
+            </div>
+            <pre id="quickstart-main"><code>git clone https://github.com/rmusser01/tldw_server.git
+cd tldw_server
+make quickstart</code></pre>
+            <p class="code-note">Launches the API at <code>http://localhost:8000</code> and WebUI at <code>http://localhost:8080</code>.</p>
+          </article>
+          <article class="code-block">
+            <div class="code-bar">
+              <span>Alternative: API only</span>
+              <button class="copy-button" type="button" data-copy-target="quickstart-api">Copy</button>
+            </div>
+            <pre id="quickstart-api"><code>git clone https://github.com/rmusser01/tldw_server.git
+cd tldw_server
+make quickstart-docker</code></pre>
+            <p class="code-note">Use this when you want the production-style API path without the WebUI layer.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="hosted" class="section-shell">
+      <div class="container callout">
+        <div>
+          <p class="section-kicker">Hosted path</p>
+          <h2>Need a managed option instead of self-hosting?</h2>
+          <p>
+            VademHQ is the commercial sibling for people who want hosted access and a calmer onboarding path without
+            turning the open-source homepage into a SaaS funnel.
+          </p>
+        </div>
+        <a class="button button-secondary" href="https://vademhq.com">Visit VademHQ</a>
+      </div>
+    </section>
+
+    <section id="community" class="section-shell section-muted">
+      <div class="container split-layout">
+        <div class="section-heading">
+          <p class="section-kicker">Community and docs</p>
+          <h2>Keep moving from project overview to working system.</h2>
+          <p>Docs, community, and source should stay one click away from the homepage.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/rmusser01/tldw_server" target="_blank" rel="noreferrer">GitHub</a>
+            <a class="button button-secondary" href="https://tldwproject.zulipchat.com" target="_blank" rel="noreferrer">Zulip</a>
+          </div>
+        </div>
+
+        <div class="note-stack">
+          <article class="note-card">
+            <h3>Docs-first onboarding</h3>
+            <p>Use the getting-started profiles and production hardening docs instead of guessing from outdated setup snippets.</p>
+          </article>
+          <article class="note-card">
+            <h3>Contribute or evaluate deeply</h3>
+            <p>GitHub is still the canonical source for issues, releases, and current platform direction.</p>
+          </article>
+        </div>
+      </div>
+    </section>
   </main>
 
-  <!-- FOOTER -->
-  <footer role="contentinfo">
-    <div class="container" style="display:flex;gap:16px;justify-content:space-between;align-items:center;flex-wrap:wrap">
-      <small>&copy; <span id="year"></span> tldw Project Contributors. Licensed under the <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noreferrer" style="color:var(--brand-2)">GNU GPL v3.0</a>.</small>
-      <div style="display:flex;gap:16px;font-size:13px">
-        <a href="#about">About</a>
-        <a href="#features">Features</a>
-        <a href="#community">Community</a>
+  <footer class="site-footer" role="contentinfo">
+    <div class="container footer-row">
+      <small>
+        &copy; <span data-current-year></span> tldw Project Contributors. Open-source under GPL. Commercial hosting by
+        <a href="https://vademhq.com">VademHQ</a>.
+      </small>
+      <div class="footer-links">
+        <a href="#whats-new">What's New</a>
+        <a href="#quickstart">Quickstart</a>
         <a href="https://github.com/rmusser01/tldw_server" target="_blank" rel="noreferrer">GitHub</a>
+        <a href="https://vademhq.com">VademHQ</a>
       </div>
     </div>
   </footer>
 
-  <script>
-    // Dynamic year
-    document.getElementById('year').textContent = new Date().getFullYear();
-
-    // Mark JS-enabled for progressive enhancement
-    document.documentElement.classList.add('js');
-
-    // Reveal on view
-    if ('IntersectionObserver' in window) {
-      const observer = new IntersectionObserver((entries)=>{
-        for(const e of entries){ if(e.isIntersecting){ e.target.classList.add('show'); observer.unobserve(e.target); } }
-      }, {threshold: .25});
-      document.querySelectorAll('.reveal').forEach(el=>observer.observe(el));
-    } else {
-      document.querySelectorAll('.reveal').forEach(el=>el.classList.add('show'));
-    }
-
-    // Copy to clipboard
-    document.querySelectorAll('.copy-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const code = btn.getAttribute('data-code');
-        const original = btn.textContent;
-        navigator.clipboard.writeText(code).then(() => {
-          btn.textContent = 'Copied!';
-          btn.classList.add('copied');
-          setTimeout(() => {
-            btn.textContent = original;
-            btn.classList.remove('copied');
-          }, 2000);
-        }).catch(() => {
-          btn.textContent = 'Failed';
-          btn.classList.add('copy-error');
-          setTimeout(() => {
-            btn.textContent = original;
-            btn.classList.remove('copy-error');
-          }, 2000);
-        });
-      });
-    });
-  </script>
+  <script src="./assets/marketing.js"></script>
 </body>
 </html>
