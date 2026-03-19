@@ -226,3 +226,37 @@ git add \
   Docs/Plans/2026-03-18-deep-research-chat-pin-history-implementation-plan.md
 git commit -m "docs(research): finalize pin from history plan"
 ```
+
+---
+
+## Execution Note
+
+Completed in the `codex/deep-research-collecting-dev-pr` worktree.
+
+Implemented:
+
+- direct `Pin` actions for recent history entries in the active attachment chip
+- matching direct `Pin` actions in the no-active fallback composer surface
+- `Playground` state wiring so pinning a history entry updates only the pinned slot and persists it
+
+Verification run:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/components/Option/Playground/__tests__/AttachedResearchContextChip.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/research-chat-context.test.ts \
+  apps/packages/ui/src/services/__tests__/chat-settings.deep-research-pinned.test.ts \
+  apps/packages/ui/src/services/__tests__/chat-settings.deep-research.test.ts
+```
+
+Result:
+
+- `6` files passed
+- `36` tests passed
+
+Residual notes:
+
+- This slice is frontend-only; no backend merge or schema changes were required.
+- Bandit was not applicable because no backend production files changed in this implementation step.

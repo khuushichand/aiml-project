@@ -14,6 +14,7 @@ type AttachedResearchContextChipProps = {
   onPin?: () => void
   onUnpin?: () => void
   onRestorePinned?: () => void
+  onPinHistory?: (context: AttachedResearchContext) => void
   onSelectHistory?: (context: AttachedResearchContext) => void
 }
 
@@ -26,6 +27,7 @@ export const AttachedResearchContextChip = ({
   onPin,
   onUnpin,
   onRestorePinned,
+  onPinHistory,
   onSelectHistory
 }: AttachedResearchContextChipProps) => {
   const { t } = useTranslation(["playground", "common"])
@@ -139,14 +141,25 @@ export const AttachedResearchContextChip = ({
             {t("playground:composer.recentResearch", "Recent research")}
           </span>
           {history.map((entry) => (
-            <button
-              key={entry.run_id}
-              type="button"
-              onClick={() => onSelectHistory?.(entry)}
-              className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
-            >
-              {entry.query}
-            </button>
+            <React.Fragment key={entry.run_id}>
+              <button
+                type="button"
+                onClick={() => onSelectHistory?.(entry)}
+                className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+              >
+                {entry.query}
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onPinHistory?.(entry)
+                }}
+                className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+              >
+                {`${t("playground:actions.pinResearchContext", "Pin")} ${entry.query}`}
+              </button>
+            </React.Fragment>
           ))}
         </div>
       ) : null}

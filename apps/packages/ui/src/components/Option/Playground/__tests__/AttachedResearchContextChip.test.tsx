@@ -74,4 +74,26 @@ describe("AttachedResearchContextChip", () => {
     expect(screen.getByRole("button", { name: "Unpin" })).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Pin" })).not.toBeInTheDocument()
   })
+
+  it("shows direct pin actions for recent history entries", () => {
+    const onPinHistory = vi.fn()
+    const onSelectHistory = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <AttachedResearchContextChip
+          context={buildAttachedContext("run_active", "Active run")}
+          history={[buildAttachedContext("run_hist", "History run")]}
+          onRemove={vi.fn()}
+          onPinHistory={onPinHistory}
+          onSelectHistory={onSelectHistory}
+        />
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Pin History run" }))
+
+    expect(onPinHistory).toHaveBeenCalledTimes(1)
+    expect(onSelectHistory).not.toHaveBeenCalled()
+  })
 })

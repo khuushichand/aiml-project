@@ -493,6 +493,34 @@ export const Playground = () => {
     persistAttachedResearchContext
   ])
 
+  const handlePinAttachedResearchContextHistory = React.useCallback(
+    (context: AttachedResearchContext) => {
+      const nextState = pinAttachedResearchContext({
+        active: attachedResearchContext,
+        baseline: attachedResearchContextBaseline,
+        pinned: attachedResearchContextPinned,
+        history: attachedResearchContextHistory,
+        nextPinned: context
+      })
+      setAttachedResearchContext(nextState.active)
+      setAttachedResearchContextBaseline(nextState.baseline)
+      setAttachedResearchContextPinned(nextState.pinned)
+      setAttachedResearchContextHistory(nextState.history)
+      void persistAttachedResearchContext(
+        nextState.active,
+        nextState.pinned,
+        nextState.history
+      )
+    },
+    [
+      attachedResearchContext,
+      attachedResearchContextBaseline,
+      attachedResearchContextPinned,
+      attachedResearchContextHistory,
+      persistAttachedResearchContext
+    ]
+  )
+
   const handleUnpinAttachedResearchContext = React.useCallback(() => {
     const nextState = unpinAttachedResearchContext({
       active: attachedResearchContext,
@@ -1509,6 +1537,9 @@ export const Playground = () => {
               onResetAttachedResearchContext={handleResetAttachedResearchContext}
               onRemoveAttachedResearchContext={handleRemoveAttachedResearchContext}
               onPinAttachedResearchContext={handlePinAttachedResearchContext}
+              onPinAttachedResearchContextHistory={
+                handlePinAttachedResearchContextHistory
+              }
               onUnpinAttachedResearchContext={handleUnpinAttachedResearchContext}
               onRestorePinnedResearchContext={
                 handleRestorePinnedResearchContext

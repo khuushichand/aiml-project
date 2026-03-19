@@ -251,6 +251,9 @@ type Props = {
   onPinAttachedResearchContext?: () => void
   onUnpinAttachedResearchContext?: () => void
   onRestorePinnedResearchContext?: () => void
+  onPinAttachedResearchContextHistory?: (
+    context: AttachedResearchContext
+  ) => void
   onSelectAttachedResearchContextHistory?: (
     context: AttachedResearchContext
   ) => void
@@ -332,6 +335,7 @@ export const PlaygroundForm = ({
   onPinAttachedResearchContext,
   onUnpinAttachedResearchContext,
   onRestorePinnedResearchContext,
+  onPinAttachedResearchContextHistory,
   onSelectAttachedResearchContextHistory
 }: Props) => {
   const { t } = useTranslation(["playground", "common", "option"])
@@ -7642,6 +7646,7 @@ export const PlaygroundForm = ({
                         onPin={() => onPinAttachedResearchContext?.()}
                         onUnpin={() => onUnpinAttachedResearchContext?.()}
                         onRestorePinned={() => onRestorePinnedResearchContext?.()}
+                        onPinHistory={onPinAttachedResearchContextHistory}
                         onSelectHistory={onSelectAttachedResearchContextHistory}
                       />
                     )}
@@ -7694,16 +7699,26 @@ export const PlaygroundForm = ({
                           </span>
                         ) : null}
                         {attachedResearchContextHistory.map((entry) => (
-                          <button
-                            key={entry.run_id}
-                            type="button"
-                            onClick={() =>
-                              onSelectAttachedResearchContextHistory?.(entry)
-                            }
-                            className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                          >
-                            {entry.query}
-                          </button>
+                          <React.Fragment key={entry.run_id}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSelectAttachedResearchContextHistory?.(entry)
+                              }
+                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                            >
+                              {entry.query}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onPinAttachedResearchContextHistory?.(entry)
+                              }
+                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                            >
+                              {`${t("playground:actions.pinResearchContext", "Pin")} ${entry.query}`}
+                            </button>
+                          </React.Fragment>
                         ))}
                       </div>
                     ) : null}

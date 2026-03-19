@@ -128,6 +128,9 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
     onPinAttachedResearchContext?: () => void
     onUnpinAttachedResearchContext?: () => void
     onRestorePinnedResearchContext?: () => void
+    onPinAttachedResearchContextHistory?: (
+      context: ReturnType<typeof buildAttachedContext>
+    ) => void
     onSelectAttachedResearchContextHistory?: (
       context: ReturnType<typeof buildAttachedContext>
     ) => void
@@ -197,20 +200,34 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
         </>
       ) : null}
       {(props.attachedResearchContextHistory || []).map((entry) => (
-        <button
-          key={entry.run_id}
-          type="button"
-          onClick={() =>
-            props.onSelectAttachedResearchContextHistory?.(
-              buildAttachedContext(
-                entry.run_id || "run_history",
-                entry.query || "History query"
+        <React.Fragment key={entry.run_id}>
+          <button
+            type="button"
+            onClick={() =>
+              props.onSelectAttachedResearchContextHistory?.(
+                buildAttachedContext(
+                  entry.run_id || "run_history",
+                  entry.query || "History query"
+                )
               )
-            )
-          }
-        >
-          {`Use history ${entry.run_id}`}
-        </button>
+            }
+          >
+            {`Use history ${entry.run_id}`}
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              props.onPinAttachedResearchContextHistory?.(
+                buildAttachedContext(
+                  entry.run_id || "run_history",
+                  entry.query || "History query"
+                )
+              )
+            }
+          >
+            {`Pin history ${entry.run_id}`}
+          </button>
+        </React.Fragment>
       ))}
     </div>
   )
@@ -709,6 +726,113 @@ describe("Playground research context integration", () => {
     expect(screen.getByTestId("playground-form")).toHaveAttribute(
       "data-pinned-run-id",
       ""
+    )
+  })
+
+  it("pins a history entry without changing the active attachment", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: buildPersistedAttachment(
+        "run_saved",
+        "Recovered battery recycling run"
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1"),
+        buildPersistedAttachment("run_hist_2", "History 2")
+      ]
+    })
+
+    render(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        "run_saved"
+      )
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pin history run_hist_1" })
+    )
+
+    await waitFor(() =>
+      expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: expect.objectContaining({
+            deepResearchPinnedAttachment: expect.objectContaining({
+              run_id: "run_hist_1"
+            }),
+            deepResearchAttachment: expect.objectContaining({
+              run_id: "run_saved"
+            }),
+            deepResearchAttachmentHistory: [
+              expect.objectContaining({ run_id: "run_hist_2" })
+            ]
+          })
+        })
+      )
+    )
+
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-attached-run-id",
+      "run_saved"
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-pinned-run-id",
+      "run_hist_1"
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-history-run-ids",
+      "run_hist_2"
+    )
+  })
+
+  it("pins a history entry from the fallback surface when no active attachment exists", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: null,
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1"),
+        buildPersistedAttachment("run_hist_2", "History 2")
+      ]
+    })
+
+    render(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("playground-form")).toHaveAttribute(
+        "data-attached-run-id",
+        ""
+      )
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Pin history run_hist_1" })
+    )
+
+    await waitFor(() =>
+      expect(chatSettingsState.applyChatSettingsPatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          patch: expect.objectContaining({
+            deepResearchPinnedAttachment: expect.objectContaining({
+              run_id: "run_hist_1"
+            }),
+            deepResearchAttachment: null,
+            deepResearchAttachmentHistory: [
+              expect.objectContaining({ run_id: "run_hist_2" })
+            ]
+          })
+        })
+      )
+    )
+
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-attached-run-id",
+      ""
+    )
+    expect(screen.getByTestId("playground-form")).toHaveAttribute(
+      "data-pinned-run-id",
+      "run_hist_1"
     )
   })
 
