@@ -242,3 +242,76 @@ Add:
 git add Docs/Plans/2026-03-19-deep-research-chat-run-surface-follow-up-implementation-plan.md
 git commit -m "docs(research): finalize run-surface follow-up plan"
 ```
+
+---
+
+## Execution Notes
+
+- Task 1 corrected the red tests to assert the approved shared `onPrepareResearchFollowUp` seam instead of the existing attach-context path. The focused red run failed only on the missing `Follow up` controls and missing deterministic prompt copy in `PlaygroundForm.tsx`.
+- Task 2 added `buildResearchFollowUpPrompt(...)` to `research-chat-context.ts` with whitespace normalization and a safe blank-query fallback.
+- Task 3 added completed-only `Follow up` actions to linked research rows and deep-research completion handoff messages, then threaded both into a single `PlaygroundChat` callback without embedding draft or attach logic in the chat surfaces.
+- Task 4 integrated the callback in `Playground.tsx` by best-effort reattaching the selected run, seeding `selectedQuickPrompt` with the deterministic prompt, and reusing the existing overwrite/append insertion flow in `PlaygroundForm.tsx`. The form now also refocuses the textarea after follow-up prompt insertion.
+
+## Verification
+
+- Red Task 1 check:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts
+```
+
+Result:
+- `3` failed, `8` passed
+- intended failures were:
+  - missing `Follow up` button on completed linked-run rows
+  - missing `Follow up` button on completion handoff messages
+  - missing `Follow up on this research:` copy in `PlaygroundForm.tsx`
+
+- Task 2 helper check:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/components/Option/Playground/__tests__/research-chat-context.test.ts
+```
+
+Result:
+- `1` file passed
+- `15` tests passed
+
+- Task 3 surface check:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx
+```
+
+Result:
+- `2` files passed
+- `10` tests passed
+
+- Final focused verification:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/research-chat-context.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx
+```
+
+Result:
+- `6` files passed
+- `43` tests passed
+
+## Commits
+
+- `7b1c49e12` `test(chat): cover run-surface follow-up actions`
+- `9eba2ed4a` `feat(chat): add follow-up prompt helper`
+- `e9b1008ef` `feat(chat): add run-surface follow-up actions`
+- `d26e0d416` `feat(chat): prepare follow-up research from completed runs`
