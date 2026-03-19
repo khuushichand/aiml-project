@@ -4185,6 +4185,8 @@ def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection
         conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_location TEXT")
     if "source_ref_requested" not in governance_pack_columns:
         conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_ref_requested TEXT")
+    if "source_ref_kind" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_ref_kind TEXT")
     if "source_subpath" not in governance_pack_columns:
         conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_subpath TEXT")
     if "source_commit_resolved" not in governance_pack_columns:
@@ -4207,9 +4209,11 @@ def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection
             source_type TEXT NOT NULL,
             source_location TEXT NOT NULL,
             source_ref_requested TEXT,
+            source_ref_kind TEXT,
             source_subpath TEXT,
             source_commit_resolved TEXT,
             pack_content_digest TEXT NOT NULL,
+            pack_document_json TEXT NOT NULL DEFAULT '{}',
             source_verified INTEGER,
             source_verification_mode TEXT,
             source_fetched_at TIMESTAMP,
@@ -4218,6 +4222,15 @@ def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection
         )
         """
     )
+    source_candidate_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_pack_source_candidates)").fetchall()
+    }
+    if "source_ref_kind" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN source_ref_kind TEXT")
+    if "pack_document_json" not in source_candidate_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN pack_document_json TEXT NOT NULL DEFAULT '{}'"
+        )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
         "ON mcp_governance_pack_source_candidates(source_type, source_location)"

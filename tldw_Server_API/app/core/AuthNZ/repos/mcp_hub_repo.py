@@ -443,6 +443,7 @@ class McpHubRepo:
         out = dict(row)
         source_verified = out.get("source_verified")
         out["source_verified"] = None if source_verified is None else _to_bool(source_verified)
+        out["pack_document"] = _load_json_dict(out.pop("pack_document_json", None))
         return out
 
     @staticmethod
@@ -561,6 +562,7 @@ class McpHubRepo:
         source_type: str | None = None,
         source_location: str | None = None,
         source_ref_requested: str | None = None,
+        source_ref_kind: str | None = None,
         source_subpath: str | None = None,
         source_commit_resolved: str | None = None,
         pack_content_digest: str | None = None,
@@ -600,6 +602,7 @@ class McpHubRepo:
             str(source_type or "").strip().lower() or None,
             str(source_location or "").strip() or None,
             str(source_ref_requested or "").strip() or None,
+            str(source_ref_kind or "").strip().lower() or None,
             str(source_subpath or "").strip() or None,
             str(source_commit_resolved or "").strip() or None,
             str(pack_content_digest or "").strip() or None,
@@ -619,11 +622,11 @@ class McpHubRepo:
             INSERT INTO mcp_governance_packs (
                 pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
                 adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                bundle_digest, source_type, source_location, source_ref_requested, source_subpath,
+                bundle_digest, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                 source_commit_resolved, pack_content_digest, source_verified,
                 source_verification_mode, source_fetched_at, fetched_by, manifest_json,
                 normalized_ir_json, is_active_install, created_by, updated_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         if conn is None:
             await self.db_pool.execute(query, params)
@@ -683,7 +686,7 @@ class McpHubRepo:
         query = """
             SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
                    adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                   bundle_digest, source_type, source_location, source_ref_requested, source_subpath,
+                   bundle_digest, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                    source_commit_resolved, pack_content_digest, source_verified,
                    source_verification_mode, source_fetched_at, fetched_by, manifest_json,
                    normalized_ir_json, is_active_install, superseded_by_governance_pack_id,
@@ -822,7 +825,7 @@ class McpHubRepo:
             """
             SELECT id, pack_id, pack_version, pack_schema_version, capability_taxonomy_version,
                    adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
-                   bundle_digest, source_type, source_location, source_ref_requested, source_subpath,
+                   bundle_digest, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                    source_commit_resolved, pack_content_digest, source_verified,
                    source_verification_mode, source_fetched_at, fetched_by, manifest_json,
                    normalized_ir_json, is_active_install, superseded_by_governance_pack_id,
@@ -858,9 +861,11 @@ class McpHubRepo:
         source_type: str,
         source_location: str,
         source_ref_requested: str | None = None,
+        source_ref_kind: str | None = None,
         source_subpath: str | None = None,
         source_commit_resolved: str | None = None,
         pack_content_digest: str,
+        pack_document: dict[str, Any] | None = None,
         source_verified: bool | None = None,
         source_verification_mode: str | None = None,
         source_fetched_at: datetime | str | None = None,
@@ -883,9 +888,11 @@ class McpHubRepo:
             str(source_type or "").strip().lower(),
             str(source_location or "").strip(),
             str(source_ref_requested or "").strip() or None,
+            str(source_ref_kind or "").strip().lower() or None,
             str(source_subpath or "").strip() or None,
             str(source_commit_resolved or "").strip() or None,
             str(pack_content_digest or "").strip(),
+            json.dumps(pack_document or {}),
             source_verified_value,
             str(source_verification_mode or "").strip() or None,
             source_fetched_ts,
@@ -894,10 +901,10 @@ class McpHubRepo:
         )
         query = """
             INSERT INTO mcp_governance_pack_source_candidates (
-                source_type, source_location, source_ref_requested, source_subpath,
-                source_commit_resolved, pack_content_digest, source_verified,
+                source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
+                source_commit_resolved, pack_content_digest, pack_document_json, source_verified,
                 source_verification_mode, source_fetched_at, fetched_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         row: dict[str, Any] | None = None
         if conn is None:
@@ -928,8 +935,8 @@ class McpHubRepo:
         conn: Any | None = None,
     ) -> dict[str, Any] | None:
         query = """
-            SELECT id, source_type, source_location, source_ref_requested, source_subpath,
-                   source_commit_resolved, pack_content_digest, source_verified,
+            SELECT id, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
+                   source_commit_resolved, pack_content_digest, pack_document_json, source_verified,
                    source_verification_mode, source_fetched_at, fetched_by, created_at
             FROM mcp_governance_pack_source_candidates
             WHERE id = ?
@@ -944,8 +951,8 @@ class McpHubRepo:
     async def list_governance_pack_source_candidates(self) -> list[dict[str, Any]]:
         rows = await self.db_pool.fetchall(
             """
-            SELECT id, source_type, source_location, source_ref_requested, source_subpath,
-                   source_commit_resolved, pack_content_digest, source_verified,
+            SELECT id, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
+                   source_commit_resolved, pack_content_digest, pack_document_json, source_verified,
                    source_verification_mode, source_fetched_at, fetched_by, created_at
             FROM mcp_governance_pack_source_candidates
             ORDER BY id

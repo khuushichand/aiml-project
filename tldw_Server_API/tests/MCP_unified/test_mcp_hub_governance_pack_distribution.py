@@ -305,8 +305,9 @@ async def test_distribution_service_resolves_git_source_to_exact_commit_and_dige
 
     assert resolved.manifest.pack_id == "researcher-pack"
     assert resolved.source_type == "git"
-    assert resolved.source_location == "github.com/example/researcher-pack"
+    assert resolved.source_location == repo_url
     assert resolved.source_ref_requested == "v1.0.0"
+    assert resolved.source_ref_kind == "tag"
     assert resolved.source_subpath == "packs/researcher"
     assert resolved.source_commit_resolved == commit
     assert resolved.source_path is None
@@ -355,7 +356,8 @@ async def test_distribution_service_uses_canonicalized_repo_for_trust_matching(
         subpath=None,
     )
 
-    assert resolved.source_location == "github.com/example/researcher-pack"
+    assert resolved.source_location == "git@github.com:example/researcher-pack.git"
+    assert resolved.source_ref_kind == "tag"
     assert resolved.source_commit_resolved == "abc123"
 
 

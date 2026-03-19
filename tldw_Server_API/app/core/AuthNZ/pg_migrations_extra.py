@@ -565,6 +565,11 @@ _CREATE_MCP_HUB_TABLES = [
     ),
     (
         "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_ref_kind TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
         "ADD COLUMN IF NOT EXISTS source_subpath TEXT NULL",
         (),
     ),
@@ -695,9 +700,11 @@ _CREATE_MCP_HUB_TABLES = [
             source_type TEXT NOT NULL,
             source_location TEXT NOT NULL,
             source_ref_requested TEXT NULL,
+            source_ref_kind TEXT NULL,
             source_subpath TEXT NULL,
             source_commit_resolved TEXT NULL,
             pack_content_digest TEXT NOT NULL,
+            pack_document_json TEXT NOT NULL DEFAULT '{}',
             source_verified BOOLEAN NULL,
             source_verification_mode TEXT NULL,
             source_fetched_at TIMESTAMPTZ NULL,
@@ -710,6 +717,16 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
         "ON mcp_governance_pack_source_candidates(source_type, source_location)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS source_ref_kind TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS pack_document_json TEXT NOT NULL DEFAULT '{}'",
         (),
     ),
     (

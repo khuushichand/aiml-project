@@ -65,6 +65,7 @@ class GovernancePack:
     source_type: str = "local_path"
     source_location: str | None = None
     source_ref_requested: str | None = None
+    source_ref_kind: str | None = None
     source_subpath: str | None = None
     source_commit_resolved: str | None = None
     pack_content_digest: str | None = None
