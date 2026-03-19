@@ -2639,6 +2639,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
                         historyId={historyId || undefined}
                         serverChatId={serverChatId}
                         serverMessageId={msg.serverMessageId}
+                        scope={chatScope}
                         messageId={msg.id}
                         discoSkillComment={msg.discoSkillComment}
                         createdAt={msg.createdAt}

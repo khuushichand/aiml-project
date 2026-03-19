@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PlaygroundMessage } from "../Message"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -443,24 +443,24 @@ describe("PlaygroundMessage routing fallback integration", () => {
         {...baseProps}
         serverChatId="workspace-chat-1"
         serverMessageId="message-1"
-        {...({
-          scope: { type: "workspace", workspaceId: "ws-1" }
-        } as any)}
+        scope={{ type: "workspace", workspaceId: "ws-1" }}
       />
     )
 
     fireEvent.click(screen.getByRole("button", { name: "Save to Notes" }))
 
-    expect(tldwClient.saveChatKnowledge).toHaveBeenCalledWith(
-      {
-        conversation_id: "workspace-chat-1",
-        message_id: "message-1",
-        snippet: "Sample assistant output",
-        make_flashcard: false
-      },
-      {
-        scope: { type: "workspace", workspaceId: "ws-1" }
-      }
+    await waitFor(() =>
+      expect(tldwClient.saveChatKnowledge).toHaveBeenCalledWith(
+        {
+          conversation_id: "workspace-chat-1",
+          message_id: "message-1",
+          snippet: "Sample assistant output",
+          make_flashcard: false
+        },
+        {
+          scope: { type: "workspace", workspaceId: "ws-1" }
+        }
+      )
     )
   })
 })

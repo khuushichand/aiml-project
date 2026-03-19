@@ -442,12 +442,15 @@ export const PlaygroundMessage = React.memo(function PlaygroundMessage(props: Pr
     setSavingKnowledge(makeFlashcard ? "flashcard" : "note")
     try {
       await tldwClient.initialize().catch(() => null)
-      await tldwClient.saveChatKnowledge({
-        conversation_id: props.serverChatId,
-        message_id: props.serverMessageId,
-        snippet,
-        make_flashcard: makeFlashcard
-      })
+      await tldwClient.saveChatKnowledge(
+        {
+          conversation_id: props.serverChatId,
+          message_id: props.serverMessageId,
+          snippet,
+          make_flashcard: makeFlashcard
+        },
+        props.scope ? { scope: props.scope } : undefined
+      )
       message.success(
         makeFlashcard
           ? t("savedToFlashcards", "Saved to Flashcards")

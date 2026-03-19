@@ -5703,9 +5703,10 @@ export class TldwApiClient {
     snippet: string
     tags?: string[]
     make_flashcard?: boolean
-  }): Promise<any> {
+  }, options?: { scope?: ChatScope }): Promise<any> {
     const body = {
       ...payload,
+      ...toChatScopeParams(options?.scope),
       conversation_id: String(payload.conversation_id),
       message_id: String(payload.message_id)
     }

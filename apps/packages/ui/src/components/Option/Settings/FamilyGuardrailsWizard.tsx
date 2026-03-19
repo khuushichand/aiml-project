@@ -1265,6 +1265,7 @@ export function FamilyGuardrailsWizard({
           message.error("Household name is required")
           return
         }
+        trackWizardEvent("step_completed", { household_name: householdName.trim() })
         setCurrentStep(1)
         return
       }
@@ -1366,6 +1367,14 @@ export function FamilyGuardrailsWizard({
             nextDependentDraftByKey,
             nextDependents
           )
+          trackWizardEvent("step_completed", {
+            existing_account_count: nextDependents.filter(
+              (dependent) => dependent.accountMode === "existing_account"
+            ).length,
+            invite_new_count: nextDependents.filter(
+              (dependent) => dependent.accountMode === "invite_new"
+            ).length
+          })
           setCurrentStep(4)
           return
         }
@@ -1382,11 +1391,25 @@ export function FamilyGuardrailsWizard({
         await refreshInviteTracker()
       }
       if (currentStep < stepDefinitions.length - 1) {
+        trackWizardEvent("step_completed")
         setCurrentStep((step) => step + 1)
       } else {
+        telemetryCompletedRef.current = true
+        trackWizardEvent("setup_completed", {
+          active_count: trackerCounts.active,
+          pending_count: trackerCounts.pending,
+          failed_count: trackerCounts.failed,
+          existing_account_count: dependents.filter(
+            (dependent) => dependent.accountMode === "existing_account"
+          ).length,
+          invite_new_count: dependents.filter((dependent) => dependent.accountMode === "invite_new").length
+        })
         message.success("Family guardrails wizard setup saved.")
       }
     } catch (error) {
+      trackWizardEvent("step_error", {
+        error_message: error instanceof Error ? error.message : "unknown"
+      })
       message.error(error instanceof Error ? error.message : "Unable to continue wizard")
     } finally {
       setSubmitting(false)
