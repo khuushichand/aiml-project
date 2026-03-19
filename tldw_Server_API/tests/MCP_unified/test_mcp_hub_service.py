@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tldw_Server_API.app.core.exceptions import BadRequestError
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 
 pytest_plugins = ("tldw_Server_API.tests.AuthNZ.conftest",)
@@ -656,3 +657,61 @@ async def test_service_audits_slot_binding_with_privilege_metadata(tmp_path, mon
     assert metadata["slot_name"] == "token_write"
     assert metadata["privilege_class"] == "write"
     assert metadata["required_permission"] == "grant.credentials.write"
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_binding_managed_secret_ref_from_different_scope(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.secret_backends.local_encrypted import LocalEncryptedSecretBackend
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.services.mcp_hub_service import McpHubService
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"k"))
+
+    reset_settings()
+    await reset_db_pool()
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    svc = McpHubService(repo=repo)
+
+    profile = await repo.create_permission_profile(
+        name="External Docs",
+        owner_scope_type="org",
+        owner_scope_id=7,
+        mode="custom",
+        policy_document={"capabilities": ["network.external"]},
+        actor_id=7,
+    )
+    await svc.create_external_server(
+        server_id="docs",
+        name="Docs",
+        transport="websocket",
+        config={"websocket": {"url": "wss://docs.example/ws"}},
+        owner_scope_type="global",
+        owner_scope_id=None,
+        enabled=True,
+        actor_id=7,
+    )
+    managed_ref = await LocalEncryptedSecretBackend(db_pool=pool).store_ref(
+        owner_scope_type="org",
+        owner_scope_id=42,
+        provider_key="docs-token",
+        payload={"api_key": "secret-token"},
+        created_by=7,
+        updated_by=7,
+    )
+
+    with pytest.raises(BadRequestError, match="different owner scope"):
+        await svc.upsert_profile_credential_binding(
+            profile_id=int(profile["id"]),
+            external_server_id="docs",
+            managed_secret_ref_id=int(managed_ref["id"]),
+            actor_id=7,
+        )

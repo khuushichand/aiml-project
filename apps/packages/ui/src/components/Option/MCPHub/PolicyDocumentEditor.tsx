@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Alert, Button, Card, Checkbox, Empty, Radio, Space, Tag, Typography } from "antd"
 
 import type {
+  McpHubPathScopeMode,
   McpHubPermissionPolicyDocument,
   McpHubToolRegistryEntry,
   McpHubToolRegistryModule
@@ -147,7 +148,7 @@ export const PolicyDocumentEditor = ({
     }
     onChange({
       ...policy,
-      path_scope_mode: value,
+      path_scope_mode: value as McpHubPathScopeMode,
       path_scope_enforcement: "approval_required_when_unenforceable"
     })
   }

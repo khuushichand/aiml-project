@@ -171,7 +171,9 @@ export const Playground = () => {
       }
 
       const FILE_LIMIT = 5
-      const allFiles = Array.from(e.dataTransfer?.files || [])
+      const allFiles = Array.from(e.dataTransfer?.files || []).filter(
+        (file) => !otherUnsupportedTypes.includes(file.type)
+      )
       const newFiles = allFiles.slice(0, FILE_LIMIT)
       const droppedExtra = allFiles.length - newFiles.length
 
@@ -248,6 +250,7 @@ export const Playground = () => {
       if (timelineActionRetryTimeoutRef.current) {
         clearTimeout(timelineActionRetryTimeoutRef.current)
       }
+      pendingTimelineActionRef.current = null
     }
   }, [])
 

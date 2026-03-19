@@ -40,7 +40,7 @@ class FairShareScheduler:
     # Admission control
     # ------------------------------------------------------------------
 
-    def can_submit(self, user_id: int, active_count: int) -> bool:
+    def can_submit(self, user_id: Any, active_count: int) -> bool:
         """Check if user can submit a new job.
 
         Args:
@@ -70,7 +70,7 @@ class FairShareScheduler:
 
     def calculate_priority(
         self,
-        user_id: int,
+        user_id: Any,
         active_count: int,
         wait_seconds: float = 0,
     ) -> int:

@@ -45,6 +45,22 @@ class ACPAgentRegisterRequest(BaseModel):
     requires_api_key: str | None = Field(default=None, description="Required API key env var")
     install_instructions: list[str] = Field(default_factory=list, description="Installation steps")
     docs_url: str | None = Field(default=None, description="Documentation URL")
+    mcp_orchestration: Literal["agent_driven", "llm_driven"] = Field(
+        default="agent_driven",
+        description="MCP orchestration mode when protocol='mcp'",
+    )
+    mcp_entry_tool: str = Field(default="execute", description="Entry tool for agent-driven MCP agents")
+    mcp_structured_response: bool = Field(
+        default=False,
+        description="Whether the entry tool returns structured JSON steps",
+    )
+    mcp_llm_provider: str | None = Field(default=None, description="Provider for llm_driven MCP orchestration")
+    mcp_llm_model: str | None = Field(default=None, description="Model for llm_driven MCP orchestration")
+    mcp_max_iterations: int = Field(default=20, description="Maximum llm_driven MCP iterations")
+    mcp_refresh_tools: bool = Field(
+        default=False,
+        description="Refresh MCP tool inventory before each prompt",
+    )
 
 
 class ACPAgentUpdateRequest(BaseModel):
@@ -57,6 +73,13 @@ class ACPAgentUpdateRequest(BaseModel):
     requires_api_key: str | None = None
     install_instructions: list[str] | None = None
     docs_url: str | None = None
+    mcp_orchestration: Literal["agent_driven", "llm_driven"] | None = None
+    mcp_entry_tool: str | None = None
+    mcp_structured_response: bool | None = None
+    mcp_llm_provider: str | None = None
+    mcp_llm_model: str | None = None
+    mcp_max_iterations: int | None = None
+    mcp_refresh_tools: bool | None = None
 
 
 # -----------------------------------------------------------------------------

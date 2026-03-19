@@ -35,6 +35,38 @@ type SearchBarProps = {
   showWebToggle?: boolean
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tagName = target.tagName.toUpperCase()
+  return (
+    tagName === "INPUT" ||
+    tagName === "TEXTAREA" ||
+    tagName === "SELECT" ||
+    target.isContentEditable
+  )
+}
+
+function isInteractiveControlTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return Boolean(
+    target.closest(
+      [
+        "button",
+        "a[href]",
+        "input",
+        "textarea",
+        "select",
+        "[role='button']",
+        "[role='link']",
+        "[role='menuitem']",
+        "[role='option']",
+        "[role='switch']",
+        "[role='tab']",
+      ].join(",")
+    )
+  )
+}
+
 export function SearchBar({
   className,
   autoFocus = true,
@@ -117,16 +149,23 @@ export function SearchBar({
   // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const targetIsEditable = isEditableTarget(e.target)
+      const targetIsInteractiveControl = isInteractiveControlTarget(e.target)
+
       // Focus search bar on "/" key
       if (e.key === "/" && !e.metaKey && !e.ctrlKey) {
-        const target = e.target as HTMLElement
-        if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") {
+        if (!targetIsEditable) {
           e.preventDefault()
           inputRef.current?.focus()
         }
       }
       // Cmd+K for new search
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "k" &&
+        !targetIsEditable &&
+        !targetIsInteractiveControl
+      ) {
         e.preventDefault()
         clearResults()
         setQuery("")
@@ -157,8 +196,18 @@ export function SearchBar({
   useEffect(() => {
     if (!shouldShowSuggestions) {
       setActiveSuggestionIndex(-1)
+      return
     }
-  }, [shouldShowSuggestions])
+    setActiveSuggestionIndex((previous) => {
+      if (previous < 0) {
+        return previous
+      }
+      if (suggestions.length === 0) {
+        return -1
+      }
+      return Math.min(previous, suggestions.length - 1)
+    })
+  }, [shouldShowSuggestions, suggestions.length])
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -254,8 +303,15 @@ export function SearchBar({
               return
             }
             if (e.key === "Enter" && activeSuggestionIndex >= 0) {
+              const activeSuggestion = suggestions[activeSuggestionIndex]
+              if (!activeSuggestion) {
+                setActiveSuggestionIndex(
+                  suggestions.length > 0 ? suggestions.length - 1 : -1
+                )
+                return
+              }
               e.preventDefault()
-              applySuggestion(suggestions[activeSuggestionIndex])
+              applySuggestion(activeSuggestion)
               return
             }
             if (e.key === "Escape") {

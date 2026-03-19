@@ -1,10 +1,11 @@
 import React from "react"
 import { describe, it, expect, vi } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { CommandPalette } from "../CommandPalette"
 import {
   formatShortcut,
+  isMac,
   type ShortcutModifier
 } from "@/hooks/useKeyboardShortcuts"
 import type { ShortcutConfig } from "@/hooks/keyboard/useShortcutConfig"
@@ -161,5 +162,30 @@ describe("CommandPalette shortcut hints", () => {
     expect(newChat.className).toContain("focus-visible:ring-focus")
     expect(newChat.className).toContain("focus-visible:ring-offset-2")
     expect(newChat.className).toContain("focus-visible:ring-offset-bg")
+  })
+
+  it("disables the global Cmd/Ctrl+K shortcut on the workspace playground route", async () => {
+    render(
+      <MemoryRouter initialEntries={["/workspace-playground"]}>
+        <CommandPalette
+          onNewChat={vi.fn()}
+          onToggleRag={vi.fn()}
+          onToggleWebSearch={vi.fn()}
+          onIngestPage={vi.fn()}
+          onSwitchModel={vi.fn()}
+          onToggleSidebar={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+
+    fireEvent.keyDown(document, isMac
+      ? { key: "k", metaKey: true }
+      : { key: "k", ctrlKey: true })
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+
+    window.dispatchEvent(new CustomEvent("tldw:open-command-palette"))
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument()
   })
 })

@@ -103,9 +103,15 @@ export const useSmartScroll = (
     scrollToBottom(true)
   }, [scrollToBottom])
 
+  const isAutoScrollToBottom = useMemo(
+    () => isAutoScrollEnabled && isAtBottom(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-evaluate when messages or streaming change
+    [isAutoScrollEnabled, messages, streaming]
+  )
+
   return {
     containerRef,
-    isAutoScrollToBottom: isAutoScrollEnabled && isAtBottom(),
+    isAutoScrollToBottom,
     autoScrollToBottom
   }
 }

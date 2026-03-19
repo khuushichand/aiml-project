@@ -11226,6 +11226,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, tuple(params))
         return [self._persona_memory_row_to_dict(row) for row in cursor.fetchall() if row]
 
+    def get_persona_memory_entry_by_id(
+        self,
+        *,
+        entry_id: str,
+        user_id: str,
+        persona_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a single persona memory entry by ID, owned by user."""
+        clauses = ["id = ?", "user_id = ?"]
+        params: list[Any] = [entry_id, user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        query = f"SELECT * FROM persona_memory_entries WHERE {' AND '.join(clauses)}"  # nosec B608
+        cursor = self.execute_query(query, tuple(params))
+        return self._persona_memory_row_to_dict(cursor.fetchone())
+
+    def count_persona_memory_entries(
+        self,
+        *,
+        user_id: str,
+        persona_id: str | None = None,
+        memory_type: str | None = None,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> int:
+        """Count persona memory entries matching the given filters."""
+        clauses = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        if memory_type is not None:
+            clauses.append("memory_type = ?")
+            params.append(str(memory_type).strip())
+        if not include_archived:
+            clauses.append("archived = 0")
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        query = f"SELECT COUNT(*) FROM persona_memory_entries WHERE {' AND '.join(clauses)}"  # nosec B608
+        cursor = self.execute_query(query, tuple(params))
+        row = cursor.fetchone()
+        return row[0] if row else 0
+
     def set_persona_memory_archived(
         self,
         *,
@@ -11266,6 +11313,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         allowed_fields = {
             "content",
+            "memory_type",
             "salience",
             "source_conversation_id",
             "scope_snapshot_id",
@@ -11286,6 +11334,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     raise InputError("content cannot be empty.")  # noqa: TRY003
                 params.append(content)
                 set_parts.append("content = ?")
+            elif key == "memory_type":
+                mt = str(value or "").strip()
+                if not mt:
+                    raise InputError("memory_type cannot be empty.")  # noqa: TRY003
+                params.append(mt)
+                set_parts.append("memory_type = ?")
             elif key == "salience":
                 try:
                     params.append(float(value))
@@ -14550,14 +14604,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if character_scope_clause:
             clauses.append(character_scope_clause)
         normalized_workspace_id = self._normalize_nullable_text(workspace_id)
-        if scope_type is not None:
-            normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
-            clauses.append("scope_type = ?")
-            params.append(normalized_scope)
-            if normalized_workspace_id is not None:
-                clauses.append("workspace_id = ?")
-                params.append(normalized_workspace_id)
-        elif normalized_workspace_id is not None:
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+        clauses.append("scope_type = ?")
+        params.append(normalized_scope)
+        if normalized_workspace_id is not None:
             clauses.append("workspace_id = ?")
             params.append(normalized_workspace_id)
         query = f"SELECT COUNT(*) as cnt FROM conversations WHERE {' AND '.join(clauses)}"  # nosec B608
@@ -14609,14 +14659,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if character_scope_clause:
             clauses.append(character_scope_clause)
         normalized_workspace_id = self._normalize_nullable_text(workspace_id)
-        if scope_type is not None:
-            normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
-            clauses.append("scope_type = ?")
-            params.append(normalized_scope)
-            if normalized_workspace_id is not None:
-                clauses.append("workspace_id = ?")
-                params.append(normalized_workspace_id)
-        elif normalized_workspace_id is not None:
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+        clauses.append("scope_type = ?")
+        params.append(normalized_scope)
+        if normalized_workspace_id is not None:
             clauses.append("workspace_id = ?")
             params.append(normalized_workspace_id)
         query = (
@@ -14840,6 +14886,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         character_id: int,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> int:
         """
         Count non-deleted conversations for a given user scoped to a specific character.
@@ -14860,11 +14908,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_clause = "1 = 1"
         else:
             deleted_clause = "deleted = 0"
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
         query = (
-            f"SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND {deleted_clause}"  # nosec B608
+            f"SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND {deleted_clause} AND scope_type = ?"  # nosec B608
         )
+        params: list[Any] = [client_id, character_id, normalized_scope]
+        if normalized_workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(normalized_workspace_id)
         try:
-            cursor = self.execute_query(query, (client_id, character_id))
+            cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             if row is None:
                 return 0
@@ -14886,6 +14940,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         List conversations for a given user scoped to a specific character.
@@ -14909,13 +14965,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             deleted_clause = "deleted = 0"
 
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
         query = (
             "SELECT * FROM conversations "  # nosec B608
             f"WHERE client_id = ? AND character_id = ? AND {deleted_clause} "
-            "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+            "AND scope_type = ? "
         )
+        params: list[Any] = [client_id, character_id, normalized_scope]
+        if normalized_workspace_id is not None:
+            query += "AND workspace_id = ? "
+            params.append(normalized_workspace_id)
+        query += "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
         try:
-            cursor = self.execute_query(query, (client_id, character_id, limit, offset))
+            cursor = self.execute_query(query, tuple(params))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         except CharactersRAGDBError as e:
@@ -15563,14 +15627,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             filters.append(self._conversation_character_scope_clause(normalized_character_scope, column=f"{alias}.character_id"))
 
         normalized_workspace_id = self._normalize_nullable_text(workspace_id)
-        if scope_type is not None:
-            normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
-            filters.append(f"{alias}.scope_type = ?")
-            params.append(normalized_scope)
-            if normalized_workspace_id is not None:
-                filters.append(f"{alias}.workspace_id = ?")
-                params.append(normalized_workspace_id)
-        elif normalized_workspace_id is not None:
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+        filters.append(f"{alias}.scope_type = ?")
+        params.append(normalized_scope)
+        if normalized_workspace_id is not None:
             filters.append(f"{alias}.workspace_id = ?")
             params.append(normalized_workspace_id)
 
@@ -16208,9 +16268,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 entity_id=workspace_id,
             )
 
+        conversations = self.execute_query(
+            "SELECT id, version FROM conversations WHERE workspace_id = ? AND scope_type = ? AND deleted = 0",
+            (workspace_id, "workspace"),
+        ).fetchall()
+        for conversation in conversations:
+            conversation_id = conversation["id"] if isinstance(conversation, dict) else conversation[0]
+            conversation_version = conversation["version"] if isinstance(conversation, dict) else conversation[1]
+            failed_message_ids: set[str] = set()
+            while True:
+                batch = self.get_messages_for_conversation(conversation_id, limit=100, offset=0)
+                batch = [m for m in batch if m.get("id") not in failed_message_ids]
+                if not batch:
+                    break
+                deleted_this_batch = 0
+                for message in batch:
+                    message_id = message.get("id")
+                    if not message_id:
+                        continue
+                    try:
+                        self.soft_delete_message(message_id, message.get("version", 1))
+                        deleted_this_batch += 1
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS:
+                        logger.warning(
+                            "Failed to soft-delete message {} during workspace delete {}.",
+                            message_id,
+                            workspace_id,
+                        )
+                        failed_message_ids.add(str(message_id))
+                if deleted_this_batch == 0:
+                    break
+            self.soft_delete_conversation(conversation_id, int(conversation_version))
+
         now = self._get_current_utc_timestamp_iso()
         with self.transaction() as conn:
-            # Soft-delete the workspace itself
             cursor = conn.execute(
                 "UPDATE workspaces SET deleted = 1, last_modified = ?, version = ? WHERE id = ? AND version = ?",
                 (now, expected_version + 1, workspace_id, expected_version),
@@ -16221,15 +16312,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     entity="workspaces",
                     entity_id=workspace_id,
                 )
-            # Cascade: soft-delete conversations scoped to this workspace
-            conn.execute(
-                "UPDATE conversations SET deleted = 1, last_modified = ? WHERE workspace_id = ? AND deleted = 0",
-                (now, workspace_id),
-            )
         return True
 
     def hard_delete_workspace(self, workspace_id: str) -> None:
         """Permanently delete a workspace row. FK CASCADE handles sub-resources."""
+        conversations = self.execute_query(
+            "SELECT id FROM conversations WHERE workspace_id = ? AND scope_type = ?",
+            (workspace_id, "workspace"),
+        ).fetchall()
+        for conversation in conversations:
+            conversation_id = conversation["id"] if isinstance(conversation, dict) else conversation[0]
+            self.hard_delete_conversation(str(conversation_id))
         with self.transaction() as conn:
             conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
 
@@ -16761,7 +16854,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError: For database errors.
         """
-        query = "SELECT id, conversation_id, parent_message_id, sender, content, image_data, image_mime_type, timestamp, ranking, last_modified, version, client_id, deleted FROM messages WHERE id = ? AND deleted = 0"
+        query = (
+            "SELECT m.id, m.conversation_id, m.parent_message_id, m.sender, m.content, "
+            "m.image_data, m.image_mime_type, m.timestamp, m.ranking, m.last_modified, "
+            "m.version, m.client_id, m.deleted "
+            "FROM messages m "
+            "JOIN conversations c ON c.id = m.conversation_id "
+            "WHERE m.id = ? AND m.deleted = 0 AND c.deleted = 0"
+        )
         try:
             cursor = self.execute_query(query, (message_id,))
             row = cursor.fetchone()

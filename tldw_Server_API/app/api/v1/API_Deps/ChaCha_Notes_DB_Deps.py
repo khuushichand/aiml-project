@@ -414,10 +414,10 @@ async def get_chacha_db_for_user_id(user_id: int, client_id: str | None = None) 
     This helper mirrors get_chacha_db_for_user but is intended for non-request contexts
     (e.g., WebSocket handlers) where we already know the user id.
     """
-    if not isinstance(user_id, int):
+    if isinstance(user_id, bool) or not isinstance(user_id, int) or user_id <= 0:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="User identification failed for ChaChaNotes DB.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid owner_user_id.",
         )
 
     db_instance = await _get_or_init_db_instance(user_id, client_id or str(user_id))

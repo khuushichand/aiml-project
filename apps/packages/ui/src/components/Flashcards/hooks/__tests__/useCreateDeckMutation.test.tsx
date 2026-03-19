@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useCreateDeckMutation } from "../useFlashcardQueries"
 import { createDeck, type DeckSchedulerSettings } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
   useServerCapabilities: () => ({
@@ -63,6 +64,11 @@ const schedulerSettings: DeckSchedulerSettings = {
   enable_fuzz: false
 }
 
+const schedulerEnvelope = {
+  ...DEFAULT_SCHEDULER_SETTINGS_ENVELOPE,
+  sm2_plus: schedulerSettings
+}
+
 const buildWrapper = (queryClient: QueryClient) => {
   return ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -91,8 +97,9 @@ describe("useCreateDeckMutation", () => {
       version: 1,
       created_at: "2026-03-13T08:00:00Z",
       last_modified: "2026-03-13T08:00:00Z",
-      scheduler_settings_json: JSON.stringify(schedulerSettings),
-      scheduler_settings: schedulerSettings
+      scheduler_type: "sm2_plus",
+      scheduler_settings_json: JSON.stringify(schedulerEnvelope),
+      scheduler_settings: schedulerEnvelope
     })
 
     const { result } = renderHook(() => useCreateDeckMutation(), {
@@ -103,14 +110,14 @@ describe("useCreateDeckMutation", () => {
       await result.current.mutateAsync({
         name: "  Biology Basics  ",
         description: "  Intro deck  ",
-        scheduler_settings: schedulerSettings
+        scheduler_settings: schedulerEnvelope
       })
     })
 
     expect(createDeck).toHaveBeenCalledWith({
       name: "Biology Basics",
       description: "Intro deck",
-      scheduler_settings: schedulerSettings
+      scheduler_settings: schedulerEnvelope
     })
   })
 })

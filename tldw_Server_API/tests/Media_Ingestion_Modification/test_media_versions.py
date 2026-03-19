@@ -799,6 +799,16 @@ class TestMediaListDetailEndpoints:
         assert isinstance(data["versions"], list)
         assert len(data["versions"]) >= 1 # Should have at least the initial version
 
+    def test_get_media_item_exposes_chunking_and_vector_processing_status(self):
+
+        """Detail responses should expose retrieval readiness state for workspace clients."""
+        doc_id = self.media_ids["document"]
+        response = self.client.get(f"/api/v1/media/{doc_id}")
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "chunking_status" in data["processing"]
+        assert "vector_processing_status" in data["processing"]
+
     def test_get_media_item_video(self):
 
         """Test retrieving details of a video media item."""

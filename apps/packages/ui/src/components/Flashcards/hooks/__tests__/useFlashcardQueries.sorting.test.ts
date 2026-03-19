@@ -20,6 +20,7 @@ const baseCard: Flashcard = {
   interval_days: 0,
   repetitions: 0,
   lapses: 0,
+  queue_state: "new",
   due_at: null,
   created_at: null,
   last_reviewed_at: null,

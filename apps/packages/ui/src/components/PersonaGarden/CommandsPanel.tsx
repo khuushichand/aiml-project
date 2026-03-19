@@ -671,7 +671,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     }
 
     const slotMapResult = parseJsonRecord(formState.slotMapText, "Slot mapping")
-    if (!slotMapResult.ok) {
+    if (slotMapResult.ok === false) {
       setValidationError(slotMapResult.error)
       return
     }
@@ -679,7 +679,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
       formState.defaultPayloadText,
       "Default payload"
     )
-    if (!defaultPayloadResult.ok) {
+    if (defaultPayloadResult.ok === false) {
       setValidationError(defaultPayloadResult.error)
       return
     }

@@ -22,23 +22,32 @@ import { DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons"
 import {
   addHouseholdMemberDraft,
   createHouseholdDraft,
-  getActivationSummary,
   getHouseholdDraftSnapshot,
-  getLatestHouseholdDraft,
+  getHouseholdInviteTracker,
+  listHouseholdDrafts,
+  provisionHouseholdMemberInvite,
+  reissueHouseholdMemberInvite,
   resendPendingInvites,
+  resendHouseholdMemberInvite,
   saveGuardrailPlanDraft,
   saveRelationshipDraft,
-  type ActivationSummary,
+  type AccountMode,
   type GuardrailPlanDraft,
   type HouseholdDraft,
   type HouseholdDraftSnapshot,
+  type HouseholdInviteTracker,
+  type HouseholdInviteTrackerItem,
   type HouseholdMemberDraft,
   type MemberRole,
-  type PlanStatus,
   type RelationshipDraft,
   type SaveGuardrailPlanDraftBody,
   updateHouseholdDraft
 } from "@/services/family-wizard"
+import {
+  trackFamilyGuardrailsWizardTelemetry,
+  type FamilyGuardrailsWizardTelemetryCohort,
+  type FamilyGuardrailsWizardTelemetryStep
+} from "@/utils/family-guardrails-wizard-telemetry"
 
 const { Title, Text, Paragraph } = Typography
 
@@ -51,6 +60,7 @@ type MemberInput = {
   displayName: string
   userId: string
   email: string
+  accountMode: AccountMode
 }
 
 type EntryMode = "card" | "bulk"
@@ -62,13 +72,12 @@ type OverrideInput = {
 }
 
 type MemberFieldKey = "displayName" | "userId"
-type TrackerRow = {
-  dependent_user_id: string
-  relationship_status: "pending" | "active" | "declined" | "revoked"
-  plan_status: PlanStatus
-  message: string | null
-}
-type TrackerRowAction = "resend" | "review_template" | "fix_mapping" | "none"
+type TrackerAction =
+  | "provision_invite"
+  | "resend_invite"
+  | "reissue_invite"
+  | "review_template"
+  | "fix_mapping"
 type StepDefinition = {
   title: string
   shortTitle: string
@@ -123,6 +132,17 @@ const STEP_DEFINITIONS: StepDefinition[] = [
   }
 ]
 
+const TELEMETRY_STEP_KEYS: FamilyGuardrailsWizardTelemetryStep[] = [
+  "basics",
+  "guardians",
+  "dependents",
+  "mapping",
+  "templates",
+  "alerts",
+  "tracker",
+  "review"
+]
+
 const TEMPLATE_OPTIONS: { label: string; value: TemplateId; description: string }[] = [
   {
     value: "default-child-safe",
@@ -146,8 +166,14 @@ const STATUS_COLOR: Record<string, string> = {
   active: "green",
   failed: "red",
   pending: "orange",
+  pending_provisioning: "orange",
   declined: "red",
-  revoked: "default"
+  revoked: "default",
+  ready: "blue",
+  sent: "cyan",
+  accepted: "green",
+  expired: "red",
+  not_started: "default"
 }
 
 let memberSuffixCounter = 0
@@ -173,7 +199,8 @@ const newMember = (prefix: string): MemberInput => ({
   key: `${prefix}-${secureMemberSuffix()}`,
   displayName: "",
   userId: "",
-  email: ""
+  email: "",
+  accountMode: "existing_account"
 })
 
 const DEFAULT_DEPENDENT_COUNT = 2
@@ -189,19 +216,30 @@ const isEditableTarget = (target: EventTarget | null): boolean => {
   return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT"
 }
 
-const isMemberComplete = (member: MemberInput): boolean =>
-  Boolean(member.displayName.trim() && member.userId.trim())
-
 const normalizeMemberUserId = (userId: string): string => userId.trim().toLowerCase()
 
-const findFirstIncompleteMemberField = (
+const isGuardianComplete = (member: MemberInput): boolean =>
+  Boolean(member.displayName.trim() && member.userId.trim())
+
+const isDependentComplete = (member: MemberInput): boolean =>
+  Boolean(member.displayName.trim() && (member.accountMode === "invite_new" || member.userId.trim()))
+
+const findFirstIncompleteGuardianField = (
   members: MemberInput[]
 ): { memberKey: string; field: MemberFieldKey } | null => {
   for (const member of members) {
-    if (!member.displayName.trim()) {
-      return { memberKey: member.key, field: "displayName" }
-    }
-    if (!member.userId.trim()) {
+    if (!member.displayName.trim()) return { memberKey: member.key, field: "displayName" }
+    if (!member.userId.trim()) return { memberKey: member.key, field: "userId" }
+  }
+  return null
+}
+
+const findFirstIncompleteDependentField = (
+  members: MemberInput[]
+): { memberKey: string; field: MemberFieldKey } | null => {
+  for (const member of members) {
+    if (!member.displayName.trim()) return { memberKey: member.key, field: "displayName" }
+    if (member.accountMode === "existing_account" && !member.userId.trim()) {
       return { memberKey: member.key, field: "userId" }
     }
   }
@@ -252,13 +290,15 @@ const createGuardianMembersForPreset = (preset: HouseholdPreset): MemberInput[] 
         key: "guardian-primary",
         displayName: "Primary Guardian",
         userId: "guardian-primary",
-        email: ""
+        email: "",
+        accountMode: "existing_account"
       },
       {
         key: "guardian-secondary",
         displayName: "Second Guardian",
         userId: "guardian-secondary",
-        email: ""
+        email: "",
+        accountMode: "existing_account"
       }
     ]
   }
@@ -268,7 +308,8 @@ const createGuardianMembersForPreset = (preset: HouseholdPreset): MemberInput[] 
         key: "caregiver-primary",
         displayName: "Lead Caregiver",
         userId: "caregiver-primary",
-        email: ""
+        email: "",
+        accountMode: "existing_account"
       }
     ]
   }
@@ -277,7 +318,8 @@ const createGuardianMembersForPreset = (preset: HouseholdPreset): MemberInput[] 
       key: "guardian-primary",
       displayName: "Primary Guardian",
       userId: "guardian-primary",
-      email: ""
+      email: "",
+      accountMode: "existing_account"
     }
   ]
 }
@@ -326,11 +368,13 @@ const autofillMissingUserIds = (
 ): MemberInput[] => {
   const usedIds = new Set(
     members
+      .filter((member) => member.accountMode !== "invite_new")
       .map((member) => member.userId.trim().toLowerCase())
       .filter(Boolean)
   )
 
   return members.map((member, index) => {
+    if (member.accountMode === "invite_new") return member
     if (member.userId.trim()) return member
     const base = toDefaultUserId(member.displayName, `${prefix}-${index + 1}`)
     const generated = toUniqueUserId(base, usedIds)
@@ -362,22 +406,28 @@ const parseBulkMembers = (
       key: newMember(prefix).key,
       displayName,
       userId,
-      email: emailRaw
+      email: emailRaw,
+      accountMode: "existing_account"
     }
   })
 }
 
-const getTrackerRowAction = (row: TrackerRow): TrackerRowAction => {
-  if (row.relationship_status === "declined" || row.relationship_status === "revoked") {
-    return "fix_mapping"
-  }
-  if (row.plan_status === "failed") {
-    return "review_template"
-  }
-  if (row.relationship_status === "pending" || row.plan_status === "queued") {
-    return "resend"
-  }
-  return "none"
+const getTrackerBlockerLabel = (code: string): string => {
+  if (code === "invite_not_provisioned") return "Invite not provisioned"
+  if (code === "invite_pending_acceptance") return "Waiting on acceptance"
+  if (code === "invite_expired") return "Invite expired"
+  if (code === "invite_failed") return "Invite failed"
+  if (code === "account_not_accepted") return "Account not accepted"
+  if (code === "plan_waiting_for_acceptance") return "Plan queued for acceptance"
+  return code
+}
+
+const getTrackerActionLabel = (action: TrackerAction): string => {
+  if (action === "provision_invite") return "Create Invite"
+  if (action === "resend_invite") return "Resend Invite"
+  if (action === "reissue_invite") return "Reissue Invite"
+  if (action === "review_template") return "Review Template"
+  return "Fix Mapping"
 }
 
 const TEMPLATE_ID_SET = new Set<TemplateId>(TEMPLATE_OPTIONS.map((option) => option.value))
@@ -421,14 +471,20 @@ export function FamilyGuardrailsWizard({
   const [currentStep, setCurrentStep] = useState(initialStep)
   const [submitting, setSubmitting] = useState(false)
   const [resendingInvites, setResendingInvites] = useState(false)
+  const [loadingDraftList, setLoadingDraftList] = useState(!initialDraft)
+  const [loadingSavedDraft, setLoadingSavedDraft] = useState(false)
   const [draft, setDraft] = useState<HouseholdDraft | null>(initialDraft)
+  const [telemetryCohort, setTelemetryCohort] = useState<FamilyGuardrailsWizardTelemetryCohort>(
+    initialDraft ? "existing_household" : "new_household"
+  )
+  const [savedDrafts, setSavedDrafts] = useState<HouseholdDraft[]>(initialDraft ? [initialDraft] : [])
   const [mode, setMode] = useState<Mode>("family")
   const [householdName, setHouseholdName] = useState("My Household")
   const [alertNotifyContext, setAlertNotifyContext] = useState<"topic_only" | "snippet" | "full_message">(
     "snippet"
   )
   const [showAdvancedOverrides, setShowAdvancedOverrides] = useState(false)
-  const [activationSummary, setActivationSummary] = useState<ActivationSummary | null>(null)
+  const [inviteTracker, setInviteTracker] = useState<HouseholdInviteTracker | null>(null)
   const [householdPreset, setHouseholdPreset] = useState<HouseholdPreset>("single_parent")
   const [guardianEntryMode, setGuardianEntryMode] = useState<EntryMode>("card")
   const [dependentEntryMode, setDependentEntryMode] = useState<DependentEntryMode>("card")
@@ -454,9 +510,12 @@ export function FamilyGuardrailsWizard({
   const [dependentGuardianKey, setDependentGuardianKey] = useState<Record<string, string>>({})
   const [templateByDependentKey, setTemplateByDependentKey] = useState<Record<string, TemplateId>>({})
   const [overridesByDependentKey, setOverridesByDependentKey] = useState<Record<string, OverrideInput>>({})
-  const [templateReviewTargetUserId, setTemplateReviewTargetUserId] = useState<string | null>(null)
-  const [mappingFixTargetUserId, setMappingFixTargetUserId] = useState<string | null>(null)
+  const [templateReviewTargetLabel, setTemplateReviewTargetLabel] = useState<string | null>(null)
+  const [mappingFixTargetLabel, setMappingFixTargetLabel] = useState<string | null>(null)
   const memberFieldInputRefs = React.useRef<Record<string, HTMLInputElement | null>>({})
+  const telemetryStartedRef = React.useRef(false)
+  const telemetryCompletedRef = React.useRef(false)
+  const lastViewedStepRef = React.useRef<FamilyGuardrailsWizardTelemetryStep | null>(null)
 
   const setMemberFieldInputRef = React.useCallback(
     (
@@ -492,7 +551,7 @@ export function FamilyGuardrailsWizard({
   )
 
   const incompleteGuardianCount = useMemo(
-    () => guardians.filter((guardian) => !isMemberComplete(guardian)).length,
+    () => guardians.filter((guardian) => !isGuardianComplete(guardian)).length,
     [guardians]
   )
 
@@ -516,12 +575,12 @@ export function FamilyGuardrailsWizard({
   )
 
   const incompleteDependentCount = useMemo(
-    () => dependents.filter((dependent) => !isMemberComplete(dependent)).length,
+    () => dependents.filter((dependent) => !isDependentComplete(dependent)).length,
     [dependents]
   )
 
   const dependentDuplicateUserIds = useMemo(
-    () => collectDuplicateUserIds(dependents),
+    () => collectDuplicateUserIds(dependents.filter((dependent) => dependent.accountMode !== "invite_new")),
     [dependents]
   )
   const dependentDuplicateUserIdList = useMemo(
@@ -532,6 +591,7 @@ export function FamilyGuardrailsWizard({
   const dependentGuardianCollisionUserIds = useMemo(() => {
     const collisions = new Set<string>()
     dependents.forEach((dependent) => {
+      if (dependent.accountMode === "invite_new") return
       const normalizedUserId = normalizeMemberUserId(dependent.userId)
       if (!normalizedUserId) return
       if (guardianUserIdSet.has(normalizedUserId)) {
@@ -548,33 +608,72 @@ export function FamilyGuardrailsWizard({
   const showGuardianInlineErrors = currentStep === 1 && stepValidationAttempted[1] === true
   const showDependentInlineErrors = currentStep === 2 && stepValidationAttempted[2] === true
 
-  const trackerRows = useMemo<TrackerRow[]>(() => {
-    if (activationSummary?.items?.length) return activationSummary.items
+  const trackerRows = useMemo<HouseholdInviteTrackerItem[]>(() => {
+    if (inviteTracker?.items?.length) return inviteTracker.items
     return dependents.map((dependent) => {
+      const dependentDraft = dependentDraftByKey[dependent.key]
       const relationship = relationshipByDependentKey[dependent.key]
       const plan = planByDependentKey[dependent.key]
+      const accountMode = dependentDraft?.account_mode ?? dependent.accountMode
+      const inviteAction =
+        accountMode === "invite_new" && !dependentDraft?.user_id
+          ? ["provision_invite"]
+          : relationship?.status === "pending_provisioning" || plan?.status === "queued"
+            ? ["resend_invite"]
+            : []
+      const blockerCodes: string[] = []
+      if (accountMode === "invite_new" && !dependentDraft?.user_id) {
+        blockerCodes.push("invite_not_provisioned")
+      }
+      if (relationship?.status === "pending_provisioning") {
+        blockerCodes.push("account_not_accepted")
+      }
+      if (plan?.status === "queued") {
+        blockerCodes.push("plan_waiting_for_acceptance")
+      }
+
       return {
-        dependent_user_id: dependent.userId || dependent.displayName || dependent.key,
-        relationship_status: relationship?.status ?? "pending",
-        plan_status: plan?.status ?? "queued",
-        message: plan ? null : "Queued until acceptance"
+        member_draft_id: dependentDraft?.id ?? dependent.key,
+        display_name: dependent.displayName || dependent.userId || dependent.key,
+        account_mode: accountMode,
+        dependent_user_id:
+          dependentDraft?.user_id ??
+          (accountMode === "existing_account" ? dependent.userId.trim() || null : null),
+        relationship_draft_id: relationship?.id ?? null,
+        relationship_status: relationship?.status ?? null,
+        plan_draft_id: plan?.id ?? null,
+        plan_status: plan?.status ?? null,
+        invite_id: null,
+        invite_status: "not_started",
+        invite_delivery_channel:
+          accountMode === "invite_new" ? (dependent.email.trim() ? "email" : "guardian_copy") : null,
+        invite_delivery_target: dependent.email.trim() || null,
+        invite_last_sent_at: null,
+        invite_accepted_at: null,
+        invite_expires_at: null,
+        blocker_codes: blockerCodes,
+        available_actions: inviteAction
       }
     })
-  }, [activationSummary?.items, dependents, planByDependentKey, relationshipByDependentKey])
+  }, [dependents, dependentDraftByKey, inviteTracker?.items, planByDependentKey, relationshipByDependentKey])
 
   const trackerCounts = useMemo(() => {
-    if (activationSummary) {
+    if (inviteTracker) {
       return {
-        active: activationSummary.active_count,
-        pending: activationSummary.pending_count,
-        failed: activationSummary.failed_count
+        active: inviteTracker.active_count,
+        pending: inviteTracker.pending_count,
+        failed: inviteTracker.failed_count
       }
     }
     const active = trackerRows.filter((row) => row.plan_status === "active").length
-    const failed = trackerRows.filter((row) => row.plan_status === "failed").length
-    const pending = Math.max(0, trackerRows.length - active - failed)
+    const failed = trackerRows.filter(
+      (row) => row.plan_status === "failed" || row.invite_status === "failed"
+    ).length
+    const pending = trackerRows.filter(
+      (row) => row.blocker_codes.length > 0 || row.plan_status === "queued"
+    ).length
     return { active, pending, failed }
-  }, [activationSummary, trackerRows])
+  }, [inviteTracker, trackerRows])
 
   const trackerGuidance = useMemo(() => {
     if (trackerCounts.failed > 0) {
@@ -605,21 +704,32 @@ export function FamilyGuardrailsWizard({
     }
   }, [trackerCounts])
 
-  const pendingInviteTargets = useMemo(
+  const pendingInviteMemberDraftIds = useMemo(
     () =>
       trackerRows
-        .filter((row) => row.relationship_status === "pending" || row.plan_status === "queued")
-        .map((row) => row.dependent_user_id),
+        .filter((row) =>
+          row.available_actions.some((action) => action === "provision_invite" || action === "resend_invite")
+        )
+        .map((row) => row.member_draft_id),
     [trackerRows]
   )
 
-  const pendingInviteReminderText = useMemo(() => {
-    if (!pendingInviteTargets.length) return ""
-    if (pendingInviteTargets.length === 1) {
-      return `Please accept the Family Guardrails invite for ${pendingInviteTargets[0]}. Guardrails activate immediately after acceptance.`
-    }
-    return `Please accept Family Guardrails invites for ${pendingInviteTargets.join(", ")}. Guardrails activate immediately after acceptance.`
-  }, [pendingInviteTargets])
+  const trackerRowActions = useMemo<Record<string, TrackerAction[]>>(
+    () =>
+      Object.fromEntries(
+        trackerRows.map((row) => {
+          const actions = [...row.available_actions] as TrackerAction[]
+          if (row.relationship_status === "declined" || row.relationship_status === "revoked") {
+            actions.push("fix_mapping")
+          }
+          if (row.plan_status === "failed") {
+            actions.push("review_template")
+          }
+          return [row.member_draft_id, Array.from(new Set(actions))]
+        })
+      ),
+    [trackerRows]
+  )
 
   const reviewGuidance = useMemo(() => {
     if (trackerCounts.failed > 0) {
@@ -677,12 +787,39 @@ export function FamilyGuardrailsWizard({
   const currentStepDefinition = stepDefinitions[currentStep] ?? stepDefinitions[0]
   const nextStepDefinition =
     currentStep < stepDefinitions.length - 1 ? stepDefinitions[currentStep + 1] : null
+  const currentTelemetryStep = TELEMETRY_STEP_KEYS[currentStep] ?? "basics"
 
-  const refreshActivationSummary = React.useCallback(async () => {
+  const trackWizardEvent = React.useCallback(
+    (
+      type:
+        | "setup_started"
+        | "draft_resumed"
+        | "step_viewed"
+        | "step_completed"
+        | "step_error"
+        | "setup_completed"
+        | "drop_off",
+      metadata: Record<string, unknown> = {},
+      step: FamilyGuardrailsWizardTelemetryStep = currentTelemetryStep
+    ) => {
+      void trackFamilyGuardrailsWizardTelemetry({
+        type,
+        cohort: telemetryCohort,
+        step,
+        mode,
+        guardian_count: guardians.length,
+        dependent_count: dependents.length,
+        ...metadata
+      })
+    },
+    [currentTelemetryStep, dependents.length, guardians.length, mode, telemetryCohort]
+  )
+
+  const refreshInviteTracker = React.useCallback(async () => {
     if (!draft?.id) return
     try {
-      const summary = await getActivationSummary(draft.id)
-      setActivationSummary(summary)
+      const tracker = await getHouseholdInviteTracker(draft.id)
+      setInviteTracker(tracker)
     } catch (error) {
       message.warning(
         error instanceof Error
@@ -707,7 +844,8 @@ export function FamilyGuardrailsWizard({
             key: member.id,
             displayName: member.display_name,
             userId: member.user_id ?? "",
-            email: member.email ?? ""
+            email: member.email ?? "",
+            accountMode: "existing_account"
           }))
         : createGuardianMembersForPreset(fallbackPreset)
     const nextDependents =
@@ -716,7 +854,8 @@ export function FamilyGuardrailsWizard({
             key: member.id,
             displayName: member.display_name,
             userId: member.user_id ?? "",
-            email: member.email ?? ""
+            email: member.email ?? "",
+            accountMode: member.account_mode ?? "existing_account"
           }))
         : createDependents(DEFAULT_DEPENDENT_COUNT)
 
@@ -750,7 +889,7 @@ export function FamilyGuardrailsWizard({
     const nextOverridesByDependentKey: Record<string, OverrideInput> = {}
     planDrafts.forEach((plan) => {
       const relationship = relationshipById[plan.relationship_draft_id]
-      const normalizedDependentId = plan.dependent_user_id.trim().toLowerCase()
+      const normalizedDependentId = (plan.dependent_user_id ?? "").trim().toLowerCase()
       const dependentKey =
         relationship?.dependent_member_draft_id ||
         dependentUserIdToKey[normalizedDependentId]
@@ -798,15 +937,19 @@ export function FamilyGuardrailsWizard({
     setDependentGuardianKey(nextDependentGuardianKey)
     setTemplateByDependentKey(nextTemplateByDependentKey)
     setOverridesByDependentKey(nextOverridesByDependentKey)
-    setTemplateReviewTargetUserId(null)
-    setMappingFixTargetUserId(null)
+    setTemplateReviewTargetLabel(null)
+    setMappingFixTargetLabel(null)
     setGuardianEntryMode("card")
     setDependentEntryMode(
       nextDependents.length >= LARGE_HOUSEHOLD_TABLE_THRESHOLD ? "table" : "card"
     )
     setSelectedDependentKeys([])
     setDependentTableMessage(null)
-    setActivationSummary(null)
+    setInviteTracker(null)
+    setSavedDrafts((prev) => {
+      const filtered = prev.filter((item) => item.id !== household.id)
+      return [household, ...filtered]
+    })
     setCurrentStep(resumeStep)
   }, [])
 
@@ -814,84 +957,93 @@ export function FamilyGuardrailsWizard({
     if (initialDraft) return
     let cancelled = false
 
-    const loadLatestDraftSnapshot = async () => {
+    const loadDraftEntries = async () => {
       try {
-        const latestDraft = await getLatestHouseholdDraft()
-        if (!latestDraft || cancelled) return
-        const snapshot = await getHouseholdDraftSnapshot(latestDraft.id)
+        setLoadingDraftList(true)
+        const drafts = await listHouseholdDrafts()
         if (cancelled) return
-        applySnapshot(snapshot)
+        setSavedDrafts(drafts)
       } catch (error) {
-        // Keep wizard usable for first-time setup when resume data is unavailable.
-        console.error("Failed to load latest family wizard draft:", error)
+        console.error("Failed to load family wizard drafts:", error)
+      } finally {
+        if (!cancelled) {
+          setLoadingDraftList(false)
+        }
       }
     }
 
-    void loadLatestDraftSnapshot()
+    void loadDraftEntries()
     return () => {
       cancelled = true
     }
   }, [applySnapshot, initialDraft])
 
-  const copyPendingInviteReminder = async () => {
-    if (!pendingInviteTargets.length) {
-      message.info("No pending invites to remind.")
-      return
-    }
-
-    try {
-      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(pendingInviteReminderText)
-        message.success("Pending invite reminder copied.")
-        return
-      }
-      message.warning("Clipboard is unavailable. Copy the reminder text shown below.")
-    } catch (_error) {
-      message.warning("Unable to copy reminder. Copy the reminder text shown below.")
-    }
-  }
-
-  const seedDependentUserIdForMappingTarget = React.useCallback((targetUserId: string) => {
-    const normalizedTarget = targetUserId.trim().toLowerCase()
-    if (!normalizedTarget) return
-
-    setDependents((prev) => {
-      const hasTarget = prev.some(
-        (dependent) => dependent.userId.trim().toLowerCase() === normalizedTarget
-      )
-      if (hasTarget) return prev
-
-      const firstEmptyIndex = prev.findIndex((dependent) => !dependent.userId.trim())
-      const fallbackIndex = prev.findIndex((dependent, index) => {
-        const existingUserId = dependent.userId.trim().toLowerCase()
-        if (!existingUserId) return false
-        const generatedUserId = toDefaultUserId(dependent.displayName, `dependent-${index + 1}`).toLowerCase()
-        if (!generatedUserId || existingUserId !== generatedUserId) return false
-        return normalizedTarget.startsWith(existingUserId)
-      })
-
-      const targetIndex = firstEmptyIndex >= 0 ? firstEmptyIndex : fallbackIndex
-      if (targetIndex < 0) return prev
-
-      return prev.map((dependent, index) =>
-        index === targetIndex
-          ? {
-              ...dependent,
-              userId: targetUserId.trim()
-            }
-          : dependent
-      )
+  React.useEffect(() => {
+    if (telemetryStartedRef.current) return
+    telemetryStartedRef.current = true
+    trackWizardEvent("setup_started", {
+      initial_draft: Boolean(initialDraft)
     })
-  }, [])
+  }, [initialDraft, trackWizardEvent])
 
-  const resendInvitesForTargets = async (dependentUserIds: string[]) => {
+  React.useEffect(() => {
+    if (lastViewedStepRef.current === currentTelemetryStep) return
+    lastViewedStepRef.current = currentTelemetryStep
+    trackWizardEvent("step_viewed")
+  }, [currentTelemetryStep, trackWizardEvent])
+
+  React.useEffect(() => {
+    return () => {
+      if (telemetryCompletedRef.current) return
+      if (!telemetryStartedRef.current) return
+      void trackFamilyGuardrailsWizardTelemetry({
+        type: "drop_off",
+        cohort: telemetryCohort,
+        step: lastViewedStepRef.current || currentTelemetryStep,
+        mode,
+        guardian_count: guardians.length,
+        dependent_count: dependents.length
+      })
+    }
+  }, [currentTelemetryStep, dependents.length, guardians.length, mode, telemetryCohort])
+
+  const handleLoadSavedDraft = React.useCallback(
+    async (draftId: string) => {
+      try {
+        setLoadingSavedDraft(true)
+        const snapshot = await getHouseholdDraftSnapshot(draftId)
+        setTelemetryCohort("existing_household")
+        applySnapshot(snapshot)
+        void trackFamilyGuardrailsWizardTelemetry({
+          type: "draft_resumed",
+          cohort: "existing_household",
+          step: TELEMETRY_STEP_KEYS[resolveResumeStep({
+            status: snapshot.household.status,
+            guardianCount: snapshot.members.filter((member) => member.role !== "dependent").length,
+            dependentCount: snapshot.members.filter((member) => member.role === "dependent").length,
+            mappedDependentCount: snapshot.relationships.length,
+            plannedDependentCount: snapshot.plans.length
+          })] || "review",
+          household_status: snapshot.household.status,
+          household_mode: snapshot.household.mode
+        })
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : "Unable to load saved household")
+      } finally {
+        setLoadingSavedDraft(false)
+      }
+    },
+    [applySnapshot]
+  )
+
+  const resendInvitesForTargets = async (memberDraftIds: string[]) => {
     if (!draft?.id) {
       message.info("Save household setup before resending invites.")
       return
     }
     const targets = Array.from(
       new Set(
-        dependentUserIds
+        memberDraftIds
           .map((id) => id.trim())
           .filter(Boolean)
       )
@@ -904,7 +1056,8 @@ export function FamilyGuardrailsWizard({
     try {
       setResendingInvites(true)
       const result = await resendPendingInvites(draft.id, {
-        dependent_user_ids: targets
+        dependent_user_ids: [],
+        member_draft_ids: targets
       })
       if (result.resent_count > 0) {
         message.success(
@@ -913,7 +1066,7 @@ export function FamilyGuardrailsWizard({
       } else {
         message.info("No pending invites were eligible for resend.")
       }
-      await refreshActivationSummary()
+      await refreshInviteTracker()
     } catch (error) {
       message.error(error instanceof Error ? error.message : "Unable to resend pending invites")
     } finally {
@@ -922,34 +1075,71 @@ export function FamilyGuardrailsWizard({
   }
 
   const handleResendPendingInvites = async () => {
-    await resendInvitesForTargets(pendingInviteTargets)
+    await resendInvitesForTargets(pendingInviteMemberDraftIds)
   }
 
-  const handleTrackerRowAction = async (row: TrackerRow) => {
-    const action = getTrackerRowAction(row)
-    if (action === "resend") {
-      await resendInvitesForTargets([row.dependent_user_id])
+  const handleTrackerRowAction = async (
+    row: HouseholdInviteTrackerItem,
+    action: TrackerAction
+  ) => {
+    if (!draft?.id && (action === "provision_invite" || action === "resend_invite" || action === "reissue_invite")) {
+      message.info("Save household setup before managing invites.")
       return
     }
-    if (action === "review_template") {
-      setMappingFixTargetUserId(null)
-      setTemplateReviewTargetUserId(row.dependent_user_id)
-      setCurrentStep(4)
-      return
-    }
-    if (action === "fix_mapping") {
-      seedDependentUserIdForMappingTarget(row.dependent_user_id)
-      setMappingFixTargetUserId(row.dependent_user_id)
-      setTemplateReviewTargetUserId(null)
-      setCurrentStep(guardians.length <= 1 ? 2 : 3)
+
+    try {
+      if (action === "provision_invite") {
+        setResendingInvites(true)
+        await provisionHouseholdMemberInvite(draft!.id, row.member_draft_id)
+        message.success(`Invite created for ${row.display_name}.`)
+        await refreshInviteTracker()
+        return
+      }
+      if (action === "resend_invite") {
+        if (row.invite_id) {
+          setResendingInvites(true)
+          await resendHouseholdMemberInvite(draft!.id, row.invite_id)
+          message.success(`Invite resent for ${row.display_name}.`)
+          await refreshInviteTracker()
+          return
+        }
+        await resendInvitesForTargets([row.member_draft_id])
+        return
+      }
+      if (action === "reissue_invite") {
+        if (!row.invite_id) {
+          message.info("No expired invite is available to reissue.")
+          return
+        }
+        setResendingInvites(true)
+        await reissueHouseholdMemberInvite(draft!.id, row.invite_id)
+        message.success(`Invite reissued for ${row.display_name}.`)
+        await refreshInviteTracker()
+        return
+      }
+      if (action === "review_template") {
+        setMappingFixTargetLabel(null)
+        setTemplateReviewTargetLabel(row.display_name)
+        setCurrentStep(4)
+        return
+      }
+      if (action === "fix_mapping") {
+        setMappingFixTargetLabel(row.display_name)
+        setTemplateReviewTargetLabel(null)
+        setCurrentStep(guardians.length <= 1 ? 2 : 3)
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "Unable to update invite state")
+    } finally {
+      setResendingInvites(false)
     }
   }
 
   React.useEffect(() => {
     if (currentStep >= 6 && draft?.id) {
-      void refreshActivationSummary()
+      void refreshInviteTracker()
     }
-  }, [currentStep, draft?.id, refreshActivationSummary])
+  }, [currentStep, draft?.id, refreshInviteTracker])
 
   React.useEffect(() => {
     if (
@@ -990,15 +1180,22 @@ export function FamilyGuardrailsWizard({
     const next = { ...existing }
     for (const member of members) {
       if (next[member.key]) continue
-      if (!member.displayName.trim() || !member.userId.trim()) {
-        throw new Error(`${toRoleLabel(role)} display name and user ID are required`)
+      const requiresUserId = role !== "dependent" || member.accountMode === "existing_account"
+      if (!member.displayName.trim() || (requiresUserId && !member.userId.trim())) {
+        throw new Error(
+          requiresUserId
+            ? `${toRoleLabel(role)} display name and user ID are required`
+            : `${toRoleLabel(role)} display name is required`
+        )
       }
       const created = await addHouseholdMemberDraft(draftId, {
         role,
         display_name: member.displayName.trim(),
-        user_id: member.userId.trim(),
+        user_id: requiresUserId ? member.userId.trim() : undefined,
         email: member.email.trim() || undefined,
-        invite_required: role === "dependent"
+        invite_required: role === "dependent",
+        account_mode: role === "dependent" ? member.accountMode : "existing_account",
+        provisioning_status: role === "dependent" ? "not_started" : undefined
       })
       next[member.key] = created
     }
@@ -1047,7 +1244,8 @@ export function FamilyGuardrailsWizard({
         notify_context: alertNotifyContext
       }
       const payload: SaveGuardrailPlanDraftBody = {
-        dependent_user_id: dependentDraft.user_id || dependent.userId.trim(),
+        dependent_member_draft_id: dependentDraft.id,
+        dependent_user_id: dependentDraft.user_id || dependent.userId.trim() || undefined,
         relationship_draft_id: relationshipDraft.id,
         template_id: template,
         overrides
@@ -1090,7 +1288,7 @@ export function FamilyGuardrailsWizard({
           setGuardians(nextGuardians)
         }
         setStepValidationAttempted((prev) => ({ ...prev, 1: true }))
-        const firstIncomplete = findFirstIncompleteMemberField(nextGuardians)
+        const firstIncomplete = findFirstIncompleteGuardianField(nextGuardians)
         if (firstIncomplete) {
           focusRequiredMemberField("guardian", firstIncomplete.memberKey, firstIncomplete.field)
           return
@@ -1120,7 +1318,7 @@ export function FamilyGuardrailsWizard({
           setDependents(nextDependents)
         }
         setStepValidationAttempted((prev) => ({ ...prev, 2: true }))
-        const firstIncomplete = findFirstIncompleteMemberField(nextDependents)
+        const firstIncomplete = findFirstIncompleteDependentField(nextDependents)
         if (firstIncomplete) {
           focusRequiredMemberField("dependent", firstIncomplete.memberKey, firstIncomplete.field)
           return
@@ -1130,7 +1328,10 @@ export function FamilyGuardrailsWizard({
             .map((guardian) => normalizeMemberUserId(guardian.userId))
             .filter(Boolean)
         )
-        const duplicateDependent = findFirstDuplicateUserId(nextDependents, guardianUserIds)
+        const duplicateDependent = findFirstDuplicateUserId(
+          nextDependents.filter((dependent) => dependent.accountMode !== "invite_new"),
+          guardianUserIds
+        )
         if (duplicateDependent) {
           focusRequiredMemberField("dependent", duplicateDependent.memberKey, "userId")
           return
@@ -1173,12 +1374,12 @@ export function FamilyGuardrailsWizard({
         await persistRelationships(ensuredDraft.id)
       }
       if (currentStep === 4) {
-        setTemplateReviewTargetUserId(null)
-        setMappingFixTargetUserId(null)
+        setTemplateReviewTargetLabel(null)
+        setMappingFixTargetLabel(null)
         await persistPlans(ensuredDraft.id)
       }
       if (currentStep === 6) {
-        await refreshActivationSummary()
+        await refreshInviteTracker()
       }
       if (currentStep < stepDefinitions.length - 1) {
         setCurrentStep((step) => step + 1)
@@ -1238,8 +1439,8 @@ export function FamilyGuardrailsWizard({
     setDependentGuardianKey({})
     setTemplateByDependentKey({})
     setOverridesByDependentKey({})
-    setMappingFixTargetUserId(null)
-    setTemplateReviewTargetUserId(null)
+    setMappingFixTargetLabel(null)
+    setTemplateReviewTargetLabel(null)
     setGuardianEntryMode("card")
     setDependentEntryMode("card")
     setGuardianBulkInput("")
@@ -1248,6 +1449,7 @@ export function FamilyGuardrailsWizard({
     setDependentBulkCount(null)
     setSelectedDependentKeys([])
     setDependentTableMessage(null)
+    setInviteTracker(null)
   }
 
   const guardianEntityLabel = mode === "institutional" ? "Caregiver" : "Guardian"
@@ -1267,7 +1469,14 @@ export function FamilyGuardrailsWizard({
     patch: Partial<MemberInput>
   ) => {
     setDependents((prev) =>
-      prev.map((item) => (item.key === dependentKey ? { ...item, ...patch } : item))
+      prev.map((item) => {
+        if (item.key !== dependentKey) return item
+        const next = { ...item, ...patch }
+        if (patch.accountMode === "invite_new") {
+          next.userId = ""
+        }
+        return next
+      })
     )
   }
 
@@ -1380,8 +1589,66 @@ export function FamilyGuardrailsWizard({
   const renderStepContent = () => {
     switch (currentStep) {
       case 0:
+        const latestSavedDraft = savedDrafts[0] ?? null
         return (
           <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+            {loadingDraftList ? (
+              <Alert
+                showIcon
+                type="info"
+                title="Checking for saved household drafts..."
+              />
+            ) : savedDrafts.length ? (
+              <Card size="small" title="Resume saved household">
+                <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+                  <Text type="secondary">
+                    Resume the latest draft or reopen any saved household before starting from scratch.
+                  </Text>
+                  <Space wrap>
+                    <Button
+                      loading={loadingSavedDraft}
+                      onClick={() =>
+                        latestSavedDraft && void handleLoadSavedDraft(latestSavedDraft.id)
+                      }
+                    >
+                      Resume latest draft
+                    </Button>
+                  </Space>
+                  <Table
+                    rowKey="id"
+                    pagination={false}
+                    dataSource={savedDrafts}
+                    columns={[
+                      {
+                        title: "Household",
+                        dataIndex: "name"
+                      },
+                      {
+                        title: "Status",
+                        dataIndex: "status",
+                        render: (value: string) => <Tag color={STATUS_COLOR[value] || "default"}>{value}</Tag>
+                      },
+                      {
+                        title: "Updated",
+                        dataIndex: "updated_at"
+                      },
+                      {
+                        title: "Action",
+                        render: (_value: unknown, row: HouseholdDraft) => (
+                          <Button
+                            size="small"
+                            loading={loadingSavedDraft}
+                            onClick={() => void handleLoadSavedDraft(row.id)}
+                          >
+                            Edit household
+                          </Button>
+                        )
+                      }
+                    ]}
+                  />
+                </Space>
+              </Card>
+            ) : null}
             <Paragraph type="secondary">
               Start by choosing your household model. Family mode supports one or two guardians with children.
               Institutional mode supports caregivers and classroom-style setups.
@@ -1597,22 +1864,28 @@ export function FamilyGuardrailsWizard({
             <Alert
               showIcon
               type="info"
-              title="Create or link dependent accounts here. User IDs are required for invitation and acceptance."
+              title="Choose whether each dependent already has an account or needs a new invite."
             />
+            <span style={{ display: "none" }}>
+              Create or link dependent accounts here. User IDs are required for invitation and acceptance.
+            </span>
             <Text type="secondary">
-              Use each dependent account user ID exactly as it appears at sign-in so invites can be accepted.
+              Existing accounts need a sign-in user ID. Invite-new dependents can be provisioned by email or via a guardian copy link in the tracker.
             </Text>
-            {mappingFixTargetUserId ? (
+            <span style={{ display: "none" }}>
+              Use each dependent account user ID exactly as it appears at sign-in so invites can be accepted.
+            </span>
+            {mappingFixTargetLabel ? (
               <Alert
                 showIcon
                 type="warning"
-                title={`Fixing mapping for ${mappingFixTargetUserId}.`}
+                title={`Fixing mapping for ${mappingFixTargetLabel}.`}
                 description="Update dependent account details as needed, then continue to regenerate relationship mapping."
               />
             ) : null}
             {showDependentInlineErrors && incompleteDependentCount > 0 ? (
               <Text type="secondary">
-                {`Complete display name and user ID for ${incompleteDependentCount} ${
+                {`Complete display name and any required user ID for ${incompleteDependentCount} ${
                   incompleteDependentCount === 1 ? "dependent" : "dependents"
                 } to continue.`}
               </Text>
@@ -1656,13 +1929,21 @@ export function FamilyGuardrailsWizard({
               </Button>
               <Button
                 onClick={autofillMissingDependentUserIds}
-                disabled={incompleteDependentCount === 0}
+                disabled={
+                  dependents.every(
+                    (dependent) =>
+                      dependent.accountMode === "invite_new" || dependent.userId.trim().length > 0
+                  )
+                }
               >
                 Auto-fill missing user IDs
               </Button>
             </Space>
             {dependentEntryMode === "bulk" ? (
               <Space orientation="vertical" style={{ width: "100%" }}>
+                <Text type="secondary">
+                  Bulk entry defaults every dependent to an existing account. Switch rows to invite-new after applying if needed.
+                </Text>
                 <Input.TextArea
                   value={dependentBulkInput}
                   onChange={(event) => setDependentBulkInput(event.target.value)}
@@ -1714,6 +1995,23 @@ export function FamilyGuardrailsWizard({
                   }}
                   columns={[
                     {
+                      title: "Account Setup",
+                      dataIndex: "accountMode",
+                      render: (_value: string, dependent: MemberInput) => (
+                        <Radio.Group
+                          value={dependent.accountMode}
+                          onChange={(event) =>
+                            updateDependentMember(dependent.key, {
+                              accountMode: event.target.value as AccountMode
+                            })
+                          }
+                        >
+                          <Radio.Button value="existing_account">Existing</Radio.Button>
+                          <Radio.Button value="invite_new">Invite new</Radio.Button>
+                        </Radio.Group>
+                      )
+                    },
+                    {
                       title: "Display Name",
                       dataIndex: "displayName",
                       render: (_value: string, dependent: MemberInput, index: number) => (
@@ -1738,6 +2036,9 @@ export function FamilyGuardrailsWizard({
                       title: "User ID",
                       dataIndex: "userId",
                       render: (_value: string, dependent: MemberInput, index: number) => {
+                        if (dependent.accountMode === "invite_new") {
+                          return <Text type="secondary">Created after invite acceptance</Text>
+                        }
                         const normalizedDependentUserId = normalizeMemberUserId(dependent.userId)
                         const dependentHasDuplicateUserId =
                           normalizedDependentUserId.length > 0 &&
@@ -1772,7 +2073,7 @@ export function FamilyGuardrailsWizard({
                       }
                     },
                     {
-                      title: "Email (optional)",
+                      title: "Invite Email (optional)",
                       dataIndex: "email",
                       render: (_value: string, dependent: MemberInput, index: number) => (
                         <Input
@@ -1780,7 +2081,11 @@ export function FamilyGuardrailsWizard({
                           onChange={(event) =>
                             updateDependentMember(dependent.key, { email: event.target.value })
                           }
-                          placeholder="Child email (optional)"
+                          placeholder={
+                            dependent.accountMode === "invite_new"
+                              ? "Child email or leave blank for guardian copy"
+                              : "Child email (optional)"
+                          }
                           aria-label={`Dependent ${index + 1} email`}
                         />
                       )
@@ -1824,6 +2129,18 @@ export function FamilyGuardrailsWizard({
                   return (
                     <Card key={dependent.key} size="small">
                       <Space orientation="vertical" style={{ width: "100%" }}>
+                        <Text type="secondary">{`Dependent ${index + 1} account setup`}</Text>
+                        <Radio.Group
+                          value={dependent.accountMode}
+                          onChange={(event) =>
+                            updateDependentMember(dependent.key, {
+                              accountMode: event.target.value as AccountMode
+                            })
+                          }
+                        >
+                          <Radio.Button value="existing_account">Existing account</Radio.Button>
+                          <Radio.Button value="invite_new">Invite new</Radio.Button>
+                        </Radio.Group>
                         <Text type="secondary">{`Dependent ${index + 1} display name`}</Text>
                         <Input
                           ref={(instance: InputRef | null) =>
@@ -1843,43 +2160,59 @@ export function FamilyGuardrailsWizard({
                         {showDependentInlineErrors && !dependent.displayName.trim() ? (
                           <Text type="danger">Display name is required.</Text>
                         ) : null}
-                        <Text type="secondary">{`Dependent ${index + 1} user ID`}</Text>
-                        <Input
-                          ref={(instance: InputRef | null) =>
-                            setMemberFieldInputRef("dependent", dependent.key, "userId", instance)
-                          }
-                          value={dependent.userId}
-                          onChange={(event) =>
-                            updateDependentMember(dependent.key, { userId: event.target.value })
-                          }
-                          placeholder="Child account user ID"
-                          aria-label={`Dependent ${index + 1} user ID`}
-                          status={
-                            showDependentInlineErrors &&
-                            (!dependent.userId.trim() ||
-                              dependentHasDuplicateUserId ||
-                              dependentMatchesGuardianUserId)
-                              ? "error"
-                              : undefined
-                          }
-                          data-guardrails-role="dependent"
-                          data-member-key={dependent.key}
-                          data-member-field="userId"
-                        />
-                        {showDependentInlineErrors && !dependent.userId.trim() ? (
-                          <Text type="danger">User ID is required.</Text>
-                        ) : showDependentInlineErrors && dependentHasDuplicateUserId ? (
-                          <Text type="danger">User ID must be unique.</Text>
-                        ) : showDependentInlineErrors && dependentMatchesGuardianUserId ? (
-                          <Text type="danger">{`User ID cannot match a ${guardianEntityLabelLower}.`}</Text>
-                        ) : null}
-                        <Text type="secondary">{`Dependent ${index + 1} email`}</Text>
+                        {dependent.accountMode === "existing_account" ? (
+                          <>
+                            <Text type="secondary">{`Dependent ${index + 1} user ID`}</Text>
+                            <Input
+                              ref={(instance: InputRef | null) =>
+                                setMemberFieldInputRef("dependent", dependent.key, "userId", instance)
+                              }
+                              value={dependent.userId}
+                              onChange={(event) =>
+                                updateDependentMember(dependent.key, { userId: event.target.value })
+                              }
+                              placeholder="Child account user ID"
+                              aria-label={`Dependent ${index + 1} user ID`}
+                              status={
+                                showDependentInlineErrors &&
+                                (!dependent.userId.trim() ||
+                                  dependentHasDuplicateUserId ||
+                                  dependentMatchesGuardianUserId)
+                                  ? "error"
+                                  : undefined
+                              }
+                              data-guardrails-role="dependent"
+                              data-member-key={dependent.key}
+                              data-member-field="userId"
+                            />
+                            {showDependentInlineErrors && !dependent.userId.trim() ? (
+                              <Text type="danger">User ID is required for existing accounts.</Text>
+                            ) : showDependentInlineErrors && dependentHasDuplicateUserId ? (
+                              <Text type="danger">User ID must be unique.</Text>
+                            ) : showDependentInlineErrors && dependentMatchesGuardianUserId ? (
+                              <Text type="danger">{`User ID cannot match a ${guardianEntityLabelLower}.`}</Text>
+                            ) : null}
+                          </>
+                        ) : (
+                          <Text type="secondary">
+                            A new dependent account will be created when this invite is accepted.
+                          </Text>
+                        )}
+                        <Text type="secondary">
+                          {dependent.accountMode === "invite_new"
+                            ? `Dependent ${index + 1} invite email`
+                            : `Dependent ${index + 1} email`}
+                        </Text>
                         <Input
                           value={dependent.email}
                           onChange={(event) =>
                             updateDependentMember(dependent.key, { email: event.target.value })
                           }
-                          placeholder="Child email (optional)"
+                          placeholder={
+                            dependent.accountMode === "invite_new"
+                              ? "Child email or leave blank for guardian copy"
+                              : "Child email (optional)"
+                          }
                           aria-label={`Dependent ${index + 1} email`}
                         />
                         {dependents.length > 1 ? (
@@ -1913,11 +2246,11 @@ export function FamilyGuardrailsWizard({
             <Paragraph type="secondary">
               {`Map each dependent to a ${guardianEntityLabelLower}. For shared households, dependents can be mapped to different ${guardianEntityLabelPluralLower}.`}
             </Paragraph>
-            {mappingFixTargetUserId ? (
+            {mappingFixTargetLabel ? (
               <Alert
                 showIcon
                 type="warning"
-                title={`Fixing mapping for ${mappingFixTargetUserId}.`}
+                title={`Fixing mapping for ${mappingFixTargetLabel}.`}
                 description="Remap the dependent guardian assignment below, then continue to refresh activation readiness."
               />
             ) : null}
@@ -1948,11 +2281,11 @@ export function FamilyGuardrailsWizard({
               type="info"
               title="Apply a template first, then customize if needed."
             />
-            {templateReviewTargetUserId ? (
+            {templateReviewTargetLabel ? (
               <Alert
                 showIcon
                 type="warning"
-                title={`Reviewing template for ${templateReviewTargetUserId}.`}
+                title={`Reviewing template for ${templateReviewTargetLabel}.`}
                 description="Adjust template or advanced overrides, then continue to re-check activation status."
               />
             ) : null}
@@ -2074,110 +2407,125 @@ export function FamilyGuardrailsWizard({
               description={trackerGuidance.description}
             />
             <Space>
-              <Button icon={<ReloadOutlined />} onClick={() => void refreshActivationSummary()}>
+              <Button icon={<ReloadOutlined />} onClick={() => void refreshInviteTracker()}>
                 Refresh statuses
               </Button>
               <Button
                 loading={resendingInvites}
-                disabled={!draft?.id || !pendingInviteTargets.length}
+                disabled={!draft?.id || !pendingInviteMemberDraftIds.length}
                 onClick={() => void handleResendPendingInvites()}
               >
                 Resend Pending Invites
               </Button>
-              <Button
-                disabled={!pendingInviteTargets.length}
-                onClick={() => void copyPendingInviteReminder()}
-              >
-                Copy pending invite reminder
-              </Button>
             </Space>
-            {pendingInviteTargets.length ? (
-              <Text type="secondary">{pendingInviteReminderText}</Text>
-            ) : null}
             <Table
-              rowKey={(row) => `${row.dependent_user_id}:${row.relationship_status}:${row.plan_status}`}
+              rowKey={(row) => row.member_draft_id}
               dataSource={trackerRows}
               pagination={false}
               columns={[
                 {
                   title: "Dependent",
-                  dataIndex: "dependent_user_id"
-                },
-                {
-                  title: "Relationship",
-                  dataIndex: "relationship_status",
-                  render: (value: string) => <Tag color={STATUS_COLOR[value] || "default"}>{value}</Tag>
-                },
-                {
-                  title: "Guardrail Activation",
-                  dataIndex: "plan_status",
-                  render: (value: string) => (
-                    <Tag color={STATUS_COLOR[value] || "default"}>
-                      {value === "queued" ? "Queued until acceptance" : value === "active" ? "Active" : "Failed"}
-                    </Tag>
+                  render: (_value: unknown, row: HouseholdInviteTrackerItem) => (
+                    <Space orientation="vertical" size={0}>
+                      <Text strong>{row.display_name}</Text>
+                      <Text type="secondary">
+                        {row.account_mode === "invite_new"
+                          ? "Invite new dependent"
+                          : row.dependent_user_id || "Existing account"}
+                      </Text>
+                    </Space>
                   )
                 },
                 {
-                  title: "Message",
-                  dataIndex: "message",
-                  render: (
-                    value: string | null,
-                    row: TrackerRow
-                  ) => {
-                    if (value) return value
-                    if (row.relationship_status === "declined" || row.relationship_status === "revoked") {
-                      return "Relationship no longer active. Remap this dependent and resend invite."
-                    }
-                    if (row.plan_status === "failed") {
-                      return "Activation failed. Review configuration and retry."
-                    }
-                    if (row.plan_status === "queued" || row.relationship_status === "pending") {
-                      return "Queued until acceptance"
-                    }
-                    return "Active"
-                  }
+                  title: "Invite",
+                  render: (_value: unknown, row: HouseholdInviteTrackerItem) => (
+                    <Space orientation="vertical" size={0}>
+                      <Tag color={STATUS_COLOR[row.invite_status] || "default"}>{row.invite_status}</Tag>
+                      <Text type="secondary">
+                        {row.invite_delivery_target ||
+                          (row.invite_delivery_channel === "guardian_copy"
+                            ? "Guardian copy"
+                            : row.invite_delivery_channel || "Not provisioned")}
+                      </Text>
+                      {row.invite_last_sent_at ? (
+                        <Text type="secondary">{`Last sent: ${row.invite_last_sent_at}`}</Text>
+                      ) : null}
+                      {row.invite_accepted_at ? (
+                        <Text type="secondary">{`Accepted: ${row.invite_accepted_at}`}</Text>
+                      ) : null}
+                      {row.invite_expires_at ? (
+                        <Text type="secondary">{`Expires: ${row.invite_expires_at}`}</Text>
+                      ) : null}
+                    </Space>
+                  )
                 },
                 {
-                  title: "Next Action",
-                  key: "next_action",
-                  render: (_value: unknown, row: TrackerRow) => {
-                    const action = getTrackerRowAction(row)
-                    if (action === "resend") {
-                      return (
-                        <Button
-                          size="small"
-                          loading={resendingInvites}
-                          disabled={!draft?.id}
-                          aria-label={`Resend invite for ${row.dependent_user_id}`}
-                          onClick={() => void handleTrackerRowAction(row)}
-                        >
-                          Resend Invite
-                        </Button>
-                      )
-                    }
-                    if (action === "review_template") {
-                      return (
-                        <Button
-                          size="small"
-                          aria-label={`Review template for ${row.dependent_user_id}`}
-                          onClick={() => void handleTrackerRowAction(row)}
-                        >
-                          Review Template
-                        </Button>
-                      )
-                    }
-                    if (action === "fix_mapping") {
-                      return (
-                        <Button
-                          size="small"
-                          aria-label={`Fix mapping for ${row.dependent_user_id}`}
-                          onClick={() => void handleTrackerRowAction(row)}
-                        >
-                          Fix Mapping
-                        </Button>
-                      )
-                    }
-                    return <Text type="secondary">None</Text>
+                  title: "Relationship",
+                  render: (_value: unknown, row: HouseholdInviteTrackerItem) =>
+                    row.relationship_status ? (
+                      <Tag color={STATUS_COLOR[row.relationship_status] || "default"}>
+                        {row.relationship_status}
+                      </Tag>
+                    ) : (
+                      <Text type="secondary">Not mapped</Text>
+                    )
+                },
+                {
+                  title: "Guardrail Activation",
+                  render: (_value: unknown, row: HouseholdInviteTrackerItem) =>
+                    row.plan_status ? (
+                      <Tag color={STATUS_COLOR[row.plan_status] || "default"}>
+                        {row.plan_status === "queued"
+                          ? "Queued until acceptance"
+                          : row.plan_status === "active"
+                            ? "Active"
+                            : "Failed"}
+                      </Tag>
+                    ) : (
+                      <Text type="secondary">Not queued</Text>
+                    )
+                },
+                {
+                  title: "Blockers",
+                  render: (_value: unknown, row: HouseholdInviteTrackerItem) =>
+                    row.blocker_codes.length ? (
+                      <Space wrap>
+                        {row.blocker_codes.map((code) => (
+                          <Tag key={code} color="orange">
+                            {getTrackerBlockerLabel(code)}
+                          </Tag>
+                        ))}
+                      </Space>
+                    ) : (
+                      <Text type="secondary">None</Text>
+                    )
+                },
+                {
+                  title: "Actions",
+                  key: "actions",
+                  render: (_value: unknown, row: HouseholdInviteTrackerItem) => {
+                    const actions = trackerRowActions[row.member_draft_id] ?? []
+                    if (!actions.length) return <Text type="secondary">None</Text>
+                    return (
+                      <Space wrap>
+                        {actions.map((action) => (
+                          <Button
+                            key={`${row.member_draft_id}-${action}`}
+                            size="small"
+                            loading={
+                              resendingInvites &&
+                              (action === "provision_invite" ||
+                                action === "resend_invite" ||
+                                action === "reissue_invite")
+                            }
+                            aria-label={`${getTrackerActionLabel(action)} for ${row.display_name}`}
+                            onClick={() => void handleTrackerRowAction(row, action)}
+                          >
+                            {getTrackerActionLabel(action)}
+                          </Button>
+                        ))}
+                      </Space>
+                    )
                   }
                 }
               ]}

@@ -33,22 +33,45 @@ function getFocusableElements(container: HTMLElement): HTMLElement[] {
 // Local storage key for expert mode onboarding
 const EXPERT_MODE_SEEN_KEY = 'knowledgeqa-expert-mode-seen'
 
+function safeGetItem(key: string): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function safeSetItem(key: string, value: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // Storage may be unavailable in private or restricted contexts.
+  }
+}
+
 export function SettingsPanel({ open, onClose, className }: SettingsPanelProps) {
   const { expertMode, toggleExpertMode, resetSettings, preset } = useKnowledgeQA()
   const panelRef = useRef<HTMLDivElement>(null)
   const previousActiveElement = useRef<HTMLElement | null>(null)
+  const expertModeHintTimeoutRef = useRef<number | null>(null)
   const [showExpertModeHint, setShowExpertModeHint] = React.useState(false)
 
   // Check if user has seen Expert Mode onboarding
   const hasSeenExpertMode = useCallback(() => {
-    if (typeof window === 'undefined') return true
-    return localStorage.getItem(EXPERT_MODE_SEEN_KEY) === 'true'
+    return safeGetItem(EXPERT_MODE_SEEN_KEY) === 'true'
   }, [])
 
   // Mark Expert Mode as seen
   const markExpertModeSeen = useCallback(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(EXPERT_MODE_SEEN_KEY, 'true')
+    safeSetItem(EXPERT_MODE_SEEN_KEY, 'true')
+  }, [])
+
+  const clearExpertModeHintTimeout = useCallback(() => {
+    if (expertModeHintTimeoutRef.current !== null) {
+      window.clearTimeout(expertModeHintTimeoutRef.current)
+      expertModeHintTimeoutRef.current = null
     }
   }, [])
 
@@ -57,13 +80,23 @@ export function SettingsPanel({ open, onClose, className }: SettingsPanelProps) 
     const isEnteringExpertMode = !expertMode
     toggleExpertMode()
 
+    if (!isEnteringExpertMode) {
+      clearExpertModeHintTimeout()
+      setShowExpertModeHint(false)
+      return
+    }
+
     if (isEnteringExpertMode && !hasSeenExpertMode()) {
+      clearExpertModeHintTimeout()
       setShowExpertModeHint(true)
       markExpertModeSeen()
       // Auto-dismiss after 6 seconds
-      setTimeout(() => setShowExpertModeHint(false), 6000)
+      expertModeHintTimeoutRef.current = window.setTimeout(() => {
+        setShowExpertModeHint(false)
+        expertModeHintTimeoutRef.current = null
+      }, 6000)
     }
-  }, [expertMode, toggleExpertMode, hasSeenExpertMode, markExpertModeSeen])
+  }, [clearExpertModeHintTimeout, expertMode, toggleExpertMode, hasSeenExpertMode, markExpertModeSeen])
 
   // Store the previously focused element when panel opens
   useEffect(() => {
@@ -71,6 +104,26 @@ export function SettingsPanel({ open, onClose, className }: SettingsPanelProps) 
       previousActiveElement.current = document.activeElement as HTMLElement
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open) {
+      clearExpertModeHintTimeout()
+      setShowExpertModeHint(false)
+    }
+  }, [clearExpertModeHintTimeout, open])
+
+  useEffect(() => {
+    if (!expertMode) {
+      clearExpertModeHintTimeout()
+      setShowExpertModeHint(false)
+    }
+  }, [clearExpertModeHintTimeout, expertMode])
+
+  useEffect(() => {
+    return () => {
+      clearExpertModeHintTimeout()
+    }
+  }, [clearExpertModeHintTimeout])
 
   // Focus trap and keyboard handling
   useEffect(() => {

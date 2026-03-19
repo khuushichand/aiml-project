@@ -2,10 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   createHouseholdDraft,
+  getHouseholdDrafts,
   getHouseholdDraftSnapshot,
   getLatestHouseholdDraft,
   getActivationSummary,
+  getHouseholdInvitePreview,
+  getHouseholdInviteTracker,
+  acceptHouseholdInviteClaim,
+  acceptHouseholdInviteRegister,
+  provisionHouseholdMemberInvite,
+  reissueHouseholdMemberInvite,
   resendPendingInvites,
+  resendHouseholdMemberInvite,
   saveGuardrailPlanDraft,
   saveRelationshipDraft
 } from "../family-wizard"
@@ -56,6 +64,7 @@ describe("family wizard service", () => {
 
   it("calls guardrail plans endpoint", async () => {
     await saveGuardrailPlanDraft("draft-1", {
+      dependent_member_draft_id: "member-1",
       dependent_user_id: "child-1",
       relationship_draft_id: "rel-draft-1",
       template_id: "default-child-safe",
@@ -66,6 +75,7 @@ describe("family wizard service", () => {
       path: "/api/v1/guardian/wizard/drafts/draft-1/plans",
       method: "POST",
       body: {
+        dependent_member_draft_id: "member-1",
         dependent_user_id: "child-1",
         relationship_draft_id: "rel-draft-1",
         template_id: "default-child-safe",
@@ -92,6 +102,15 @@ describe("family wizard service", () => {
     })
   })
 
+  it("calls drafts listing endpoint", async () => {
+    await getHouseholdDrafts()
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/drafts",
+      method: "GET"
+    })
+  })
+
   it("calls draft snapshot endpoint", async () => {
     await getHouseholdDraftSnapshot("draft-1")
 
@@ -103,14 +122,95 @@ describe("family wizard service", () => {
 
   it("calls resend pending invites endpoint", async () => {
     await resendPendingInvites("draft-1", {
-      dependent_user_ids: ["child-1", "child-2"]
+      dependent_user_ids: ["child-1", "child-2"],
+      member_draft_ids: ["member-1", "member-2"]
     })
 
     expect(bgRequestMock).toHaveBeenCalledWith({
       path: "/api/v1/guardian/wizard/drafts/draft-1/invites/resend",
       method: "POST",
       body: {
-        dependent_user_ids: ["child-1", "child-2"]
+        dependent_user_ids: ["child-1", "child-2"],
+        member_draft_ids: ["member-1", "member-2"]
+      }
+    })
+  })
+
+  it("calls invite tracker endpoint", async () => {
+    await getHouseholdInviteTracker("draft-1")
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/drafts/draft-1/tracker",
+      method: "GET"
+    })
+  })
+
+  it("calls invite provision endpoint", async () => {
+    await provisionHouseholdMemberInvite("draft-1", "member-1")
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/drafts/draft-1/members/member-1/invite/provision",
+      method: "POST"
+    })
+  })
+
+  it("calls single invite resend endpoint", async () => {
+    await resendHouseholdMemberInvite("draft-1", "invite-1")
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/drafts/draft-1/invites/invite-1/resend",
+      method: "POST"
+    })
+  })
+
+  it("calls single invite reissue endpoint", async () => {
+    await reissueHouseholdMemberInvite("draft-1", "invite-1")
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/drafts/draft-1/invites/invite-1/reissue",
+      method: "POST"
+    })
+  })
+
+  it("calls invite preview endpoint", async () => {
+    await getHouseholdInvitePreview("token-1")
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/invites/preview?token=token-1",
+      method: "GET"
+    })
+  })
+
+  it("calls invite register acceptance endpoint", async () => {
+    await acceptHouseholdInviteRegister({
+      token: "token-1",
+      username: "child_one",
+      email: "child@example.com",
+      password: "correct horse battery staple"
+    })
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/invites/accept/register",
+      method: "POST",
+      body: {
+        token: "token-1",
+        username: "child_one",
+        email: "child@example.com",
+        password: "correct horse battery staple"
+      }
+    })
+  })
+
+  it("calls invite claim acceptance endpoint", async () => {
+    await acceptHouseholdInviteClaim({
+      token: "token-1"
+    })
+
+    expect(bgRequestMock).toHaveBeenCalledWith({
+      path: "/api/v1/guardian/wizard/invites/accept/claim",
+      method: "POST",
+      body: {
+        token: "token-1"
       }
     })
   })

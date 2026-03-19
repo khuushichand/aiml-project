@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { FlashcardDocumentRow } from "../FlashcardDocumentRow"
 import type { Deck, Flashcard, FlashcardBulkUpdateResponse } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 
 const uploadFlashcardAsset = vi.hoisted(() => vi.fn())
 
@@ -43,6 +44,7 @@ const makeFlashcard = (overrides: Partial<Flashcard> = {}): Flashcard => ({
   due_at: null,
   created_at: null,
   last_reviewed_at: null,
+  queue_state: "new",
   last_modified: null,
   deleted: false,
   client_id: "test",
@@ -58,7 +60,9 @@ const decks: Deck[] = [
     name: "Biology",
     deleted: false,
     client_id: "test",
-    version: 1
+    version: 1,
+    scheduler_type: "sm2_plus",
+    scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
   }
 ]
 

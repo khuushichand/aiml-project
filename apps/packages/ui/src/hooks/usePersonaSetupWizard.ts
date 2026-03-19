@@ -10,6 +10,7 @@ export type PersonaSetupStep =
 export type PersonaSetupState = {
   status?: "not_started" | "in_progress" | "completed" | null
   version?: number | null
+  run_id?: string | null
   current_step?: PersonaSetupStep | null
   completed_steps?: PersonaSetupStep[] | null
   completed_at?: string | null

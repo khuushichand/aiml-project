@@ -163,3 +163,88 @@ def test_list_chat_sessions_can_skip_message_counts_for_lean_overview(
     assert body["chats"][0]["message_count"] is None
     assert single_calls == []
     assert batch_calls == []
+
+
+def test_list_chat_sessions_defaults_omitted_scope_to_global(tmp_path):
+    db = CharactersRAGDB(db_path=str(tmp_path / "chacha.db"), client_id="user-1")
+    app = _build_app(db)
+
+    character_id = db.add_character_card(
+        {
+            "name": "Scope Character",
+            "description": "desc",
+            "personality": "helpful",
+            "system_prompt": "You are helpful.",
+            "client_id": "user-1",
+        }
+    )
+    db.upsert_workspace("ws-1", "Workspace One")
+    _seed_chat(
+        db,
+        conversation_id="global-chat",
+        title="Global chat",
+        character_id=character_id,
+    )
+    db.add_conversation(
+        {
+            "id": "workspace-chat",
+            "root_id": "workspace-chat",
+            "title": "Workspace chat",
+            "character_id": character_id,
+            "client_id": "user-1",
+            "scope_type": "workspace",
+            "workspace_id": "ws-1",
+        }
+    )
+
+    response = app.get("/api/v1/chats/")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [item["id"] for item in body["chats"]] == ["global-chat"]
+    assert body["total"] == 1
+
+
+def test_get_chat_session_requires_exact_scope_match(tmp_path):
+    db = CharactersRAGDB(db_path=str(tmp_path / "chacha.db"), client_id="user-1")
+    app = _build_app(db)
+
+    character_id = db.add_character_card(
+        {
+            "name": "Scope Detail Character",
+            "description": "desc",
+            "personality": "helpful",
+            "system_prompt": "You are helpful.",
+            "client_id": "user-1",
+        }
+    )
+    db.upsert_workspace("ws-1", "Workspace One")
+    db.add_conversation(
+        {
+            "id": "workspace-chat",
+            "root_id": "workspace-chat",
+            "title": "Workspace chat",
+            "character_id": character_id,
+            "client_id": "user-1",
+            "scope_type": "workspace",
+            "workspace_id": "ws-1",
+        }
+    )
+
+    missing_scope = app.get("/api/v1/chats/workspace-chat")
+    assert missing_scope.status_code == 404
+
+    wrong_scope = app.get(
+        "/api/v1/chats/workspace-chat",
+        params={"scope_type": "workspace", "workspace_id": "ws-2"},
+    )
+    assert wrong_scope.status_code == 404
+
+    correct_scope = app.get(
+        "/api/v1/chats/workspace-chat",
+        params={"scope_type": "workspace", "workspace_id": "ws-1"},
+    )
+    assert correct_scope.status_code == 200, correct_scope.text
+    payload = correct_scope.json()
+    assert payload["scope_type"] == "workspace"
+    assert payload["workspace_id"] == "ws-1"

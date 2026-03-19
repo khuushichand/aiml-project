@@ -29,6 +29,24 @@ SINGLE_USER_API_KEY=replace-with-strong-key
 docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
 ```
 
+By default this profile stores application data in Docker named volumes, not in the repo checkout:
+
+- `app-data` backs `/app/Databases`
+- `chroma-data` backs `/app/Databases/user_databases`
+- `postgres_data` and `redis_data` back the bundled Postgres and Redis containers
+
+Keep `tldw_Server_API/Config_Files/.env` with your backups, because it stores the startup auth mode and single-user API key that the quickstart uses.
+
+`docker compose down` keeps the Docker named volumes. `docker compose down -v` deletes them and removes the persisted databases, user files, and vector storage.
+
+If you prefer host-visible storage for manual backups or inspection, use `Dockerfiles/docker-compose.host-storage.yml` instead of the default compose file:
+
+```bash
+docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.host-storage.yml up -d --build
+```
+
+That optional variant writes data under `docker-data/` at the repo root and preserves the default quickstart behavior for existing users.
+
 ## Verify
 
 ```bash

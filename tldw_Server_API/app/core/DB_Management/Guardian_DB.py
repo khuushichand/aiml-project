@@ -253,6 +253,8 @@ class HouseholdMemberDraft:
     email: str | None = None
     invite_required: bool = True
     invite_status: str = "pending"
+    account_mode: str = "existing_account"
+    provisioning_status: str = "not_started"
     metadata: dict[str, Any] | None = None
     created_at: str = ""
     updated_at: str = ""
@@ -277,9 +279,10 @@ class RelationshipDraft:
 class GuardrailPlanDraft:
     id: str
     household_draft_id: str
-    dependent_user_id: str
+    dependent_member_draft_id: str
     relationship_draft_id: str
     template_id: str
+    dependent_user_id: str | None = None
     overrides: dict[str, Any] = field(default_factory=dict)
     status: str = "queued"  # queued | active | failed
     materialized_policy_id: str | None = None
@@ -536,6 +539,8 @@ class GuardianDB:
                         email TEXT,
                         invite_required INTEGER NOT NULL DEFAULT 1,
                         invite_status TEXT NOT NULL DEFAULT 'pending',
+                        account_mode TEXT NOT NULL DEFAULT 'existing_account',
+                        provisioning_status TEXT NOT NULL DEFAULT 'not_started',
                         metadata TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
@@ -548,6 +553,36 @@ class GuardianDB:
                         ON guardian_household_member_drafts(role);
                     CREATE INDEX IF NOT EXISTS idx_ghmd_user
                         ON guardian_household_member_drafts(user_id);
+                    CREATE INDEX IF NOT EXISTS idx_ghmd_account_mode
+                        ON guardian_household_member_drafts(account_mode);
+
+                    CREATE TABLE IF NOT EXISTS guardian_household_member_invites (
+                        id TEXT PRIMARY KEY,
+                        household_draft_id TEXT NOT NULL,
+                        member_draft_id TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'ready',
+                        delivery_channel TEXT NOT NULL,
+                        delivery_target TEXT,
+                        invite_token TEXT NOT NULL,
+                        resend_count INTEGER NOT NULL DEFAULT 0,
+                        last_sent_at TEXT,
+                        accepted_at TEXT,
+                        expires_at TEXT,
+                        revoked_at TEXT,
+                        failure_reason TEXT,
+                        metadata TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (member_draft_id) REFERENCES guardian_household_member_drafts(id) ON DELETE CASCADE
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_ghmi_household
+                        ON guardian_household_member_invites(household_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_ghmi_member
+                        ON guardian_household_member_invites(member_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_ghmi_status
+                        ON guardian_household_member_invites(status);
 
                     CREATE TABLE IF NOT EXISTS guardian_relationship_drafts (
                         id TEXT PRIMARY KEY,
@@ -575,7 +610,8 @@ class GuardianDB:
                     CREATE TABLE IF NOT EXISTS guardian_guardrail_plan_drafts (
                         id TEXT PRIMARY KEY,
                         household_draft_id TEXT NOT NULL,
-                        dependent_user_id TEXT NOT NULL,
+                        dependent_member_draft_id TEXT NOT NULL,
+                        dependent_user_id TEXT,
                         relationship_draft_id TEXT NOT NULL,
                         template_id TEXT NOT NULL,
                         overrides TEXT NOT NULL DEFAULT '{}',
@@ -585,12 +621,15 @@ class GuardianDB:
                         metadata TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
+                        FOREIGN KEY (dependent_member_draft_id) REFERENCES guardian_household_member_drafts(id) ON DELETE CASCADE,
                         FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
                         FOREIGN KEY (relationship_draft_id) REFERENCES guardian_relationship_drafts(id) ON DELETE CASCADE
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_ggpd_household
                         ON guardian_guardrail_plan_drafts(household_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_ggpd_member
+                        ON guardian_guardrail_plan_drafts(dependent_member_draft_id);
                     CREATE INDEX IF NOT EXISTS idx_ggpd_status
                         ON guardian_guardrail_plan_drafts(status);
                     CREATE INDEX IF NOT EXISTS idx_ggpd_relationship
@@ -628,6 +667,16 @@ class GuardianDB:
             ("self_monitoring_rules", "governance_policy_id", "TEXT"),
             ("self_monitoring_rules", "deactivation_confirmation_token", "TEXT"),
             ("self_monitoring_rules", "deactivation_requested_at", "TEXT"),
+            (
+                "guardian_household_member_drafts",
+                "account_mode",
+                "TEXT NOT NULL DEFAULT 'existing_account'",
+            ),
+            (
+                "guardian_household_member_drafts",
+                "provisioning_status",
+                "TEXT NOT NULL DEFAULT 'not_started'",
+            ),
         ]
         with self._lock:
             conn = self._connect()
@@ -645,6 +694,36 @@ class GuardianDB:
                         logger.warning(
                             f"Guardian DB migration error for {table}.{column} (non-critical): {e}"
                         )
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS guardian_household_member_invites (
+                        id TEXT PRIMARY KEY,
+                        household_draft_id TEXT NOT NULL,
+                        member_draft_id TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'ready',
+                        delivery_channel TEXT NOT NULL,
+                        delivery_target TEXT,
+                        invite_token TEXT NOT NULL,
+                        resend_count INTEGER NOT NULL DEFAULT 0,
+                        last_sent_at TEXT,
+                        accepted_at TEXT,
+                        expires_at TEXT,
+                        revoked_at TEXT,
+                        failure_reason TEXT,
+                        metadata TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
+                        FOREIGN KEY (member_draft_id) REFERENCES guardian_household_member_drafts(id) ON DELETE CASCADE
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_ghmi_household
+                        ON guardian_household_member_invites(household_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_ghmi_member
+                        ON guardian_household_member_invites(member_draft_id);
+                    CREATE INDEX IF NOT EXISTS idx_ghmi_status
+                        ON guardian_household_member_invites(status);
+                """)
+                self._migrate_guardrail_plan_drafts_table(conn)
                 self._ensure_optional_indexes(conn)
             finally:
                 conn.close()
@@ -664,6 +743,110 @@ class GuardianDB:
                 conn.execute(
                     f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})"
                 )
+
+    def _migrate_guardrail_plan_drafts_table(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]: row
+            for row in conn.execute(
+                "PRAGMA table_info(guardian_guardrail_plan_drafts)"
+            ).fetchall()
+        }
+        if not columns:
+            return
+
+        dependent_user_column = columns.get("dependent_user_id")
+        dependent_user_not_null = bool(_safe_get(dependent_user_column, "notnull", 0))
+        needs_rebuild = (
+            "dependent_member_draft_id" not in columns
+            or dependent_user_not_null
+        )
+        if not needs_rebuild:
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_ggpd_member
+                   ON guardian_guardrail_plan_drafts(dependent_member_draft_id)"""
+            )
+            return
+
+        conn.execute(
+            "ALTER TABLE guardian_guardrail_plan_drafts RENAME TO guardian_guardrail_plan_drafts_legacy"
+        )
+        conn.executescript("""
+            CREATE TABLE guardian_guardrail_plan_drafts (
+                id TEXT PRIMARY KEY,
+                household_draft_id TEXT NOT NULL,
+                dependent_member_draft_id TEXT NOT NULL,
+                dependent_user_id TEXT,
+                relationship_draft_id TEXT NOT NULL,
+                template_id TEXT NOT NULL,
+                overrides TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'queued',
+                materialized_policy_id TEXT,
+                failure_reason TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (dependent_member_draft_id) REFERENCES guardian_household_member_drafts(id) ON DELETE CASCADE,
+                FOREIGN KEY (household_draft_id) REFERENCES guardian_household_drafts(id) ON DELETE CASCADE,
+                FOREIGN KEY (relationship_draft_id) REFERENCES guardian_relationship_drafts(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ggpd_household
+                ON guardian_guardrail_plan_drafts(household_draft_id);
+            CREATE INDEX IF NOT EXISTS idx_ggpd_member
+                ON guardian_guardrail_plan_drafts(dependent_member_draft_id);
+            CREATE INDEX IF NOT EXISTS idx_ggpd_status
+                ON guardian_guardrail_plan_drafts(status);
+            CREATE INDEX IF NOT EXISTS idx_ggpd_relationship
+                ON guardian_guardrail_plan_drafts(relationship_draft_id);
+        """)
+
+        legacy_has_member_column = "dependent_member_draft_id" in columns
+        if legacy_has_member_column:
+            conn.execute(
+                """INSERT INTO guardian_guardrail_plan_drafts
+                (id, household_draft_id, dependent_member_draft_id, dependent_user_id,
+                 relationship_draft_id, template_id, overrides, status, materialized_policy_id,
+                 failure_reason, metadata, created_at, updated_at)
+                SELECT p.id,
+                       p.household_draft_id,
+                       COALESCE(p.dependent_member_draft_id, r.dependent_member_draft_id),
+                       p.dependent_user_id,
+                       p.relationship_draft_id,
+                       p.template_id,
+                       p.overrides,
+                       p.status,
+                       p.materialized_policy_id,
+                       p.failure_reason,
+                       p.metadata,
+                       p.created_at,
+                       p.updated_at
+                  FROM guardian_guardrail_plan_drafts_legacy p
+                  LEFT JOIN guardian_relationship_drafts r ON p.relationship_draft_id = r.id"""
+            )
+        else:
+            conn.execute(
+                """INSERT INTO guardian_guardrail_plan_drafts
+                (id, household_draft_id, dependent_member_draft_id, dependent_user_id,
+                 relationship_draft_id, template_id, overrides, status, materialized_policy_id,
+                 failure_reason, metadata, created_at, updated_at)
+                SELECT p.id,
+                       p.household_draft_id,
+                       r.dependent_member_draft_id,
+                       p.dependent_user_id,
+                       p.relationship_draft_id,
+                       p.template_id,
+                       p.overrides,
+                       p.status,
+                       p.materialized_policy_id,
+                       p.failure_reason,
+                       p.metadata,
+                       p.created_at,
+                       p.updated_at
+                  FROM guardian_guardrail_plan_drafts_legacy p
+                  LEFT JOIN guardian_relationship_drafts r ON p.relationship_draft_id = r.id"""
+            )
+
+        conn.execute("DROP TABLE guardian_guardrail_plan_drafts_legacy")
 
     # ── Guardian Relationships ─────────────────────────────────
 
@@ -2120,6 +2303,32 @@ class GuardianDB:
             finally:
                 conn.close()
 
+    def list_household_drafts(self, owner_user_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """SELECT * FROM guardian_household_drafts
+                       WHERE owner_user_id = ?
+                       ORDER BY updated_at DESC, created_at DESC""",
+                    (str(owner_user_id),),
+                ).fetchall()
+                return [
+                    {
+                        "id": row["id"],
+                        "owner_user_id": row["owner_user_id"],
+                        "name": row["name"],
+                        "mode": row["mode"],
+                        "status": row["status"],
+                        "metadata": self._loads_json_or_default(row["metadata"], None),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    }
+                    for row in rows
+                ]
+            finally:
+                conn.close()
+
     def update_household_draft(self, draft_id: str, **fields: Any) -> bool:
         allowed_fields = {"name", "mode", "status", "metadata"}
         updates: list[str] = []
@@ -2158,10 +2367,23 @@ class GuardianDB:
         email: str | None = None,
         invite_required: bool = True,
         invite_status: str = "pending",
+        account_mode: str = "existing_account",
+        provisioning_status: str = "not_started",
         metadata: dict[str, Any] | None = None,
     ) -> str:
         if role not in ("guardian", "dependent", "caregiver"):
             raise ValueError(f"Invalid member role: {role}")
+        if account_mode not in ("existing_account", "invite_new"):
+            raise ValueError(f"Invalid account_mode: {account_mode}")
+        if provisioning_status not in (
+            "not_started",
+            "invite_ready",
+            "sent",
+            "accepted",
+            "expired",
+            "failed",
+        ):
+            raise ValueError(f"Invalid provisioning_status: {provisioning_status}")
         now = _utcnow_iso()
         member_id = _new_id()
         with self._lock:
@@ -2170,8 +2392,9 @@ class GuardianDB:
                 conn.execute(
                     """INSERT INTO guardian_household_member_drafts
                     (id, household_draft_id, role, display_name, user_id, email,
-                     invite_required, invite_status, metadata, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     invite_required, invite_status, account_mode, provisioning_status,
+                     metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         member_id,
                         household_draft_id,
@@ -2181,6 +2404,8 @@ class GuardianDB:
                         email,
                         int(invite_required),
                         invite_status,
+                        account_mode,
+                        provisioning_status,
                         json.dumps(metadata) if metadata else None,
                         now,
                         now,
@@ -2222,6 +2447,12 @@ class GuardianDB:
                         "email": row["email"],
                         "invite_required": bool(row["invite_required"]),
                         "invite_status": row["invite_status"],
+                        "account_mode": _safe_get(row, "account_mode", "existing_account"),
+                        "provisioning_status": _safe_get(
+                            row,
+                            "provisioning_status",
+                            "not_started",
+                        ),
                         "metadata": self._loads_json_or_default(row["metadata"], None),
                         "created_at": row["created_at"],
                         "updated_at": row["updated_at"],
@@ -2250,10 +2481,281 @@ class GuardianDB:
                     "email": row["email"],
                     "invite_required": bool(row["invite_required"]),
                     "invite_status": row["invite_status"],
+                    "account_mode": _safe_get(row, "account_mode", "existing_account"),
+                    "provisioning_status": _safe_get(
+                        row,
+                        "provisioning_status",
+                        "not_started",
+                    ),
                     "metadata": self._loads_json_or_default(row["metadata"], None),
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
+            finally:
+                conn.close()
+
+    def resolve_household_member_draft_user(self, member_id: str, user_id: str) -> bool:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                result = conn.execute(
+                    """UPDATE guardian_household_member_drafts
+                       SET user_id = ?,
+                           invite_status = 'accepted',
+                           provisioning_status = 'accepted',
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (str(user_id), now, member_id),
+                )
+                return (result.rowcount or 0) > 0
+            finally:
+                conn.close()
+
+    def _household_member_invite_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "household_draft_id": row["household_draft_id"],
+            "member_draft_id": row["member_draft_id"],
+            "status": row["status"],
+            "delivery_channel": row["delivery_channel"],
+            "delivery_target": row["delivery_target"],
+            "invite_token": row["invite_token"],
+            "resend_count": row["resend_count"],
+            "last_sent_at": row["last_sent_at"],
+            "accepted_at": row["accepted_at"],
+            "expires_at": row["expires_at"],
+            "revoked_at": row["revoked_at"],
+            "failure_reason": row["failure_reason"],
+            "metadata": self._loads_json_or_default(row["metadata"], None),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def create_household_member_invite(
+        self,
+        household_draft_id: str,
+        member_draft_id: str,
+        delivery_channel: str,
+        delivery_target: str | None = None,
+        status: str = "ready",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        now = _utcnow_iso()
+        invite_id = _new_id()
+        with self._lock:
+            conn = self._connect()
+            try:
+                household_row = conn.execute(
+                    """SELECT owner_user_id
+                       FROM guardian_household_drafts
+                       WHERE id = ?""",
+                    (household_draft_id,),
+                ).fetchone()
+                if not household_row:
+                    raise ValueError("Household draft not found")
+                invite_token = f"{household_row['owner_user_id']}.{invite_id}.{_new_id()}"
+                conn.execute(
+                    """INSERT INTO guardian_household_member_invites
+                    (id, household_draft_id, member_draft_id, status, delivery_channel,
+                     delivery_target, invite_token, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        invite_id,
+                        household_draft_id,
+                        member_draft_id,
+                        status,
+                        delivery_channel,
+                        delivery_target,
+                        invite_token,
+                        json.dumps(metadata) if metadata else None,
+                        now,
+                        now,
+                    ),
+                )
+                return invite_id
+            finally:
+                conn.close()
+
+    def get_household_member_invite(self, invite_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM guardian_household_member_invites WHERE id = ?",
+                    (invite_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return self._household_member_invite_from_row(row)
+            finally:
+                conn.close()
+
+    def get_household_member_invite_by_token(self, invite_token: str) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """SELECT * FROM guardian_household_member_invites
+                       WHERE invite_token = ?""",
+                    (invite_token,),
+                ).fetchone()
+                if not row:
+                    return None
+                return self._household_member_invite_from_row(row)
+            finally:
+                conn.close()
+
+    def list_household_member_invites(
+        self,
+        household_draft_id: str,
+        member_draft_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            try:
+                if member_draft_id:
+                    rows = conn.execute(
+                        """SELECT * FROM guardian_household_member_invites
+                           WHERE household_draft_id = ? AND member_draft_id = ?
+                           ORDER BY created_at DESC""",
+                        (household_draft_id, member_draft_id),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """SELECT * FROM guardian_household_member_invites
+                           WHERE household_draft_id = ?
+                           ORDER BY created_at DESC""",
+                        (household_draft_id,),
+                    ).fetchall()
+                return [self._household_member_invite_from_row(row) for row in rows]
+            finally:
+                conn.close()
+
+    def get_latest_household_member_invite_for_member(
+        self,
+        member_draft_id: str,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """SELECT * FROM guardian_household_member_invites
+                       WHERE member_draft_id = ?
+                       ORDER BY created_at DESC
+                       LIMIT 1""",
+                    (member_draft_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return self._household_member_invite_from_row(row)
+            finally:
+                conn.close()
+
+    def update_household_member_invite_status(
+        self,
+        invite_id: str,
+        *,
+        status: str,
+        last_sent_at: str | None = None,
+        accepted_at: str | None = None,
+        expires_at: str | None = None,
+        revoked_at: str | None = None,
+        failure_reason: str | None = None,
+        increment_resend_count: bool = False,
+    ) -> bool:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                current = conn.execute(
+                    """SELECT resend_count
+                       FROM guardian_household_member_invites
+                       WHERE id = ?""",
+                    (invite_id,),
+                ).fetchone()
+                if not current:
+                    return False
+                resend_count = int(current["resend_count"] or 0)
+                resolved_last_sent_at = last_sent_at
+                if increment_resend_count:
+                    resend_count += 1
+                    if resolved_last_sent_at is None:
+                        resolved_last_sent_at = now
+                result = conn.execute(
+                    """UPDATE guardian_household_member_invites
+                       SET status = ?,
+                           resend_count = ?,
+                           last_sent_at = COALESCE(?, last_sent_at),
+                           accepted_at = COALESCE(?, accepted_at),
+                           expires_at = COALESCE(?, expires_at),
+                           revoked_at = COALESCE(?, revoked_at),
+                           failure_reason = ?,
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (
+                        status,
+                        resend_count,
+                        resolved_last_sent_at,
+                        accepted_at,
+                        expires_at,
+                        revoked_at,
+                        failure_reason,
+                        now,
+                        invite_id,
+                    ),
+                )
+                return (result.rowcount or 0) > 0
+            finally:
+                conn.close()
+
+    def reissue_household_member_invite(self, invite_id: str) -> str:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """SELECT * FROM guardian_household_member_invites
+                       WHERE id = ?""",
+                    (invite_id,),
+                ).fetchone()
+                if not row:
+                    raise ValueError("Invite not found")
+                conn.execute(
+                    """UPDATE guardian_household_member_invites
+                       SET status = 'revoked',
+                           revoked_at = ?,
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (now, now, invite_id),
+                )
+                replacement_id = _new_id()
+                household_row = conn.execute(
+                    """SELECT owner_user_id
+                       FROM guardian_household_drafts
+                       WHERE id = ?""",
+                    (row["household_draft_id"],),
+                ).fetchone()
+                if not household_row:
+                    raise ValueError("Household draft not found")
+                conn.execute(
+                    """INSERT INTO guardian_household_member_invites
+                    (id, household_draft_id, member_draft_id, status, delivery_channel,
+                     delivery_target, invite_token, resend_count, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, 'ready', ?, ?, ?, 0, ?, ?, ?)""",
+                    (
+                        replacement_id,
+                        row["household_draft_id"],
+                        row["member_draft_id"],
+                        row["delivery_channel"],
+                        row["delivery_target"],
+                        f"{household_row['owner_user_id']}.{replacement_id}.{_new_id()}",
+                        row["metadata"],
+                        now,
+                        now,
+                    ),
+                )
+                return replacement_id
             finally:
                 conn.close()
 
@@ -2299,10 +2801,13 @@ class GuardianDB:
         dependent_member_draft_id: str,
         relationship_type: str = "parent",
         dependent_visible: bool = True,
+        status: str = "pending",
         metadata: dict[str, Any] | None = None,
     ) -> str:
         if relationship_type not in ("parent", "legal_guardian", "institutional"):
             raise ValueError(f"Invalid relationship_type: {relationship_type}")
+        if status not in ("pending", "pending_provisioning", "active", "declined", "revoked"):
+            raise ValueError(f"Invalid relationship draft status: {status}")
         now = _utcnow_iso()
         relationship_draft_id = _new_id()
         with self._lock:
@@ -2313,7 +2818,7 @@ class GuardianDB:
                     (id, household_draft_id, guardian_member_draft_id, dependent_member_draft_id,
                      relationship_type, dependent_visible, status, relationship_id,
                      metadata, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, ?)""",
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)""",
                     (
                         relationship_draft_id,
                         household_draft_id,
@@ -2321,6 +2826,7 @@ class GuardianDB:
                         dependent_member_draft_id,
                         relationship_type,
                         int(dependent_visible),
+                        status,
                         json.dumps(metadata) if metadata else None,
                         now,
                         now,
@@ -2395,7 +2901,7 @@ class GuardianDB:
         relationship_id: str,
         status: str = "pending",
     ) -> bool:
-        if status not in ("pending", "active", "declined", "revoked"):
+        if status not in ("pending", "pending_provisioning", "active", "declined", "revoked"):
             raise ValueError(f"Invalid relationship draft status: {status}")
         with self._lock:
             conn = self._connect()
@@ -2413,9 +2919,10 @@ class GuardianDB:
     def create_guardrail_plan_draft(
         self,
         household_draft_id: str,
-        dependent_user_id: str,
         relationship_draft_id: str,
         template_id: str,
+        dependent_member_draft_id: str | None = None,
+        dependent_user_id: str | None = None,
         overrides: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
@@ -2426,16 +2933,28 @@ class GuardianDB:
         with self._lock:
             conn = self._connect()
             try:
+                resolved_member_draft_id = dependent_member_draft_id
+                if not resolved_member_draft_id:
+                    relationship_row = conn.execute(
+                        """SELECT dependent_member_draft_id
+                           FROM guardian_relationship_drafts
+                           WHERE id = ?""",
+                        (relationship_draft_id,),
+                    ).fetchone()
+                    if not relationship_row:
+                        raise ValueError("relationship_draft_id is invalid")
+                    resolved_member_draft_id = relationship_row["dependent_member_draft_id"]
                 conn.execute(
                     """INSERT INTO guardian_guardrail_plan_drafts
-                    (id, household_draft_id, dependent_user_id, relationship_draft_id,
-                     template_id, overrides, status, materialized_policy_id, failure_reason,
-                     metadata, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, ?, ?)""",
+                    (id, household_draft_id, dependent_member_draft_id, dependent_user_id,
+                     relationship_draft_id, template_id, overrides, status,
+                     materialized_policy_id, failure_reason, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, ?, ?)""",
                     (
                         plan_id,
                         household_draft_id,
-                        str(dependent_user_id),
+                        resolved_member_draft_id,
+                        str(dependent_user_id) if dependent_user_id else None,
                         relationship_draft_id,
                         template_id,
                         json.dumps(overrides or {}),
@@ -2474,6 +2993,7 @@ class GuardianDB:
                     {
                         "id": row["id"],
                         "household_draft_id": row["household_draft_id"],
+                        "dependent_member_draft_id": row["dependent_member_draft_id"],
                         "dependent_user_id": row["dependent_user_id"],
                         "relationship_draft_id": row["relationship_draft_id"],
                         "template_id": row["template_id"],
@@ -2503,6 +3023,7 @@ class GuardianDB:
                 return {
                     "id": row["id"],
                     "household_draft_id": row["household_draft_id"],
+                    "dependent_member_draft_id": row["dependent_member_draft_id"],
                     "dependent_user_id": row["dependent_user_id"],
                     "relationship_draft_id": row["relationship_draft_id"],
                     "template_id": row["template_id"],
@@ -2514,6 +3035,25 @@ class GuardianDB:
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
+            finally:
+                conn.close()
+
+    def resolve_guardrail_plan_drafts_for_member(
+        self,
+        member_draft_id: str,
+        dependent_user_id: str,
+    ) -> int:
+        now = _utcnow_iso()
+        with self._lock:
+            conn = self._connect()
+            try:
+                result = conn.execute(
+                    """UPDATE guardian_guardrail_plan_drafts
+                       SET dependent_user_id = ?, updated_at = ?
+                       WHERE dependent_member_draft_id = ?""",
+                    (str(dependent_user_id), now, member_draft_id),
+                )
+                return result.rowcount or 0
             finally:
                 conn.close()
 
@@ -2534,6 +3074,7 @@ class GuardianDB:
                     {
                         "id": row["id"],
                         "household_draft_id": row["household_draft_id"],
+                        "dependent_member_draft_id": row["dependent_member_draft_id"],
                         "dependent_user_id": row["dependent_user_id"],
                         "relationship_draft_id": row["relationship_draft_id"],
                         "template_id": row["template_id"],
@@ -2569,6 +3110,7 @@ class GuardianDB:
                     {
                         "id": row["id"],
                         "household_draft_id": row["household_draft_id"],
+                        "dependent_member_draft_id": row["dependent_member_draft_id"],
                         "dependent_user_id": row["dependent_user_id"],
                         "relationship_draft_id": row["relationship_draft_id"],
                         "template_id": row["template_id"],

@@ -1,6 +1,11 @@
 # Local Single-User Setup
 
-Use this profile when you want to run the API directly on your machine with a local Python virtual environment.
+Use this profile for development, local debugging, or contributor workflows where you want to run the API directly on your machine with a local Python virtual environment.
+
+For most self-hosted users:
+- use `make quickstart` for the Docker single-user + WebUI path,
+- use `make quickstart-docker` for the API-only Docker path,
+- use `Docker multi-user + Postgres` for team or public deployments.
 
 ## Prerequisites
 
@@ -26,7 +31,7 @@ make quickstart-install PYTHON=python3.12
 ## Run
 
 ```bash
-make quickstart
+make quickstart-local
 ```
 
 Default API URL: `http://127.0.0.1:8000`

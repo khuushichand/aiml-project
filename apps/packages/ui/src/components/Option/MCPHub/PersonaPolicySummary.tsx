@@ -6,7 +6,8 @@ import {
   getEffectivePolicy,
   listPolicyAssignments,
   type McpHubEffectiveExternalAccess,
-  type McpHubEffectivePolicy
+  type McpHubEffectivePolicy,
+  type McpHubPermissionPolicyDocument
 } from "@/services/tldw/mcp-hub"
 
 import { getPathAllowlistSummary, getPathScopeLabel } from "./policyHelpers"
@@ -76,9 +77,11 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
 
   const provenance = Array.isArray(policy?.provenance) ? policy.provenance : []
   const resolvedPolicyDocument =
-    (policy?.resolved_policy_document as Record<string, unknown> | null | undefined) ??
-    policy?.policy_document ??
+    (policy?.resolved_policy_document as McpHubPermissionPolicyDocument | null | undefined) ??
+    (policy?.policy_document as McpHubPermissionPolicyDocument | null | undefined) ??
     {}
+  const authoredPolicyDocument =
+    (policy?.policy_document as McpHubPermissionPolicyDocument | null | undefined) ?? {}
   const capabilityMappingSummary = Array.isArray(policy?.capability_mapping_summary)
     ? policy.capability_mapping_summary
     : []
@@ -121,14 +124,14 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
         <Typography.Text type="secondary">Loading effective policy...</Typography.Text>
       ) : policy ? (
         <Space orientation="vertical" size="small" style={{ width: "100%" }}>
-          {getPathScopeLabel(policy.policy_document?.path_scope_mode) ? (
+          {getPathScopeLabel(resolvedPolicyDocument.path_scope_mode) ? (
             <Typography.Text type="secondary">
-              {`Local file scope: ${getPathScopeLabel(resolvedPolicyDocument?.path_scope_mode)}`}
+              {`Local file scope: ${getPathScopeLabel(resolvedPolicyDocument.path_scope_mode)}`}
             </Typography.Text>
           ) : null}
-          {getPathAllowlistSummary(resolvedPolicyDocument?.path_allowlist_prefixes) ? (
+          {getPathAllowlistSummary(resolvedPolicyDocument.path_allowlist_prefixes) ? (
             <Typography.Text type="secondary">
-              {`Allowed paths: ${getPathAllowlistSummary(resolvedPolicyDocument?.path_allowlist_prefixes)}`}
+              {`Allowed paths: ${getPathAllowlistSummary(resolvedPolicyDocument.path_allowlist_prefixes)}`}
             </Typography.Text>
           ) : null}
           {policy.selected_assignment_workspace_ids?.length ? (
@@ -184,14 +187,14 @@ export const PersonaPolicySummary = ({ personaId }: PersonaPolicySummaryProps) =
               <Tag key={capability}>{capability}</Tag>
             ))}
             {policy.approval_mode ? <Tag color="gold">{policy.approval_mode}</Tag> : null}
-            {getPathScopeLabel(resolvedPolicyDocument?.path_scope_mode) ? (
-              <Tag color="cyan">{getPathScopeLabel(resolvedPolicyDocument?.path_scope_mode)}</Tag>
+            {getPathScopeLabel(resolvedPolicyDocument.path_scope_mode) ? (
+              <Tag color="cyan">{getPathScopeLabel(resolvedPolicyDocument.path_scope_mode)}</Tag>
             ) : null}
-            {resolvedPolicyDocument?.path_scope_enforcement ? (
+            {resolvedPolicyDocument.path_scope_enforcement ? (
               <Tag color="orange">Path approval fallback</Tag>
             ) : null}
-            {getPathAllowlistSummary(resolvedPolicyDocument?.path_allowlist_prefixes) ? (
-              <Tag color="blue">{`paths ${getPathAllowlistSummary(resolvedPolicyDocument?.path_allowlist_prefixes)}`}</Tag>
+            {getPathAllowlistSummary(resolvedPolicyDocument.path_allowlist_prefixes) ? (
+              <Tag color="blue">{`paths ${getPathAllowlistSummary(resolvedPolicyDocument.path_allowlist_prefixes)}`}</Tag>
             ) : null}
             {provenance.some((entry) => entry.source_kind === "assignment_override") ? (
               <Tag color="cyan">Override active</Tag>

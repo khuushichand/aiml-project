@@ -34,6 +34,11 @@ type GovernanceAuditTabProps = {
 const severityColor = (severity: "error" | "warning"): "red" | "gold" =>
   severity === "error" ? "red" : "gold"
 
+const parseInlineActionObjectId = (objectId: string): number | null => {
+  const parsed = Number(objectId)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
 export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
   const [allItems, setAllItems] = useState<McpHubGovernanceAuditFinding[]>([])
   const [loading, setLoading] = useState(false)
@@ -214,15 +219,25 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
       if (action.kind === "deactivate_external_server") {
         await updateExternalServer(action.object_id, { enabled: false })
         setActionStatus({ type: "success", message: "Server deactivated." })
-      } else if (action.kind === "clear_permission_profile_reference") {
-        await updatePolicyAssignment(action.object_id, { profile_id: null })
-        setActionStatus({ type: "success", message: action.success_message })
-      } else if (action.object_kind === "policy_assignment") {
-        await updatePolicyAssignment(action.object_id, { path_scope_object_id: null })
-        setActionStatus({ type: "success", message: action.success_message })
       } else {
-        await updatePermissionProfile(action.object_id, { path_scope_object_id: null })
-        setActionStatus({ type: "success", message: action.success_message })
+        const objectId = parseInlineActionObjectId(action.object_id)
+        if (objectId === null) {
+          setActionStatus({
+            type: "error",
+            message: "The audit action referenced an invalid object identifier."
+          })
+          return
+        }
+        if (action.kind === "clear_permission_profile_reference") {
+          await updatePolicyAssignment(objectId, { profile_id: null })
+          setActionStatus({ type: "success", message: action.success_message })
+        } else if (action.object_kind === "policy_assignment") {
+          await updatePolicyAssignment(objectId, { path_scope_object_id: null })
+          setActionStatus({ type: "success", message: action.success_message })
+        } else {
+          await updatePermissionProfile(objectId, { path_scope_object_id: null })
+          setActionStatus({ type: "success", message: action.success_message })
+        }
       }
       await loadAuditFindings()
     } catch {
@@ -278,7 +293,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
           <Tag.CheckableTag
             checked={severityFilter === "all"}
             onChange={() => setSeverityFilter("all")}
-            role="button"
             aria-label="All severities"
           >
             All
@@ -286,7 +300,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
           <Tag.CheckableTag
             checked={severityFilter === "error"}
             onChange={() => setSeverityFilter("error")}
-            role="button"
             aria-label="Error severities"
           >
             Errors
@@ -294,7 +307,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
           <Tag.CheckableTag
             checked={severityFilter === "warning"}
             onChange={() => setSeverityFilter("warning")}
-            role="button"
             aria-label="Warning severities"
           >
             Warnings
@@ -305,7 +317,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
           <Tag.CheckableTag
             checked={findingTypeFilter === "all"}
             onChange={() => setFindingTypeFilter("all")}
-            role="button"
             aria-label="All finding types"
           >
             All
@@ -317,7 +328,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
               key={findingType}
               checked={findingTypeFilter === findingType}
               onChange={() => setFindingTypeFilter(findingType)}
-              role="button"
               aria-label={`Finding type ${FINDING_TYPE_LABELS[findingType]}`}
             >
               {FINDING_TYPE_LABELS[findingType]}
@@ -329,7 +339,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
           <Tag.CheckableTag
             checked={objectKindFilter === "all"}
             onChange={() => setObjectKindFilter("all")}
-            role="button"
             aria-label="All object kinds"
           >
             All
@@ -339,7 +348,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
               key={objectKind}
               checked={objectKindFilter === objectKind}
               onChange={() => setObjectKindFilter(objectKind)}
-              role="button"
               aria-label={`Object kind ${OBJECT_KIND_LABELS[objectKind] || objectKind}`}
             >
               {OBJECT_KIND_LABELS[objectKind] || objectKind}
@@ -351,7 +359,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
           <Tag.CheckableTag
             checked={scopeTypeFilter === "all"}
             onChange={() => setScopeTypeFilter("all")}
-            role="button"
             aria-label="All scopes"
           >
             All
@@ -361,7 +368,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
               key={scopeType}
               checked={scopeTypeFilter === scopeType}
               onChange={() => setScopeTypeFilter(scopeType)}
-              role="button"
               aria-label={`Scope ${scopeType}`}
             >
               {scopeType}
@@ -373,7 +379,6 @@ export const GovernanceAuditTab = ({ onOpen }: GovernanceAuditTabProps) => {
           <Tag.CheckableTag
             checked={hasRelatedObjectOnly}
             onChange={(checked) => setHasRelatedObjectOnly(checked)}
-            role="button"
             aria-label="Has related object"
           >
             Has related object

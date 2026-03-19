@@ -20,6 +20,7 @@ import {
 } from "lucide-react"
 import { Modal, Tag, Tooltip, Input, Slider, Switch, Button, message } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { buildWorkspaceChatSessionKey } from "@/store/workspace-chat-session-key"
 import { useWorkspaceStore } from "@/store/workspace"
 import { useStoreMessageOption } from "@/store/option"
 import { useStoreChatModelSettings } from "@/store/model"
@@ -33,6 +34,7 @@ import { DEFAULT_RAG_SETTINGS } from "@/services/rag/unified-rag"
 import { formatCost } from "@/utils/model-pricing"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import type { WorkspaceSource, WorkspaceSourceType } from "@/types/workspace"
+import type { ChatScope } from "@/types/chat-scope"
 import {
   applyVariantToMessage,
   normalizeMessageVariants
@@ -1189,6 +1191,16 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   const selectedModel = useStoreMessageOption((s) => s.selectedModel)
   const setSelectedModel = useStoreMessageOption((s) => s.setSelectedModel)
   const chatApiProvider = useStoreChatModelSettings((s) => s.apiProvider)
+  const chatScope = React.useMemo<ChatScope | undefined>(
+    () =>
+      workspaceId
+        ? {
+            type: "workspace",
+            workspaceId
+          }
+        : undefined,
+    [workspaceId]
+  )
 
   // Message option hook
   const {
@@ -1210,7 +1222,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     setHistoryId,
     serverChatId,
     setServerChatId
-  } = useMessageOption({})
+  } = useMessageOption({ scope: chatScope })
 
   // RAG state from store
   const setRagMediaIds = useStoreMessageOption((s) => s.setRagMediaIds)
@@ -1294,7 +1306,14 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     count: 0,
     lastAttemptAt: 0
   })
-  const workspaceSessionId = workspaceId || WORKSPACE_CONVERSATION_ID
+  const workspaceSessionId = React.useMemo(
+    () =>
+      buildWorkspaceChatSessionKey(
+        workspaceId || WORKSPACE_CONVERSATION_ID,
+        workspaceChatReferenceId || workspaceId || WORKSPACE_CONVERSATION_ID
+      ),
+    [workspaceChatReferenceId, workspaceId]
+  )
 
   // Smart scroll for chat messages
   const { containerRef, isAutoScrollToBottom, autoScrollToBottom } =
@@ -2231,11 +2250,15 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     setLorebookActivityError(null)
     setLorebookActivityForbidden(false)
     try {
-      const response = await tldwClient.getChatLorebookDiagnostics(serverChatId, {
-        page: 1,
-        size: LOREBOOK_ACTIVITY_PAGE_SIZE,
-        order: "desc"
-      })
+      const response = await tldwClient.getChatLorebookDiagnostics(
+        serverChatId,
+        {
+          page: 1,
+          size: LOREBOOK_ACTIVITY_PAGE_SIZE,
+          order: "desc"
+        },
+        chatScope ? { scope: chatScope } : undefined
+      )
       const turns = Array.isArray(response?.turns) ? response.turns : []
       const normalizedTurns: LorebookActivityTurn[] = turns
         .slice(0, LOREBOOK_ACTIVITY_PAGE_SIZE)
@@ -2263,17 +2286,21 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     } finally {
       setLorebookActivityLoading(false)
     }
-  }, [serverChatId])
+  }, [chatScope, serverChatId])
 
   const handleExportLorebookActivity = React.useCallback(async () => {
     if (!serverChatId || exportingLorebookActivity) return
     setExportingLorebookActivity(true)
     try {
-      const response = await tldwClient.getChatLorebookDiagnostics(serverChatId, {
-        page: 1,
-        size: LOREBOOK_ACTIVITY_EXPORT_PAGE_SIZE,
-        order: "asc"
-      })
+      const response = await tldwClient.getChatLorebookDiagnostics(
+        serverChatId,
+        {
+          page: 1,
+          size: LOREBOOK_ACTIVITY_EXPORT_PAGE_SIZE,
+          order: "asc"
+        },
+        chatScope ? { scope: chatScope } : undefined
+      )
       const payload = {
         exported_at: new Date().toISOString(),
         chat_id: String(serverChatId),
@@ -2296,7 +2323,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     } finally {
       setExportingLorebookActivity(false)
     }
-  }, [exportingLorebookActivity, messageApi, serverChatId])
+  }, [chatScope, exportingLorebookActivity, messageApi, serverChatId])
 
   React.useEffect(() => {
     if (!hasMessages || !serverChatId) {
@@ -2337,9 +2364,13 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     if (!serverChatId || sharingConversation) return
     setSharingConversation(true)
     try {
-      const result = await tldwClient.createConversationShareLink(serverChatId, {
-        label: "Workspace share"
-      })
+      const result = await tldwClient.createConversationShareLink(
+        serverChatId,
+        {
+          label: "Workspace share"
+        },
+        chatScope ? { scope: chatScope } : undefined
+      )
       const shareUrl = buildConversationShareUrl(window.location.origin, {
         share_path: result?.share_path ?? null,
         token: result?.token ?? null
@@ -2361,7 +2392,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
     } finally {
       setSharingConversation(false)
     }
-  }, [serverChatId, sharingConversation, messageApi, t])
+  }, [chatScope, serverChatId, sharingConversation, messageApi, t])
 
   // Fetch slash commands once (UX-006)
   React.useEffect(() => {
@@ -2403,8 +2434,7 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
   }, [selectedModel, chatApiProvider])
 
   // Conversation instance ID (use workspace ID or fallback)
-  const conversationInstanceId =
-    workspaceChatReferenceId || workspaceId || WORKSPACE_CONVERSATION_ID
+  const conversationInstanceId = workspaceSessionId
   const showConnectionBanner =
     statusGuardrailsEnabled &&
     (submitError !== null ||

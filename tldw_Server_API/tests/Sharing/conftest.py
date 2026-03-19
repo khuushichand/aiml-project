@@ -7,7 +7,7 @@ import pytest
 
 from tldw_Server_API.app.core.AuthNZ.migrations import (
     migration_001_create_users_table,
-    migration_072_create_sharing_tables,
+    migration_077_create_sharing_tables,
 )
 
 
@@ -27,13 +27,13 @@ class _FakePool:
         if row is None:
             return None
         cols = [d[0] for d in cur.description]
-        return dict(zip(cols, row))
+        return dict(zip(cols, row, strict=True))
 
     async def fetchall(self, sql: str, params: tuple = ()) -> list[dict]:
         cur = self._conn.execute(sql, params)
         rows = cur.fetchall()
         cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in rows]
+        return [dict(zip(cols, row, strict=True)) for row in rows]
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def sharing_db():
         "INSERT INTO users (id, username, email, password_hash) VALUES (2, 'bob', 'bob@test.com', 'hash')"
     )
     conn.commit()
-    migration_072_create_sharing_tables(conn)
+    migration_077_create_sharing_tables(conn)
     yield conn
     conn.close()
 

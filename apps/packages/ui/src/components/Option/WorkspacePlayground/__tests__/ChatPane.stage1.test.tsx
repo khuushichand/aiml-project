@@ -23,6 +23,7 @@ const mockOnSubmit = vi.fn()
 const mockRegenerateLastMessage = vi.fn()
 const mockDeleteMessage = vi.fn()
 const mockEditMessage = vi.fn()
+const mockUseMessageOption = vi.fn()
 const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
   () => ({
     mockScheduleWorkspaceUndoAction: vi.fn(),
@@ -165,7 +166,10 @@ vi.mock("@/store/model", () => ({
 }))
 
 vi.mock("@/hooks/useMessageOption", () => ({
-  useMessageOption: () => messageOptionState
+  useMessageOption: (...args: unknown[]) => {
+    mockUseMessageOption(...args)
+    return messageOptionState
+  }
 }))
 
 vi.mock("@/components/Common/Playground/Message", () => ({
@@ -184,7 +188,7 @@ vi.mock("@/components/Common/Playground/Message", () => ({
         <button
           type="button"
           aria-label={`delete-message-${currentMessageIndex ?? -1}`}
-          onClick={() => void onDeleteMessage()}
+          onClick={() => void onDeleteMessage(currentMessageIndex ?? -1)}
         >
           Delete
         </button>
@@ -258,6 +262,7 @@ describe("ChatPane Stage 1 reliability and controls", () => {
     messageOptionState.streaming = false
     messageOptionState.isProcessing = false
     mockOnSubmit.mockResolvedValue(undefined)
+    mockUseMessageOption.mockReset()
 
     mockGetWorkspaceChatSession.mockImplementation((workspaceId: string) => {
       return workspaceSessions.get(workspaceId) ?? null
@@ -287,6 +292,14 @@ describe("ChatPane Stage 1 reliability and controls", () => {
         message: "Shortcut submission",
         image: ""
       })
+    })
+  })
+
+  it("passes workspace scope into the shared chat hook", () => {
+    render(<ChatPane />)
+
+    expect(mockUseMessageOption).toHaveBeenCalledWith({
+      scope: { type: "workspace", workspaceId: "workspace-a" }
     })
   })
 
@@ -518,7 +531,9 @@ describe("ChatPane Stage 1 reliability and controls", () => {
     messageOptionState.historyId = "history-a"
     messageOptionState.serverChatId = "server-chat-a"
 
-    workspaceSessions.set("workspace-b", {
+    workspaceStoreState.workspaceChatReferenceId = "session-a"
+
+    workspaceSessions.set("workspace-b::session-b", {
       messages: [
         {
           isBot: true,
@@ -535,10 +550,10 @@ describe("ChatPane Stage 1 reliability and controls", () => {
     const { rerender } = render(<ChatPane />)
 
     workspaceStoreState.workspaceId = "workspace-b"
-    workspaceStoreState.workspaceChatReferenceId = "workspace-b"
+    workspaceStoreState.workspaceChatReferenceId = "session-b"
     rerender(<ChatPane />)
 
-    expect(mockSaveWorkspaceChatSession).toHaveBeenCalledWith("workspace-a", {
+    expect(mockSaveWorkspaceChatSession).toHaveBeenCalledWith("workspace-a::session-a", {
       messages: [
         {
           id: "a-1",

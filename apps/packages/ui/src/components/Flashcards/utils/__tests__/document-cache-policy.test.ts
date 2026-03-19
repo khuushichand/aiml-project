@@ -16,6 +16,7 @@ function makeFlashcard(overrides: Partial<import("@/services/flashcards").Flashc
     interval_days: 0,
     repetitions: 0,
     lapses: 0,
+    queue_state: "new" as const,
     due_at: "2026-03-13T00:00:00Z",
     created_at: "2026-03-12T00:00:00Z",
     last_reviewed_at: null,

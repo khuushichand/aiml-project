@@ -239,7 +239,12 @@ export const PlaygroundChat = React.forwardRef<PlaygroundChatHandle, PlaygroundC
   );
   const previousMessageCount = React.useRef(messages.length);
 
+  const prevStableHistoryIdRef = React.useRef(stableHistoryId);
   React.useEffect(() => {
+    if (prevStableHistoryIdRef.current !== stableHistoryId) {
+      previousMessageCount.current = 0;
+      prevStableHistoryIdRef.current = stableHistoryId;
+    }
     const hasStableId = Boolean(serverChatId || stableHistoryId);
     if (
       !hasStableId &&
@@ -2218,6 +2223,10 @@ export const PlaygroundChat = React.forwardRef<PlaygroundChatHandle, PlaygroundC
             <div className="mx-auto max-w-xl rounded-xl border border-destructive/30 bg-destructive/5 px-5 py-4 text-center text-sm text-text">
               {selectedServerChatLoadFailureMessage}
             </div>
+          </div>
+        ) : messages.length === 0 && serverChatLoadState === "loading" ? (
+          <div className="mt-32 flex w-full items-center justify-center">
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-primary" />
           </div>
         ) : (
           messages.length === 0 &&

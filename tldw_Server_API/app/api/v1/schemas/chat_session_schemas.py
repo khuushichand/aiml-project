@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingOverride
 
 ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
 ALLOWED_ASSISTANT_KINDS = ("character", "persona")
@@ -137,6 +138,14 @@ class ChatSessionUpdate(BaseModel):
 class ChatSessionResponse(BaseModel):
     """Schema for chat session responses."""
     id: str = Field(..., description="UUID of the chat session")
+    scope_type: Literal["global", "workspace"] = Field(
+        "global",
+        description="Conversation scope type",
+    )
+    workspace_id: Optional[str] = Field(
+        None,
+        description="Workspace ID when scope_type='workspace'",
+    )
     character_id: int | None = Field(None, description="ID of the associated character")
     assistant_kind: Literal["character", "persona"] | None = Field(
         None,
@@ -455,6 +464,13 @@ class CharacterChatCompletionV2Request(BaseModel):
         None,
         description="LLM provider (e.g., openai, anthropic, local-llm). When omitted, server default provider settings are used.",
     )
+    routing: Optional[RoutingOverride] = Field(
+        None,
+        description=(
+            "Optional server-side model-router overrides when model='auto', including routing "
+            "mode, objective, provider boundary, and failure handling."
+        ),
+    )
     model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Sampling temperature")
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0, description="Nucleus sampling probability")
@@ -464,6 +480,12 @@ class CharacterChatCompletionV2Request(BaseModel):
     tools: Optional[list[dict[str, Any]]] = Field(None, description="Tool definitions")
     tool_choice: Optional[dict[str, Any]] = Field(None, description="Tool choice specification")
     stream: Optional[bool] = Field(False, description="If true, stream the assistant response (SSE)")
+
+    @model_validator(mode="after")
+    def _validate_routing_requires_auto_model(self) -> "CharacterChatCompletionV2Request":
+        if self.routing is not None and str(self.model or "").strip().lower() != "auto":
+            raise ValueError("routing overrides are only allowed when model='auto'")
+        return self
 
 
 class CharacterChatCompletionV2Response(BaseModel):

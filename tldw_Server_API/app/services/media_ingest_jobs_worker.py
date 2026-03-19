@@ -252,6 +252,7 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
                 db_path=str(db_path),
                 client_id=str(client_id),
                 temp_dir=temp_dir,
+                user_id=int(user_id) if user_id.isdigit() else None,
                 cancel_check=cancel_check,
             )
         else:

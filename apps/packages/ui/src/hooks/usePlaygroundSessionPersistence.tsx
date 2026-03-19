@@ -197,7 +197,8 @@ export function usePlaygroundSessionPersistence() {
       clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
     }
-    const snapshot = latestSessionSnapshotRef.current
+    // Prefer a fresh snapshot over the ref to avoid saving stale state on unmount.
+    const snapshot = buildPersistableSessionSnapshot() ?? latestSessionSnapshotRef.current
     if (!snapshot) return
     void resolveCurrentScopeKey().then((scopeKey) => {
       saveSession({
@@ -205,7 +206,7 @@ export function usePlaygroundSessionPersistence() {
         scopeKey
       })
     })
-  }, [resolveCurrentScopeKey, saveSession])
+  }, [buildPersistableSessionSnapshot, resolveCurrentScopeKey, saveSession])
 
   const flushPendingSessionSaveRef = useRef(flushPendingSessionSave)
 

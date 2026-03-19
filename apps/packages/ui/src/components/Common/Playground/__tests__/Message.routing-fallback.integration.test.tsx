@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 import React from "react"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PlaygroundMessage } from "../Message"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 
 const storageOverrides = vi.hoisted(() => new Map<string, unknown>())
 const detectCharacterMoodMock = vi.hoisted(() =>
   vi.fn(() => ({ label: "neutral", confidence: 0.5, topic: null }))
 )
+const initializeMock = vi.hoisted(() => vi.fn(async () => undefined))
+const saveChatKnowledgeMock = vi.hoisted(() => vi.fn(async () => undefined))
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -86,7 +89,17 @@ vi.mock("@/components/Sidepanel/Chat/ToolCallBlock", () => ({
 }))
 
 vi.mock("../MessageActionsBar", () => ({
-  MessageActionsBar: () => <div data-testid="message-actions" />
+  MessageActionsBar: ({
+    onSaveKnowledge
+  }: {
+    onSaveKnowledge?: (makeFlashcard: boolean) => void
+  }) => (
+    <div data-testid="message-actions">
+      <button type="button" onClick={() => onSaveKnowledge?.(false)}>
+        Save to Notes
+      </button>
+    </div>
+  )
 }))
 
 vi.mock("../ReasoningBlock", () => ({
@@ -147,8 +160,8 @@ vi.mock("@/hooks/useTldwAudioStatus", () => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
-    initialize: vi.fn(async () => undefined),
-    saveChatKnowledge: vi.fn(async () => undefined),
+    initialize: initializeMock,
+    saveChatKnowledge: saveChatKnowledgeMock,
     createChatCompletion: vi.fn(async () => ({}))
   }
 }))
@@ -278,6 +291,8 @@ const baseProps: React.ComponentProps<typeof PlaygroundMessage> = {
 describe("PlaygroundMessage routing fallback integration", () => {
   beforeEach(() => {
     storageOverrides.clear()
+    initializeMock.mockClear()
+    saveChatKnowledgeMock.mockClear()
     detectCharacterMoodMock.mockReset()
     detectCharacterMoodMock.mockReturnValue({
       label: "neutral",
@@ -420,5 +435,32 @@ describe("PlaygroundMessage routing fallback integration", () => {
       "final response"
     )
     expect(screen.queryByTestId("playground-streaming-plain-text")).toBeNull()
+  })
+
+  it("passes workspace scope when saving chat knowledge", async () => {
+    render(
+      <PlaygroundMessage
+        {...baseProps}
+        serverChatId="workspace-chat-1"
+        serverMessageId="message-1"
+        {...({
+          scope: { type: "workspace", workspaceId: "ws-1" }
+        } as any)}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Save to Notes" }))
+
+    expect(tldwClient.saveChatKnowledge).toHaveBeenCalledWith(
+      {
+        conversation_id: "workspace-chat-1",
+        message_id: "message-1",
+        snippet: "Sample assistant output",
+        make_flashcard: false
+      },
+      {
+        scope: { type: "workspace", workspaceId: "ws-1" }
+      }
+    )
   })
 })

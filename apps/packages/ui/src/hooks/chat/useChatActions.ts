@@ -52,6 +52,7 @@ import {
   type AssistantSelection,
 } from "@/types/assistant-selection";
 import type { Character } from "@/types/character";
+import type { ChatScope } from "@/types/chat-scope";
 import type {
   MessageSteeringMode,
   MessageSteeringPromptTemplates,
@@ -183,6 +184,7 @@ type UseChatActionsOptions = {
   messageSteeringMode: MessageSteeringMode;
   messageSteeringForceNarrate: boolean;
   clearMessageSteering: () => void;
+  scope?: ChatScope;
 };
 
 export const useChatActions = ({
@@ -262,6 +264,7 @@ export const useChatActions = ({
   messageSteeringMode,
   messageSteeringForceNarrate,
   clearMessageSteering,
+  scope,
 }: UseChatActionsOptions) => {
   const sendInFlightRef = React.useRef(false);
   const discardCurrentTurnOnAbortRef = React.useRef(false);
@@ -457,10 +460,14 @@ export const useChatActions = ({
         );
         const mirrorContent = buildImageGenerationEventMirrorContent(payload as any);
         if (mirrorContent) {
-          const result = (await tldwClient.addChatMessage(effectiveChatId, {
-            role: "assistant",
-            content: mirrorContent,
-          })) as { id?: string | number } | null;
+          const result = (await tldwClient.addChatMessage(
+            effectiveChatId,
+            {
+              role: "assistant",
+              content: mirrorContent,
+            },
+            scope ? { scope } : undefined,
+          )) as { id?: string | number } | null;
           await updateImageEventSyncMetadata(payload, {
             status: "synced",
             policy: payload.imageEventSyncPolicy ?? "inherit",
@@ -509,7 +516,9 @@ export const useChatActions = ({
         serverChatExternalRef,
         historyId,
         temporaryChat,
-        createChat: (payload) => tldwClient.createChat(payload),
+        scope,
+        createChat: (payload, createOptions) =>
+          tldwClient.createChat(payload, createOptions),
         ensureServerChatHistoryId,
         invalidateServerChatHistory,
         setServerChatId,
@@ -540,6 +549,7 @@ export const useChatActions = ({
       serverChatState,
       serverChatTitle,
       serverChatTopic,
+      scope,
       setServerChatAssistantId,
       setServerChatAssistantKind,
       setServerChatCharacterId,
@@ -622,6 +632,7 @@ export const useChatActions = ({
     notification,
     discardCurrentTurnOnAbortRef,
     selectedCharacter,
+    scope,
   });
 
   // --- buildChatModeParams ---
@@ -747,6 +758,7 @@ export const useChatActions = ({
     saveMessageOnSuccess,
     saveMessageOnError,
     discardCurrentTurnOnAbortRef,
+    scope,
   });
 
   // --- Compare submit ---
@@ -935,7 +947,6 @@ export const useChatActions = ({
       imageGenerationSource,
       imageEventSyncPolicy,
     }).catch((error) => {
-      sendInFlightRef.current = false;
       throw error;
     });
     const baseMessages = chatHistory || messages;
@@ -1411,6 +1422,7 @@ export const useChatActions = ({
       });
       setIsProcessing(false);
       setStreaming(false);
+      setAbortController(null);
     } finally {
       sendInFlightRef.current = false;
       if (replyActive && capturedReplyTargetId != null) {

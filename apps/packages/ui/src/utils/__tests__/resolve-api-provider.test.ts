@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { tldwModels } from "@/services/tldw"
 import { inferProviderFromModel } from "@/utils/provider-registry"
 import {
+  isAutoModelId,
   resolveApiProviderForModel,
   resolveExplicitProviderForSelectedModel
 } from "../resolve-api-provider"
@@ -93,6 +94,20 @@ describe("resolveApiProviderForModel", () => {
         modelId: "custom-random-model-123"
       })
     ).resolves.toBeUndefined()
+  })
+
+  it("does not apply provider hints to auto model selections", async () => {
+    await expect(
+      resolveApiProviderForModel({
+        modelId: "auto",
+        providerHint: "openai"
+      })
+    ).resolves.toBeUndefined()
+  })
+
+  it("normalizes prefixed mixed-case auto model selections", () => {
+    expect(isAutoModelId(" tldw:Auto ")).toBe(true)
+    expect(isAutoModelId("gpt-4.1")).toBe(false)
   })
 })
 

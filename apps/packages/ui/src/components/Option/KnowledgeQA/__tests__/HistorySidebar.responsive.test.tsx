@@ -7,6 +7,7 @@ const messageOpenMock = vi.fn()
 const state = {
   isMobile: false,
   historySidebarOpen: true,
+  historyHydrated: true,
   currentThreadId: null as string | null,
   searchHistory: [] as Array<{
     id: string
@@ -39,6 +40,7 @@ vi.mock("@/hooks/useAntdMessage", () => ({
 vi.mock("../KnowledgeQAProvider", () => ({
   useKnowledgeQA: () => ({
     searchHistory: state.searchHistory,
+    historyHydrated: state.historyHydrated,
     currentThreadId: state.currentThreadId,
     historySidebarOpen: state.historySidebarOpen,
     setHistorySidebarOpen: state.setHistorySidebarOpen,
@@ -55,6 +57,7 @@ describe("HistorySidebar responsive layout", () => {
     vi.clearAllMocks()
     state.isMobile = false
     state.historySidebarOpen = true
+    state.historyHydrated = true
     state.currentThreadId = null
     state.searchHistory = []
     localStorage.clear()
@@ -94,24 +97,18 @@ describe("HistorySidebar responsive layout", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("keeps the history skeleton visible for the 500ms loading gate", () => {
-    vi.useFakeTimers()
+  it("keeps the history skeleton visible until provider hydration completes", () => {
     state.searchHistory = []
+    state.historyHydrated = false
 
-    render(<HistorySidebar />)
+    const { rerender } = render(<HistorySidebar />)
     expect(screen.getByLabelText("Loading search history")).toBeInTheDocument()
+    expect(screen.queryByText("No search history yet")).not.toBeInTheDocument()
 
-    act(() => {
-      vi.advanceTimersByTime(499)
-    })
-    expect(screen.getByLabelText("Loading search history")).toBeInTheDocument()
+    state.historyHydrated = true
+    rerender(<HistorySidebar />)
 
-    act(() => {
-      vi.advanceTimersByTime(1)
-    })
-    expect(
-      screen.queryByLabelText("Loading search history")
-    ).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Loading search history")).not.toBeInTheDocument()
     expect(screen.getByText("No search history yet")).toBeInTheDocument()
   })
 
@@ -313,5 +310,31 @@ describe("HistorySidebar responsive layout", () => {
     )
 
     clickSpy.mockRestore()
+  })
+
+  it("dismisses the collapsed-sidebar hint without crashing when storage writes are blocked", () => {
+    vi.useFakeTimers()
+    state.historySidebarOpen = false
+
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError")
+      })
+
+    try {
+      render(<HistorySidebar />)
+      expect(screen.getByRole("status")).toHaveTextContent("Expand history sidebar")
+
+      expect(() => {
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+      }).not.toThrow()
+
+      expect(screen.queryByRole("status")).not.toBeInTheDocument()
+    } finally {
+      setItemSpy.mockRestore()
+    }
   })
 })
