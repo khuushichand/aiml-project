@@ -12,6 +12,8 @@
 
 ### Task 1: Add Failing Absence Coverage For Hosted Ops And Assets
 
+Status: Complete
+
 **Files:**
 - Modify: `tldw_Server_API/tests/test_public_private_boundary.py`
 
@@ -45,6 +47,8 @@ python -m pytest tldw_Server_API/tests/test_public_private_boundary.py -v
 Expected: FAIL because those hosted assets still exist in the public repo.
 
 ### Task 2: Delete Hosted Ops And Deploy Assets From Public
+
+Status: Complete
 
 **Files:**
 - Delete: `Docs/Operations/Hosted_Staging_Operations_Runbook.md`
@@ -81,6 +85,8 @@ git commit -m "docs: remove hosted ops and deploy assets from public repo"
 
 ### Task 3: Remove Hosted Helper Scripts And Hosted Compose Tests
 
+Status: Complete
+
 **Files:**
 - Delete: `Helper_Scripts/validate_hosted_saas_profile.py`
 - Delete: `Helper_Scripts/Deployment/hosted_staging_preflight.py`
@@ -114,6 +120,8 @@ git commit -m "test: remove hosted helpers and compose tests from public repo"
 ```
 
 ### Task 4: Expand Boundary Enforcement To Public Asset Paths
+
+Status: Complete
 
 **Files:**
 - Modify: `Helper_Scripts/docs/check_public_private_boundary.py`
@@ -165,6 +173,8 @@ git commit -m "test: expand public hosted asset boundary enforcement"
 ```
 
 ### Task 5: Final Public Verification
+
+Status: Complete
 
 **Files:**
 - Verify only

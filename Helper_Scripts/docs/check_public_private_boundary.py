@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that public docs and frontend entrypoints do not reference private SaaS assets."""
+"""Check that public docs, deploy assets, and frontend entrypoints avoid private SaaS references."""
 
 from __future__ import annotations
 
@@ -13,7 +13,12 @@ SCAN_TARGETS = (
     "Docs/Published",
     "Docs/Operations",
     "Docs/Code_Documentation/Docs_Site_Guide.md",
+    "Docs/User_Guides/Server/Production_Hardening_Checklist.md",
+    "Dockerfiles",
     "Helper_Scripts/refresh_docs_published.sh",
+    "Helper_Scripts/Deployment",
+    "Helper_Scripts/Samples/Caddy",
+    "Helper_Scripts/validate_hosted_saas_profile.py",
     ".github/workflows/mkdocs.yml",
     "apps/tldw-frontend/pages/_app.tsx",
     "apps/tldw-frontend/pages/login.tsx",
@@ -24,12 +29,9 @@ SCAN_TARGETS = (
     "apps/tldw-frontend/pages/auth/reset-password.tsx",
     "apps/tldw-frontend/pages/auth/magic-link.tsx",
     "apps/tldw-frontend/components/layout/Header.tsx",
+    "tldw_Server_API/Config_Files",
+    "tldw_Server_API/app/core/Billing/README.md",
 )
-
-SKIP_PATHS = {
-    Path("Docs/Operations/Hosted_Staging_Operations_Runbook.md"),
-    Path("Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md"),
-}
 
 DENYLIST = {
     "Hosted_SaaS_Profile.md": "public surfaces should not point to the hosted SaaS profile doc",
@@ -69,8 +71,7 @@ def _iter_candidate_files() -> list[Path]:
 
 
 def _should_skip(path: Path) -> bool:
-    relative_path = path.relative_to(REPO_ROOT)
-    return relative_path in SKIP_PATHS
+    return False
 
 
 def _find_violations(path: Path) -> list[str]:
@@ -104,7 +105,7 @@ def main() -> int:
             print(f"- {violation}")
         return 1
 
-    print("OK: public docs and frontend entrypoints do not reference private SaaS assets.")
+    print("OK: public docs, deploy assets, and frontend entrypoints do not reference private SaaS assets.")
     return 0
 
 

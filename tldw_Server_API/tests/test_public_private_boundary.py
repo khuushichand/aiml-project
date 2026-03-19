@@ -51,10 +51,12 @@ def test_public_docs_do_not_point_self_host_users_to_hosted_runbooks() -> None:
     first_time_setup = Path("Docs/Published/Deployment/First_Time_Production_Setup.md").read_text(
         encoding="utf-8"
     )
-    staging_ops = Path("Docs/Operations/Hosted_Staging_Operations_Runbook.md").read_text(
+    production_hardening = Path(
+        "Docs/User_Guides/Server/Production_Hardening_Checklist.md"
+    ).read_text(
         encoding="utf-8"
     )
-    stripe_ops = Path("Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md").read_text(
+    billing_readme = Path("tldw_Server_API/app/core/Billing/README.md").read_text(
         encoding="utf-8"
     )
 
@@ -67,12 +69,16 @@ def test_public_docs_do_not_point_self_host_users_to_hosted_runbooks() -> None:
         "expected self-host production setup guide to avoid hosted production runbook links",
     )
     _require(
-        "Hosted_Staging_Runbook.md" not in stripe_ops,
-        "expected hosted Stripe ops doc to avoid public hosted staging runbook links",
+        "Hosted_SaaS_Profile.md" not in production_hardening,
+        "expected production hardening checklist to avoid public hosted SaaS profile links",
     )
     _require(
-        "Hosted_Production_Runbook.md" not in staging_ops,
-        "expected hosted staging ops doc to avoid public hosted production runbook links",
+        "validate_hosted_saas_profile.py" not in production_hardening,
+        "expected production hardening checklist to avoid public hosted validation helper references",
+    )
+    _require(
+        "Hosted_Stripe_Test_Mode_Runbook.md" not in billing_readme,
+        "expected billing README to avoid public hosted Stripe runbook links",
     )
 
 
@@ -126,6 +132,32 @@ def test_public_curated_tree_does_not_ship_hosted_deployment_docs() -> None:
         _require(
             not path.exists(),
             f"expected hosted doc to be absent from public tree: {path}",
+        )
+
+
+def test_public_repo_does_not_ship_hosted_ops_and_asset_paths() -> None:
+    hosted_paths = [
+        Path("Docs/Operations/Hosted_Staging_Operations_Runbook.md"),
+        Path("Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md"),
+        Path("Dockerfiles/docker-compose.hosted-saas-staging.yml"),
+        Path("Dockerfiles/docker-compose.hosted-saas-prod.yml"),
+        Path("Dockerfiles/docker-compose.hosted-saas-prod.local-postgres.yml"),
+        Path("tldw_Server_API/Config_Files/.env.hosted-staging.example"),
+        Path("tldw_Server_API/Config_Files/.env.hosted-production.example"),
+        Path("Helper_Scripts/Samples/Caddy/Caddyfile.hosted-saas.compose"),
+        Path("Helper_Scripts/Samples/Caddy/Caddyfile.hosted-saas.prod.compose"),
+        Path("Helper_Scripts/validate_hosted_saas_profile.py"),
+        Path("Helper_Scripts/Deployment/hosted_staging_preflight.py"),
+        Path("tldw_Server_API/tests/test_hosted_production_compose.py"),
+        Path("tldw_Server_API/tests/test_hosted_staging_compose.py"),
+        Path("tldw_Server_API/tests/test_hosted_staging_preflight.py"),
+        Path("tldw_Server_API/tests/AuthNZ/unit/test_validate_hosted_saas_profile.py"),
+    ]
+
+    for path in hosted_paths:
+        _require(
+            not path.exists(),
+            f"expected hosted asset to be absent from public repo: {path}",
         )
 
 
