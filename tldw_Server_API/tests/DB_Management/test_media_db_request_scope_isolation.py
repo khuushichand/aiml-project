@@ -118,6 +118,65 @@ def test_get_or_create_media_db_factory_caches_factory_per_user(monkeypatch) -> 
     assert len(created) == 1
 
 
+def test_resolve_media_db_for_user_reuses_shared_sqlite_backend_per_user(monkeypatch) -> None:
+    sentinel_backend = object()
+    backend_calls: list[tuple[str, str]] = []
+    database_calls: list[dict[str, object]] = []
+
+    class _FakeDatabase:
+        def __init__(self, *, db_path: str, client_id: str, backend=None):
+            self.db_path = db_path
+            self.client_id = client_id
+            self.backend = backend
+            self.default_org_id = None
+            self.default_team_id = None
+            database_calls.append(
+                {
+                    "db_path": db_path,
+                    "client_id": client_id,
+                    "backend": backend,
+                }
+            )
+
+        def release_context_connection(self) -> None:
+            return None
+
+    monkeypatch.setattr(deps, "_media_db_factories", {}, raising=False)
+    monkeypatch.setattr(deps, "_get_db_path_for_user", lambda user_id: Path(f"/tmp/{user_id}.db"), raising=True)
+    monkeypatch.setattr(deps, "get_content_backend_instance", lambda: None, raising=True)
+    monkeypatch.setattr(deps, "get_scope", lambda: None, raising=True)
+    monkeypatch.setattr(
+        media_db_session,
+        "_create_sqlite_backend",
+        lambda db_path, client_id: backend_calls.append((db_path, client_id)) or sentinel_backend,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        media_db_session,
+        "_load_default_media_database_factory",
+        lambda: _FakeDatabase,
+        raising=True,
+    )
+
+    first = deps._resolve_media_db_for_user(_make_user())
+    second = deps._resolve_media_db_for_user(_make_user())
+
+    assert first is not second
+    assert backend_calls == [("/tmp/1.db", "1")]
+    assert database_calls == [
+        {
+            "db_path": "/tmp/1.db",
+            "client_id": "1",
+            "backend": sentinel_backend,
+        },
+        {
+            "db_path": "/tmp/1.db",
+            "client_id": "1",
+            "backend": sentinel_backend,
+        },
+    ]
+
+
 def test_get_or_create_media_db_factory_accepts_string_user_ids_via_id_int(monkeypatch) -> None:
     created: list[object] = []
 
@@ -226,3 +285,43 @@ def test_media_db_validation_requires_full_legacy_helper_contract() -> None:
             incomplete,
             error_message="expected media db",
         )
+
+
+def test_request_owned_media_db_session_closes_owned_backend_pool_on_release() -> None:
+    events: list[str] = []
+
+    class _FakePool:
+        def close_all(self) -> None:
+            events.append("close_all")
+
+    class _FakeBackend:
+        def __init__(self) -> None:
+            self.pool = _FakePool()
+
+        def get_pool(self) -> _FakePool:
+            return self.pool
+
+    class _FakeDatabase:
+        def __init__(self) -> None:
+            self.backend = _FakeBackend()
+
+        def release_context_connection(self) -> None:
+            events.append("release_context_connection")
+
+        def close_connection(self) -> None:
+            events.append("close_connection")
+
+    session = media_db_session.MediaDbSession(
+        db_path="/tmp/request-owned.db",
+        client_id="scope-test",
+        database=_FakeDatabase(),
+        owns_backend_resources=True,
+    )
+
+    session.release_context_connection()
+
+    assert events == [
+        "release_context_connection",
+        "close_connection",
+        "close_all",
+    ]

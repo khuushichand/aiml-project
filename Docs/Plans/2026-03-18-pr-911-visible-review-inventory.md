@@ -22,6 +22,7 @@
 - `slides.py`: `generate_from_media(...)` now types the dependency as `MediaDbSession`
 - `embeddings_abtest_service.py`: A/B test helpers now use `MediaDbLike` instead of `Any`
 - `media_module.py`: ownership fallback no longer treats any DB-like object as module-owned, and `_get_semantic_retriever(...)` now has an explicit return annotation
+- `media_db/runtime/session.py`: request-owned `MediaDbSession` teardown now releases owned backend resources instead of leaving a request-owned pool alive
 
 ### Historical Or Explicitly No-Op
 - `claims_clustering.py`: docstring-only suggestion, no behavioral issue
@@ -31,6 +32,7 @@
 - `document_references.py`: endpoint/raw-SQL architecture suggestion is valid but too large for this PR tail
 - `process_code.py`: cosmetic typing/name suggestion; previously evaluated and not worth verification churn here
 - `media_module.py`: broader public/private DB API consistency suggestion reduced to the verified ownership fix above; no further correctness issue established
+- Qodo top-level comment: the `fts.py` typing issue, `main.py` raw-SQL issue, and `runtime/factory.py` explicit-backend issue were already fixed on the current branch head by the time this inventory was rechecked
 
 ## Stage 2: Address Actionable Items
 **Goal**: Implement and verify any remaining valid review findings still visible on the PR.

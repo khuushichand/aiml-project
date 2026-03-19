@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import suppress
 from typing import Callable
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
@@ -52,6 +53,7 @@ class MediaDbSession:
     database: object
     org_id: int | None = None
     team_id: int | None = None
+    owns_backend_resources: bool = False
 
     def __getattr__(self, item: str) -> object:
         """Delegate attribute access to the wrapped database implementation."""
@@ -62,6 +64,20 @@ class MediaDbSession:
         release = getattr(self.database, "release_context_connection", None)
         if callable(release):
             release()
+        if not self.owns_backend_resources:
+            return
+        close_connection = getattr(self.database, "close_connection", None)
+        if callable(close_connection):
+            with suppress(AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                close_connection()
+        backend = getattr(self.database, "backend", None)
+        get_pool = getattr(backend, "get_pool", None)
+        if callable(get_pool):
+            with suppress(AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                pool = get_pool()
+                close_all = getattr(pool, "close_all", None)
+                if callable(close_all):
+                    close_all()
 
 
 @dataclass(slots=True)
@@ -131,6 +147,7 @@ class MediaDbFactory:
             database=database,
             org_id=org_id,
             team_id=team_id,
+            owns_backend_resources=self.backend is None,
         )
 
     def close(self) -> None:
