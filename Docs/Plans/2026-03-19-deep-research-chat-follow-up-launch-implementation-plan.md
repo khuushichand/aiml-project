@@ -22,8 +22,10 @@
 Add coverage that proves:
 
 - `POST /api/v1/research/runs` accepts bounded `follow_up` and passes it to `ResearchService.create_session(...)`
+- `POST /api/v1/research/runs` rejects invalid or foreign `chat_handoff.chat_id`
 - `ResearchService.create_session(...)` persists `follow_up_json`
 - malformed follow-up payloads are rejected at the schema boundary
+- oversized follow-up background payloads are rejected at the schema boundary
 
 Add a planner test that proves:
 
@@ -67,6 +69,7 @@ git commit -m "test(research): cover chat follow-up launches"
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Research/service.py`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Research/planner.py`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Research/jobs.py`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/api/v1/endpoints/research_runs.py`
 
 **Step 1: Extend the create contract**
 
@@ -81,6 +84,7 @@ In `research_runs_schemas.py`:
   - follow-up create request
 - add optional `follow_up` to `ResearchRunCreateRequest`
 - reject unknown keys in the nested follow-up models
+- enforce explicit list and string caps on the nested follow-up background models
 
 **Step 2: Persist follow-up metadata**
 
@@ -95,6 +99,7 @@ In `service.py`:
 
 - accept `follow_up`
 - pass normalized `follow_up_json` into DB session creation
+- validate `chat_handoff.chat_id` ownership before persisting follow-up launch linkage
 
 **Step 3: Use follow-up background in planning**
 
@@ -142,6 +147,7 @@ git commit -m "feat(research): support chat follow-up launch metadata"
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts`
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/tldw-frontend/lib/api/researchRuns.ts`
 
 **Step 1: Write the failing package-client test**
 
@@ -150,6 +156,8 @@ Add coverage that proves `TldwApiClient.createResearchRun(...)`:
 - posts to `/api/v1/research/runs`
 - sends `chat_handoff.chat_id`
 - sends optional bounded `follow_up`
+
+Add a small contract test or type-alignment assertion for `apps/tldw-frontend/lib/api/researchRuns.ts` so the web research client request shape stays in sync with the backend create contract.
 
 **Step 2: Write the failing real-form test**
 
@@ -161,6 +169,7 @@ In a new `PlaygroundForm.follow-up-research.test.tsx`:
 - assert a saved thread with draft text can open the confirmation surface
 - assert the attached-background toggle appears only when attached context exists
 - assert `Start research` calls the follow-up launch path with the bounded payload
+- assert `Start research` is single-flight while launch is pending
 - assert the normal send button still uses the normal send path
 
 Use the same real-form harness style as the other `PlaygroundForm` integration tests so this verifies real DOM and callbacks, not only prop plumbing.
@@ -210,6 +219,7 @@ git commit -m "test(chat): cover follow-up research launch"
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/services/tldw/TldwApiClient.ts`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/ComposerToolbar.tsx` only if the existing toolbar prop surface needs a small extension for the new action placement
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/tldw-frontend/lib/api/researchRuns.ts`
 
 **Step 1: Add the package-side research create client**
 
@@ -218,6 +228,10 @@ In `TldwApiClient.ts`:
 - add typed request helpers for bounded follow-up launch
 - add `createResearchRun(...)`
 - keep the request shape aligned with backend `chat_handoff` and `follow_up`
+
+In `apps/tldw-frontend/lib/api/researchRuns.ts`:
+
+- extend `ResearchRunCreateRequest` with the same optional `follow_up` type
 
 **Step 2: Add the composer confirmation surface**
 
@@ -244,6 +258,11 @@ On successful launch:
 - close the confirmation surface
 - preserve the draft and attached context
 
+While launch is in flight:
+
+- disable `Start research`
+- ignore repeated clicks so the same draft cannot create duplicate runs
+
 Do not navigate to `/research`, send a chat message, or alter the normal send flow.
 
 **Step 4: Run the focused frontend tests to verify they pass**
@@ -254,7 +273,8 @@ Run:
 ./apps/packages/ui/node_modules/.bin/vitest run \
   apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx \
-  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/ComposerToolbar.test.tsx
 ```
 
 Expected:
@@ -300,6 +320,7 @@ Run:
   apps/packages/ui/src/services/tldw/__tests__/TldwApiClient.research-runs.test.ts \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/ComposerToolbar.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx
 ```

@@ -85,6 +85,11 @@ Behavior:
 
 This keeps the contract simple and avoids inventing temporary-chat research linkage in the same slice.
 
+Backend requirement:
+
+- when `chat_handoff.chat_id` is provided for follow-up launch, the backend must verify that the chat exists and is owned by the current user before creating the linked research run
+- invalid or foreign chat IDs must fail the create request instead of producing an orphaned linked run
+
 ### 2. Direct Launch From Chat
 
 Add a package-side direct launch client:
@@ -100,6 +105,8 @@ The composer action should:
 5. keep the user in the same chat thread
 
 The new run will then appear in the existing linked-run status stack without any transcript changes.
+
+To keep the frontend contracts aligned, the web research client type in `apps/tldw-frontend/lib/api/researchRuns.ts` should also be extended with the same optional `follow_up` contract, even if v1 launch uses the package-side client only.
 
 ### 3. Follow-Up Payload Contract
 
@@ -133,6 +140,16 @@ This remains intentionally bounded:
 - no raw artifacts
 - no full claims corpus
 
+V1 caps should be explicit and enforced on the backend create schema:
+
+- `question` and `research_url` should keep request-safe max lengths
+- `outline`: max `7` items
+- `key_claims`: max `5` items
+- `unresolved_questions`: max `5` items
+- each outline title, claim text, and unresolved-question string should have a bounded max length
+
+The follow-up request should reject oversized background payloads rather than silently persisting arbitrarily large `follow_up_json`.
+
 ### 4. Persisted Follow-Up Metadata On The Research Run
 
 The follow-up seed cannot remain request-only because the planning job runs asynchronously after session creation.
@@ -149,6 +166,8 @@ Store the normalized follow-up metadata there so:
 - session creation remains deterministic
 - planning jobs can read the same bounded background later
 - follow-up provenance is inspectable for debugging
+
+The persisted payload should remain the same normalized bounded shape accepted at the API boundary. It should not re-expand into bundle-sized data at persistence time.
 
 ### 5. Planning Hook
 
@@ -211,6 +230,12 @@ Reason:
 - this action starts background research but does not send a chat message
 - preserving the draft avoids destructive surprise on a non-send action
 
+Duplicate-launch protection is required:
+
+- disable `Start research` while a follow-up launch is in flight
+- ignore repeated clicks while pending
+- the minimum v1 guarantee is that one double-click does not create two runs
+
 On failure:
 
 - show a local action-level error or toast consistent with existing composer launch failures
@@ -271,6 +296,7 @@ In [service.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep
 
 - accept `follow_up`
 - persist it via `follow_up_json`
+- verify `chat_handoff.chat_id` ownership before persisting linkage for follow-up launches
 
 In [planner.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Research/planner.py) and [jobs.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/tldw_Server_API/app/core/Research/jobs.py):
 
@@ -284,11 +310,16 @@ In [TldwApiClient.ts](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktree
 - add typed follow-up request interfaces
 - add `createResearchRun(...)`
 
+In [researchRuns.ts](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/tldw-frontend/lib/api/researchRuns.ts):
+
+- extend `ResearchRunCreateRequest` with the same optional `follow_up` type so frontend research API contracts do not drift
+
 In [PlaygroundForm.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx):
 
 - add the composer action
 - add the confirmation surface
 - wire direct launch and linked-run query invalidation
+- add a pending launch lock so duplicate clicks cannot create duplicate runs
 
 The linked-run stack itself does not need a structural change.
 
@@ -297,6 +328,7 @@ The linked-run stack itself does not need a structural change.
 ### Backend
 
 - research run create endpoint accepts optional bounded `follow_up`
+- research run create rejects foreign or nonexistent `chat_handoff.chat_id` for follow-up launches
 - malformed or oversized follow-up background is rejected cleanly
 - service persists `follow_up_json`
 - planning uses follow-up background to influence focus-area generation
@@ -308,11 +340,13 @@ The linked-run stack itself does not need a structural change.
 - it is disabled for empty drafts
 - it is disabled for temporary chats
 - the background toggle appears only when attached research exists
+- starting research is single-flight and repeat clicks while pending do not create duplicate launches
 - starting research calls the package-side client with:
   - `query`
   - `chat_handoff.chat_id`
   - optional `follow_up`
 - success invalidates the linked-runs query without sending a chat message
+- the web research client type stays aligned with the backend request contract
 - the normal `Send` path remains unchanged
 
 ## Risks
