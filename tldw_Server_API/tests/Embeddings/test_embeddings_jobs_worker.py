@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -332,6 +333,63 @@ async def test_embeddings_worker_marks_non_retryable_media_error(monkeypatch):
         await jobs_worker._handle_job(job)
 
     assert captured["error"] == ("user-777", 777, "embedding backend unavailable")
+
+
+@pytest.mark.asyncio
+async def test_embeddings_worker_malformed_custom_content_does_not_mark_media_error(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(jobs_worker, "_resolve_model_provider", lambda *_: ("test-model", "test-provider"))
+    monkeypatch.setattr(
+        jobs_worker,
+        "_mark_media_embeddings_error",
+        lambda *, user_id, media_id, error_message: captured.setdefault(
+            "error",
+            (user_id, media_id, error_message),
+        ),
+    )
+
+    job = {
+        "job_type": "content_embeddings",
+        "payload": {
+            "item_id": 555,
+            "content": "custom content payload",
+            "collection_name": "kanban_user_1",
+        },
+        "owner_user_id": "user-555",
+    }
+
+    with pytest.raises(jobs_worker.EmbeddingsJobError) as excinfo:
+        await jobs_worker._handle_job(job)
+
+    assert "missing document_id" in str(excinfo.value)
+    assert "error" not in captured
+
+
+def test_mark_media_embeddings_complete_is_best_effort(monkeypatch):
+    fake_db = SimpleNamespace(close_connection=lambda: None)
+
+    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
+    monkeypatch.setattr(jobs_worker, "create_media_database", lambda **_: fake_db)
+
+    def fail_mark_media_as_processed(**_kwargs):
+        raise RuntimeError("db write failed")
+
+    monkeypatch.setattr(jobs_worker, "mark_media_as_processed", fail_mark_media_as_processed)
+
+    jobs_worker._mark_media_embeddings_complete(user_id="user-1", media_id=1)
+
+
+def test_mark_media_embeddings_error_is_best_effort(monkeypatch):
+    fake_db = SimpleNamespace(
+        mark_embeddings_error=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("db write failed")),
+        close_connection=lambda: None,
+    )
+
+    monkeypatch.setattr(jobs_worker, "get_user_media_db_path", lambda *_: "/tmp/media.db")
+    monkeypatch.setattr(jobs_worker, "create_media_database", lambda **_: fake_db)
+
+    jobs_worker._mark_media_embeddings_error(user_id="user-1", media_id=1, error_message="boom")
 
 
 @pytest.mark.asyncio

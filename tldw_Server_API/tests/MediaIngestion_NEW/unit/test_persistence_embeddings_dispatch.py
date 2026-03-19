@@ -7,6 +7,7 @@ import pytest
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing import persistence
 import tldw_Server_API.app.core.Embeddings.jobs_adapter as jobs_adapter_module
+import tldw_Server_API.app.api.v1.endpoints.media_embeddings as media_embeddings_endpoint
 
 
 pytestmark = pytest.mark.unit
@@ -210,3 +211,103 @@ async def test_schedule_media_add_embeddings_auto_falls_back_to_background(monke
         1,
         {"path_kind": "background", "outcome": "success"},
     ) in metrics.increment_calls
+
+
+@pytest.mark.asyncio
+async def test_background_embeddings_task_treats_status_as_sole_success_signal(monkeypatch):
+    monkeypatch.setenv("MEDIA_ADD_EMBEDDINGS_MODE", "background")
+    tasks = _FakeBackgroundTasks()
+    captured: dict[str, Any] = {}
+
+    async def fake_get_media_content(media_id: int, _db: Any) -> dict[str, Any]:
+        return {"media_item": {"metadata": {}}, "content": {"content": f"media-{media_id}"}}
+
+    async def fake_generate_embeddings_for_media(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": "error",
+            "allow_zero_embeddings": True,
+            "error": "unexpected empty embedding batch",
+        }
+
+    monkeypatch.setattr(media_embeddings_endpoint, "get_media_content", fake_get_media_content)
+    monkeypatch.setattr(media_embeddings_endpoint, "generate_embeddings_for_media", fake_generate_embeddings_for_media)
+    monkeypatch.setattr(
+        persistence,
+        "_mark_media_embeddings_complete",
+        lambda db, media_id: captured.setdefault("complete", media_id) or True,
+    )
+    monkeypatch.setattr(
+        persistence,
+        "_mark_media_embeddings_error",
+        lambda db, media_id, error_detail: captured.setdefault("error", (media_id, str(error_detail))) or True,
+    )
+
+    await persistence.schedule_media_add_embeddings(
+        results=[{"status": "Success", "db_id": 42, "media_type": "document"}],
+        form_data=SimpleNamespace(
+            generate_embeddings=True,
+            embedding_model="model-a",
+            embedding_provider="provider-a",
+            chunk_size=100,
+            chunk_overlap=20,
+            media_type="document",
+        ),
+        background_tasks=tasks,  # type: ignore[arg-type]
+        db=SimpleNamespace(),
+        current_user=SimpleNamespace(id=9),
+    )
+
+    func, args, kwargs = tasks.calls[0]
+    await func(*args, **kwargs)
+
+    assert "complete" not in captured
+    assert captured["error"] == (42, "unexpected empty embedding batch")
+
+
+@pytest.mark.asyncio
+async def test_background_embeddings_task_marks_error_when_completion_persist_fails(monkeypatch):
+    monkeypatch.setenv("MEDIA_ADD_EMBEDDINGS_MODE", "background")
+    tasks = _FakeBackgroundTasks()
+    captured: dict[str, Any] = {"complete_calls": 0}
+
+    async def fake_get_media_content(media_id: int, _db: Any) -> dict[str, Any]:
+        return {"media_item": {"metadata": {}}, "content": {"content": f"media-{media_id}"}}
+
+    async def fake_generate_embeddings_for_media(**_kwargs: Any) -> dict[str, Any]:
+        return {"status": "success", "embedding_count": 1, "chunks_processed": 1}
+
+    monkeypatch.setattr(media_embeddings_endpoint, "get_media_content", fake_get_media_content)
+    monkeypatch.setattr(media_embeddings_endpoint, "generate_embeddings_for_media", fake_generate_embeddings_for_media)
+
+    def fail_mark_complete(db: Any, media_id: int) -> bool:
+        captured["complete_calls"] += 1
+        captured["complete_media_id"] = media_id
+        return False
+
+    def record_mark_error(db: Any, media_id: int, error_detail: Any) -> bool:
+        captured["error"] = (media_id, str(error_detail))
+        return True
+
+    monkeypatch.setattr(persistence, "_mark_media_embeddings_complete", fail_mark_complete)
+    monkeypatch.setattr(persistence, "_mark_media_embeddings_error", record_mark_error)
+
+    await persistence.schedule_media_add_embeddings(
+        results=[{"status": "Success", "db_id": 73, "media_type": "document"}],
+        form_data=SimpleNamespace(
+            generate_embeddings=True,
+            embedding_model="model-a",
+            embedding_provider="provider-a",
+            chunk_size=100,
+            chunk_overlap=20,
+            media_type="document",
+        ),
+        background_tasks=tasks,  # type: ignore[arg-type]
+        db=SimpleNamespace(),
+        current_user=SimpleNamespace(id=9),
+    )
+
+    func, args, kwargs = tasks.calls[0]
+    await func(*args, **kwargs)
+
+    assert captured["complete_calls"] == 1
+    assert captured["error"] == (73, "Failed to persist embeddings completion status")

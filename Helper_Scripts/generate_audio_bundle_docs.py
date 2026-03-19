@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    AutomationTier,
     AudioBundle,
     AudioBundleStep,
     AudioResourceProfile,
@@ -19,21 +20,8 @@ def _step_labels(steps: Iterable[AudioBundleStep]) -> list[str]:
     return [step.label for step in steps]
 
 
-def _plan_summary(bundle: AudioBundle, category: str, variant_key: str) -> str:
-    entries = getattr(bundle, f"{category}_plan", []) or []
-    parts: list[str] = []
-    for entry in entries:
-        engine = entry.get("engine", "unknown")
-        variants = entry.get(variant_key, []) or []
-        if variants:
-            parts.append(f"{engine} [{', '.join(variants)}]")
-        else:
-            parts.append(engine)
-    return ", ".join(parts) if parts else "none"
-
-
-def _profile_plan_summary(profile: AudioResourceProfile, category: str, variant_key: str) -> str:
-    entries = getattr(profile, f"{category}_plan", []) or []
+def _plan_summary(resource: AudioBundle | AudioResourceProfile, category: str, variant_key: str) -> str:
+    entries = getattr(resource, f"{category}_plan", []) or []
     parts: list[str] = []
     for entry in entries:
         engine = entry.get("engine", "unknown")
@@ -78,12 +66,12 @@ def generate_bundle_docs_text() -> str:
     for bundle in catalog.bundles:
         profiles = ", ".join(profile.label for profile in _iter_profiles(bundle))
         automatic_steps = _step_labels([
-            *[step for step in bundle.system_prerequisites if step.automation_tier == "automatic"],
+            *[step for step in bundle.system_prerequisites if step.automation_tier == AutomationTier.AUTOMATIC],
             *bundle.python_dependencies,
             *bundle.model_assets,
         ])
         guided_steps = _step_labels([
-            step for step in bundle.system_prerequisites if step.automation_tier != "automatic"
+            step for step in bundle.system_prerequisites if step.automation_tier != AutomationTier.AUTOMATIC
         ])
         lines.append(
             "| `{bundle_id}` | {label} | {profiles} | {offline} | {pack_compatibility} | {stt} | {tts} | {automatic} | {guided} |".format(
@@ -101,12 +89,12 @@ def generate_bundle_docs_text() -> str:
 
     for bundle in catalog.bundles:
         automatic_steps = [
-            *[step for step in bundle.system_prerequisites if step.automation_tier == "automatic"],
+            *[step for step in bundle.system_prerequisites if step.automation_tier == AutomationTier.AUTOMATIC],
             *bundle.python_dependencies,
             *bundle.model_assets,
         ]
         guided_steps = [
-            step for step in bundle.system_prerequisites if step.automation_tier != "automatic"
+            step for step in bundle.system_prerequisites if step.automation_tier != AutomationTier.AUTOMATIC
         ]
         lines.extend(
             [
@@ -132,8 +120,8 @@ def generate_bundle_docs_text() -> str:
                     label=profile.label,
                     resource_class=profile.resource_class or "unspecified",
                     disk=profile.estimated_disk_gb or "n/a",
-                    stt=_profile_plan_summary(profile, "stt", "models"),
-                    tts=_profile_plan_summary(profile, "tts", "variants"),
+                    stt=_plan_summary(profile, "stt", "models"),
+                    tts=_plan_summary(profile, "tts", "variants"),
                 )
             )
 

@@ -198,7 +198,7 @@ def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
 def _should_track_media_state(job_type: str | None, payload: dict[str, Any]) -> bool:
     if job_type != _CONTENT_JOB_TYPE:
         return True
-    return not (payload.get("collection_name") and payload.get("document_id"))
+    return not (payload.get("collection_name") or payload.get("document_id"))
 
 
 def _mark_media_embeddings_complete(*, user_id: str, media_id: int) -> None:
@@ -206,7 +206,7 @@ def _mark_media_embeddings_complete(*, user_id: str, media_id: int) -> None:
     db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
     try:
         mark_media_as_processed(db_instance=db, media_id=media_id)
-    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Failed to mark media {} embeddings complete for user {}: {}",
             media_id,
@@ -223,7 +223,7 @@ def _mark_media_embeddings_error(*, user_id: str, media_id: int, error_message: 
     db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
     try:
         db.mark_embeddings_error(media_id, error_message)
-    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Failed to mark media {} embeddings error for user {}: {}",
             media_id,

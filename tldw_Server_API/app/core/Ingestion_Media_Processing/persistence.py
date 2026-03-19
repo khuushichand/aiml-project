@@ -1603,7 +1603,8 @@ def _resolve_media_add_embeddings_mode(form_data: Any) -> str:
     return "auto"
 
 
-def _mark_media_embeddings_complete(db: Any, media_id: int) -> None:
+def _mark_media_embeddings_complete(db: Any, media_id: int) -> bool:
+    """Mark embeddings generation as completed for a media row."""
     try:
         mark_media_as_processed(db_instance=db, media_id=media_id)
     except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
@@ -1612,9 +1613,12 @@ def _mark_media_embeddings_complete(db: Any, media_id: int) -> None:
             media_id,
             exc,
         )
+        return False
+    return True
 
 
-def _mark_media_embeddings_error(db: Any, media_id: int, error_detail: Any) -> None:
+def _mark_media_embeddings_error(db: Any, media_id: int, error_detail: Any) -> bool:
+    """Record an embeddings failure against a media row when possible."""
     detail = str(error_detail or "Embedding generation failed").strip() or "Embedding generation failed"
     try:
         mark_error = getattr(db, "mark_embeddings_error", None)
@@ -1627,6 +1631,15 @@ def _mark_media_embeddings_error(db: Any, media_id: int, error_detail: Any) -> N
             media_id,
             exc,
         )
+        return False
+    except AttributeError as exc:
+        logger.warning(
+            "Failed to mark embeddings error for media {}: {}",
+            media_id,
+            exc,
+        )
+        return False
+    return True
 
 
 def _coerce_positive_int(value: Any, default: int) -> int:
@@ -1849,9 +1862,13 @@ async def schedule_media_add_embeddings(
                         chunk_overlap=chunk_overlap,
                         user_id=user_id,
                     )
-                    allow_zero = bool(result_emb.get("allow_zero_embeddings"))
-                    if result_emb.get("status") == "success" or allow_zero:
-                        _mark_media_embeddings_complete(db, media_id)
+                    if result_emb.get("status") == "success":
+                        if not _mark_media_embeddings_complete(db, media_id):
+                            _mark_media_embeddings_error(
+                                db,
+                                media_id,
+                                "Failed to persist embeddings completion status",
+                            )
                     else:
                         _mark_media_embeddings_error(
                             db,
