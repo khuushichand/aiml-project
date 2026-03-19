@@ -52,4 +52,11 @@
 **Goal**: Post an accurate PR update summarizing what remains visible and why.
 **Success Criteria**: PR comment reflects exact current state without conflating threads, reviews, and top-level comments.
 **Tests**: `git status --short` clean after push
-**Status**: In Progress
+**Status**: Complete
+
+### PR Update
+- Posted accurate PR status note: `issuecomment-4087103017`
+- The note distinguishes:
+  - visible review history on the PR page
+  - unresolved inline thread count
+  - remaining technically actionable items on the branch head
