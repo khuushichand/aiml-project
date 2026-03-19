@@ -193,10 +193,17 @@ async def _handle_planning_phase(
         return halted
     _set_phase_progress(db=db, session=session, phase="drafting_plan", job_id=job_id)
 
+    follow_up_background = None
+    if isinstance(getattr(session, "follow_up_json", None), dict):
+        background = session.follow_up_json.get("background")
+        if isinstance(background, dict):
+            follow_up_background = background
+
     plan = build_initial_plan(
         query=session.query,
         source_policy=session.source_policy,
         autonomy_mode=session.autonomy_mode,
+        follow_up_background=follow_up_background,
     )
 
     artifact_store.write_json(

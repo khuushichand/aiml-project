@@ -72,6 +72,7 @@ async def create_research_run(
         limits_json=payload.limits_json,
         provider_overrides=payload.provider_overrides,
         chat_handoff=payload.chat_handoff.model_dump() if payload.chat_handoff is not None else None,
+        follow_up=payload.follow_up.model_dump() if payload.follow_up is not None else None,
     )
     return ResearchRunResponse.model_validate(session)
 

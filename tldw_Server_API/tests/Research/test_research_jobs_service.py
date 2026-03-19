@@ -47,7 +47,7 @@ def _restore_user_db_base(previous: str | None) -> None:
         pass
 
 
-def _seed_chat_thread(*, owner_user_id: str, chat_db_path) -> str:
+def _seed_chat_thread(*, owner_user_id: str, chat_db_path, chat_id: str | None = None) -> str:
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -65,6 +65,7 @@ def _seed_chat_thread(*, owner_user_id: str, chat_db_path) -> str:
     )
     chat_id = chat_db.add_conversation(
         {
+            "id": chat_id,
             "character_id": character_id,
             "title": "Deep Research Chat",
             "client_id": owner_user_id,
@@ -104,9 +105,12 @@ def test_create_session_enqueues_planning_job(tmp_path):
     assert captured["payload"]["session_id"] == session.id
 
 
-def test_create_session_persists_chat_handoff_linkage(tmp_path):
+def test_create_session_persists_chat_handoff_linkage(tmp_path, monkeypatch):
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     from tldw_Server_API.app.core.Research.service import ResearchService
+
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_dbs")
 
     class DummyJobs:
         def create_job(self, **kwargs):
@@ -118,16 +122,24 @@ def test_create_session_persists_chat_handoff_linkage(tmp_path):
         job_manager=DummyJobs(),
     )
 
-    session = service.create_session(
-        owner_user_id="1",
-        query="Investigate regulatory timeline",
-        source_policy="balanced",
-        autonomy_mode="checkpointed",
-        chat_handoff={
-            "chat_id": "chat_123",
-            "launch_message_id": "msg_456",
-        },
-    )
+    try:
+        _seed_chat_thread(
+            owner_user_id="1",
+            chat_db_path=DatabasePaths.get_chacha_db_path("1"),
+            chat_id="chat_123",
+        )
+        session = service.create_session(
+            owner_user_id="1",
+            query="Investigate regulatory timeline",
+            source_policy="balanced",
+            autonomy_mode="checkpointed",
+            chat_handoff={
+                "chat_id": "chat_123",
+                "launch_message_id": "msg_456",
+            },
+        )
+    finally:
+        _restore_user_db_base(previous_user_db_base)
 
     db = ResearchSessionsDB(tmp_path / "research.db")
     handoff = db.get_chat_handoff(session.id)
@@ -317,9 +329,12 @@ def test_create_session_without_chat_handoff_has_no_linkage(tmp_path):
     assert db.get_chat_handoff(session.id) is None
 
 
-def test_list_chat_linked_runs_returns_compact_bounded_rows_ordered_by_session_update(tmp_path):
+def test_list_chat_linked_runs_returns_compact_bounded_rows_ordered_by_session_update(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
     from tldw_Server_API.app.core.Research.service import ResearchService
+
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_dbs")
 
     class DummyJobs:
         def create_job(self, **kwargs):
@@ -332,54 +347,67 @@ def test_list_chat_linked_runs_returns_compact_bounded_rows_ordered_by_session_u
     )
     db = ResearchSessionsDB(tmp_path / "research.db")
 
-    terminal_ids: list[str] = []
-    for index in range(12):
-        session = service.create_session(
+    try:
+        _seed_chat_thread(
             owner_user_id="owner-1",
-            query=f"terminal query {index}",
+            chat_db_path=DatabasePaths.get_chacha_db_path("owner-1"),
+            chat_id="chat_123",
+        )
+        _seed_chat_thread(
+            owner_user_id="owner-2",
+            chat_db_path=DatabasePaths.get_chacha_db_path("owner-2"),
+            chat_id="chat_123",
+        )
+        terminal_ids: list[str] = []
+        for index in range(12):
+            session = service.create_session(
+                owner_user_id="owner-1",
+                query=f"terminal query {index}",
+                source_policy="balanced",
+                autonomy_mode="checkpointed",
+                chat_handoff={"chat_id": "chat_123"},
+            )
+            terminal_ids.append(session.id)
+            db.update_phase(
+                session.id,
+                phase="completed",
+                status="completed",
+                completed_at=f"2026-03-08T00:00:{index:02d}+00:00",
+                active_job_id=None,
+            )
+
+        active = service.create_session(
+            owner_user_id="owner-1",
+            query="active query",
             source_policy="balanced",
             autonomy_mode="checkpointed",
             chat_handoff={"chat_id": "chat_123"},
         )
-        terminal_ids.append(session.id)
         db.update_phase(
-            session.id,
+            active.id,
+            phase="collecting",
+            status="running",
+            active_job_id="22",
+        )
+
+        other_user = service.create_session(
+            owner_user_id="owner-2",
+            query="other user query",
+            source_policy="balanced",
+            autonomy_mode="checkpointed",
+            chat_handoff={"chat_id": "chat_123"},
+        )
+        db.update_phase(
+            other_user.id,
             phase="completed",
             status="completed",
-            completed_at=f"2026-03-08T00:00:{index:02d}+00:00",
+            completed_at="2026-03-08T00:02:00+00:00",
             active_job_id=None,
         )
 
-    active = service.create_session(
-        owner_user_id="owner-1",
-        query="active query",
-        source_policy="balanced",
-        autonomy_mode="checkpointed",
-        chat_handoff={"chat_id": "chat_123"},
-    )
-    db.update_phase(
-        active.id,
-        phase="collecting",
-        status="running",
-        active_job_id="22",
-    )
-
-    other_user = service.create_session(
-        owner_user_id="owner-2",
-        query="other user query",
-        source_policy="balanced",
-        autonomy_mode="checkpointed",
-        chat_handoff={"chat_id": "chat_123"},
-    )
-    db.update_phase(
-        other_user.id,
-        phase="completed",
-        status="completed",
-        completed_at="2026-03-08T00:02:00+00:00",
-        active_job_id=None,
-    )
-
-    runs = service.list_chat_linked_runs(owner_user_id="owner-1", chat_id="chat_123")
+        runs = service.list_chat_linked_runs(owner_user_id="owner-1", chat_id="chat_123")
+    finally:
+        _restore_user_db_base(previous_user_db_base)
 
     assert [run.run_id for run in runs] == [
         active.id,

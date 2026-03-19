@@ -40,6 +40,7 @@ class ResearchSessionRow:
     autonomy_mode: str
     limits_json: dict[str, Any]
     provider_overrides_json: dict[str, Any]
+    follow_up_json: dict[str, Any]
     control_state: str
     progress_percent: float | None
     progress_message: str | None
@@ -146,6 +147,7 @@ class ResearchSessionsDB:
                     autonomy_mode TEXT NOT NULL,
                     limits_json TEXT NOT NULL DEFAULT '{}',
                     provider_overrides_json TEXT NOT NULL DEFAULT '{}',
+                    follow_up_json TEXT NOT NULL DEFAULT '{}',
                     control_state TEXT NOT NULL DEFAULT 'running',
                     progress_percent REAL,
                     progress_message TEXT,
@@ -228,6 +230,10 @@ class ResearchSessionsDB:
                 conn.execute(
                     "ALTER TABLE research_sessions ADD COLUMN provider_overrides_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            if "follow_up_json" not in columns:
+                conn.execute(
+                    "ALTER TABLE research_sessions ADD COLUMN follow_up_json TEXT NOT NULL DEFAULT '{}'"
+                )
             if "control_state" not in columns:
                 conn.execute(
                     "ALTER TABLE research_sessions ADD COLUMN control_state TEXT NOT NULL DEFAULT 'running'"
@@ -254,6 +260,11 @@ class ResearchSessionsDB:
             provider_overrides_json=(
                 _parse_json_dict(row["provider_overrides_json"])
                 if "provider_overrides_json" in keys
+                else {}
+            ),
+            follow_up_json=(
+                _parse_json_dict(row["follow_up_json"])
+                if "follow_up_json" in keys
                 else {}
             ),
             control_state=(
@@ -374,6 +385,7 @@ class ResearchSessionsDB:
         autonomy_mode: str,
         limits_json: dict[str, Any],
         provider_overrides_json: dict[str, Any] | None = None,
+        follow_up_json: dict[str, Any] | None = None,
         status: str = "queued",
         phase: str = "drafting_plan",
     ) -> ResearchSessionRow:
@@ -381,14 +393,15 @@ class ResearchSessionsDB:
         now = _utc_now()
         payload = json.dumps(limits_json or {}, sort_keys=True)
         provider_payload = json.dumps(provider_overrides_json or {}, sort_keys=True)
+        follow_up_payload = json.dumps(follow_up_json or {}, sort_keys=True)
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO research_sessions (
                     id, owner_user_id, status, phase, query, source_policy,
-                    autonomy_mode, limits_json, provider_overrides_json, control_state,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    autonomy_mode, limits_json, provider_overrides_json, follow_up_json,
+                    control_state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -400,6 +413,7 @@ class ResearchSessionsDB:
                     autonomy_mode,
                     payload,
                     provider_payload,
+                    follow_up_payload,
                     "running",
                     now,
                     now,

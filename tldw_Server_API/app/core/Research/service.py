@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import (
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env
+from tldw_Server_API.app.core.config import settings
 
 from .artifact_store import ResearchArtifactStore
 from .checkpoint_service import apply_checkpoint_patch
@@ -126,6 +128,42 @@ class ResearchService:
         return str(job_uuid) if job_uuid else None
 
     @staticmethod
+    def _normalize_json_mapping(value: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        return json.loads(json.dumps(value, sort_keys=True))
+
+    @staticmethod
+    def _has_explicit_chat_db_base() -> bool:
+        configured = settings.get("USER_DB_BASE_DIR")
+        if configured:
+            return True
+        from os import getenv
+
+        return bool(getenv("USER_DB_BASE_DIR"))
+
+    @staticmethod
+    def _validate_chat_handoff_chat_id(*, owner_user_id: str, chat_id: str) -> None:
+        chat_db_path = DatabasePaths.get_chacha_db_path(owner_user_id)
+        if not chat_db_path.exists() and not ResearchService._has_explicit_chat_db_base():
+            raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found")
+        request_user_id = str(owner_user_id).strip()
+        try:
+            with sqlite3.connect(str(chat_db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT client_id FROM conversations WHERE id = ? AND deleted = 0",
+                    (chat_id,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found") from exc
+        if row is None:
+            raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found")
+        stored_client_id = str(row["client_id"] or "").strip()
+        if stored_client_id != request_user_id:
+            raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found")
+
+    @staticmethod
     def _is_executable_phase(phase: str) -> bool:
         return phase in _EXECUTABLE_PHASES
 
@@ -203,9 +241,17 @@ class ResearchService:
         limits_json: dict[str, Any] | None = None,
         provider_overrides: dict[str, Any] | None = None,
         chat_handoff: dict[str, Any] | None = None,
+        follow_up: dict[str, Any] | None = None,
     ) -> ResearchSessionRow:
         """Create a research session and enqueue the planning phase."""
         db = self._db_for_user(owner_user_id)
+        normalized_follow_up = self._normalize_json_mapping(follow_up)
+        if chat_handoff:
+            chat_id = str(chat_handoff.get("chat_id") or "").strip()
+            if not chat_id:
+                raise ValueError("chat_handoff.chat_id is required")
+            self._validate_chat_handoff_chat_id(owner_user_id=owner_user_id, chat_id=chat_id)
+
         session = db.create_session(
             owner_user_id=owner_user_id,
             query=query,
@@ -213,11 +259,9 @@ class ResearchService:
             autonomy_mode=autonomy_mode,
             limits_json=limits_json or {},
             provider_overrides_json=provider_overrides or {},
+            follow_up_json=normalized_follow_up,
         )
         if chat_handoff:
-            chat_id = str(chat_handoff.get("chat_id") or "").strip()
-            if not chat_id:
-                raise ValueError("chat_handoff.chat_id is required")
             launch_message_id = chat_handoff.get("launch_message_id")
             db.create_chat_handoff(
                 session_id=session.id,
