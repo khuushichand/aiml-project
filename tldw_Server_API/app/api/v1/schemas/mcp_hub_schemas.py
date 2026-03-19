@@ -933,6 +933,16 @@ class GovernancePackSummaryResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     bundle_digest: str
+    source_type: str | None = None
+    source_location: str | None = None
+    source_ref_requested: str | None = None
+    source_subpath: str | None = None
+    source_commit_resolved: str | None = None
+    pack_content_digest: str | None = None
+    source_verified: bool | None = None
+    source_verification_mode: str | None = None
+    source_fetched_at: datetime | str | None = None
+    fetched_by: int | None = None
     manifest: dict[str, Any] = Field(default_factory=dict)
     is_active_install: bool = True
     superseded_by_governance_pack_id: int | None = None

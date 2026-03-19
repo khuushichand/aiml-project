@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -333,6 +334,118 @@ async def test_governance_pack_repo_tracks_active_install_state_and_upgrade_line
     )
 
     assert [item["to_pack_version"] for item in history] == ["1.1.0"]
+
+
+@pytest.mark.asyncio
+async def test_governance_pack_repo_tracks_source_provenance_and_candidate_storage(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = await _make_repo(tmp_path, monkeypatch)
+
+    created = await repo.create_governance_pack(
+        pack_id="researcher-pack",
+        pack_version="1.0.0",
+        pack_schema_version=1,
+        capability_taxonomy_version=1,
+        adapter_contract_version=1,
+        title="Researcher Pack",
+        description="Initial install",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        bundle_digest="a" * 64,
+        manifest={"pack_id": "researcher-pack", "pack_version": "1.0.0"},
+        normalized_ir={"profiles": []},
+        actor_id=7,
+        source_type="git",
+        source_location="https://github.com/example/researcher-pack.git",
+        source_ref_requested="main",
+        source_subpath="packs/researcher",
+        source_commit_resolved="abc123",
+        pack_content_digest="c" * 64,
+        source_verified=True,
+        source_verification_mode="git-commit",
+        source_fetched_at=datetime.now(timezone.utc),
+        fetched_by=7,
+    )
+
+    assert created["source_type"] == "git"
+    assert created["source_location"] == "https://github.com/example/researcher-pack.git"
+    assert created["source_ref_requested"] == "main"
+    assert created["source_subpath"] == "packs/researcher"
+    assert created["source_commit_resolved"] == "abc123"
+    assert created["pack_content_digest"] == "c" * 64
+    assert created["source_verified"] is True
+    assert created["source_verification_mode"] == "git-commit"
+    assert created["fetched_by"] == 7
+
+    listed = await repo.list_governance_packs(owner_scope_type="user", owner_scope_id=7)
+    assert listed[0]["source_type"] == "git"
+    assert listed[0]["source_location"] == "https://github.com/example/researcher-pack.git"
+    assert listed[0]["pack_content_digest"] == "c" * 64
+
+    candidate = await repo.create_governance_pack_source_candidate(
+        source_type="git",
+        source_location="https://github.com/example/researcher-pack.git",
+        source_ref_requested="main",
+        source_subpath="packs/researcher",
+        source_commit_resolved="abc123",
+        pack_content_digest="c" * 64,
+        source_verified=True,
+        source_verification_mode="git-commit",
+        fetched_by=7,
+    )
+    assert candidate["source_type"] == "git"
+    assert candidate["pack_content_digest"] == "c" * 64
+
+    candidate_by_id = await repo.get_governance_pack_source_candidate(int(candidate["id"]))
+    assert candidate_by_id is not None
+    assert candidate_by_id["source_commit_resolved"] == "abc123"
+    assert candidate_by_id["source_subpath"] == "packs/researcher"
+
+    candidate_list = await repo.list_governance_pack_source_candidates()
+    assert candidate_list[0]["source_location"] == "https://github.com/example/researcher-pack.git"
+
+    superseding = await repo.create_governance_pack(
+        pack_id="researcher-pack",
+        pack_version="1.1.0",
+        pack_schema_version=1,
+        capability_taxonomy_version=1,
+        adapter_contract_version=1,
+        title="Researcher Pack",
+        description="Upgrade target",
+        owner_scope_type="user",
+        owner_scope_id=7,
+        bundle_digest="b" * 64,
+        manifest={"pack_id": "researcher-pack", "pack_version": "1.1.0"},
+        normalized_ir={"profiles": []},
+        actor_id=7,
+        source_type="git",
+        source_location="https://github.com/example/researcher-pack.git",
+        source_ref_requested="main",
+        source_subpath="packs/researcher",
+        source_commit_resolved="def456",
+        pack_content_digest="d" * 64,
+        source_verified=False,
+        source_verification_mode="git-commit",
+        source_fetched_at=datetime.now(timezone.utc),
+        fetched_by=7,
+        is_active_install=False,
+    )
+
+    updated = await repo.update_governance_pack_install_state(
+        int(created["id"]),
+        is_active_install=False,
+        superseded_by_governance_pack_id=int(superseding["id"]),
+        actor_id=7,
+    )
+    assert updated is not None
+    assert updated["is_active_install"] is False
+    assert updated["superseded_by_governance_pack_id"] == int(superseding["id"])
+    assert updated["source_type"] == "git"
+    assert updated["source_location"] == "https://github.com/example/researcher-pack.git"
+    assert updated["source_commit_resolved"] == "abc123"
+    assert updated["pack_content_digest"] == "c" * 64
 
 
 @pytest.mark.asyncio

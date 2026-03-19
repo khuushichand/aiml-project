@@ -118,6 +118,16 @@ class _FakeGovernancePackService:
                 "owner_scope_type": "user",
                 "owner_scope_id": 7,
                 "bundle_digest": "a" * 64,
+                "source_type": "git",
+                "source_location": "https://github.com/example/researcher-pack.git",
+                "source_ref_requested": "main",
+                "source_subpath": "packs/researcher",
+                "source_commit_resolved": "abc123",
+                "pack_content_digest": "b" * 64,
+                "source_verified": True,
+                "source_verification_mode": "git-commit",
+                "source_fetched_at": datetime.now(timezone.utc).isoformat(),
+                "fetched_by": 7,
                 "manifest": {
                     "pack_id": "researcher-pack",
                     "pack_version": "1.0.0",
@@ -783,8 +793,18 @@ def test_governance_pack_list_and_detail_include_provenance() -> None:
 
     assert list_resp.status_code == 200
     assert list_resp.json()[0]["pack_id"] == "researcher-pack"
+    assert list_resp.json()[0]["source_type"] == "git"
+    assert list_resp.json()[0]["source_location"] == "https://github.com/example/researcher-pack.git"
+    assert list_resp.json()[0]["source_commit_resolved"] == "abc123"
+    assert list_resp.json()[0]["pack_content_digest"] == "b" * 64
 
     assert detail_resp.status_code == 200
     detail_payload = detail_resp.json()
+    assert detail_payload["source_type"] == "git"
+    assert detail_payload["source_location"] == "https://github.com/example/researcher-pack.git"
+    assert detail_payload["source_ref_requested"] == "main"
+    assert detail_payload["source_subpath"] == "packs/researcher"
+    assert detail_payload["source_commit_resolved"] == "abc123"
+    assert detail_payload["pack_content_digest"] == "b" * 64
     assert detail_payload["imported_objects"][0]["source_object_id"] == "researcher.profile"
     assert detail_payload["imported_objects"][1]["object_type"] == "policy_assignment"

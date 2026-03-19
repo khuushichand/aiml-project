@@ -4173,6 +4173,60 @@ def migration_077_create_sharing_tables(conn: sqlite3.Connection) -> None:
     logger.info("Migration 077: Created sharing tables (shared_workspaces, share_tokens, share_audit_log, sharing_config)")
 
 
+def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection) -> None:
+    """Add governance-pack source provenance fields and prepared candidate storage."""
+
+    governance_pack_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_packs)").fetchall()
+    }
+    if "source_type" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_type TEXT")
+    if "source_location" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_location TEXT")
+    if "source_ref_requested" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_ref_requested TEXT")
+    if "source_subpath" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_subpath TEXT")
+    if "source_commit_resolved" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_commit_resolved TEXT")
+    if "pack_content_digest" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN pack_content_digest TEXT")
+    if "source_verified" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_verified INTEGER")
+    if "source_verification_mode" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_verification_mode TEXT")
+    if "source_fetched_at" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_fetched_at TIMESTAMP")
+    if "fetched_by" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN fetched_by INTEGER")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_source_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            source_location TEXT NOT NULL,
+            source_ref_requested TEXT,
+            source_subpath TEXT,
+            source_commit_resolved TEXT,
+            pack_content_digest TEXT NOT NULL,
+            source_verified INTEGER,
+            source_verification_mode TEXT,
+            source_fetched_at TIMESTAMP,
+            fetched_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
+        "ON mcp_governance_pack_source_candidates(source_type, source_location)"
+    )
+
+    conn.commit()
+    logger.info("Migration 078: Added governance-pack source provenance schema")
+
+
 def rollback_077_drop_sharing_tables(conn: sqlite3.Connection) -> None:
     """Rollback migration 077 by dropping sharing tables."""
     conn.execute("DROP TABLE IF EXISTS sharing_config")
@@ -4501,6 +4555,11 @@ def get_authnz_migrations() -> list[Migration]:
             "Create sharing tables",
             migration_077_create_sharing_tables,
             rollback_077_drop_sharing_tables,
+        ),
+        Migration(
+            78,
+            "Add governance-pack source provenance",
+            migration_078_add_governance_pack_source_provenance,
         ),
     ]
 
