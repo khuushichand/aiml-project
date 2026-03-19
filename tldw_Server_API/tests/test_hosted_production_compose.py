@@ -95,6 +95,12 @@ def test_hosted_production_compose_is_standalone_and_keeps_postgres_internal():
         "expected caddy to be the only public entrypoint",
     )
 
+    webui_service = services["webui"]
+    _require(
+        webui_service.get("ports", []) == [],
+        "expected webui to avoid public host ports",
+    )
+
     app_environment = app_service.get("environment", {})
     _require(
         app_environment.get("DATABASE_URL") == "${DATABASE_URL:?Set DATABASE_URL}",
@@ -103,6 +109,18 @@ def test_hosted_production_compose_is_standalone_and_keeps_postgres_internal():
     _require(
         app_environment.get("PUBLIC_WEB_BASE_URL") == "${PUBLIC_WEB_BASE_URL:?Set PUBLIC_WEB_BASE_URL}",
         "expected app service to require PUBLIC_WEB_BASE_URL",
+    )
+
+    webui_build_args = webui_service.get("build", {}).get("args", {})
+    _require(
+        webui_build_args.get("NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE") == "hosted",
+        "expected webui build args to bake hosted deployment mode",
+    )
+
+    webui_environment = webui_service.get("environment", {})
+    _require(
+        webui_environment.get("NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE") == "hosted",
+        "expected webui runtime env to set hosted deployment mode",
     )
 
     app_volumes = app_service.get("volumes", [])

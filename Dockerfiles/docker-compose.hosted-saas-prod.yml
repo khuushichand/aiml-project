@@ -12,6 +12,7 @@ services:
       dockerfile: Dockerfiles/Dockerfile.prod
     image: tldw-server:hosted-prod
     container_name: tldw-app-hosted-prod
+    restart: unless-stopped
     ports: []
     expose:
       - "8000"
@@ -59,6 +60,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: tldw-redis-hosted-prod
+    restart: unless-stopped
     ports: []
     expose:
       - "6379"
@@ -102,6 +104,7 @@ services:
   caddy:
     image: caddy:2
     container_name: tldw-caddy-hosted-prod
+    restart: unless-stopped
     depends_on:
       app:
         condition: service_healthy
