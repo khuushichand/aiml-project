@@ -100,7 +100,38 @@ Expected:
 - `/`, `/login`, and `/signup` return through the frontend origin
 - `/health`, `/ready`, and `/api/v1/billing/plans` route to the API behind the same public host
 
-## 6) Hand-off to Stripe and smoke verification
+## 6) Run the hosted staging preflight
+
+Use the preflight script after the stack is reachable over the public staging URL:
+
+```bash
+source .venv/bin/activate
+python Helper_Scripts/Deployment/hosted_staging_preflight.py \
+  --env-file tldw_Server_API/Config_Files/.env.hosted-staging \
+  --base-url https://staging.example.com \
+  --strict
+```
+
+If the API is fronted on a separate staging origin during an intermediate rollout, add:
+
+```bash
+python Helper_Scripts/Deployment/hosted_staging_preflight.py \
+  --env-file tldw_Server_API/Config_Files/.env.hosted-staging \
+  --base-url https://staging.example.com \
+  --api-base-url https://api.staging.example.com \
+  --strict
+```
+
+The preflight validates:
+
+- the hosted env contract from the env file
+- `/health`
+- `/ready`
+- `/login`
+- `/signup`
+- `/api/v1/billing/plans`
+
+## 7) Hand-off to Stripe and smoke verification
 
 After the stack is healthy:
 
