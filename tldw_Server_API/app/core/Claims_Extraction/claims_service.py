@@ -3573,13 +3573,20 @@ def rebuild_claim_clusters(
     if user_id is not None and db.backend_type != BackendType.POSTGRESQL:
         with _claims_user_override_db(int(user_id)) as (override_db, _db_path):
             if cluster_method == "exact":
-                return override_db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)
-            return rebuild_claim_clusters_embeddings(
-                db=override_db,
-                user_id=target_user_id,
-                min_size=min_size,
-                similarity_threshold=similarity_threshold,
-            )
+                result = override_db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)
+            else:
+                result = rebuild_claim_clusters_embeddings(
+                    db=override_db,
+                    user_id=target_user_id,
+                    min_size=min_size,
+                    similarity_threshold=similarity_threshold,
+                )
+            try:
+                watchlist_result = _evaluate_watchlist_cluster_notifications(override_db, target_user_id)
+                result["watchlist_notifications"] = watchlist_result
+            except _CLAIMS_NONCRITICAL_EXCEPTIONS:
+                pass
+            return result
 
     if cluster_method == "exact":
         result = db.rebuild_claim_clusters_exact(user_id=target_user_id, min_size=min_size)

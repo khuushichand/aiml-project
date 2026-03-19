@@ -66,13 +66,24 @@ def test_rebuild_claim_clusters_uses_override_helper_for_sqlite_admin_override(m
             return {"status": "ok", "user_id": user_id, "min_size": min_size}
 
     helper_calls: list[int] = []
+    watchlist_calls: list[tuple[object, str]] = []
 
     @contextmanager
     def _fake_override_helper(user_id: int):
         helper_calls.append(user_id)
         yield _FakeOverrideDb(), f"/tmp/user-{user_id}.db"
 
+    def _fake_watchlist_notifications(db: object, user_id: str) -> dict[str, object]:
+        watchlist_calls.append((db, user_id))
+        return {"status": "skipped", "reason": "no_subscriptions"}
+
     monkeypatch.setattr(claims_service, "_claims_user_override_db", _fake_override_helper, raising=False)
+    monkeypatch.setattr(
+        claims_service,
+        "_evaluate_watchlist_cluster_notifications",
+        _fake_watchlist_notifications,
+        raising=False,
+    )
     monkeypatch.setattr(
         claims_service,
         "MediaDatabase",
@@ -94,8 +105,68 @@ def test_rebuild_claim_clusters_uses_override_helper_for_sqlite_admin_override(m
         db=db,
     )
 
-    assert result == {"status": "ok", "user_id": "7", "min_size": 2}
+    assert result == {
+        "status": "ok",
+        "user_id": "7",
+        "min_size": 2,
+        "watchlist_notifications": {"status": "skipped", "reason": "no_subscriptions"},
+    }
     assert helper_calls == [7]
+    assert len(watchlist_calls) == 1
+    assert watchlist_calls[0][1] == "7"
+
+
+def test_rebuild_claim_clusters_override_path_preserves_watchlist_notifications(monkeypatch):
+    class _FakeOverrideDb:
+        def rebuild_claim_clusters_exact(self, *, user_id: str, min_size: int):
+            assert user_id == "7"
+            assert min_size == 2
+            return {"status": "ok"}
+
+    fake_override_db = _FakeOverrideDb()
+    helper_calls: list[int] = []
+    watchlist_calls: list[tuple[object, str]] = []
+
+    @contextmanager
+    def _fake_override_helper(user_id: int):
+        helper_calls.append(user_id)
+        yield fake_override_db, f"/tmp/user-{user_id}.db"
+
+    def _fake_watchlist_notifications(db: object, user_id: str) -> dict[str, object]:
+        watchlist_calls.append((db, user_id))
+        return {"status": "ok", "inserted": 2}
+
+    monkeypatch.setattr(claims_service, "_claims_user_override_db", _fake_override_helper, raising=False)
+    monkeypatch.setattr(
+        claims_service,
+        "_evaluate_watchlist_cluster_notifications",
+        _fake_watchlist_notifications,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        claims_service,
+        "MediaDatabase",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("legacy raw override should not be used")),
+        raising=False,
+    )
+    monkeypatch.setattr(claims_service, "get_user_media_db_path", lambda user_id: f"/tmp/user-{user_id}.db")
+
+    db = SimpleNamespace(backend_type=BackendType.SQLITE)
+    current_user = SimpleNamespace(id=1, role="admin", roles=["admin"], permissions=[])
+
+    result = claims_service.rebuild_claim_clusters(
+        min_size=2,
+        user_id=7,
+        method="exact",
+        similarity_threshold=None,
+        principal=_admin_principal(),
+        current_user=current_user,
+        db=db,
+    )
+
+    assert result == {"status": "ok", "watchlist_notifications": {"status": "ok", "inserted": 2}}
+    assert helper_calls == [7]
+    assert watchlist_calls == [(fake_override_db, "7")]
 
 
 def test_rebuild_all_media_uses_override_helper_for_sqlite_admin_override(monkeypatch):

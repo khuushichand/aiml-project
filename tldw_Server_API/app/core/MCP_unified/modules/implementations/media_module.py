@@ -455,11 +455,28 @@ class MediaModule(BaseModule):
         except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
+    def _normalize_media_db_path(self, value: Any) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text == ":memory:" or text.startswith("file:"):
+            return text
+        return os.path.abspath(text)
+
     def _is_module_media_db_owner(self, db: Any) -> bool:
         owner = getattr(self, "_module_db_owner", None)
         if owner is not None:
             return db is owner
-        return hasattr(db, "db_path_str") and hasattr(db, "close_connection")
+        if not callable(getattr(db, "close_connection", None)):
+            return False
+        db_path = self._normalize_media_db_path(getattr(db, "db_path_str", None))
+        if db_path is None:
+            return False
+        configured_path = self.config.settings.get("db_path")
+        if configured_path:
+            return db_path == self._normalize_media_db_path(configured_path)
+        default_path = DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())
+        return db_path == self._normalize_media_db_path(default_path)
 
     def _close_media_db_instance(self, db: MediaDbLike) -> None:
         with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
@@ -1277,7 +1294,7 @@ class MediaModule(BaseModule):
         )
         return rows[:fetch_size], total
 
-    def _get_semantic_retriever(self, dbi: MediaDbLike, context: Any | None):
+    def _get_semantic_retriever(self, dbi: MediaDbLike, context: Any | None) -> Any | None:
         db_path = getattr(dbi, "db_path_str", None)
         user_key = str(getattr(context, "user_id", None) or "0")
         retriever_key = (db_path, user_key)

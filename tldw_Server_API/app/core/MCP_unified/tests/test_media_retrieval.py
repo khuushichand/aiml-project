@@ -212,8 +212,17 @@ async def test_search_media_semantic_path(monkeypatch):
 def test_media_open_db_requires_context():
     mod = MediaModule(ModuleConfig(name="media"))
     mod.db = SimpleNamespace(db_path_str=":memory:", close_connection=lambda: None)
+    mod._module_db_owner = mod.db
     with pytest.raises(PermissionError):
         mod._open_media_db(context=None)
+
+
+def test_media_open_db_allows_injected_non_owner_db_without_context():
+    mod = MediaModule(ModuleConfig(name="media"))
+    injected_db = SimpleNamespace(db_path_str=":memory:", close_connection=lambda: None)
+    mod.db = injected_db
+
+    assert mod._open_media_db(context=None) is injected_db
 
 
 @pytest.mark.asyncio
