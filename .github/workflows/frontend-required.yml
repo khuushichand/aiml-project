@@ -22,6 +22,7 @@ jobs:
       backend_changed: ${{ steps.detect.outputs.backend_changed }}
       frontend_changed: ${{ steps.detect.outputs.frontend_changed }}
       tldw_frontend_changed: ${{ steps.detect.outputs.tldw_frontend_changed }}
+      family_guardrails_changed: ${{ steps.detect.outputs.family_guardrails_changed }}
       admin_ui_changed: ${{ steps.detect.outputs.admin_ui_changed }}
       e2e_changed: ${{ steps.detect.outputs.e2e_changed }}
       security_relevant_changed: ${{ steps.detect.outputs.security_relevant_changed }}
@@ -110,6 +111,16 @@ jobs:
         if: needs.changes.outputs.tldw_frontend_changed == 'true'
         working-directory: apps/packages/ui
         run: bun run test:family-guardrails
+
+      - name: Install Playwright Chromium
+        if: needs.changes.outputs.family_guardrails_changed == 'true'
+        working-directory: apps/tldw-frontend
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run family guardrails e2e
+        if: needs.changes.outputs.family_guardrails_changed == 'true'
+        working-directory: apps/tldw-frontend
+        run: bun run e2e:family-guardrails
 
       - name: Install admin-ui dependencies
         if: needs.changes.outputs.admin_ui_changed == 'true'

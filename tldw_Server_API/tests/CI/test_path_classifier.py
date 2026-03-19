@@ -14,6 +14,20 @@ def test_ui_only_change_disables_backend_and_coverage() -> None:
     assert flags["tldw_frontend_changed"] is True
     assert flags["admin_ui_changed"] is False
     assert flags["e2e_changed"] is True
+    assert flags["family_guardrails_changed"] is False
+
+
+def test_family_guardrails_change_enables_targeted_family_gate() -> None:
+    flags = classify_paths(
+        [
+            "apps/tldw-frontend/e2e/workflows/family-guardrails-wizard.spec.ts",
+            "apps/packages/ui/src/components/Option/Settings/FamilyGuardrailsWizard.tsx",
+        ]
+    )
+    assert flags["frontend_changed"] is True
+    assert flags["tldw_frontend_changed"] is True
+    assert flags["e2e_changed"] is True
+    assert flags["family_guardrails_changed"] is True
 
 
 def test_admin_ui_change_enables_frontend_without_e2e() -> None:
