@@ -23,6 +23,10 @@ def test_hosted_production_env_example_uses_prod_public_origin():
         "DATABASE_URL=postgresql://" in text,
         "expected managed postgres DSN placeholder",
     )
+    _require("TLDW_APP_DATA_DIR=" in text, "expected app data dir env entry")
+    _require("TLDW_USER_DATA_DIR=" in text, "expected user data dir env entry")
+    _require("TLDW_REDIS_DATA_DIR=" in text, "expected redis data dir env entry")
+    _require("TLDW_POSTGRES_DATA_DIR=" in text, "expected postgres data dir env entry")
 
 
 def test_hosted_production_caddy_sample_routes_api_and_webui():
