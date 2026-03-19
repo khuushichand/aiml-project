@@ -7,6 +7,7 @@ import platform
 import shutil
 from pathlib import Path
 
+from loguru import logger
 from pydantic import BaseModel
 
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
@@ -53,7 +54,8 @@ def detect_machine_profile() -> MachineProfile:
     try:
         disk_usage = shutil.disk_usage(project_root)
         free_disk_gb = round(disk_usage.free / (1024 ** 3), 1)
-    except Exception:
+    except OSError as exc:
+        logger.warning("Failed to inspect disk availability for setup profile at {}: {}", project_root, exc)
         free_disk_gb = 0.0
 
     espeak_present = bool(shutil.which("espeak-ng") or shutil.which("espeak"))

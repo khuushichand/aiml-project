@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
+from tldw_Server_API.app.core.Setup.audio_readiness_store import AudioReadinessStore
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     AUDIO_BUNDLE_CATALOG_VERSION,
     DEFAULT_AUDIO_RESOURCE_PROFILE,
@@ -50,11 +53,7 @@ def _sha256_hexdigest(payload: bytes) -> str:
 
 
 def _copy_asset_manifest(installed_assets: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    assets: list[dict[str, Any]] = []
-    for entry in installed_assets or []:
-        if isinstance(entry, dict):
-            assets.append(dict(entry))
-    return assets
+    return [dict(entry) for entry in (installed_assets or []) if isinstance(entry, dict)]
 
 
 def _calculate_asset_checksums(assets: list[dict[str, Any]]) -> dict[str, str]:
@@ -158,8 +157,13 @@ def validate_audio_pack_manifest(
     try:
         bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
         bundle.profile_by_id(resource_profile)
-    except Exception:  # noqa: BLE001
+    except KeyError as exc:
         bundle = None
+        logger.opt(exception=exc).debug(
+            "Audio pack manifest references unknown bundle/profile {}/{}",
+            bundle_id,
+            resource_profile,
+        )
         issues.append("Referenced audio bundle or resource profile is not available in this catalog.")
 
     checksum_payload = dict(manifest)
@@ -205,7 +209,7 @@ def validate_audio_pack_manifest(
 def register_imported_audio_pack(
     pack_path: str | Path,
     *,
-    readiness_store,
+    readiness_store: AudioReadinessStore,
     machine_profile: dict[str, Any] | None = None,
     python_version: str | None = None,
 ) -> dict[str, Any]:

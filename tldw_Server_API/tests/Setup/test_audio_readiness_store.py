@@ -1,3 +1,6 @@
+import pytest
+
+from tldw_Server_API.app.core.Setup import audio_readiness_store as readiness_store_module
 from tldw_Server_API.app.core.Setup import install_manager
 from tldw_Server_API.app.core.Setup.audio_readiness_store import AudioReadinessStore
 
@@ -66,3 +69,21 @@ def test_install_plan_success_marks_audio_readiness_partial(tmp_path, mocker):
     readiness = store.load()
     assert readiness["status"] == "partial"
     assert readiness["remediation_items"] == ["Run audio verification to confirm readiness."]
+
+
+def test_audio_readiness_save_keeps_existing_file_when_atomic_replace_fails(tmp_path, monkeypatch):
+    readiness_path = tmp_path / "audio_readiness.json"
+    store = AudioReadinessStore(readiness_path)
+    store.update(status="ready", selected_bundle_id="cpu_local")
+    initial_contents = readiness_path.read_text(encoding="utf-8")
+
+    def _raise_replace(_src, _dst):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(readiness_store_module.os, "replace", _raise_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        store.update(status="failed")
+
+    assert readiness_path.read_text(encoding="utf-8") == initial_contents
+    assert list(tmp_path.glob("audio_readiness.json.*.tmp")) == []

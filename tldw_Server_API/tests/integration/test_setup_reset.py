@@ -56,3 +56,45 @@ def test_admin_reset_calls_reset_flags(mocker):
     body = resp.json()
     assert body.get('success') is True
     assert body.get('requires_restart') is True
+
+
+def test_admin_reset_masks_internal_errors(mocker):
+    app = FastAPI()
+    app.include_router(setup_endpoint.router, prefix="/api/v1")
+
+    async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="admin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=None,
+            user_agent=None,
+            request_id=None,
+        )
+        return principal
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
+    mocker.patch.object(
+        setup_endpoint.setup_manager,
+        "reset_setup_flags",
+        side_effect=RuntimeError("db blew up at /tmp/setup.db"),
+    )
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/setup/reset")
+
+    app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
+
+    assert resp.status_code == 400
+    assert resp.json() == {"detail": "Failed to reset setup flags."}

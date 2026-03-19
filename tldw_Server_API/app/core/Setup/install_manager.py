@@ -29,6 +29,8 @@ from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     AUDIO_BUNDLE_CATALOG_VERSION,
+    AudioBundle,
+    AudioResourceProfile,
     AudioBundleStep,
     AutomationTier,
     DEFAULT_AUDIO_RESOURCE_PROFILE,
@@ -438,7 +440,7 @@ def get_install_status_snapshot() -> dict[str, Any] | None:
 def _utc_now() -> str:
     return datetime.utcnow().isoformat() + 'Z'
 
-def execute_install_plan(plan_payload: dict[str, Any]) -> None:
+def execute_install_plan(plan_payload: dict[str, Any]) -> dict[str, Any] | None:
     """Background entry point to execute an installation plan."""
     try:
         validate = getattr(InstallPlan, 'model_validate', None) or getattr(InstallPlan, 'parse_obj', None)
@@ -577,7 +579,7 @@ def _qualify_install_step_name(
     catalog_version: str,
 ) -> str:
     selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
-    if name.startswith("deps:") or name.startswith("embeddings:") or name == "stt:silero_vad":
+    if name.startswith(("deps:", "embeddings:")) or name == "stt:silero_vad":
         return f"{selection_key}:{name}"
     if name.startswith("stt:"):
         engine = name.split(":", 1)[1]
@@ -659,14 +661,14 @@ def execute_audio_bundle(
     )
     completed_steps = _completed_step_names(get_install_status_snapshot()) if safe_rerun else set()
     if safe_rerun and expected_steps and expected_steps.issubset(completed_steps):
-        for step_name in sorted(expected_steps):
-            result_steps.append(
-                {
-                    "name": step_name,
-                    "status": "skipped",
-                    "detail": "Already satisfied by a previous successful install run.",
-                }
-            )
+        result_steps.extend(
+            {
+                "name": step_name,
+                "status": "skipped",
+                "detail": "Already satisfied by a previous successful install run.",
+            }
+            for step_name in sorted(expected_steps)
+        )
         readiness.update(
             status="partial",
             remediation_items=["Run audio verification to confirm readiness."],
@@ -718,7 +720,10 @@ def _remediation_item(code: str, message: str, *, action: str = "safe_rerun") ->
     }
 
 
-async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: Any) -> dict[str, Any]:
+async def verify_audio_bundle_async_for_profile(
+    bundle: AudioBundle,
+    selected_profile: AudioResourceProfile,
+) -> dict[str, Any]:
     """Verify the primary STT/TTS paths for a selected bundle profile."""
 
     bundle_id = bundle.bundle_id

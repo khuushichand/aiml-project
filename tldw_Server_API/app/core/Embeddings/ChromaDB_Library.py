@@ -6,6 +6,7 @@ import os
 import re
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 
@@ -199,8 +200,22 @@ def _normalize_user_embedding_config(raw_config: Any) -> dict[str, Any]:
 
 
 def _persistent_client_cache_key(user_chroma_path: Path) -> str:
-    """Return a stable key for process-local PersistentClient reuse."""
-    return str(Path(user_chroma_path).resolve())
+    """Return a stable key for process-local PersistentClient reuse.
+
+    `user_chroma_path` already comes from `DatabasePaths.get_user_chroma_dir()`,
+    which resolves and constrains the path under the sanitized user storage root.
+    Avoid re-resolving here so the cache key stays a pure normalization step.
+    """
+    return os.path.normcase(os.fspath(user_chroma_path))
+
+
+@dataclass
+class _PersistentClientState:
+    """Track a shared PersistentClient plus its synchronization and lease count."""
+
+    client: Any
+    lock: threading.RLock
+    ref_count: int = 1
 
 #
 # Functions:
@@ -243,7 +258,7 @@ class ChromaDBManager:
         if not self.user_embedding_config:
             logger.error("Initialization failed: normalized user_embedding_config is empty.")
             raise ValueError("user_embedding_config cannot be empty for ChromaDBManager.")
-        self._lock = threading.RLock()  # Instance-specific lock
+        self._lock = threading.RLock()  # Rebound to a shared lock for cached persistent clients.
         self._persistent_client_cache_key: Optional[str] = None
 
         # --- Configuration Usage (Point 1) ---
@@ -319,9 +334,11 @@ class ChromaDBManager:
                 )
                 cache_key = _persistent_client_cache_key(self.user_chroma_path)
                 with _PERSISTENT_CLIENTS_LOCK:
-                    cached_client = _PERSISTENT_CLIENTS.get(cache_key)
-                    if cached_client is not None:
-                        self.client = cached_client
+                    cached_state = _PERSISTENT_CLIENTS.get(cache_key)
+                    if cached_state is not None:
+                        cached_state.ref_count += 1
+                        self.client = cached_state.client
+                        self._lock = cached_state.lock
                         self._persistent_client_cache_key = cache_key
                         logger.info(
                             f"User '{self.user_id}': Reusing cached Chroma persistent client for {self.user_chroma_path}."
@@ -351,7 +368,11 @@ class ChromaDBManager:
                             else:
                                 raise RuntimeError(f"ChromaDB client initialization failed: {e}") from e
                         else:
-                            _PERSISTENT_CLIENTS[cache_key] = self.client
+                            _PERSISTENT_CLIENTS[cache_key] = _PersistentClientState(
+                                client=self.client,
+                                lock=threading.RLock(),
+                            )
+                            self._lock = _PERSISTENT_CLIENTS[cache_key].lock
                             self._persistent_client_cache_key = cache_key
 
         # Default embedding model_id for this manager instance.
@@ -380,10 +401,20 @@ class ChromaDBManager:
                 return
             cache_key = getattr(self, "_persistent_client_cache_key", None)
             if cache_key:
+                should_close_cached_client = False
                 with _PERSISTENT_CLIENTS_LOCK:
-                    cached_client = _PERSISTENT_CLIENTS.get(cache_key)
-                if cached_client is client:
+                    cached_state = _PERSISTENT_CLIENTS.get(cache_key)
+                    if cached_state is not None and cached_state.client is client:
+                        cached_state.ref_count = max(0, cached_state.ref_count - 1)
+                        if cached_state.ref_count == 0:
+                            _PERSISTENT_CLIENTS.pop(cache_key, None)
+                            should_close_cached_client = True
+                    else:
+                        should_close_cached_client = True
+
+                if not should_close_cached_client:
                     self.client = None
+                    self._persistent_client_cache_key = None
                     return
             try:
                 # Prefer explicit close if available (future APIs)
@@ -402,6 +433,7 @@ class ChromaDBManager:
             finally:
                 with contextlib.suppress(_CHROMA_NONCRITICAL_EXCEPTIONS):
                     self.client = None
+                    self._persistent_client_cache_key = None
 
     # Support context manager usage
     def __enter__(self):
@@ -1496,13 +1528,6 @@ class ChromaDBManager:
                     f"User '{self.user_id}': Unexpected error deleting IDs {ids} from collection "
                     f"'{target_collection.name}': {e}", exc_info=True)
                 raise RuntimeError(f"Unexpected error during deletion: {e}") from e
-            except Exception as e:
-                logger.error(
-                    f"User '{self.user_id}': Unhandled error deleting IDs {ids} from collection "
-                    f"'{target_collection.name}': {e}",
-                    exc_info=True,
-                )
-                raise RuntimeError(f"Unexpected error during deletion: {e}") from e
 
     # --- Ingest-time utilities ---
     def _dedupe_text_chunks(self, chunks: list[dict[str, Any]], threshold: float = 0.9) -> tuple[list[dict[str, Any]], dict[str, str]]:
@@ -1763,7 +1788,7 @@ _manager_lock = threading.Lock()
 _TEST_FALLBACK_DIRS: dict[str, Path] = {}
 _TEST_STUB_CLIENTS: dict[str, Any] = {}
 _TEST_STUB_CLIENTS_LOCK = threading.Lock()
-_PERSISTENT_CLIENTS: dict[str, Any] = {}
+_PERSISTENT_CLIENTS: dict[str, _PersistentClientState] = {}
 _PERSISTENT_CLIENTS_LOCK = threading.Lock()
 
 
