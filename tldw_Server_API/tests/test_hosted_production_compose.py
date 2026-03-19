@@ -28,6 +28,7 @@ def test_hosted_production_env_example_uses_prod_public_origin():
     _require("TLDW_USER_DATA_DIR=" in text, "expected user data dir env entry")
     _require("TLDW_REDIS_DATA_DIR=" in text, "expected redis data dir env entry")
     _require("TLDW_POSTGRES_DATA_DIR=" in text, "expected postgres data dir env entry")
+    _require("POSTGRES_PASSWORD=" in text, "expected fallback postgres password env entry")
 
 
 def test_hosted_production_caddy_sample_routes_api_and_webui():
@@ -180,6 +181,13 @@ def test_hosted_production_local_postgres_overlay_adds_internal_postgres_service
     _require(
         any("TLDW_POSTGRES_DATA_DIR" in volume for volume in postgres_service.get("volumes", [])),
         "expected fallback postgres to use TLDW_POSTGRES_DATA_DIR bind mount",
+    )
+
+    postgres_environment = postgres_service.get("environment", {})
+    _require(
+        postgres_environment.get("POSTGRES_PASSWORD")
+        == "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}",
+        "expected fallback postgres to require an explicit POSTGRES_PASSWORD",
     )
 
     app_service = services["app"]
