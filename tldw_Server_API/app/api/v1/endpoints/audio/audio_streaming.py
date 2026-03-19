@@ -67,7 +67,9 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 )
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import upsert_transcript
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
+    upsert_transcript,
+)
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,

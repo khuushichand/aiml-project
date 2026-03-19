@@ -44,6 +44,7 @@ _CHROMA_NONCRITICAL_EXCEPTIONS = (
 # Local Imports:
 from tldw_Server_API.app.core.Chunking import Chunker, chunk_for_embedding  # Using V2 through compatibility layer
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 
 # Import embeddings creation lazily/safely to avoid hard dependency at import time
 try:
@@ -744,7 +745,6 @@ class ChromaDBManager:
                             extract_claims_for_chunks,
                             store_claims,
                         )
-                        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
                         # Build map: chunk_index -> chunk_text
                         chunk_text_map = {}
                         for ch in chunks:
@@ -762,17 +762,20 @@ class ChromaDBManager:
                             except _CHROMA_NONCRITICAL_EXCEPTIONS:
                                 logger.warning(f"Claims disabled for non-integer media_id: {media_id}")
                             else:
-                                db = MediaDatabase(db_path=db_path, client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
-                                inserted = store_claims(
-                                    db,
-                                    media_id=mid,
-                                    chunk_texts_by_index=chunk_text_map,
-                                    claims=claims,
-                                    extractor=mode,
-                                    extractor_version="v1",
-                                )
-                                with contextlib.suppress(_CHROMA_NONCRITICAL_EXCEPTIONS):
-                                    db.close_connection()
+                                with managed_media_database(
+                                    str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+                                    db_path=str(db_path),
+                                    initialize=False,
+                                    suppress_close_exceptions=_CHROMA_NONCRITICAL_EXCEPTIONS,
+                                ) as db:
+                                    inserted = store_claims(
+                                        db,
+                                        media_id=mid,
+                                        chunk_texts_by_index=chunk_text_map,
+                                        claims=claims,
+                                        extractor=mode,
+                                        extractor_version="v1",
+                                    )
                                 logger.info(f"User '{self.user_id}': Stored {inserted} ingestion-time claims for media {mid}.")
                         # Optional: embed claims into a dedicated Chroma collection
                         try:

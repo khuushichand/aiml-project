@@ -33,7 +33,8 @@ from tldw_Server_API.app.api.v1.schemas.websearch_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user  # For User dependency
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.Third_Party.Arxiv import convert_xml_to_markdown, fetch_arxiv_xml, search_arxiv_custom_api
 from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import search_papers_semantic_scholar
 from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs
@@ -94,7 +95,7 @@ async def arxiv_search_endpoint(
         # user: User = Depends(get_request_user), # Optional: if endpoint requires auth
         search_params: ArxivSearchRequestForm = Depends(),
         Token: Optional[str] = Query(None, alias="X-Token"),
-        db: MediaDatabase = Depends(get_media_db_for_user),
+        db: Any = Depends(get_media_db_for_user),
 ):
     """
     Searches the arXiv repository based on query, author, and year.
@@ -167,20 +168,22 @@ def process_and_ingest_arxiv_paper(paper_id, additional_keywords):
             keywords += f",{additional_keywords}"
 
         # Persist via MediaDatabase instance
-        from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-        db_instance = create_media_database(client_id="research_ingest")
-        db_instance.add_media_with_keywords(
-            url=f"https://arxiv.org/abs/{paper_id}",
-            title=title,
-            media_type='document',
-            content=markdown,
-            keywords=[kw.strip() for kw in keywords.split(',') if kw.strip()] if isinstance(keywords, str) else (keywords or []),
-            prompt='No prompt for arXiv papers',
-            analysis_content='arXiv paper ingested from XML',
-            transcription_model='None',
-            author=', '.join(authors),
-            ingestion_date=datetime.now().strftime('%Y-%m-%d')
-        )
+        with managed_media_database(
+            client_id="research_ingest",
+            initialize=False,
+        ) as db_instance:
+            get_media_repository(db_instance).add_media_with_keywords(
+                url=f"https://arxiv.org/abs/{paper_id}",
+                title=title,
+                media_type='document',
+                content=markdown,
+                keywords=[kw.strip() for kw in keywords.split(',') if kw.strip()] if isinstance(keywords, str) else (keywords or []),
+                prompt='No prompt for arXiv papers',
+                analysis_content='arXiv paper ingested from XML',
+                transcription_model='None',
+                author=', '.join(authors),
+                ingestion_date=datetime.now().strftime('%Y-%m-%d')
+            )
 
         return f"arXiv paper '{title}' ingested successfully."
     except Exception as e:
@@ -316,7 +319,7 @@ async def websearch_endpoint(
     payload: WebSearchRequest,
     request: Request,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ):
     """
     Runs the websearch pipeline: optional subqueries + provider search. If aggregate=True,

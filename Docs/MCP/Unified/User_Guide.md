@@ -255,9 +255,11 @@ modules:
     circuit_breaker_backoff_factor: 2.0
     circuit_breaker_max_timeout: 180
     settings:
-      db_path: Databases/user_databases/1/Media_DB_v2.db
+      db_path: Databases/user_databases/1/<content-db>.db
       cache_ttl: 300
 ```
+
+Replace `<content-db>.db` with your configured per-user content DB filename.
 
 ### Environment variable registration (quick dev path)
 

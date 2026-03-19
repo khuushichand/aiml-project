@@ -1,3 +1,4 @@
+import contextlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -148,6 +149,42 @@ class FakeQuizzesDB:
 
     def close_all_connections(self) -> None:
         return None
+
+
+def test_quizzes_module_get_media_content_uses_managed_media_database(monkeypatch, tmp_path: Path):
+    mod = QuizzesModule(ModuleConfig(name="quizzes"))
+    events = []
+
+    class _FakeDb:
+        def get_media_by_id(self, media_id: int):
+            events.append(("get_media_by_id", media_id))
+            return {"content": "quiz source"}
+
+    @contextlib.contextmanager
+    def _fake_managed_media_database(client_id, **kwargs):
+        events.append(("open", client_id, kwargs))
+        yield _FakeDb()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.modules.implementations.quizzes_module.MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("quizzes_module should not construct MediaDatabase directly")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.modules.implementations.quizzes_module.managed_media_database",
+        _fake_managed_media_database,
+        raising=False,
+    )
+
+    result = mod._get_media_content(str(tmp_path / "media.db"), 17)
+
+    assert result == "quiz source"
+    assert events == [
+        ("open", "mcp_quizzes_gen", {"db_path": str(tmp_path / "media.db"), "initialize": False}),
+        ("get_media_by_id", 17),
+    ]
 
 
 @pytest.mark.asyncio

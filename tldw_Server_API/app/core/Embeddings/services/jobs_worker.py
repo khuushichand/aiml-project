@@ -46,12 +46,12 @@ from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (
     generate_embeddings_for_media,
 )
 from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
 )
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
@@ -154,30 +154,35 @@ def _update_root_job(
 
 def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
     db_path = get_user_media_db_path(user_id)
-    db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
+    with managed_media_database(
+        client_id="embeddings_jobs_worker",
+        db_path=db_path,
+        initialize=False,
+    ) as db:
+        media_item = db.get_media_by_id(media_id)
+        if not media_item:
+            raise EmbeddingsJobError(f"Media item {media_id} not found", retryable=False)
 
-    media_item = db.get_media_by_id(media_id)
-    if not media_item:
-        raise EmbeddingsJobError(f"Media item {media_id} not found", retryable=False)
+        try:
+            if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
+                from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+                    get_document_version,
+                )
 
-    try:
-        if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version
+                latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
+                if latest and latest.get("content"):
+                    media_item = dict(media_item)
+                    media_item["content"] = latest["content"]
+        except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Failed to load fallback document content for media {media_id}: {exc}")
 
-            latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
-            if latest and latest.get("content"):
-                media_item = dict(media_item)
-                media_item["content"] = latest["content"]
-    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
-        logger.warning(f"Failed to load fallback document content for media {media_id}: {exc}")
+        if not media_item:
+            raise EmbeddingsJobError(f"No content found for media item {media_id}", retryable=False)
 
-    if not media_item:
-        raise EmbeddingsJobError(f"No content found for media item {media_id}", retryable=False)
-
-    return {
-        "media_item": media_item,
-        "content": media_item,
-    }
+        return {
+            "media_item": media_item,
+            "content": media_item,
+        }
 
 
 def _update_root_progress(

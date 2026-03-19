@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 from tldw_Server_API.app.core.External_Sources import connectors_service as svc
 from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncChange
 
@@ -92,7 +92,7 @@ async def _get_required_binding(
 
 async def reconcile_file_change(
     connectors_db,
-    media_db: MediaDatabase,
+    media_db: Any,
     *,
     source_id: int,
     provider: str,
@@ -113,7 +113,7 @@ async def reconcile_file_change(
     if not binding and change.event_type == "created":
         if content is None or content.text is None:
             raise ValueError("Content payload is required for event_type=created")  # noqa: TRY003
-        media_id, _, _ = media_db.add_media_with_keywords(
+        media_id, _, _ = get_media_repository(media_db).add_media_with_keywords(
             url=f"{provider}://{change.remote_id}",
             title=change.remote_name or change.remote_id,
             media_type="document",

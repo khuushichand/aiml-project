@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,6 +29,78 @@ class _MetricsCapture:
 
     def observe(self, *_args: Any, **_kwargs: Any) -> None:
         return None
+
+
+class _RepoBackedWorkerDB:
+    instances: list["_RepoBackedWorkerDB"] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.backend = "sqlite"
+        self.closed = False
+        self.upsert_calls: list[dict[str, Any]] = []
+        type(self).instances.append(self)
+
+    def close_connection(self) -> None:
+        self.closed = True
+
+    def upsert_email_message_graph(self, **kwargs: Any) -> dict[str, Any]:
+        self.upsert_calls.append(kwargs)
+        return {"email_message_id": 901}
+
+
+class _FakeMediaRepository:
+    calls: list[dict[str, Any]] = []
+
+    def add_media_with_keywords(self, **kwargs: Any) -> tuple[int, str, str]:
+        type(self).calls.append(kwargs)
+        idx = len(type(self).calls)
+        return idx, f"uuid-{idx}", f"Media '{kwargs.get('title')}' added."
+
+
+def _fake_create_media_database(*_args: Any, **_kwargs: Any) -> _RepoBackedWorkerDB:
+    return _RepoBackedWorkerDB()
+
+
+class _ChunkCountDb:
+    def __init__(self, count: int) -> None:
+        self.count = count
+        self.closed = False
+
+    def get_unvectorized_chunk_count(self, media_id: int) -> int:
+        assert media_id > 0
+        return self.count
+
+    def close_connection(self) -> None:
+        self.closed = True
+
+
+class _HelperSessionDb:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close_connection(self) -> None:
+        self.closed = True
+
+
+def test_with_media_db_session_closes_connection_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub_db = _HelperSessionDb()
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        lambda client_id, *, db_path=None, **_kwargs: stub_db,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        ingestion_persistence._with_media_db_session(
+            db_path=":memory:",
+            client_id="test-client",
+            operation=lambda _db: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+    assert stub_db.closed is True
 
 
 @pytest.mark.asyncio
@@ -77,6 +150,29 @@ async def test_chunk_consistency_warn_policy_adds_warning_and_metric(
         1,
         {"reason": "chunk_consistency", "path_kind": "upload"},
     ) in metrics.increment_calls
+
+
+@pytest.mark.asyncio
+async def test_fetch_unvectorized_chunk_count_uses_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub_db = _ChunkCountDb(4)
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        lambda client_id, *, db_path=None, **_kwargs: stub_db,
+    )
+
+    count = await ingestion_persistence._fetch_unvectorized_chunk_count(
+        db_path=":memory:",
+        client_id="test-client",
+        media_id=11,
+        loop=asyncio.get_running_loop(),
+    )
+
+    assert count == 4
+    assert stub_db.closed is True
 
 
 @pytest.mark.asyncio
@@ -169,6 +265,8 @@ async def test_persist_primary_av_item_invokes_chunk_consistency_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[int | None] = []
+    _RepoBackedWorkerDB.instances = []
+    _FakeMediaRepository.calls = []
 
     async def _fake_enforce(**kwargs: Any) -> None:
         calls.append(kwargs.get("expected_chunk_count"))
@@ -176,23 +274,23 @@ async def test_persist_primary_av_item_invokes_chunk_consistency_check(
     async def _fake_persist_claims(**_kwargs: Any) -> None:
         return None
 
-    class _FakeDB:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-        def add_media_with_keywords(self, **_kwargs: Any) -> tuple[int, str, str]:
-            return 44, "uuid-44", "Media 'clip' added."
-
-        def close_connection(self) -> None:
-            return None
-
     monkeypatch.setattr(
         ingestion_persistence,
         "_enforce_chunk_consistency_after_persist",
         _fake_enforce,
     )
     monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
-    monkeypatch.setattr(ingestion_persistence, "MediaDatabase", _FakeDB)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "get_media_repository",
+        lambda db: _FakeMediaRepository(),
+        raising=False,
+    )
 
     process_result = {
         "status": "Success",
@@ -227,7 +325,295 @@ async def test_persist_primary_av_item_invokes_chunk_consistency_check(
         claims_context=None,
     )
 
-    assert process_result.get("db_id") == 44
+    assert process_result.get("db_id") == 1
     assert len(calls) == 1
-    assert calls[0] is not None
-    assert calls[0] > 0
+    assert calls[0] == 1
+    assert len(_FakeMediaRepository.calls) == 1
+    assert _FakeMediaRepository.calls[0]["title"] == "clip"
+    assert _FakeMediaRepository.calls[0]["media_type"] == "audio"
+    assert _RepoBackedWorkerDB.instances
+    assert _RepoBackedWorkerDB.instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_persist_primary_av_item_upserts_normalized_transcript_via_extracted_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _RepoBackedWorkerDB.instances = []
+    _FakeMediaRepository.calls = []
+    transcript_calls: list[dict[str, Any]] = []
+
+    async def _fake_enforce(**_kwargs: Any) -> None:
+        return None
+
+    async def _fake_persist_claims(**_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "_enforce_chunk_consistency_after_persist",
+        _fake_enforce,
+    )
+    monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "get_media_repository",
+        lambda db: _FakeMediaRepository(),
+        raising=False,
+    )
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
+        Audio_Transcription_Lib,
+        stt_provider_adapter,
+    )
+
+    monkeypatch.setattr(
+        stt_provider_adapter,
+        "get_stt_provider_registry",
+        lambda: SimpleNamespace(
+            resolve_provider_for_model=lambda _model: ("fake-provider", "resolved-model", None)
+        ),
+    )
+    monkeypatch.setattr(
+        Audio_Transcription_Lib,
+        "to_normalized_stt_artifact",
+        lambda text, segments, language, provider, model: {
+            "text": text,
+            "segments": segments,
+            "language": language,
+            "metadata": {"provider": provider, "model": model},
+        },
+    )
+
+    def _fake_upsert_transcript(**kwargs: Any) -> dict[str, Any]:
+        transcript_calls.append(kwargs)
+        return {"id": len(transcript_calls)}
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "upsert_transcript",
+        _fake_upsert_transcript,
+        raising=False,
+    )
+
+    process_result = {
+        "status": "Success",
+        "input_ref": "clip.mp3",
+        "processing_source": "clip.mp3",
+        "metadata": {"model": "base-model"},
+        "content": "hello world",
+        "transcript": "hello world",
+        "segments": [{"text": "hello world", "start": 0.0, "end": 1.0}],
+        "summary": None,
+        "analysis": None,
+        "analysis_details": {"transcription_language": "en"},
+        "warnings": None,
+        "error": None,
+    }
+
+    await ingestion_persistence.persist_primary_av_item(
+        process_result=process_result,
+        form_data=SimpleNamespace(
+            keywords=[],
+            custom_prompt=None,
+            overwrite_existing=True,
+            transcription_model=None,
+            chunk_consistency_policy="warn",
+        ),
+        media_type="audio",
+        original_input_ref="clip.mp3",
+        chunk_options=None,
+        path_kind="upload",
+        db_path=":memory:",
+        client_id="test-client",
+        loop=asyncio.get_running_loop(),
+        claims_context=None,
+    )
+
+    assert len(transcript_calls) == 1
+    assert transcript_calls[0]["media_id"] == 1
+    assert transcript_calls[0]["whisper_model"] == "resolved-model"
+    assert json.loads(transcript_calls[0]["transcription"]) == {
+        "text": "hello world",
+        "segments": [{"text": "hello world", "start": 0.0, "end": 1.0}],
+        "language": "en",
+        "metadata": {"provider": "fake-provider", "model": "resolved-model"},
+    }
+    assert process_result["normalized_stt"]["metadata"]["model"] == "resolved-model"
+    assert len(_RepoBackedWorkerDB.instances) == 2
+    assert all(instance.closed for instance in _RepoBackedWorkerDB.instances)
+
+
+@pytest.mark.asyncio
+async def test_persist_doc_item_and_children_routes_email_parent_and_child_through_media_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _RepoBackedWorkerDB.instances = []
+    _FakeMediaRepository.calls = []
+
+    async def _fake_enforce(**_kwargs: Any) -> None:
+        return None
+
+    async def _fake_persist_claims(**_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "_enforce_chunk_consistency_after_persist",
+        _fake_enforce,
+    )
+    monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
+    monkeypatch.setattr(ingestion_persistence, "_is_email_native_persist_enabled", lambda: True)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "get_media_repository",
+        lambda db: _FakeMediaRepository(),
+        raising=False,
+    )
+
+    final_result = {
+        "status": "Success",
+        "content": "Parent email body",
+        "summary": None,
+        "analysis": None,
+        "metadata": {"email": {"message_id": "msg-1"}, "author": "Alice"},
+        "children": [
+            {
+                "status": "Success",
+                "content": "Attachment body",
+                "metadata": {"title": "Attachment A", "filename": "a.txt"},
+            }
+        ],
+        "warnings": None,
+        "error": None,
+    }
+
+    await ingestion_persistence.persist_doc_item_and_children(
+        final_result=final_result,
+        form_data=SimpleNamespace(
+            keywords=[],
+            custom_prompt=None,
+            overwrite_existing=False,
+            title=None,
+            author=None,
+            ingest_attachments=True,
+            accept_archives=False,
+            accept_mbox=False,
+            accept_pst=False,
+        ),
+        media_type="email",
+        item_input_ref="mail.eml",
+        processing_filename=None,
+        chunk_options=None,
+        path_kind="upload",
+        db_path=":memory:",
+        client_id="test-client",
+        loop=asyncio.get_running_loop(),
+        claims_context=None,
+    )
+
+    assert final_result["db_id"] == 1
+    assert final_result["email_message_id"] == 901
+    assert len(_FakeMediaRepository.calls) == 2
+    assert _FakeMediaRepository.calls[0]["title"] == "mail"
+    assert _FakeMediaRepository.calls[0]["media_type"] == "email"
+    assert _FakeMediaRepository.calls[1]["title"] == "Attachment A"
+    assert "child_db_results" in final_result
+    assert len(final_result["child_db_results"]) == 1
+    assert len(_RepoBackedWorkerDB.instances) == 2
+    assert _RepoBackedWorkerDB.instances[0].upsert_calls
+    assert _RepoBackedWorkerDB.instances[1].upsert_calls
+    assert all(db.closed for db in _RepoBackedWorkerDB.instances)
+
+
+@pytest.mark.asyncio
+async def test_persist_doc_item_and_children_routes_archive_children_through_media_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _RepoBackedWorkerDB.instances = []
+    _FakeMediaRepository.calls = []
+
+    async def _fake_enforce(**_kwargs: Any) -> None:
+        return None
+
+    async def _fake_persist_claims(**_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "_enforce_chunk_consistency_after_persist",
+        _fake_enforce,
+    )
+    monkeypatch.setattr(ingestion_persistence, "persist_claims_if_applicable", _fake_persist_claims)
+    monkeypatch.setattr(ingestion_persistence, "_is_email_native_persist_enabled", lambda: True)
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "get_media_repository",
+        lambda db: _FakeMediaRepository(),
+        raising=False,
+    )
+
+    final_result = {
+        "status": "Success",
+        "content": "",
+        "summary": None,
+        "analysis": None,
+        "metadata": {},
+        "children": [
+            {
+                "status": "Success",
+                "content": "Archived email body",
+                "metadata": {"title": "Archive Child", "filename": "child.eml"},
+            }
+        ],
+        "warnings": None,
+        "error": None,
+    }
+
+    await ingestion_persistence.persist_doc_item_and_children(
+        final_result=final_result,
+        form_data=SimpleNamespace(
+            keywords=[],
+            custom_prompt=None,
+            overwrite_existing=False,
+            title=None,
+            author=None,
+            ingest_attachments=False,
+            accept_archives=True,
+            accept_mbox=False,
+            accept_pst=False,
+        ),
+        media_type="email",
+        item_input_ref="bundle.zip",
+        processing_filename="bundle.zip",
+        chunk_options=None,
+        path_kind="upload",
+        db_path=":memory:",
+        client_id="test-client",
+        loop=asyncio.get_running_loop(),
+        claims_context=None,
+    )
+
+    assert final_result["db_message"] == "Persisted archive children."
+    assert len(_FakeMediaRepository.calls) == 1
+    assert _FakeMediaRepository.calls[0]["title"] == "Archive Child"
+    assert _FakeMediaRepository.calls[0]["media_type"] == "email"
+    assert len(final_result["child_db_results"]) == 1
+    assert len(_RepoBackedWorkerDB.instances) == 1
+    assert _RepoBackedWorkerDB.instances[0].upsert_calls
+    assert _RepoBackedWorkerDB.instances[0].closed is True

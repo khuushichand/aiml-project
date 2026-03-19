@@ -17,7 +17,6 @@ from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
 )
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEmailsForm
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -42,7 +41,7 @@ router = APIRouter()
     dependencies=[Depends(guard_storage_quota)],
 )
 async def process_emails_endpoint(
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     form_data: ProcessEmailsForm = Depends(get_process_emails_form),
     files: list[UploadFile] | None = File(None),
 ):

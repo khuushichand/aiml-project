@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import functools
 from sqlite3 import Error as SQLiteError
 from typing import Any, Callable
@@ -18,7 +17,7 @@ from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     store_claims,
 )
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.testing import is_truthy
 
 _SETTINGS_LOOKUP_EXCEPTIONS = (AttributeError, OSError, RuntimeError, TypeError, ValueError)
@@ -292,8 +291,12 @@ async def persist_claims_if_applicable(
     claims = claims_context.get("claims") or []
 
     def _worker() -> int:
-        db = MediaDatabase(db_path=db_path, client_id=client_id)
-        try:
+        with managed_media_database(
+            client_id,
+            db_path=db_path,
+            initialize=False,
+            suppress_close_exceptions=_CLAIMS_DB_EXCEPTIONS,
+        ) as db:
             try:
                 db.soft_delete_claims_for_media(int(media_id))
             except _CLAIMS_DB_EXCEPTIONS as e:
@@ -311,9 +314,6 @@ async def persist_claims_if_applicable(
                 extractor_version="v1",
             )
             return inserted
-        finally:
-            with contextlib.suppress(_CLAIMS_DB_EXCEPTIONS):
-                db.close_connection()
 
     try:
         inserted_count = await loop.run_in_executor(None, _worker)

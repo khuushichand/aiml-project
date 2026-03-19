@@ -42,7 +42,6 @@ from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_quiz_attempt_question_context,
     generate_study_assistant_reply,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.quiz_generator import (
     QuizProvenanceValidationError,
     generate_quiz_from_sources,
@@ -551,7 +550,7 @@ async def respond_quiz_attempt_question_assistant(
 async def generate_quiz(
     request: QuizGenerateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ):
     """Generate a quiz from mixed sources using AI."""
     try:

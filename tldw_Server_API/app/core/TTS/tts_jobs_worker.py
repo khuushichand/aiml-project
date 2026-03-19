@@ -20,7 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Jobs.event_stream import emit_job_event
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
@@ -76,10 +76,13 @@ def _tts_history_config() -> dict[str, Any]:
     }
 
 
-def _open_media_db_for_history(user_id: str) -> MediaDatabase | None:
+def _open_media_db_for_history(user_id: str) -> Any | None:
     try:
         db_path = DatabasePaths.get_media_db_path(user_id)
-        return MediaDatabase(db_path=str(db_path), client_id="tts_jobs_worker")
+        return create_media_database(
+            client_id="tts_jobs_worker",
+            db_path=str(db_path),
+        )
     except _TTS_JOBS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("TTS jobs worker: failed to open media db for history: {}", exc)
         return None
@@ -142,7 +145,7 @@ async def _handle_tts_job(job: dict[str, Any]) -> dict[str, Any]:
 
     history_cfg = _tts_history_config()
     history_enabled = history_cfg.get("enabled", False)
-    history_db: MediaDatabase | None = _open_media_db_for_history(user_id) if history_enabled else None
+    history_db: Any | None = _open_media_db_for_history(user_id) if history_enabled else None
     history_written = False
 
     def _record_history(

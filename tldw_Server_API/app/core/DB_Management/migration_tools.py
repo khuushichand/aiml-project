@@ -472,7 +472,7 @@ def _iter_migration_targets(args: argparse.Namespace) -> Iterator[tuple[str, Pat
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Migrate SQLite databases to PostgreSQL.')
-    parser.add_argument('--content-sqlite', help='Path to Media_DB_v2.db to migrate')
+    parser.add_argument('--content-sqlite', help='Path to the legacy content SQLite database to migrate')
     parser.add_argument('--chacha-sqlite', help='Path to ChaChaNotes.db to migrate (optional)')
     parser.add_argument('--analytics-sqlite', help='Path to Analytics.db to migrate (optional)')
     parser.add_argument('--evaluations-sqlite', help='Path to evaluations.db to migrate (optional)')

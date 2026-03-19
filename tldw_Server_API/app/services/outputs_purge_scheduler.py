@@ -17,7 +17,6 @@ exactness, integrate with the APScheduler service later.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import sqlite3
 
@@ -26,7 +25,7 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError as BackendDatabaseError
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.exceptions import StoragePathValidationError
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.testing import env_flag_enabled
@@ -164,21 +163,21 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
                     logger.debug("metrics increment failed for file_delete_failed")
     if ids:
         try:
-            media_db = MediaDatabase(db_path=str(DatabasePaths.get_media_db_path(user_id)), client_id="outputs_purge")
-            for rid in ids:
-                try:
-                    media_db.mark_tts_history_artifacts_deleted_for_output(
-                        user_id=str(user_id),
-                        output_id=int(rid),
-                    )
-                except _OUTPUTS_PURGE_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.debug(f"outputs_purge: failed to update tts_history for output {rid}: {exc}")
+            with managed_media_database(
+                "outputs_purge",
+                db_path=str(DatabasePaths.get_media_db_path(user_id)),
+                initialize=False,
+            ) as media_db:
+                for rid in ids:
+                    try:
+                        media_db.mark_tts_history_artifacts_deleted_for_output(
+                            user_id=str(user_id),
+                            output_id=int(rid),
+                        )
+                    except _OUTPUTS_PURGE_NONCRITICAL_EXCEPTIONS as exc:
+                        logger.debug(f"outputs_purge: failed to update tts_history for output {rid}: {exc}")
         except _OUTPUTS_PURGE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"outputs_purge: failed to open Media DB for history update: {exc}")
-        finally:
-            if media_db is not None:
-                with contextlib.suppress(_OUTPUTS_PURGE_NONCRITICAL_EXCEPTIONS):
-                    media_db.close_connection()
     removed = 0
     if ids:
         placeholders = ",".join(["?"] * len(ids))

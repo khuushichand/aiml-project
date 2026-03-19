@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,

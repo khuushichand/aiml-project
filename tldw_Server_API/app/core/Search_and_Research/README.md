@@ -28,7 +28,7 @@
 - Dependencies
   - LLM stack for subquery generation and relevance/aggregation: `tldw_Server_API/app/core/Chat/chat_orchestrator.py:77`, `tldw_Server_API/app/core/LLM_Calls/Summarization_General_Lib.py:312`.
   - Article scraping for evidence: `tldw_Server_API/app/core/Web_Scraping/Article_Extractor_Lib.py:335`.
-  - DB persistence: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py` via `MediaDatabase`.
+  - DB persistence: legacy media DB module via the media database adapter.
 - Configuration
   - Provider API keys and URLs are loaded from `Config_Files/config.txt` (section `search_engines` and third-party sections). For web search engines, see the WebSearch README.
   - Per-provider throttling/limits vary by upstream API; tests favor mocking.

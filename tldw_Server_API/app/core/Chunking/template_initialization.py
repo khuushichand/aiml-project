@@ -4,16 +4,18 @@ Initialize built-in chunking templates in the database.
 This module loads templates from JSON files and seeds them into the database.
 """
 
+import contextlib
 import importlib.resources as ires
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from sqlite3 import Error as SQLiteError
-from typing import Any
+from typing import Any, Protocol
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 
 _TEMPLATE_IO_EXCEPTIONS = (AttributeError, OSError, TypeError, ValueError)
 _TEMPLATE_INIT_EXCEPTIONS = (
@@ -25,6 +27,40 @@ _TEMPLATE_INIT_EXCEPTIONS = (
     ValueError,
     json.JSONDecodeError,
 )
+
+
+class _TemplateDatabase(Protocol):
+    def seed_builtin_templates(self, templates: list[dict[str, Any]]) -> int: ...
+
+    def get_chunking_template(self, name: str) -> dict[str, Any] | None: ...
+
+    def update_chunking_template(
+        self,
+        *,
+        name: str,
+        template_json: str,
+        description: str | None,
+        tags: list[str] | None,
+    ) -> bool: ...
+
+    def list_chunking_templates(
+        self,
+        *,
+        include_builtin: bool,
+        include_custom: bool,
+    ) -> list[dict[str, Any]]: ...
+
+
+def _is_template_database(value: Any) -> bool:
+    return value is not None and all(
+        callable(getattr(value, method_name, None))
+        for method_name in (
+            "seed_builtin_templates",
+            "get_chunking_template",
+            "update_chunking_template",
+            "list_chunking_templates",
+        )
+    )
 
 
 def load_builtin_templates() -> list[dict[str, Any]]:
@@ -179,7 +215,32 @@ def _resolve_default_media_db_path() -> str:
     return str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
 
 
-def initialize_chunking_templates(db_path: str = None, client_id: str = 'system', db: MediaDatabase = None) -> int:
+@contextlib.contextmanager
+def _resolve_template_db(
+    db_path: str | _TemplateDatabase | None,
+    client_id: str,
+    db: _TemplateDatabase | None,
+) -> Iterator[_TemplateDatabase]:
+    if db is None and _is_template_database(db_path):
+        db = db_path
+    if db is not None:
+        yield db
+        return
+
+    resolved_db_path = db_path if isinstance(db_path, str) else _resolve_default_media_db_path()
+    with managed_media_database(
+        client_id=client_id,
+        db_path=resolved_db_path,
+        initialize=False,
+    ) as owned_db:
+        yield owned_db
+
+
+def initialize_chunking_templates(
+    db_path: str | None = None,
+    client_id: str = 'system',
+    db: _TemplateDatabase | None = None,
+) -> int:
     """
     Initialize built-in chunking templates in the database.
 
@@ -192,39 +253,32 @@ def initialize_chunking_templates(db_path: str = None, client_id: str = 'system'
         Number of templates successfully seeded
     """
     try:
-        # Backward compat: allow passing MediaDatabase as first positional arg
-        if isinstance(db_path, MediaDatabase) and db is None:
-            db = db_path
-            db_path = None
-        # Use provided database instance or create one
-        if db is None:
-            # For backward compatibility and startup initialization
-            # This will be called for the default/single-user database
-            if db_path is None:
-                db_path = _resolve_default_media_db_path()
+        with _resolve_template_db(db_path=db_path, client_id=client_id, db=db) as resolved_db:
 
-            # Create database instance
-            db = MediaDatabase(db_path=db_path, client_id=client_id)
+            # Load built-in templates
+            templates = load_builtin_templates()
 
-        # Load built-in templates
-        templates = load_builtin_templates()
+            if not templates:
+                logger.warning("No built-in templates found to seed")
+                return 0
 
-        if not templates:
-            logger.warning("No built-in templates found to seed")
-            return 0
+            # Seed templates into database
+            count = resolved_db.seed_builtin_templates(templates)
 
-        # Seed templates into database
-        count = db.seed_builtin_templates(templates)
-
-        logger.info(f"Successfully seeded {count} built-in templates into database")
-        return count
+            logger.info(f"Successfully seeded {count} built-in templates into database")
+            return count
 
     except _TEMPLATE_INIT_EXCEPTIONS as e:
         logger.error(f"Error initializing chunking templates: {e}")
         return 0
 
 
-def update_builtin_templates(db_path: str = None, client_id: str = 'system', force: bool = False, db: MediaDatabase = None) -> int:
+def update_builtin_templates(
+    db_path: str | None = None,
+    client_id: str = 'system',
+    force: bool = False,
+    db: _TemplateDatabase | None = None,
+) -> int:
     """
     Update existing built-in templates with latest definitions.
 
@@ -237,42 +291,33 @@ def update_builtin_templates(db_path: str = None, client_id: str = 'system', for
         Number of templates updated
     """
     try:
-        # Backward compat: allow passing MediaDatabase as first positional arg
-        if isinstance(db_path, MediaDatabase) and db is None:
-            db = db_path
-            db_path = None
-        # Use provided database instance or create one
-        if db is None:
-            if db_path is None:
-                db_path = _resolve_default_media_db_path()
+        with _resolve_template_db(db_path=db_path, client_id=client_id, db=db) as resolved_db:
+            templates = load_builtin_templates()
 
-            db = MediaDatabase(db_path=db_path, client_id=client_id)
-        templates = load_builtin_templates()
+            updated_count = 0
 
-        updated_count = 0
+            for template in templates:
+                existing = resolved_db.get_chunking_template(name=template['name'])
 
-        for template in templates:
-            existing = db.get_chunking_template(name=template['name'])
+                if existing and existing['is_builtin']:
+                    # Compare template content
+                    existing_template = json.loads(existing['template_json'])
+                    new_template = template['template']
 
-            if existing and existing['is_builtin']:
-                # Compare template content
-                existing_template = json.loads(existing['template_json'])
-                new_template = template['template']
+                    if force or existing_template != new_template:
+                        # Update the template
+                        success = resolved_db.update_chunking_template(
+                            name=template['name'],
+                            template_json=json.dumps(new_template),
+                            description=template.get('description'),
+                            tags=template.get('tags')
+                        )
 
-                if force or existing_template != new_template:
-                    # Update the template
-                    success = db.update_chunking_template(
-                        name=template['name'],
-                        template_json=json.dumps(new_template),
-                        description=template.get('description'),
-                        tags=template.get('tags')
-                    )
+                        if success:
+                            updated_count += 1
+                            logger.info(f"Updated built-in template: {template['name']}")
 
-                    if success:
-                        updated_count += 1
-                        logger.info(f"Updated built-in template: {template['name']}")
-
-        return updated_count
+            return updated_count
 
     except _TEMPLATE_INIT_EXCEPTIONS as e:
         logger.error(f"Error updating built-in templates: {e}")
@@ -280,7 +325,10 @@ def update_builtin_templates(db_path: str = None, client_id: str = 'system', for
 
 
 # Convenience function to be called during application startup
-def ensure_templates_initialized(db_path: str = None, db: MediaDatabase = None) -> bool:
+def ensure_templates_initialized(
+    db_path: str | None = None,
+    db: _TemplateDatabase | None = None,
+) -> bool:
     """
     Ensure built-in templates are initialized in the database.
     Called during application startup.
@@ -299,11 +347,10 @@ def ensure_templates_initialized(db_path: str = None, db: MediaDatabase = None) 
         else:
             # Check if templates already exist
             if db is None:
-                if db_path is None:
-                    db_path = _resolve_default_media_db_path()
-
-                db = MediaDatabase(db_path=db_path, client_id='system')
-            existing = db.list_chunking_templates(include_builtin=True, include_custom=False)
+                with _resolve_template_db(db_path=db_path, client_id='system', db=db) as owned_db:
+                    existing = owned_db.list_chunking_templates(include_builtin=True, include_custom=False)
+            else:
+                existing = db.list_chunking_templates(include_builtin=True, include_custom=False)
 
             if existing:
                 logger.debug(f"Found {len(existing)} existing built-in templates")

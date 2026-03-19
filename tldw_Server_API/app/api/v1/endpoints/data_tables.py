@@ -58,7 +58,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import InputError, MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.errors import InputError
 from tldw_Server_API.app.core.exceptions import (
     FileArtifactsError,
     FileArtifactsValidationError,
@@ -284,7 +284,7 @@ def _row_values_from_json(
 
 
 def _collect_export_rows(
-    db: MediaDatabase,
+    db: Any,
     table_id: int,
     *,
     column_ids: list[str],
@@ -360,7 +360,7 @@ async def _wait_for_job_completion(
 
 def _build_table_detail_response(
     table_row: dict[str, Any],
-    db: MediaDatabase,
+    db: Any,
     *,
     rows_limit: int = 200,
     rows_offset: int = 0,
@@ -424,7 +424,7 @@ async def generate_data_table(
     wait_timeout_seconds: int = Query(300, ge=1, le=1800),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
 ) -> DataTableGenerateResponse | DataTableDetailResponse:
     """Queue a data table generation job and optionally wait for completion."""
@@ -576,7 +576,7 @@ async def list_data_tables(
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> DataTablesListResponse:
     """List data tables with optional filters and pagination."""
     owner_user_id = _resolve_owner_id(principal, current_user)
@@ -651,7 +651,7 @@ async def get_data_table(
     include_sources: bool = Query(True),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> DataTableDetailResponse:
     """Return a single data table with optional rows and sources."""
     owner_user_id = _resolve_owner_id(principal, current_user)
@@ -689,7 +689,7 @@ async def export_data_table(
     download: bool = Query(False, description="Return file content directly"),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     cdb: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> DataTableExportResponse:
     """Export a data table via file artifacts or direct response."""
@@ -801,7 +801,7 @@ async def update_data_table_content(
     req: DataTableContentUpdateRequest,
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> DataTableDetailResponse:
     """Update data table columns and rows content."""
     owner_user_id = _resolve_owner_id(principal, current_user)
@@ -933,7 +933,7 @@ async def update_data_table(
     req: DataTableUpdateRequest,
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> DataTableSummary:
     """Update data table metadata such as name and description."""
     owner_user_id = _resolve_owner_id(principal, current_user)
@@ -974,7 +974,7 @@ async def delete_data_table(
     table_uuid: str,
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> DataTableDeleteResponse:
     """Delete a data table."""
     owner_user_id = _resolve_owner_id(principal, current_user)
@@ -1010,7 +1010,7 @@ async def regenerate_data_table(
     wait_timeout_seconds: int = Query(300, ge=1, le=1800),
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
 ) -> DataTableGenerateResponse | DataTableDetailResponse:
     """Queue a data table regeneration job."""

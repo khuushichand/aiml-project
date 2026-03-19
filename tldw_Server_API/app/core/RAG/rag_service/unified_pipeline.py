@@ -26,6 +26,9 @@ from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    managed_media_database,
+)
 from tldw_Server_API.app.core.LLM_Calls.structured_output import (
     StructuredOutputOptions,
     StructuredOutputParseError,
@@ -5236,28 +5239,36 @@ async def unified_rag_pipeline(
                         pre_claims: list[str] = []
                         if media_db_path and (result.documents or []):
                             from tldw_Server_API.app.core.config import settings as _settings
-                            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-                            db = MediaDatabase(db_path=media_db_path, client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
-                            # Collect media IDs present in documents
-                            media_ids: list[int] = []
-                            for d in result.documents:
-                                try:
-                                    mid = d.metadata.get("media_id") if isinstance(d.metadata, dict) else None
-                                    if mid is not None:
-                                        media_ids.append(int(mid))
-                                except (TypeError, ValueError):
-                                    continue
-                            media_ids = list(dict.fromkeys(media_ids))[:5]
-                            if media_ids:
-                                # Fetch a small number of claims per media
-                                for mid in media_ids:
-                                    rows = db.execute_query(
-                                        "SELECT claim_text FROM Claims WHERE media_id = ? AND deleted = 0 LIMIT ?",
-                                        (int(mid), int(claims_max)),
-                                    ).fetchall()
-                                    pre_claims.extend([r[0] for r in rows])
-                            with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError, sqlite3.Error):
-                                db.close_connection()
+                            with managed_media_database(
+                                client_id=str(_settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+                                db_path=media_db_path,
+                                initialize=False,
+                                suppress_close_exceptions=(
+                                    AttributeError,
+                                    RuntimeError,
+                                    TypeError,
+                                    ValueError,
+                                    sqlite3.Error,
+                                ),
+                            ) as db:
+                                # Collect media IDs present in documents
+                                media_ids: list[int] = []
+                                for d in result.documents:
+                                    try:
+                                        mid = d.metadata.get("media_id") if isinstance(d.metadata, dict) else None
+                                        if mid is not None:
+                                            media_ids.append(int(mid))
+                                    except (TypeError, ValueError):
+                                        continue
+                                media_ids = list(dict.fromkeys(media_ids))[:5]
+                                if media_ids:
+                                    # Fetch a small number of claims per media
+                                    for mid in media_ids:
+                                        rows = db.execute_query(
+                                            "SELECT claim_text FROM Claims WHERE media_id = ? AND deleted = 0 LIMIT ?",
+                                            (int(mid), int(claims_max)),
+                                        ).fetchall()
+                                        pre_claims.extend([r[0] for r in rows])
                         if pre_claims:
                             # Verify these claims directly, skipping extraction
                             from tldw_Server_API.app.core.Claims_Extraction.claims_engine import Claim as _Claim

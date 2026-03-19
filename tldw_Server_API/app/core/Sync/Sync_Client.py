@@ -3,7 +3,7 @@ import json
 import os
 import sqlite3  # For specific error types
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 #
 # Third-Party Imports
@@ -12,11 +12,12 @@ from loguru import logger
 #
 # Local Imports
 try:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+    from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+    from tldw_Server_API.app.core.DB_Management.media_db.errors import (
         ConflictError,
         DatabaseError,
         InputError,
-        MediaDatabase,
     )
 except ImportError:
     logger.error("Could not import the 'Media_DB' library. Make sure Media_DB.py is accessible.")
@@ -62,6 +63,18 @@ SYNC_RUNTIME_ERRORS = (
 )
 
 _SYNC_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+MediaDbLike = Any
+
+
+def _is_media_db_instance(db_instance: object) -> bool:
+    return all(
+        hasattr(db_instance, attr)
+        for attr in (
+            "db_path_str",
+            "get_sync_log_entries",
+            "transaction",
+        )
+    )
 
 
 def _extract_http_status_error(exc: Exception) -> Optional[tuple[int, str]]:
@@ -148,7 +161,7 @@ class ClientSyncEngine:
 
     def __init__(
         self,
-        db_instance: MediaDatabase,
+        db_instance: MediaDbLike,
         server_api_url: str,
         client_id: str,
         state_file: str,
@@ -156,8 +169,10 @@ class ClientSyncEngine:
         api_key: Optional[str] = None,
         default_headers: Optional[dict[str, str]] = None,
     ):
-        if not isinstance(db_instance, MediaDatabase):
-             raise TypeError("db_instance must be a valid Database object.")
+        if not _is_media_db_instance(db_instance):
+            raise TypeError("db_instance must be a valid Database object.")
+        if getattr(db_instance, "backend_type", None) != BackendType.SQLITE:
+            raise TypeError("ClientSyncEngine currently supports only SQLite-backed media databases.")
 
         self.db = db_instance
         self.server_api_url = server_api_url.rstrip('/') # Ensure no trailing slash
@@ -1008,12 +1023,12 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(DATABASE_PATH) or '.', exist_ok=True)
 
     # Initialize db to None outside the try block
-    db: Optional[MediaDatabase] = None
+    db: Optional[MediaDbLike] = None
     engine: Optional[ClientSyncEngine] = None
 
     try:
         # Initialize the database (creates schema if needed)
-        db = MediaDatabase(db_path=DATABASE_PATH, client_id=CLIENT_ID)
+        db = create_media_database(client_id=CLIENT_ID, db_path=DATABASE_PATH)
         logger.info("Database object created.")
 
         # Initialize the sync engine

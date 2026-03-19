@@ -13,6 +13,7 @@ from loguru import logger
 
 from ....config import load_and_log_configs
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
+from ....DB_Management.media_db.api import managed_media_database
 from ..base import BaseModule, create_tool_definition
 from ..disk_space import get_free_disk_space_gb
 
@@ -893,15 +894,15 @@ class QuizzesModule(BaseModule):
     def _get_media_content(self, media_path: str, media_id: int) -> Optional[str]:
         """Get media content for quiz generation."""
         try:
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-            db = MediaDatabase(db_path=media_path, client_id="mcp_quizzes_gen")
-            try:
+            with managed_media_database(
+                "mcp_quizzes_gen",
+                db_path=media_path,
+                initialize=False,
+            ) as db:
                 media = db.get_media_by_id(media_id)
                 if not media:
                     return None
                 return media.get("content") or media.get("transcript") or media.get("summary")
-            finally:
-                db.close_all_connections()
         except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get media content: {e}")
             return None

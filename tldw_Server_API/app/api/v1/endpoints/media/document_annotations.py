@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -19,7 +20,6 @@ from tldw_Server_API.app.api.v1.schemas.document_annotations import (
     AnnotationUpdate,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 router = APIRouter(tags=["Document Workspace"])
 
@@ -28,7 +28,7 @@ router = APIRouter(tags=["Document Workspace"])
 ANNOTATIONS_TABLE = "document_annotations"
 
 
-def _ensure_annotations_table(db: MediaDatabase) -> None:
+def _ensure_annotations_table(db: Any) -> None:
     """
     Ensure the document_annotations table exists in the database.
     Creates the table if it doesn't exist, and applies migrations for new columns.
@@ -89,7 +89,7 @@ def _log_missing_media_context(
     operation: str,
     media_id: int,
     user_id: str,
-    db: MediaDatabase,
+    db: Any,
 ) -> None:
     db_path = getattr(db, "db_path_str", getattr(db, "db_path", "<unknown>"))
     logger.warning(
@@ -130,7 +130,7 @@ def _row_to_response(row: dict, media_id: int) -> AnnotationResponse:
 )
 async def list_annotations(
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> AnnotationListResponse:
     """
@@ -198,7 +198,7 @@ async def list_annotations(
 async def create_annotation(
     body: AnnotationCreate,
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> AnnotationResponse:
     """
@@ -290,7 +290,7 @@ async def update_annotation(
     body: AnnotationUpdate,
     media_id: int = Path(..., description="The ID of the media item"),
     annotation_id: str = Path(..., description="The ID of the annotation"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> AnnotationResponse:
     """
@@ -384,6 +384,7 @@ async def update_annotation(
 @router.delete(
     "/{media_id:int}/annotations/{annotation_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
     summary="Delete Document Annotation",
     responses={
         204: {"description": "Annotation deleted successfully"},
@@ -393,9 +394,9 @@ async def update_annotation(
 async def delete_annotation(
     media_id: int = Path(..., description="The ID of the media item"),
     annotation_id: str = Path(..., description="The ID of the annotation"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
-) -> None:
+) -> Response:
     """
     Delete an annotation (soft delete).
 
@@ -436,6 +437,8 @@ async def delete_annotation(
             detail="Failed to delete annotation",
         ) from e
 
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 @router.post(
     "/{media_id:int}/annotations/sync",
@@ -450,7 +453,7 @@ async def delete_annotation(
 async def sync_annotations(
     body: AnnotationSyncRequest,
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> AnnotationSyncResponse:
     """

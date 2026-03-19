@@ -1,7 +1,10 @@
 import json
 import uuid
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, upsert_transcript
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
+    upsert_transcript,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     to_normalized_stt_artifact,
 )

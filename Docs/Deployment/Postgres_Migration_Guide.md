@@ -9,7 +9,7 @@ workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, `Databases/Analytics.db`). If you have multiple users, repeat for each `<user_id>`.
+- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/<content-db>.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, `Databases/Analytics.db`). If you have multiple users, repeat for each `<user_id>`.
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
@@ -18,6 +18,7 @@ workflow jobs.
   FTS artefacts, then shut the server down before migrating data.
 
 `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+Replace `<content-db>.db` with your configured per-user content DB filename in the examples below.
 
 ## Step 1 - Prepare connection details
 
@@ -53,16 +54,17 @@ fi
 for user_path in "${USER_DB_BASE_DIR}"/*; do
   [ -d "${user_path}" ] || { echo "Skipping non-directory entry: ${user_path}" >&2; continue; }
   user_id="$(basename "${user_path}")"
-  media_db="${user_path}/Media_DB_v2.db"
+  CONTENT_DB_NAME="${CONTENT_DB_NAME:?set CONTENT_DB_NAME to your configured per-user content DB filename}"
+  content_db="${user_path}/${CONTENT_DB_NAME}"
   chacha_db="${user_path}/ChaChaNotes.db"
 
-  if [ ! -r "${media_db}" ]; then
-    echo "Warning: missing or unreadable Media_DB_v2.db for user ${user_id} (${media_db}). Skipping." >&2
+  if [ ! -r "${content_db}" ]; then
+    echo "Warning: missing or unreadable content DB for user ${user_id} (${content_db}). Skipping." >&2
     continue
   fi
 
   migration_args=(
-    --content-sqlite "${media_db}"
+    --content-sqlite "${content_db}"
     --analytics-sqlite Databases/Analytics.db
     --workflows-sqlite Databases/workflows.db
     --pg-host "$PGHOST"
@@ -110,7 +112,7 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   for user_id in $(ls -1 "$USER_DB_BASE_DIR"); do
     [ -d "$USER_DB_BASE_DIR/$user_id" ] || continue
     echo "User $user_id:"
-    sqlite3 "${USER_DB_BASE_DIR}/${user_id}/Media_DB_v2.db" 'SELECT COUNT(*) FROM media;'
+    sqlite3 "${USER_DB_BASE_DIR}/${user_id}/${CONTENT_DB_NAME}" 'SELECT COUNT(*) FROM media;'
   done
   sqlite3 Databases/workflows.db 'SELECT COUNT(*) FROM workflow_runs;'
   ```

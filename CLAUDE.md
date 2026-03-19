@@ -94,7 +94,7 @@ The project is a FastAPI-first backend with a Next.js WebUI, mature AuthNZ (sing
 
 ### Database Design
 - **SQLite Databases (default)**:
-  - Content (Media DB v2): per-user `Databases/user_databases/<user_id>/Media_DB_v2.db` (root-level path deprecated)
+  - Content (Media DB v2): per-user content DB under `Databases/user_databases/<user_id>/` (root-level path deprecated)
   - AuthNZ users: `Databases/users.db` (SQLite by default; PostgreSQL supported)
   - Evaluations: `Databases/evaluations.db`
   - Notes/Chats: per-user `Databases/user_databases/<user_id>/ChaChaNotes.db`
@@ -250,11 +250,11 @@ python -m pytest -m "integration" -v
 
 ### Database Operations
 ```python
-# Use the MediaDatabase class for all operations
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+# Use the extracted media DB factory for content DB sessions
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 
-db = MediaDatabase(db_path="path/to/media.db", client_id="api_client")
-# Always use context managers for transactions
+db = create_media_database("api_client", db_path="path/to/media.db")
+# Always use context managers for transactions and close owned handles
 ```
 
 ### Adding a New LLM Provider

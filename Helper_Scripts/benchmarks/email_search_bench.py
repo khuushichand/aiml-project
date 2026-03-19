@@ -67,10 +67,21 @@ from common.repo_utils import ensure_repo_root
 ensure_repo_root()
 
 try:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-except Exception:
-    print("tldw_Server_API not available; run from repo root or set PYTHONPATH.", file=sys.stderr)
-    raise SystemExit(1) from None
+    from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+except ImportError as exc:
+    logger.error(
+        "tldw_Server_API import failed (run from repo root or set PYTHONPATH): {}",
+        exc,
+    )
+    raise SystemExit(1) from exc
+
+
+MediaDbLike = Any
+
+
+def _open_media_db(*, db_path: Path, client_id: str) -> MediaDbLike:
+    """Open the media DB handle used by this benchmark for the given tenant path."""
+    return create_media_database(client_id, db_path=db_path)
 
 
 def _iso_utc_now() -> str:
@@ -199,7 +210,7 @@ def _load_query_mix_from_workload_trace(
     return cases
 
 
-def _fetch_fixture_profile(db: MediaDatabase, tenant_id: str) -> dict[str, Any]:
+def _fetch_fixture_profile(db: MediaDbLike, tenant_id: str) -> dict[str, Any]:
     with db.transaction() as conn:
         total_row = db._fetchone_with_connection(  # noqa: SLF001 - benchmark helper
             conn,
@@ -362,7 +373,7 @@ def _build_default_query_mix(profile: dict[str, Any]) -> list[QueryCase]:
 
 def _build_fixture(
     *,
-    db: MediaDatabase,
+    db: MediaDbLike,
     tenant_id: str,
     source_key: str,
     message_target: int,
@@ -383,7 +394,7 @@ def _build_fixture(
         )
         return profile_before
 
-    rnd = random.Random(seed)
+    rnd = random.Random(seed)  # nosec B311 - deterministic benchmark fixture generator, not cryptographic
     label_names = [f"Label-{idx+1:02d}" for idx in range(max(1, label_cardinality))]
     subject_topics = [
         "Quarterly Report",
@@ -506,7 +517,7 @@ def _run_query_once(
     limit: int,
     offset: int,
 ) -> tuple[float, int]:
-    db = MediaDatabase(db_path=db_path, client_id=client_id)
+    db = _open_media_db(db_path=db_path, client_id=client_id)
     try:
         t0 = time.perf_counter()
         _rows, total = db.search_email_messages(
@@ -553,7 +564,7 @@ def _run_cold_pass(
     return {"queries": query_rows, "summary": _summary(all_latencies)}
 
 
-def _is_sqlite_backend(db: MediaDatabase) -> bool:
+def _is_sqlite_backend(db: MediaDbLike) -> bool:
     backend_type = getattr(db, "backend_type", None)
     backend_name = str(getattr(backend_type, "name", backend_type) or "").strip().lower()
     return "sqlite" in backend_name
@@ -561,7 +572,7 @@ def _is_sqlite_backend(db: MediaDatabase) -> bool:
 
 def _capture_sqlite_query_plan(
     *,
-    db: MediaDatabase,
+    db: MediaDbLike,
     tenant_id: str,
     query: str,
     limit: int,
@@ -682,7 +693,7 @@ def _run_warm_pass(
     capture_query_plans: bool,
     query_plan_statements_max: int,
 ) -> dict[str, Any]:
-    db = MediaDatabase(db_path=db_path, client_id=client_id)
+    db = _open_media_db(db_path=db_path, client_id=client_id)
     try:
         query_rows: list[dict[str, Any]] = []
         all_latencies: list[float] = []
@@ -846,7 +857,7 @@ def main() -> int:
     report_started = time.perf_counter()
     fixture_profile: dict[str, Any]
 
-    db = MediaDatabase(db_path=db_path, client_id=args.client_id)
+    db = _open_media_db(db_path=db_path, client_id=args.client_id)
     try:
         if args.ensure_fixture:
             fixture_profile = _build_fixture(

@@ -1006,6 +1006,41 @@ def test_get_schema_versions():
         assert val is None or isinstance(val, int)
 
 
+def test_get_schema_versions_uses_runtime_media_schema_helper(monkeypatch):
+    """Media schema version should come from the shared runtime helper."""
+    from tldw_Server_API.app.services import admin_bundle_service
+
+    monkeypatch.setattr(
+        admin_bundle_service,
+        "get_current_media_schema_version",
+        lambda: 4242,
+        raising=False,
+    )
+
+    versions = admin_bundle_service._get_schema_versions()
+
+    assert versions["media"] == 4242
+
+
+def test_resolve_authnz_sqlite_relative_database_url_to_project_path(monkeypatch):
+    """Relative sqlite auth URLs should resolve inside the project, not filesystem root."""
+    from types import SimpleNamespace
+
+    from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
+    from tldw_Server_API.app.services import admin_data_ops_service
+
+    monkeypatch.setattr(
+        admin_data_ops_service,
+        "get_settings",
+        lambda: SimpleNamespace(DATABASE_URL="sqlite:///./Databases/users.db"),
+    )
+
+    db_path, resolved_user_id = admin_data_ops_service._resolve_dataset_db_path("authnz", None)
+
+    assert db_path == get_project_relative_path("Databases/users.db")
+    assert resolved_user_id is None
+
+
 def test_check_disk_space(tmp_path):
     """_check_disk_space should not raise for small requirements."""
     from tldw_Server_API.app.services.admin_bundle_service import _check_disk_space

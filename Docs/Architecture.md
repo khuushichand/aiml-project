@@ -250,7 +250,7 @@ For subsystem-level diagrams and details, see:
 
 Database design is covered in depth in:
 - `Docs/Code_Documentation/Database.md`
-- `Docs/Code_Documentation/Databases/Media_DB_v2.md`
+- the media DB code documentation page
 - `Docs/Code_Documentation/Databases/ChaChaNotes_DB.md`
 
 This section gives the quick mental model.
@@ -264,10 +264,11 @@ Note: `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config`, defa
 - Unlike per-user Content/Media DBs under `<USER_DB_BASE_DIR>/<user_id>/`, AuthNZ data remains centralized.
 - Stores users, credentials, permissions, and related auth data.
 
-### Content / Media DB v2
-- Per-user SQLite DB under `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`.
+### Content / Media DB
+- Per-user SQLite DB under `<USER_DB_BASE_DIR>/<user_id>/<content-db>.db`.
 - Stores media items, chunks, metadata, and FTS indexes.
-- Root-level path `Databases/Media_DB_v2.db` is deprecated; always go through the DB helpers.
+- Root-level single-file content DB paths are deprecated; always go through the DB helpers.
+- Replace `<content-db>.db` with your configured per-user content DB filename.
 
 ### Notes / Chats / Characters
 - Per-user `ChaChaNotes.db` under `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`.

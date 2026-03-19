@@ -25,6 +25,9 @@ from tldw_Server_API.app.core.DB_Management.DB_Backups import (
     restore_sqlite_database_file,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
+    get_current_media_schema_version,
+)
 from tldw_Server_API.app.core.exceptions import (
     BundleConcurrencyError,
     BundleDiskSpaceError,
@@ -80,8 +83,7 @@ def _get_schema_versions() -> dict[str, int | None]:
     """Collect current schema versions from DB modules (lazy imports)."""
     versions: dict[str, int | None] = {}
     try:
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-        versions["media"] = int(MediaDatabase._CURRENT_SCHEMA_VERSION)
+        versions["media"] = get_current_media_schema_version()
     except Exception:
         versions["media"] = None
     try:

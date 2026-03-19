@@ -55,6 +55,7 @@ async def test_arxiv_ingest_success(monkeypatch, paper_search_app):
 
     monkeypatch.setattr(_Arxiv, "fetch_arxiv_xml", _fake_fetch_arxiv_xml)
     monkeypatch.setattr(_Arxiv, "parse_arxiv_feed", _fake_parse_arxiv_feed)
+    monkeypatch.setattr(_Arxiv, "fetch_arxiv_pdf_url", lambda paper_id: None)
 
     # Fake session returns a PDF
     monkeypatch.setattr(paper_search, "_http_session", lambda: _FakeSession(b"%PDF-1.5\n..."))
@@ -127,5 +128,66 @@ async def test_s2_ingest_success(monkeypatch, paper_search_app):
         saved = fake_db.calls[0]
         assert saved["url"].startswith("s2:")
         assert '"s2_paper_id": "abcdef"' in saved.get("safe_metadata", "")
+
+    paper_search_app.dependency_overrides.pop(get_media_db_for_user, None)
+
+
+@pytest.mark.asyncio
+async def test_ingest_by_doi_uses_media_repository_for_media_db_sessions(
+    monkeypatch,
+    paper_search_app,
+):
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    import tldw_Server_API.app.api.v1.endpoints.paper_search as paper_search
+    from tldw_Server_API.app.core.Third_Party import Unpaywall as _Unpaywall
+
+    class _MediaDb:
+        backend = object()
+
+    class _FakeRepo:
+        def __init__(self):
+            self.calls = []
+
+        def add_media_with_keywords(self, **kwargs):
+            self.calls.append(kwargs)
+            return 19, "doi-uuid", "stored"
+
+    async def _fake_process_pdf_task(**kwargs):
+        return {
+            "text": "doi text",
+            "analysis": "doi summary",
+            "metadata": {"title": "OA Paper", "author": "OA Author"},
+        }
+
+    media_db = _MediaDb()
+    fake_repo = _FakeRepo()
+    paper_search_app.dependency_overrides[get_media_db_for_user] = lambda: media_db
+
+    monkeypatch.setattr(paper_search, "get_media_repository", lambda db: fake_repo, raising=False)
+    monkeypatch.setattr(_Unpaywall, "resolve_oa_pdf", lambda doi: ("https://example.com/oa.pdf", None))
+    monkeypatch.setattr(paper_search, "_http_session", lambda: _FakeSession(b"%PDF-1.5\n..."))
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as _PDF
+
+    monkeypatch.setattr(_PDF, "process_pdf_task", _fake_process_pdf_task)
+
+    async with AsyncClient(transport=ASGITransport(app=paper_search_app), base_url="http://test") as client:
+        r = await client.post(
+            "/api/v1/paper-search/ingest/by-doi",
+            params={"doi": "10.1000/xyz", "perform_chunking": False},
+        )
+        assert r.status_code == 200
+        assert fake_repo.calls
+        saved = fake_repo.calls[0]
+        assert saved["url"] == "doi:10.1000/xyz"
+        assert saved["title"] == "OA Paper"
+        assert saved["author"] == "OA Author"
+        assert saved["content"] == "doi text"
+        assert saved["analysis_content"] == "doi summary"
+        assert saved["safe_metadata"] == {
+            "provider": "unpaywall",
+            "doi": "10.1000/xyz",
+            "pdf_url": "https://example.com/oa.pdf",
+        }
 
     paper_search_app.dependency_overrides.pop(get_media_db_for_user, None)

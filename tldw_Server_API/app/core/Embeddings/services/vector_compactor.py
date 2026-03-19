@@ -31,8 +31,8 @@ except (ImportError, ModuleNotFoundError):  # pragma: no cover
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 
 _DB_CLOSE_EXCEPTIONS = (BackendDatabaseError, sqlite3.Error, OSError, RuntimeError)
 _CHROMA_CLOSE_EXCEPTIONS = (RuntimeError, OSError)
@@ -93,18 +93,15 @@ def _sanitize_media_db_path(user_id: str, db_path: str | None) -> str:
 
 
 async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
-    db = create_media_database(client_id="embeddings_vector_compactor", db_path=db_path)
-    try:
+    with managed_media_database(
+        client_id="embeddings_vector_compactor",
+        db_path=db_path,
+        initialize=False,
+        suppress_close_exceptions=(*_DB_CLOSE_EXCEPTIONS, *_COMPACTOR_NONCRITICAL_EXCEPTIONS),
+    ) as db:
         cur = db.execute_query("SELECT id FROM Media WHERE deleted = 1")
         rows = cur.fetchall() or []
         return [int(r[0]) for r in rows]
-    finally:
-        try:
-            db.close_connection()
-        except _DB_CLOSE_EXCEPTIONS as e:
-            logger.debug(f"Compactor: failed to close media DB connection: {e}")
-        except _COMPACTOR_NONCRITICAL_EXCEPTIONS as e:
-            logger.debug(f"Compactor: unexpected error closing media DB connection: {e}")
 
 
 def _collection_name_for(user_id: str, media_id: int) -> str:

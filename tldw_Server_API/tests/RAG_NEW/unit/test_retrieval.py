@@ -6,6 +6,7 @@ from typing import Iterable
 import pytest
 
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
+    MediaDatabaseError,
     MediaDBRetriever,
     MultiDatabaseRetriever,
     RetrievalConfig,
@@ -66,6 +67,51 @@ class TestMediaDBRetriever:
         assert docs, "Fixture seeds a video entry containing the word 'vector'"
         assert all(doc.metadata.get("media_type") == "video" for doc in docs)
 
+    def test_attach_media_db_uses_shared_factory(self, monkeypatch, tmp_path):
+        import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
+
+        events: list[tuple[str, object]] = []
+
+        class _FakeDb:
+            def close_connection(self):
+                events.append(("close", None))
+
+        def _fake_create_media_database(client_id, **kwargs):
+            events.append(("create", client_id))
+            events.append(("kwargs", kwargs))
+            return _FakeDb()
+
+        monkeypatch.setattr(retr_mod, "create_media_database", _fake_create_media_database)
+        monkeypatch.setattr(retr_mod.MediaDBRetriever, "_initialize_vector_store", lambda self: None)
+
+        retriever = retr_mod.MediaDBRetriever(str(tmp_path / "media.db"))
+
+        try:
+            assert retriever._own_media_db is True
+            assert isinstance(retriever.media_db, _FakeDb)
+            assert retriever._db_adapter is retriever.media_db
+            assert events[:2] == [
+                ("create", "rag_service"),
+                ("kwargs", {"db_path": str((tmp_path / "media.db").resolve())}),
+            ]
+        finally:
+            retriever.close()
+
+        assert ("close", None) in events
+
+    def test_attach_media_db_propagates_factory_configuration_errors(self, monkeypatch, tmp_path):
+        import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
+
+        monkeypatch.setattr(
+            retr_mod,
+            "create_media_database",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(MediaDatabaseError("bad config")),
+        )
+        monkeypatch.setattr(retr_mod.MediaDBRetriever, "_initialize_vector_store", lambda self: None)
+
+        with pytest.raises(MediaDatabaseError):
+            retr_mod.MediaDBRetriever(str(tmp_path / "media.db"))
+
 
 @pytest.mark.unit
 class TestMultiDatabaseRetriever:
@@ -87,6 +133,53 @@ class TestMultiDatabaseRetriever:
         retriever = MultiDatabaseRetriever(db_paths, user_id="test-user")
         docs = await retriever.retrieve("retrieval", sources=["nonexistent_source"])  # type: ignore[arg-type]
         assert docs == []
+
+
+@pytest.mark.unit
+def test_claims_retriever_attach_uses_shared_factory(monkeypatch, tmp_path):
+    import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
+
+    events: list[tuple[str, object]] = []
+
+    class _FakeDb:
+        def close_connection(self):
+            events.append(("close", None))
+
+    def _fake_create_media_database(client_id, **kwargs):
+        events.append(("create", client_id))
+        events.append(("kwargs", kwargs))
+        return _FakeDb()
+
+    monkeypatch.setattr(retr_mod, "create_media_database", _fake_create_media_database)
+
+    retriever = retr_mod.ClaimsRetriever(str(tmp_path / "claims.db"))
+
+    try:
+        assert retriever._own_media_db is True
+        assert isinstance(retriever.media_db, _FakeDb)
+        assert retriever._db_adapter is retriever.media_db
+        assert events[:2] == [
+            ("create", "rag_service"),
+            ("kwargs", {"db_path": str((tmp_path / "claims.db").resolve())}),
+        ]
+    finally:
+        retriever.close()
+
+    assert ("close", None) in events
+
+
+@pytest.mark.unit
+def test_claims_retriever_attach_propagates_factory_configuration_errors(monkeypatch, tmp_path):
+    import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
+
+    monkeypatch.setattr(
+        retr_mod,
+        "create_media_database",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad path")),
+    )
+
+    with pytest.raises(ValueError):
+        retr_mod.ClaimsRetriever(str(tmp_path / "claims.db"))
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ This is a fairly comprehensive and well-thought-out client-side sync library. It
 4.  **Conflict Detection:** The logic in `_apply_single_change` to detect conflicts based on `version` and `client_id` is sound.
 5.  **Conflict Resolution (LWW):** Last-Write-Wins based on `server_timestamp` is a common and understandable strategy.
 6.  **Idempotency:** Attempts to make operations idempotent (e.g., `INSERT OR IGNORE`, skipping old/duplicate changes).
-7.  **Error Handling:** Good use of `try-except` blocks for network errors, DB errors, and JSON parsing errors. Specific error types from the `Media_DB_v2` library are used.
+7.  **Error Handling:** Good use of `try-except` blocks for network errors, DB errors, and JSON parsing errors. Specific legacy media DB error types are used.
 8.  **Logging:** Comprehensive logging throughout the process is very helpful for debugging.
 9.  **FTS Management:** Explicitly handling FTS updates because triggers are disabled is a complex but necessary task if triggers are indeed off. The order of FTS operations (delete/update before main, insert after) is correct.
 10. **Modularity:** The class structure and helper methods make the code relatively organized.
@@ -121,7 +121,7 @@ This is a fairly comprehensive and well-thought-out client-side sync library. It
     *   `_execute_media_keyword_sql` has an early `return` inside `_execute_change_sql`. If other operations were meant to happen after the `if entity == "MediaKeywords":` block for *all* entities, they would be skipped. Currently, it seems fine as the rest of the function is for non-MediaKeywords.
 
 14. **Example Usage `db.add_keyword`:**
-    *   The example uses `db.add_keyword("test_sync_keyword")`. It's assumed this method in the `Database` class correctly creates an entry in the `sync_log` table (likely via a trigger in the `Media_DB_v2` library). This is a critical assumption for the whole "push local changes" to work.
+    *   The example uses `db.add_keyword("test_sync_keyword")`. It's assumed this method in the `Database` class correctly creates an entry in the `sync_log` table (likely via a trigger in the legacy media DB layer). This is a critical assumption for the whole "push local changes" to work.
 
 15. **Magic Strings for Operations/Entities:**
     *   "create", "update", "delete", "link", "unlink", "Media", "Keywords", "MediaKeywords".

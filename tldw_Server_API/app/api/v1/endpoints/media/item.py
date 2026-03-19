@@ -24,12 +24,15 @@ from tldw_Server_API.app.api.v1.utils.rag_cache import (
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE, MEDIA_UPDATE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_full_media_details_rich2
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
-    MediaDatabase,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
     fetch_keywords_for_media,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item,
 )
 
@@ -66,7 +69,7 @@ async def get_media_item(
         False,
         description="Include content for each version in versions list",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
     if_none_match: str | None = Header(None),
 ) -> Any:
@@ -169,7 +172,7 @@ async def get_media_item(
 )
 async def delete_media_item(
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> Response:
     """
@@ -263,7 +266,7 @@ async def restore_media_item(
         False,
         description="Include content for each version in versions list",
     ),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> Any:
     """
@@ -354,7 +357,7 @@ async def restore_media_item(
 )
 async def permanently_delete_media_item(
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> Response:
     """
@@ -432,7 +435,7 @@ async def permanently_delete_media_item(
 async def update_media_item(
     payload: MediaUpdateRequest,
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> MediaDetailResponse:
     """
@@ -734,7 +737,7 @@ async def update_media_item(
 async def update_media_keywords(
     payload: MediaKeywordsUpdateRequest,
     media_id: int = Path(..., description="The ID of the media item"),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     _current_user: User = Depends(get_request_user),
 ) -> MediaKeywordsResponse:
     """Update media keywords without altering other media fields."""

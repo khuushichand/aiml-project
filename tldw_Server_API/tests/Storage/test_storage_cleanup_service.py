@@ -5,6 +5,7 @@ Focus on expired-file cleanup:
 - Usage decrement via unregister_generated_file
 - Safe path resolution prevents traversal deletes
 """
+import contextlib
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -101,3 +102,51 @@ class TestExpiredCleanup:
         assert deleted == 0
         storage_service.unregister_generated_file.assert_awaited_once_with(3, hard_delete=True)
         assert file_path.exists()
+
+
+def test_mark_tts_history_artifact_deleted_uses_managed_media_database(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    events = []
+
+    class _FakeDb:
+        def mark_tts_history_artifacts_deleted_for_file_id(self, **kwargs):
+            events.append(("mark", kwargs))
+
+    @contextlib.contextmanager
+    def _fake_managed_media_database(client_id, **kwargs):
+        events.append(("open", client_id, kwargs))
+        yield _FakeDb()
+
+    monkeypatch.setattr(
+        cleanup.DatabasePaths,
+        "get_media_db_path",
+        lambda user_id: f"/tmp/media-{user_id}.db",
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("storage_cleanup should not construct MediaDatabase directly")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "managed_media_database",
+        _fake_managed_media_database,
+        raising=False,
+    )
+
+    cleanup._mark_tts_history_artifact_deleted(user_id=7, file_id=11)
+
+    assert events == [
+        ("open", "storage_cleanup", {"db_path": "/tmp/media-7.db", "initialize": False}),
+        (
+            "mark",
+            {
+                "user_id": "7",
+                "file_id": 11,
+            },
+        ),
+    ]

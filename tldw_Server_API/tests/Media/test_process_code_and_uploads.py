@@ -174,7 +174,13 @@ async def test_pdf_text_normalization_applies_to_all_parser_paths(
     )
     monkeypatch.setattr(pdf_mod, patch_attr, lambda path: wrapped_text)
     if parser_name == "docling":
-        monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+        original_find_spec = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util,
+            "find_spec",
+            lambda name: object() if name == "docling.document_converter" else original_find_spec(name),
+        )
+        monkeypatch.setattr(pdf_mod, "_is_usable_torch_module_for_docling", lambda: True)
 
     out = await pdf_mod.process_pdf_task(
         file_bytes=b"%PDF-fake",

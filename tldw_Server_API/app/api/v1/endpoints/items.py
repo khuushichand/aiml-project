@@ -17,7 +17,10 @@ from tldw_Server_API.app.api.v1.schemas.items_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, InputError
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
+    DatabaseError,
+    InputError,
+)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -252,7 +255,12 @@ def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
         return None
     # Fetch tags per item
     try:
-        from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import fetch_keywords_for_media, get_document_version
+        from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+            get_document_version,
+        )
+        from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+            fetch_keywords_for_media,
+        )
         tag_list = fetch_keywords_for_media(media_id=int(row.get("id")), db_instance=db)
     except _ITEMS_NONCRITICAL_EXCEPTIONS:
         tag_list = []

@@ -6,7 +6,7 @@ import os
 import threading
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # 3rd-party Libraries
 from fastapi import Depends, HTTPException, Request, status
@@ -27,11 +27,9 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-
-# Import the specific Database class
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # Adjust import path
+from tldw_Server_API.app.core.DB_Management.media_db.api import MediaDbFactory, MediaDbSession
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError,
-    MediaDatabase,
     SchemaError,
 )
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
@@ -39,21 +37,27 @@ from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 #######################################################################################################################
 
+# Transitional compatibility alias for legacy monkeypatch/test surfaces.
+MediaDatabase = Any
+
 # Note: Do not cache USER_DB_BASE_DIR at import time. Tests may set USER_DB_BASE_DIR
 # via environment after module import. We will resolve it at request time in helpers.
 
-# --- Global Cache for User DB Instances ---
+# --- Global Cache for Media DB Factories ---
 MAX_CACHED_DB_INSTANCES = 100  # Adjust as needed
 
 if _HAS_CACHETOOLS:
-    # Keyed by user ID (int)
+    # Legacy cache retained for compatibility with older reset/test helpers.
     _user_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_DB_INSTANCES)
     logger.info(f"Using LRUCache for user DB instances (maxsize={MAX_CACHED_DB_INSTANCES}).")
-else:
     # Keyed by user ID (int)
+    _media_db_factories: LRUCache = LRUCache(maxsize=MAX_CACHED_DB_INSTANCES)
+else:
+    # Legacy cache retained for compatibility with older reset/test helpers.
     _user_db_instances: dict[int, MediaDatabase] = {} # Fallback to standard dict
+    _media_db_factories: dict[int, MediaDbFactory] = {}
 
-_user_db_lock = threading.Lock() # Protects access to _user_db_instances
+_user_db_lock = threading.Lock() # Protects access to _media_db_factories and legacy cache state
 
 #######################################################################################################################
 
@@ -108,13 +112,18 @@ def _get_db_path_for_user(user_id: int) -> Path:
         logger.error(f"Could not resolve database directory for user_id {user_id}: {e}", exc_info=True)
         raise OSError(f"Could not initialize storage directory for user {user_id}.") from e
 
-def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
-    if not current_user or not isinstance(current_user.id, int):
-        logger.error("get_media_db_for_user called without a valid User object/ID.")
+def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
+    if not current_user:
+        logger.error("get_media_db_for_user called without a valid User object.")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User identification failed.")
 
-    user_id = current_user.id  # Will be SINGLE_USER_FIXED_ID in single-user mode
-    db_instance: Optional[MediaDatabase] = None
+    user_id = getattr(current_user, "id_int", None)
+    if user_id is None and isinstance(getattr(current_user, "id", None), int):
+        user_id = current_user.id
+    if user_id is None:
+        logger.error("get_media_db_for_user could not resolve a numeric user identifier.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User identification failed.")
+
     backend_mode_hint = (os.getenv("CONTENT_DB_MODE") or str(settings.get("CONTENT_DB_BACKEND", "sqlite"))).strip().lower()
     require_shared_backend = backend_mode_hint in {"postgres", "postgresql"}
 
@@ -139,55 +148,64 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
 
     # --- Check Cache ---
     with _user_db_lock:
-        db_instance = _user_db_instances.get(user_id)
+        factory = _media_db_factories.get(user_id)
     # TEST_MODE: log cache hit/miss visibility for debugging
     try:
         if is_test_mode():
             logger.warning(
-                f"TEST_MODE: DB_Deps cache {'hit' if db_instance else 'miss'} for user_id={user_id}"
+                f"TEST_MODE: DB_Deps factory cache {'hit' if factory else 'miss'} for user_id={user_id}"
             )
     except (OSError, RuntimeError, TypeError, ValueError):
         pass
 
-    if db_instance:
-        logger.debug(f"Using cached Database instance for user_id: {user_id}")
-        return db_instance
+    if factory:
+        logger.debug(f"Using cached MediaDbFactory for user_id: {user_id}")
+        return factory
 
-    # --- Instance Not Cached: Create New One ---
-    logger.info(f"No cached DB instance found for user_id: {user_id}. Initializing.")
+    # --- Factory Not Cached: Create New One ---
+    logger.info(f"No cached MediaDbFactory found for user_id: {user_id}. Initializing.")
     with _user_db_lock:
-        db_instance = _user_db_instances.get(user_id)
-        if db_instance:
-            logger.debug(f"DB instance for user {user_id} created concurrently.")
+        factory = _media_db_factories.get(user_id)
+        if factory:
+            logger.debug(f"MediaDbFactory for user {user_id} created concurrently.")
             try:
                 if is_test_mode():
-                    _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
-                    logger.warning(f"TEST_MODE: DB_Deps returning concurrently-created cached instance user_id={user_id} db_path={_dbp}")
+                    logger.warning(
+                        "TEST_MODE: DB_Deps returning concurrently-created cached factory user_id={}",
+                        user_id,
+                    )
             except (OSError, RuntimeError, TypeError, ValueError):
                 pass
-            return db_instance
+            return factory
 
         db_path: Optional[Path] = None
         try:
             if use_shared_backend:
                 db_path = Path(":memory:")
-                logger.info(f"Initializing Database instance for user {user_id} using shared Postgres backend")
-                db_instance = MediaDatabase(
+                logger.info(f"Initializing MediaDbFactory for user {user_id} using shared Postgres backend")
+                factory = MediaDbFactory(
                     db_path=str(db_path),
                     client_id=str(current_user.id),
                     backend=shared_backend,
                 )
             else:
                 db_path = _get_db_path_for_user(user_id)
-                logger.info(f"Initializing Database instance for user {user_id} at path: {db_path}")
-                db_instance = MediaDatabase(db_path=str(db_path), client_id=str(current_user.id))
+                logger.info(f"Initializing MediaDbFactory for user {user_id} at path: {db_path}")
+                factory = MediaDbFactory.for_sqlite_path(
+                    db_path=str(db_path),
+                    client_id=str(current_user.id),
+                )
 
-            _user_db_instances[user_id] = db_instance
-            logger.info(f"Database instance created and cached successfully for user {user_id}")
+            _media_db_factories[user_id] = factory
+            logger.info(f"MediaDbFactory created and cached successfully for user {user_id}")
             try:
                 if is_test_mode():
-                    _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
-                    logger.warning(f"TEST_MODE: DB_Deps cached new instance user_id={user_id} db_path={_dbp} shared_backend={use_shared_backend}")
+                    logger.warning(
+                        "TEST_MODE: DB_Deps cached new factory user_id={} db_path={} shared_backend={}",
+                        user_id,
+                        db_path,
+                        use_shared_backend,
+                    )
             except (OSError, RuntimeError, TypeError, ValueError):
                 pass
 
@@ -212,14 +230,21 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
                 detail="An unexpected error occurred during database setup for user."
             ) from e
 
+    return factory
+
+
+def _resolve_media_db_for_user(current_user: User) -> MediaDbSession:
+    factory = _get_or_create_media_db_factory(current_user)
+    org_id: int | None = None
+    team_id: int | None = None
     try:
         scope = get_scope()
         if scope:
-            db_instance.default_org_id = scope.effective_org_id
-            db_instance.default_team_id = scope.effective_team_id
+            org_id = scope.effective_org_id
+            team_id = scope.effective_team_id
     except (AttributeError, RuntimeError, TypeError, ValueError):
         pass
-    return db_instance
+    return factory.for_request(org_id=org_id, team_id=team_id)
 
 
 # --- Main Dependency Function ---
@@ -227,11 +252,12 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
 async def get_media_db_for_user(
     request: Request,
     current_user: User = Depends(get_request_user)
-) -> AsyncGenerator[MediaDatabase, None]:
+) -> AsyncGenerator[MediaDbSession, None]:
     """
-    FastAPI dependency that provides a MediaDatabase instance for the current user.
+    FastAPI dependency that provides a request-scoped Media DB handle.
 
-    Yields the database instance and ensures connection cleanup on exit.
+    Yields a fresh handle for the current request and ensures connection cleanup
+    on exit.
     """
     db_instance = _resolve_media_db_for_user(current_user)
     try:
@@ -261,7 +287,7 @@ def get_media_db_for_owner(owner_user_id: int) -> MediaDatabase:
 
 
 def reset_media_db_cache() -> None:
-    """Clear cached MediaDatabase instances (useful for tests)."""
+    """Clear cached Media DB factories and any legacy cached instances."""
     with _user_db_lock:
         try:
             # Attempt to close outstanding connections for cache entries
@@ -284,17 +310,30 @@ def reset_media_db_cache() -> None:
             _user_db_instances.clear()  # type: ignore[attr-defined]
         except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
+        try:
+            for factory in list(_media_db_factories.values()):  # type: ignore[attr-defined]
+                try:
+                    if hasattr(factory, "close"):
+                        factory.close()
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+                    pass
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+        try:
+            _media_db_factories.clear()  # type: ignore[attr-defined]
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
 
 
 async def try_get_media_db_for_user(
     request: Request,
     current_user: User = Depends(get_request_user),
-) -> AsyncGenerator[Optional[MediaDatabase], None]:
+) -> AsyncGenerator[Optional[MediaDbSession], None]:
     """
-    Optional version of get_media_db_for_user for endpoints that can operate without DB.
-    Returns None instead of raising on initialization failures.
+    Optional version of get_media_db_for_user for endpoints that can operate
+    without DB. Returns None instead of raising on initialization failures.
     """
-    db_instance: Optional[MediaDatabase] = None
+    db_instance: Optional[MediaDbSession] = None
     try:
         db_instance = _resolve_media_db_for_user(current_user)
     except HTTPException as e:

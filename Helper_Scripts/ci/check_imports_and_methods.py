@@ -19,12 +19,14 @@ import os
 import sys
 import shutil
 import inspect
-import subprocess
+import subprocess  # nosec B404 - CI helper intentionally launches local pytest subprocesses
 from pathlib import Path
 from typing import Iterable, List
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 def clear_bytecode_caches(root: Path) -> tuple[int, int]:
@@ -66,9 +68,11 @@ def assert_mediadatabase_methods() -> None:
     """Import MediaDatabase and assert required methods exist on the class."""
     # Import here to ensure we do it after clearing caches
     import tldw_Server_API  # type: ignore
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # type: ignore
-        MediaDatabase,
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime.media_class import (  # type: ignore
+        load_media_database_cls,
     )
+
+    MediaDatabase = load_media_database_cls()
 
     print(f"tldw_Server_API module file: {getattr(tldw_Server_API, '__file__', 'unknown')}")
     try:
@@ -117,7 +121,11 @@ def run_pytest(pytest_args: Iterable[str]) -> int:
     print("Running:", " ".join(cmd))
     print("PYTHONDONTWRITEBYTECODE=", env["PYTHONDONTWRITEBYTECODE"])
 
-    proc = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env)
+    proc = subprocess.run(  # nosec B603 - fixed local argv, no shell or untrusted command composition
+        cmd,
+        cwd=str(REPO_ROOT),
+        env=env,
+    )
     return proc.returncode
 
 

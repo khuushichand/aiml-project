@@ -43,16 +43,19 @@ from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_chacha_db_path,
     get_user_media_db_path,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
-    get_document_version,
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
     get_latest_transcription,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    create_media_database,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+    get_document_version,
 )
 from tldw_Server_API.app.core.exceptions import DataTablesJobError
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -158,7 +161,7 @@ DATA_TABLES_RUNTIME_EXCEPTIONS = (
 )
 
 
-def _close_media_db(user_id: str, db: MediaDatabase) -> None:
+def _close_media_db(user_id: str, db: Any) -> None:
     try:
         db.close_connection()
     except DATA_TABLES_DB_EXCEPTIONS as exc:
@@ -646,7 +649,7 @@ def _build_prompt(
     )
 
 
-def _get_media_db(user_id: str) -> MediaDatabase:
+def _get_media_db(user_id: str) -> Any:
     with _MEDIA_DB_LOCK:
         cached = _MEDIA_DB_CACHE.get(user_id)
         if cached is not None:
@@ -680,7 +683,7 @@ def _get_chacha_db(user_id: str) -> CharactersRAGDB:
     return db
 
 
-def _extract_media_text(db: MediaDatabase, media_id: int) -> str:
+def _extract_media_text(db: Any, media_id: int) -> str:
     media_item = db.get_media_by_id(media_id)
     if not media_item:
         raise DataTablesJobError(f"media_not_found:{media_id}", retryable=False)
@@ -763,7 +766,7 @@ def _extract_chat_text(db: CharactersRAGDB, conversation_id: str) -> str:
 async def _resolve_rag_query_source(
     *,
     query: str,
-    media_db: MediaDatabase,
+    media_db: Any,
     chacha_db: CharactersRAGDB,
     retrieval_params: dict[str, Any],
     user_id: str,
@@ -817,7 +820,7 @@ async def _handle_job(job: dict[str, Any], jm: JobManager) -> dict[str, Any]:
     payload = _normalize_payload(job.get("payload"))
     user_id = _normalize_user_id(job, payload)
     table_id = _coerce_int(payload.get("table_id"), 0)
-    db: MediaDatabase | None = None
+    db: Any | None = None
     table_row: dict[str, Any] | None = None
     try:
         job_type = str(job.get("job_type") or payload.get("job_type") or "").strip().lower()
