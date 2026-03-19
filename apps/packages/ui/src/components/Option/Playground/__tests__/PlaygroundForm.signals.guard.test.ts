@@ -83,6 +83,12 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain("onRemoveAttachedResearchContext")
     expect(formSource).toContain("onPinAttachedResearchContext")
     expect(formSource).toContain("onRestorePinnedResearchContext")
+    expect(formSource).toContain('data-testid="pinned-research-fallback-card"')
+    expect(formSource).toContain('data-testid="pinned-research-history-block"')
+    expect(formSource).toContain("Use now")
+    expect(formSource).toContain(
+      "This thread keeps this research as its default context."
+    )
     expect(formSource).toContain("researchContext:")
     expect(formSource).toContain("Attached Research Context")
     expect(formSource).toContain("Reset to Attached Run")

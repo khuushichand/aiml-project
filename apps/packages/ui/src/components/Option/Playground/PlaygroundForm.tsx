@@ -7653,73 +7653,101 @@ export const PlaygroundForm = ({
                     {!attachedResearchContext &&
                     (attachedResearchContextPinned ||
                       attachedResearchContextHistory.length > 0) ? (
-                      <div
-                        data-testid="attached-research-context-history-fallback"
-                        className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text"
-                      >
+                      <div className="mb-2 flex flex-col gap-2">
                         {attachedResearchContextPinned ? (
-                          <>
-                            <span className="font-medium text-text-muted">
-                              {t(
-                                "playground:composer.pinnedResearch",
-                                "Pinned research"
-                              )}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => onRestorePinnedResearchContext?.()}
-                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                            >
-                              {attachedResearchContextPinned.query}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onUnpinAttachedResearchContext?.()}
-                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                            >
-                              {t("playground:actions.unpinResearchContext", "Unpin")}
-                            </button>
-                          </>
+                          <div
+                            data-testid="pinned-research-fallback-card"
+                            className="rounded-md border border-border bg-surface2 px-3 py-3 text-xs text-text"
+                          >
+                            <div className="flex flex-col gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium text-text-muted">
+                                  {t(
+                                    "playground:composer.pinnedResearch",
+                                    "Pinned research"
+                                  )}
+                                </span>
+                                <span className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text">
+                                  {attachedResearchContextPinned.query}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-text-muted">
+                                {t(
+                                  "playground:composer.pinnedResearchFallbackDescription",
+                                  "This thread keeps this research as its default context."
+                                )}
+                              </p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => onRestorePinnedResearchContext?.()}
+                                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                >
+                                  {t(
+                                    "playground:actions.usePinnedResearchNow",
+                                    "Use now"
+                                  )}
+                                </button>
+                                <Link
+                                  to={attachedResearchContextPinned.research_url}
+                                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                >
+                                  {t(
+                                    "playground:actions.openInResearch",
+                                    "Open in Research"
+                                  )}
+                                </Link>
+                                <button
+                                  type="button"
+                                  onClick={() => onUnpinAttachedResearchContext?.()}
+                                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                >
+                                  {t(
+                                    "playground:actions.unpinResearchContext",
+                                    "Unpin"
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
                         ) : null}
-                        {attachedResearchContextPinned &&
-                        attachedResearchContextHistory.length > 0 ? (
-                          <span className="font-medium text-text-muted">
-                            {t(
-                              "playground:composer.recentResearch",
-                              "Recent research"
-                            )}
-                          </span>
+                        {attachedResearchContextHistory.length > 0 ? (
+                          <div
+                            data-testid="pinned-research-history-block"
+                            className="rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium text-text-muted">
+                                {t(
+                                  "playground:composer.recentResearch",
+                                  "Recent research"
+                                )}
+                              </span>
+                              {attachedResearchContextHistory.map((entry) => (
+                                <React.Fragment key={entry.run_id}>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onSelectAttachedResearchContextHistory?.(entry)
+                                    }
+                                    className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                  >
+                                    {entry.query}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onPinAttachedResearchContextHistory?.(entry)
+                                    }
+                                    className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                  >
+                                    {`${t("playground:actions.pinResearchContext", "Pin")} ${entry.query}`}
+                                  </button>
+                                </React.Fragment>
+                              ))}
+                            </div>
+                          </div>
                         ) : null}
-                        {!attachedResearchContextPinned ? (
-                          <span className="font-medium text-text-muted">
-                            {t(
-                              "playground:composer.recentResearch",
-                              "Recent research"
-                            )}
-                          </span>
-                        ) : null}
-                        {attachedResearchContextHistory.map((entry) => (
-                          <React.Fragment key={entry.run_id}>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onSelectAttachedResearchContextHistory?.(entry)
-                              }
-                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                            >
-                              {entry.query}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onPinAttachedResearchContextHistory?.(entry)
-                              }
-                              className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                            >
-                              {`${t("playground:actions.pinResearchContext", "Pin")} ${entry.query}`}
-                            </button>
-                          </React.Fragment>
-                        ))}
                       </div>
                     ) : null}
                     <div

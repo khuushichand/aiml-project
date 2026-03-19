@@ -184,3 +184,31 @@ git add \
   Docs/Plans/2026-03-18-deep-research-chat-pinned-fallback-implementation-plan.md
 git commit -m "docs(research): finalize pinned fallback plan"
 ```
+
+---
+
+## Execution Notes
+
+- Added a real-form fallback test in `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.pinned-fallback.test.tsx`.
+- Restructured the no-active fallback in `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx` into:
+  - `data-testid="pinned-research-fallback-card"`
+  - `data-testid="pinned-research-history-block"`
+- Updated secondary copy/structure guard coverage in `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts`.
+
+Commands run:
+
+```bash
+./node_modules/.bin/vitest run src/components/Option/Playground/__tests__/PlaygroundForm.pinned-fallback.test.tsx
+./node_modules/.bin/vitest run src/components/Option/Playground/__tests__/PlaygroundForm.pinned-fallback.test.tsx src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts src/components/Option/Playground/__tests__/AttachedResearchContextChip.test.tsx
+./node_modules/.bin/vitest run src/services/__tests__/chat-settings.deep-research-pinned.test.ts src/services/__tests__/chat-settings.deep-research.test.ts
+```
+
+Results:
+
+- Initial red run: `PlaygroundForm.pinned-fallback.test.tsx` failed `2/2` due to missing pinned-only fallback structure and actions.
+- Focused frontend verification: `17/17` passed.
+- Adjacent persistence regressions: `7/7` passed.
+
+Residual UX risk:
+
+- The pinned-only mini-card is intentionally more prominent; if the composer fallback grows further, copy density may need a later trim pass to keep the area compact.
