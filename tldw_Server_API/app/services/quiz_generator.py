@@ -400,6 +400,7 @@ def _build_source_contract(selected_sources: Sequence[dict[str, str]]) -> str:
 
 
 def _truncate_quiz_evidence(text: str, limit: int = 120) -> str:
+    """Collapse evidence text to a stable, citation-friendly excerpt."""
     normalized = " ".join(str(text or "").split()).strip()
     if len(normalized) <= limit:
         return normalized
@@ -413,6 +414,7 @@ def _build_test_mode_questions(
     num_questions: int,
     question_types: Sequence[Any] | None,
 ) -> list[dict[str, Any]]:
+    """Build deterministic quiz questions that preserve evidence provenance in test mode."""
     normalized_types = _coerce_question_types(question_types)
     total_questions = max(1, num_questions)
     questions: list[dict[str, Any]] = []
@@ -420,12 +422,17 @@ def _build_test_mode_questions(
     for index in range(total_questions):
         source = normalized_sources[index % len(normalized_sources)]
         evidence_item = evidence[index % len(evidence)] if evidence else {}
+        citation_source_type = str(evidence_item.get("source_type") or source["source_type"]).strip()
+        citation_source_id = str(evidence_item.get("source_id") or source["source_id"]).strip()
         excerpt = _truncate_quiz_evidence(
-            str(evidence_item.get("text") or f"Study point from {source['source_type']}:{source['source_id']}.")
+            str(
+                evidence_item.get("text")
+                or f"Study point from {citation_source_type}:{citation_source_id}."
+            )
         )
         citation = {
-            "source_type": source["source_type"],
-            "source_id": source["source_id"],
+            "source_type": citation_source_type,
+            "source_id": citation_source_id,
             "label": f"Source {index + 1}",
             "quote": excerpt,
         }
@@ -435,7 +442,10 @@ def _build_test_mode_questions(
             questions.append(
                 {
                     "question_type": "multiple_choice",
-                    "question_text": f"Which statement is directly supported by {source['source_type']}:{source['source_id']}?",
+                    "question_text": (
+                        f"Which statement is directly supported by "
+                        f"{citation_source_type}:{citation_source_id}?"
+                    ),
                     "options": [
                         excerpt,
                         "A conflicting claim with no evidence.",

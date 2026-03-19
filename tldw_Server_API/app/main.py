@@ -797,7 +797,10 @@ try:
             _dict_config_wrapper._tldw_original = getattr(_logcfg, "_tldw_original_dictConfig", None)
             _logcfg._tldw_dict_config_wrapped = True  # type: ignore[attr-defined]
 except _LOGGING_SETUP_EXCEPTIONS as _log_wrap_err:
-    logger.debug(f"Failed to wrap logging.config.dictConfig for interception: {_log_wrap_err}")
+    logger.debug(
+        "Failed to wrap logging.config.dictConfig for interception: {}",
+        _log_wrap_err,
+    )
 
 # Apply once now as well
 _reinstall_intercept_handlers()
@@ -1134,7 +1137,14 @@ elif _MINIMAL_TEST_APP:
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     from tldw_Server_API.app.api.v1.endpoints.research_runs import router as research_runs_router
-    from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.setup import router as setup_router
+    except _IMPORT_EXCEPTIONS as _setup_min_import_err:
+        logger.debug(
+            "Skipping setup router import in minimal test app: {}",
+            _setup_min_import_err,
+        )
+        setup_router = None  # type: ignore[assignment]
 
     # Admin endpoints are used by several pytest modules; import for minimal app
     try:

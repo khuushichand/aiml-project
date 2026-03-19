@@ -4,7 +4,10 @@ import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.services.quiz_generator import generate_quiz_from_sources
+from tldw_Server_API.app.services.quiz_generator import (
+    _build_test_mode_questions,
+    generate_quiz_from_sources,
+)
 
 
 @pytest.fixture(scope="function")
@@ -48,3 +51,26 @@ async def test_generate_quiz_from_sources_returns_deterministic_payload_in_test_
     assert len(result["questions"]) == 2
     assert result["questions"][0]["source_citations"][0]["source_type"] == "note"
     assert result["questions"][0]["source_citations"][0]["source_id"] == note_id
+
+
+def test_build_test_mode_questions_prefers_evidence_source_identity() -> None:
+    questions = _build_test_mode_questions(
+        evidence=[
+            {
+                "source_type": "note",
+                "source_id": "note-b",
+                "text": "Beta evidence should keep its own citation identity.",
+            }
+        ],
+        normalized_sources=[
+            {"source_type": "note", "source_id": "note-a"},
+            {"source_type": "note", "source_id": "note-b"},
+        ],
+        num_questions=1,
+        question_types=["multiple_choice"],
+    )
+
+    citation = questions[0]["source_citations"][0]
+    assert citation["source_type"] == "note"
+    assert citation["source_id"] == "note-b"
+    assert citation["quote"] == "Beta evidence should keep its own citation identity."

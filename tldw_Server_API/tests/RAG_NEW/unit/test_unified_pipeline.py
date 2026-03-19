@@ -526,6 +526,125 @@ class TestUnifiedPipeline:
                     assert security_report == {"pii_detected": [[{"type": "person_name"}], [{"type": "person_name"}]]}
 
     @pytest.mark.asyncio
+    async def test_unified_pipeline_security_filter_rejects_invalid_sensitivity_level(self):
+        """Security filtering should surface invalid sensitivity levels as validation errors."""
+        from types import SimpleNamespace
+
+        class _FakeSecurityFilter:
+            def filter_by_sensitivity(self, documents, max_level=None):
+                return documents
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SecurityFilter', _FakeSecurityFilter):
+            with patch(
+                'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SensitivityLevel',
+                SimpleNamespace(PUBLIC=1, INTERNAL=2, CONFIDENTIAL=3, RESTRICTED=4),
+            ):
+                with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                    mock_retriever_instance = MagicMock()
+                    mock_retriever_instance.retrieve = AsyncMock(return_value=[
+                        Document(id="1", content="Visible", metadata={}, source=DataSource.MEDIA_DB, score=0.9),
+                    ])
+                    mock_retriever.return_value = mock_retriever_instance
+
+                    result = await unified_rag_pipeline(
+                        query="security test",
+                        enable_security_filter=True,
+                        sensitivity_level="topsecret",  # type: ignore[arg-type]
+                        enable_generation=False,
+                        enable_cache=False,
+                        enable_reranking=False,
+                    )
+
+                    errors = getattr(result, 'errors', None) if not isinstance(result, dict) else result.get('errors', [])
+
+                    assert any("Invalid sensitivity_level 'topsecret'" in err for err in (errors or []))
+
+    @pytest.mark.asyncio
+    async def test_unified_pipeline_security_filter_awaits_async_detector_fallback(self):
+        """Security filtering should await async pii_detector.detect_pii fallbacks."""
+        from types import SimpleNamespace
+
+        class _AsyncPIIDetector:
+            async def detect_pii(self, _text):
+                class _FakePIIMatch:
+                    def to_dict(self):
+                        return {"type": "email"}
+
+                await asyncio.sleep(0)
+                return [_FakePIIMatch()]
+
+        class _FakeSecurityFilter:
+            def __init__(self):
+                self.pii_detector = _AsyncPIIDetector()
+
+            def filter_by_sensitivity(self, documents, max_level=None):
+                return documents
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SecurityFilter', _FakeSecurityFilter):
+            with patch(
+                'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SensitivityLevel',
+                SimpleNamespace(PUBLIC=1, INTERNAL=2, CONFIDENTIAL=3, RESTRICTED=4),
+            ):
+                with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                    mock_retriever_instance = MagicMock()
+                    mock_retriever_instance.retrieve = AsyncMock(return_value=[
+                        Document(id="1", content="alice@example.com", metadata={}, source=DataSource.MEDIA_DB, score=0.9),
+                    ])
+                    mock_retriever.return_value = mock_retriever_instance
+
+                    result = await unified_rag_pipeline(
+                        query="security test",
+                        enable_security_filter=True,
+                        detect_pii=True,
+                        enable_generation=False,
+                        enable_cache=False,
+                        enable_reranking=False,
+                    )
+
+                    errors = getattr(result, 'errors', None) if not isinstance(result, dict) else result.get('errors', [])
+                    security_report = getattr(result, 'security_report', None) if not isinstance(result, dict) else result.get('security_report', {})
+
+                    assert not any("Security filter failed" in err for err in (errors or []))
+                    assert security_report == {"pii_detected": [[{"type": "email"}]]}
+
+    @pytest.mark.asyncio
+    async def test_unified_pipeline_security_filter_drops_documents_when_filter_returns_none(self):
+        """Security filtering should fail closed when filter_by_sensitivity returns no iterable payload."""
+        from types import SimpleNamespace
+
+        class _FakeSecurityFilter:
+            def filter_by_sensitivity(self, documents, max_level=None):
+                return None
+
+            def redact_pii(self, text):
+                return text.replace("Alice", "[REDACTED]")
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SecurityFilter', _FakeSecurityFilter):
+            with patch(
+                'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SensitivityLevel',
+                SimpleNamespace(PUBLIC=1, INTERNAL=2, CONFIDENTIAL=3, RESTRICTED=4),
+            ):
+                with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                    mock_retriever_instance = MagicMock()
+                    mock_retriever_instance.retrieve = AsyncMock(return_value=[
+                        Document(id="1", content="Alice public note", metadata={}, source=DataSource.MEDIA_DB, score=0.9),
+                    ])
+                    mock_retriever.return_value = mock_retriever_instance
+
+                    result = await unified_rag_pipeline(
+                        query="security test",
+                        enable_security_filter=True,
+                        redact_pii=True,
+                        enable_generation=False,
+                        enable_cache=False,
+                        enable_reranking=False,
+                    )
+
+                    docs = getattr(result, 'documents', None) if not isinstance(result, dict) else result.get('documents', [])
+
+                    assert docs == []
+
+    @pytest.mark.asyncio
     async def test_unified_pipeline_with_citations(self, sample_documents):
         """Test unified pipeline with citation generation."""
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:

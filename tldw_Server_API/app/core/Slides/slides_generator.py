@@ -104,6 +104,7 @@ def _chunk_by_chars(text: str, chunk_size: int) -> list[str]:
 
 
 def _extract_test_mode_points(source_text: str, limit: int = 6) -> list[str]:
+    """Return deterministic bullet candidates from the source text for test-mode slides."""
     points: list[str] = []
     for raw_line in source_text.splitlines():
         line = raw_line.strip()
@@ -220,6 +221,7 @@ class SlidesGenerator:
         source_text: str,
         title_hint: str | None,
     ) -> dict[str, Any]:
+        """Build a deterministic slide deck payload without calling an external model."""
         title = (title_hint or "Test Mode Presentation").strip() or "Test Mode Presentation"
         points = _extract_test_mode_points(source_text)
         overview_points = points[:3] or ["Source content captured for slides generation."]

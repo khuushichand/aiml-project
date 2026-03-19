@@ -805,6 +805,30 @@ def _normalize_chunk_type_value(value: Any) -> Optional[str]:
         return "media"
     return raw
 
+
+def _coerce_security_filter_sequence(value: Any, *, description: str) -> list[Any]:
+    """Normalize security-filter outputs and fail closed on invalid shapes."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (str, bytes, bytearray, dict)):
+        logger.warning(
+            "Security filter returned unsupported {} type {}; dropping all documents",
+            description,
+            type(value).__name__,
+        )
+        return []
+    try:
+        return list(value)
+    except TypeError:
+        logger.warning(
+            "Security filter returned non-iterable {} type {}; dropping all documents",
+            description,
+            type(value).__name__,
+        )
+        return []
+
 try:
     from .user_personalization_store import UserPersonalizationStore as _UserPersonalizationStore
 except ImportError:
@@ -3516,7 +3540,12 @@ async def unified_rag_pipeline(
                         "confidential": SensitivityLevel.CONFIDENTIAL,
                         "restricted": SensitivityLevel.RESTRICTED,
                     }
-                    sensitivity_value = sensitivity_map[sensitivity_level]
+                    sensitivity_value = sensitivity_map.get(sensitivity_level)
+                    if sensitivity_value is None:
+                        valid_levels = ", ".join(sensitivity_map.keys())
+                        raise ValueError(
+                            f"Invalid sensitivity_level '{sensitivity_level}'. Expected one of: {valid_levels}"
+                        )
 
                     # Detect PII if requested
                     if detect_pii:
@@ -3532,6 +3561,8 @@ async def unified_rag_pipeline(
                                 pii_report = []
                                 for doc in result.documents:
                                     matches = detect_single(doc.content)
+                                    if inspect.isawaitable(matches):
+                                        matches = await matches
                                     pii_report.append(
                                         [
                                             match.to_dict() if hasattr(match, "to_dict") else match
@@ -3551,6 +3582,10 @@ async def unified_rag_pipeline(
                         )
                         if inspect.isawaitable(filtered_docs):
                             filtered_docs = await filtered_docs
+                        filtered_docs = _coerce_security_filter_sequence(
+                            filtered_docs,
+                            description="document sequence",
+                        )
 
                         if redact_pii:
                             redact_pii_fn = getattr(security_filter, "redact_pii", None)
@@ -3580,7 +3615,16 @@ async def unified_rag_pipeline(
                                 filtered_payloads = await filtered_payloads
 
                             filtered_docs = []
-                            for payload in filtered_payloads or []:
+                            for payload in _coerce_security_filter_sequence(
+                                filtered_payloads,
+                                description="payload sequence",
+                            ):
+                                if not isinstance(payload, dict):
+                                    logger.warning(
+                                        "Security filter payload entry had unsupported type {}; skipping entry",
+                                        type(payload).__name__,
+                                    )
+                                    continue
                                 doc_ref = payload.get("_document_ref")
                                 if doc_ref is None:
                                     continue
