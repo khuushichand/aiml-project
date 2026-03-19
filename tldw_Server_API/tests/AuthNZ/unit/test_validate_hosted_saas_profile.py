@@ -1,4 +1,4 @@
-from Helper_Scripts.validate_hosted_saas_profile import validate_hosted_profile
+from Helper_Scripts.validate_hosted_saas_profile import main, validate_hosted_profile
 
 
 def test_validator_rejects_missing_public_web_base_url():
@@ -100,3 +100,37 @@ def test_validator_accepts_the_hosted_saas_contract():
 
     assert result.ok is True
     assert result.errors == {}
+
+
+def test_validator_cli_can_read_env_file(tmp_path):
+    env_file = tmp_path / ".env.hosted"
+    env_file.write_text(
+        "\n".join(
+            [
+                "AUTH_MODE=multi_user",
+                "DATABASE_URL=postgresql://user:pass@db:5432/tldw",
+                "tldw_production=true",
+                "PUBLIC_WEB_BASE_URL=https://app.example.com",
+                "BILLING_REDIRECT_ALLOWLIST_REQUIRED=true",
+                "BILLING_REDIRECT_REQUIRE_HTTPS=true",
+                "BILLING_ALLOWED_REDIRECT_HOSTS=app.example.com",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        ["validate_hosted_saas_profile.py", "--env-file", str(env_file)]
+    )
+
+    assert exit_code == 0
+
+
+def test_validator_cli_rejects_missing_env_file(tmp_path):
+    missing_env_file = tmp_path / ".env.missing"
+
+    exit_code = main(
+        ["validate_hosted_saas_profile.py", "--env-file", str(missing_env_file)]
+    )
+
+    assert exit_code == 1
