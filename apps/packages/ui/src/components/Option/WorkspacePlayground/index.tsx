@@ -491,6 +491,7 @@ const isMediaLikelyReadyForRag = (detail: unknown): boolean => {
     processing?.vector_processing,
     processing?.vector_processing_status
   ]
+  let sawIncompleteVectorStatus = false
 
   for (const statusCandidate of vectorStatusCandidates) {
     const normalizedStatus = normalizeVectorProcessingStatus(statusCandidate)
@@ -498,8 +499,12 @@ const isMediaLikelyReadyForRag = (detail: unknown): boolean => {
       return true
     }
     if (normalizedStatus === "pending" || normalizedStatus === "failed") {
-      return false
+      sawIncompleteVectorStatus = true
     }
+  }
+
+  if (sawIncompleteVectorStatus) {
+    return false
   }
 
   const contentText =

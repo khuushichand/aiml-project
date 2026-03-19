@@ -1163,12 +1163,21 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           (model) =>
             typeof model.id === "string" && model.id.trim() === selectedModelId
         )
-        return {
-          model: selectedModelId,
-          provider:
-            normalizedApiProvider !== "__auto__"
-              ? normalizedApiProvider
-              : normalizeProviderValue(matchedModel?.provider)
+        if (
+          normalizedApiProvider === "__auto__" ||
+          models.length === 0 ||
+          providerFiltered.some(
+            (model) =>
+              typeof model.id === "string" && model.id.trim() === selectedModelId
+          )
+        ) {
+          return {
+            model: selectedModelId,
+            provider:
+              normalizedApiProvider !== "__auto__"
+                ? normalizedApiProvider
+                : normalizeProviderValue(matchedModel?.provider)
+          }
         }
       }
 
@@ -1189,6 +1198,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
     const cachedRuntime = pickRuntime(chatModels)
     if (
+      chatModels.length > 0 &&
       cachedRuntime.model &&
       (normalizedApiProvider !== "__auto__" || cachedRuntime.provider)
     ) {
@@ -4078,7 +4088,7 @@ async function generateMindMap(
       temperature: options.temperature,
       top_p: options.topP,
       max_tokens: options.maxTokens
-    })
+    }, { signal: options.abortSignal })
 
   const baseSourceContext = formatStudioSourceContexts(sourceContexts)
   const initialResponse = await requestMindMap([

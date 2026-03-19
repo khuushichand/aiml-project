@@ -60,7 +60,11 @@ def _user_embedding_config() -> dict[str, Any]:
     cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
     try:
         user_db_base_dir = str(DatabasePaths.get_user_db_base_dir())
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Falling back to USER_DB_BASE_DIR setting after user DB base resolution failed: {}",
+            exc,
+        )
         user_db_base_dir = settings.get("USER_DB_BASE_DIR")
     cfg["USER_DB_BASE_DIR"] = user_db_base_dir
     return cfg
@@ -392,9 +396,9 @@ async def generate_embeddings_for_media(
                 "status": "error",
                 "message": msg,
                 "error": msg,
-                    "embedding_count": 0,
-                    "chunks_processed": 0,
-                }
+                "embedding_count": 0,
+                "chunks_processed": 0,
+            }
 
         def _chunk_type_for_metadata(chunk: dict[str, Any]) -> str:
             chunk_metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}

@@ -54,14 +54,10 @@ const DEFAULT_ADD_SOURCE_TAB_ORDER: AddSourceTab[] = [
   "paste",
   "search"
 ]
-const WORKSPACE_EMBEDDING_PROVIDER = "huggingface" as const
-const WORKSPACE_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2" as const
 const WORKSPACE_RAG_INGEST_FIELDS = {
   perform_chunking: "true",
   generate_embeddings: "true",
-  embedding_dispatch_mode: "background",
-  embedding_provider: WORKSPACE_EMBEDDING_PROVIDER,
-  embedding_model: WORKSPACE_EMBEDDING_MODEL
+  embedding_dispatch_mode: "background"
 } as const
 const WORKSPACE_UPLOAD_INGEST_FIELDS = {
   overwrite: "false",

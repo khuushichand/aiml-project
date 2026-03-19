@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.endpoints import quizzes as quizzes_endpoint
 from tldw_Server_API.app.api.v1.schemas.quizzes import QuizGenerateRequest
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.services.quiz_generator import QuizProvenanceValidationError
 
 
@@ -87,3 +88,25 @@ async def test_generate_quiz_maps_provenance_validation_error_to_422(monkeypatch
         await quizzes_endpoint.generate_quiz(request=request, db=Mock(), media_db=Mock())
 
     assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_generate_quiz_maps_chat_configuration_error_to_400(monkeypatch):
+    async def fake_generate_quiz_from_sources(**kwargs):
+        raise ChatConfigurationError(provider="openai", message="Unknown provider")
+
+    monkeypatch.setattr(quizzes_endpoint, "generate_quiz_from_sources", fake_generate_quiz_from_sources)
+
+    request = QuizGenerateRequest.model_validate(
+        {
+            "num_questions": 2,
+            "sources": [{"source_type": "note", "source_id": "note-1"}],
+            "api_provider": "unknown-provider",
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await quizzes_endpoint.generate_quiz(request=request, db=Mock(), media_db=Mock())
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Unknown provider"

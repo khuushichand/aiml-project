@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.Flashcards.study_assistant import (
     generate_study_assistant_reply,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.services.quiz_generator import (
     QuizProvenanceValidationError,
     generate_quiz_from_sources,
@@ -578,6 +579,8 @@ async def generate_quiz(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except ConflictError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ChatConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except CharactersRAGDBError as e:

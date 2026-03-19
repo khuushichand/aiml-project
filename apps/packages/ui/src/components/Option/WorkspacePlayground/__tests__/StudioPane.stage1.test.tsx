@@ -659,6 +659,37 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     expect(mockRagSearch).not.toHaveBeenCalled()
   })
 
+  it("falls back to a provider-compatible model when the selected model belongs to another provider", async () => {
+    messageOptionStoreState.selectedModel = "llama-3.1-8b"
+    chatModelSettingsStoreState.apiProvider = "openai"
+    mockGetChatModels.mockResolvedValue([
+      {
+        id: "llama-3.1-8b",
+        name: "Llama 3.1 8B",
+        provider: "ollama"
+      },
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        provider: "openai"
+      }
+    ])
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Summary" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
+
+    const summaryRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(summaryRequest).toMatchObject({
+      model: "gpt-4o-mini",
+      api_provider: "openai"
+    })
+  })
+
   it("falls back to the default summary instruction when no custom prompt is set", async () => {
     messageOptionStoreState.ragAdvancedOptions = {
       min_score: 0.2,

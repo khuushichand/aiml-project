@@ -88,6 +88,28 @@ const sanitizeRagAdvancedOptions = (options?: Record<string, unknown>) => {
 
     if (RAG_STRING_ARRAY_KEYS.has(key)) {
       if (!Array.isArray(value)) continue
+      if (key === "include_note_ids") {
+        if (
+          value.length > 0 &&
+          value.every(
+            (entry) => typeof entry === "number" && Number.isFinite(entry)
+          )
+        ) {
+          sanitized[key] = value
+          continue
+        }
+
+        const normalizedLegacyIds = normalizeStringArray(
+          value.map((entry) =>
+            typeof entry === "number" && Number.isFinite(entry)
+              ? String(entry)
+              : entry
+          )
+        )
+        if (!normalizedLegacyIds) continue
+        sanitized[key] = normalizedLegacyIds
+        continue
+      }
       const normalized = normalizeStringArray(value)
       if (!normalized) continue
       sanitized[key] = normalized
@@ -419,4 +441,8 @@ export const ragMode = async (
     signal,
     params
   )
+}
+
+export const __testing__ = {
+  sanitizeRagAdvancedOptions
 }

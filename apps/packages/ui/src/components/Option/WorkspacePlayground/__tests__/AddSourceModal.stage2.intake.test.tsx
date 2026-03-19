@@ -111,20 +111,20 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add Text" }))
 
     await waitFor(() => {
-      expect(mockUploadMedia).toHaveBeenCalledWith(
-        expect.any(File),
-        expect.objectContaining({
-          title: "Pasted Note",
-          media_type: "document",
-          overwrite: "false",
-          perform_chunking: "true",
-          generate_embeddings: "true",
-          embedding_dispatch_mode: "background",
-          embedding_provider: "huggingface",
-          embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-        })
-      )
+      expect(mockUploadMedia).toHaveBeenCalledWith(expect.any(File), expect.any(Object))
     })
+
+    const uploadOptions = mockUploadMedia.mock.calls[0]?.[1]
+    expect(uploadOptions).toMatchObject({
+      title: "Pasted Note",
+      media_type: "document",
+      overwrite: "false",
+      perform_chunking: "true",
+      generate_embeddings: "true",
+      embedding_dispatch_mode: "background"
+    })
+    expect(uploadOptions).not.toHaveProperty("embedding_provider")
+    expect(uploadOptions).not.toHaveProperty("embedding_model")
   })
 
   it("orders tabs as Upload, Library, URL, Paste, Search", async () => {
@@ -213,9 +213,7 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
       expect.objectContaining({
         perform_chunking: "true",
         generate_embeddings: "true",
-        embedding_dispatch_mode: "background",
-        embedding_provider: "huggingface",
-        embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+        embedding_dispatch_mode: "background"
       })
     )
     expect(mockAddMedia).toHaveBeenNthCalledWith(
@@ -224,11 +222,13 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
       expect.objectContaining({
         perform_chunking: "true",
         generate_embeddings: "true",
-        embedding_dispatch_mode: "background",
-        embedding_provider: "huggingface",
-        embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+        embedding_dispatch_mode: "background"
       })
     )
+    expect(mockAddMedia.mock.calls[0]?.[1]).not.toHaveProperty("embedding_provider")
+    expect(mockAddMedia.mock.calls[0]?.[1]).not.toHaveProperty("embedding_model")
+    expect(mockAddMedia.mock.calls[1]?.[1]).not.toHaveProperty("embedding_provider")
+    expect(mockAddMedia.mock.calls[1]?.[1]).not.toHaveProperty("embedding_model")
 
     expect(screen.getByText("https://example.com/one")).toBeInTheDocument()
     expect(screen.getByText("https://example.com/two")).toBeInTheDocument()
@@ -278,11 +278,11 @@ describe("AddSourceModal Stage 2 intake and relevance", () => {
       expect.objectContaining({
         perform_chunking: "true",
         generate_embeddings: "true",
-        embedding_dispatch_mode: "background",
-        embedding_provider: "huggingface",
-        embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+        embedding_dispatch_mode: "background"
       })
     )
+    expect(mockAddMedia.mock.calls[0]?.[1]).not.toHaveProperty("embedding_provider")
+    expect(mockAddMedia.mock.calls[0]?.[1]).not.toHaveProperty("embedding_model")
   })
 
   it("renders search snippets and favicon hints in web results", async () => {

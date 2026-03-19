@@ -88,6 +88,17 @@ const getUploadInput = (): HTMLInputElement => {
   return element
 }
 
+const expectWorkspaceIngestFields = (options: Record<string, unknown>) => {
+  expect(options).toMatchObject({
+    overwrite: "false",
+    perform_chunking: "true",
+    generate_embeddings: "true",
+    embedding_dispatch_mode: "background"
+  })
+  expect(options).not.toHaveProperty("embedding_provider")
+  expect(options).not.toHaveProperty("embedding_model")
+}
+
 describe("AddSourceModal Stage 1 ingestion safety", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -113,18 +124,12 @@ describe("AddSourceModal Stage 1 ingestion safety", () => {
 
     expect(await screen.findByTestId("upload-progress-list")).toBeInTheDocument()
     expect(screen.getByText("Uploading")).toBeInTheDocument()
-    expect(mockUploadMedia).toHaveBeenCalledWith(
-      file,
-      expect.objectContaining({
-        media_type: "pdf",
-        overwrite: "false",
-        perform_chunking: "true",
-        generate_embeddings: "true",
-        embedding_dispatch_mode: "background",
-        embedding_provider: "huggingface",
-        embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-      })
-    )
+    expect(mockUploadMedia).toHaveBeenCalledWith(file, expect.any(Object))
+    const uploadOptions = mockUploadMedia.mock.calls[0]?.[1]
+    expect(uploadOptions).toMatchObject({
+      media_type: "pdf"
+    })
+    expectWorkspaceIngestFields(uploadOptions)
 
     resolveUpload?.({
       results: [

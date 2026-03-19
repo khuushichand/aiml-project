@@ -1108,6 +1108,9 @@ describe("StudioPane Stage 2 workflows", () => {
             content: expect.stringContaining("DSPy Prompting Talk")
           })
         ]
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal)
       })
     )
     expect(mockRagSearch).not.toHaveBeenCalled()
@@ -1175,6 +1178,9 @@ describe("StudioPane Stage 2 workflows", () => {
     expect(mockCreateChatCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "gpt-4o-mini"
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal)
       })
     )
   })
@@ -1247,6 +1253,9 @@ describe("StudioPane Stage 2 workflows", () => {
             )
           })
         ]
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal)
       })
     )
 

@@ -583,6 +583,40 @@ describe("WorkspacePlayground stage 3 global navigation", () => {
     })
   })
 
+  it("promotes processing sources to ready when a later vector status indicates completion", async () => {
+    testState.sources = [
+      {
+        id: "source-processing",
+        mediaId: 808,
+        title: "Queued Source",
+        type: "pdf",
+        status: "processing",
+        addedAt: new Date("2026-02-18T12:00:00.000Z")
+      }
+    ]
+    mockGetMediaDetails.mockResolvedValue({
+      vector_processing: "pending",
+      processing: {
+        vector_processing_status: "completed"
+      }
+    })
+
+    render(<WorkspacePlayground />)
+
+    await waitFor(() => {
+      expect(mockGetMediaDetails).toHaveBeenCalledWith(
+        808,
+        expect.objectContaining({
+          include_content: true
+        })
+      )
+      expect(testState.setSourceStatusByMediaId).toHaveBeenCalledWith(
+        808,
+        "ready"
+      )
+    })
+  })
+
   it("shows an activity rail when sources are processing or outputs are generating", () => {
     testState.sources = [
       {
