@@ -5,6 +5,8 @@ Audience: operators preparing the first cloud-managed customer-facing deployment
 
 Related documents
 - Hosted staging runbook: `Docs/Published/Deployment/Hosted_Staging_Runbook.md`
+- Hosted Stripe test-mode runbook: `Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md`
+- Hosted staging operations runbook: `Docs/Operations/Hosted_Staging_Operations_Runbook.md`
 
 This profile defines the minimum deployment contract for the hosted SaaS launch surface. It is intentionally narrower than the general self-host guidance. The target is a same-origin hosted web app with server-managed auth sessions, public auth callback routes, org-scoped billing, and a narrow core product surface.
 

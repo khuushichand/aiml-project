@@ -2,6 +2,10 @@
 
 This module provides subscription lifecycle, usage enforcement, and Stripe webhook handling for organization billing.
 
+Related documents:
+- `Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md`
+- `Docs/Published/Deployment/Hosted_Staging_Runbook.md`
+
 ## Key Environment Variables
 
 - `BILLING_ENABLED`
@@ -53,3 +57,4 @@ Validation behavior:
 
 - Stripe-backed subscription cancel/resume operations fail closed when Stripe cannot be reached or is unavailable, to avoid local/remote state drift.
 - Non-active subscription statuses (for example `past_due` or `canceled`) fall back to free-tier limits during enforcement.
+- Hosted Stripe webhook prove-out should target `POST /api/v1/billing/webhooks/stripe`; see `Docs/Operations/Hosted_Stripe_Test_Mode_Runbook.md`.
