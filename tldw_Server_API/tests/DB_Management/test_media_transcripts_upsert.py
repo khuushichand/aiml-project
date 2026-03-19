@@ -43,6 +43,7 @@ def _insert_minimal_media(db: MediaDatabase) -> int:
         return int(cur.lastrowid or 0)
 
 
+@pytest.mark.unit
 def test_sqlite_upsert_transcript_roundtrip(tmp_path):
 
     db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="unit-sqlite")

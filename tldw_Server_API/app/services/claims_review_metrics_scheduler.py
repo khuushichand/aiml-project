@@ -81,8 +81,7 @@ async def run_claims_review_metrics_once(
         lookback_val = 2
 
     if db is not None:
-        return await asyncio.to_thread(
-            agg_fn,
+        return agg_fn(
             db=db,
             target_user_id=target_user_id,
             report_date=report_date,

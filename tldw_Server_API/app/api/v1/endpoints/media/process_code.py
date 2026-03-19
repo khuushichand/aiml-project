@@ -43,7 +43,7 @@ router = APIRouter()
     tags=["Media Processing (No DB)"],
 )
 async def process_code_endpoint(
-    db: Any = Depends(get_media_db_for_user),  # Parity with legacy signature
+    db: Any = Depends(get_media_db_for_user),  # Parity with legacy signature; unused
     form_data: ProcessCodeForm = Depends(get_process_code_form),
     files: list[UploadFile] | None = File(
         None,

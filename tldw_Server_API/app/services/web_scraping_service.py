@@ -435,19 +435,7 @@ async def process_web_scraping_task(
                     # Persist each article in the DB
                     media_ids = []
                     for article in result_list:
-                        # Construct info_dict
-                        {
-                            "title": article.get("title", "Untitled"),
-                            "author": "Unknown",
-                            "source": article.get("url", ""),
-                            "scrape_method": scrape_method
-                        }
                         # We'll treat article['content'] as the main text
-                        # If there's a summary, store it in summary field
-                        summary = article.get("summary", "No summary available")
-                        # "Segments" is how your DB manager expects text. We'll store one big chunk:
-                        [{"Text": article.get("content", "")}]
-
                         # Combine content and metadata
                         content_text = article.get("content", "")
 

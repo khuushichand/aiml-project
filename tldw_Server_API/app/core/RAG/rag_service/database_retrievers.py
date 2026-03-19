@@ -446,6 +446,7 @@ class MediaDBRetriever(BaseRetriever):
             attached = self._maybe_attach_media_db(self.db_path)
             own = attached is not None
         self.media_db = media_db or attached
+        self._db_adapter = self.media_db
         self._own_media_db = own
         self.user_id = user_id
         self.vector_store: Optional[VectorStoreAdapter] = None
@@ -469,9 +470,7 @@ class MediaDBRetriever(BaseRetriever):
             OSError,
             RuntimeError,
             TypeError,
-            ValueError,
             sqlite3.Error,
-            MediaDatabaseError,
         ):
             return None
 
@@ -2716,6 +2715,7 @@ class ClaimsRetriever(BaseRetriever):
             attached = self._maybe_attach_media_db(self.db_path)
             own = attached is not None
         self.media_db = media_db or attached
+        self._db_adapter = self.media_db
         self._own_media_db = own
 
     def _maybe_attach_media_db(self, db_path: Optional[str]):
@@ -2732,9 +2732,7 @@ class ClaimsRetriever(BaseRetriever):
             OSError,
             RuntimeError,
             TypeError,
-            ValueError,
             sqlite3.Error,
-            MediaDatabaseError,
         ):
             return None
 

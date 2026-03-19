@@ -6,6 +6,7 @@ from typing import Iterable
 import pytest
 
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
+    MediaDatabaseError,
     MediaDBRetriever,
     MultiDatabaseRetriever,
     RetrievalConfig,
@@ -88,6 +89,7 @@ class TestMediaDBRetriever:
         try:
             assert retriever._own_media_db is True
             assert isinstance(retriever.media_db, _FakeDb)
+            assert retriever._db_adapter is retriever.media_db
             assert events[:2] == [
                 ("create", "rag_service"),
                 ("kwargs", {"db_path": str((tmp_path / "media.db").resolve())}),
@@ -96,6 +98,19 @@ class TestMediaDBRetriever:
             retriever.close()
 
         assert ("close", None) in events
+
+    def test_attach_media_db_propagates_factory_configuration_errors(self, monkeypatch, tmp_path):
+        import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
+
+        monkeypatch.setattr(
+            retr_mod,
+            "create_media_database",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(MediaDatabaseError("bad config")),
+        )
+        monkeypatch.setattr(retr_mod.MediaDBRetriever, "_initialize_vector_store", lambda self: None)
+
+        with pytest.raises(MediaDatabaseError):
+            retr_mod.MediaDBRetriever(str(tmp_path / "media.db"))
 
 
 @pytest.mark.unit
@@ -142,6 +157,7 @@ def test_claims_retriever_attach_uses_shared_factory(monkeypatch, tmp_path):
     try:
         assert retriever._own_media_db is True
         assert isinstance(retriever.media_db, _FakeDb)
+        assert retriever._db_adapter is retriever.media_db
         assert events[:2] == [
             ("create", "rag_service"),
             ("kwargs", {"db_path": str((tmp_path / "claims.db").resolve())}),
@@ -150,6 +166,20 @@ def test_claims_retriever_attach_uses_shared_factory(monkeypatch, tmp_path):
         retriever.close()
 
     assert ("close", None) in events
+
+
+@pytest.mark.unit
+def test_claims_retriever_attach_propagates_factory_configuration_errors(monkeypatch, tmp_path):
+    import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
+
+    monkeypatch.setattr(
+        retr_mod,
+        "create_media_database",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad path")),
+    )
+
+    with pytest.raises(ValueError):
+        retr_mod.ClaimsRetriever(str(tmp_path / "claims.db"))
 
 
 # ---------------------------------------------------------------------------
