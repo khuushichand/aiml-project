@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
 
+## [Unreleased]
+
+### Changed
+
+- Backfilled the `dev` changelog for the `main`-merged PR #910 knowledge/workspace beta readiness audit so the merged review-remediation scope stays visible before those code paths are forward-ported into `dev`.
+
+### Added
+
+- Documented the merged setup-audio rollout on `main`, including bundle-and-profile recommendations in `/setup`, offline audio-pack manifest export/import, persisted audio readiness state, and richer setup verification/remediation reporting.
+- Documented merged Knowledge QA and Workspace Playground hardening on `main`, including note-id normalization, shared-link hydration fixes, stronger study/remediation and live-workspace coverage, and tighter workspace probe/runtime assertions.
+
+### Fixed
+
+- Documented merged reliability fixes on `main` across setup install-status typing and health collection, audio-pack path and compatibility handling, RAG sensitivity/vector-store metadata handling, quiz test-mode and provenance behavior, and assorted slides/workspace retry and Chroma state-tracking edge cases.
+
+
 ## [0.1.28] 2026-03-15
 
 ### Added
