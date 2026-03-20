@@ -60,6 +60,25 @@ def _imported_upgrade_name(
     return f"{display_name} [{pack_id}:{source_object_id}@{pack_version}]"
 
 
+def _normalized_source_metadata(source_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize prepared source-candidate metadata for governance-pack install persistence."""
+    if not isinstance(source_metadata, dict):
+        return {}
+    return {
+        "source_type": str(source_metadata.get("source_type") or "").strip().lower() or None,
+        "source_location": str(source_metadata.get("source_location") or "").strip() or None,
+        "source_ref_requested": str(source_metadata.get("source_ref_requested") or "").strip() or None,
+        "source_ref_kind": str(source_metadata.get("source_ref_kind") or "").strip().lower() or None,
+        "source_subpath": str(source_metadata.get("source_subpath") or "").strip() or None,
+        "source_commit_resolved": str(source_metadata.get("source_commit_resolved") or "").strip() or None,
+        "pack_content_digest": str(source_metadata.get("pack_content_digest") or "").strip() or None,
+        "source_verified": source_metadata.get("source_verified"),
+        "source_verification_mode": str(source_metadata.get("source_verification_mode") or "").strip() or None,
+        "source_fetched_at": source_metadata.get("source_fetched_at"),
+        "fetched_by": source_metadata.get("fetched_by"),
+    }
+
+
 class GovernancePackImportResult(BaseModel):
     governance_pack_id: int
     imported_object_ids: dict[str, list[int]] = Field(default_factory=dict)
@@ -1231,6 +1250,7 @@ class McpHubGovernancePackService:
         owner_scope_type: str,
         owner_scope_id: int | None,
         actor_id: int | None,
+        source_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         pack = self.build_pack_from_document(document)
         report = await self.dry_run_pack(
@@ -1245,6 +1265,7 @@ class McpHubGovernancePackService:
             owner_scope_type=owner_scope_type,
             owner_scope_id=owner_scope_id,
             actor_id=actor_id,
+            source_metadata=source_metadata,
         )
         return {
             "governance_pack_id": imported.governance_pack_id,
@@ -1293,6 +1314,7 @@ class McpHubGovernancePackService:
         owner_scope_type: str,
         owner_scope_id: int | None,
         actor_id: int | None,
+        source_metadata: dict[str, Any] | None = None,
     ) -> GovernancePackImportResult:
         validation = validate_governance_pack(pack)
         if validation.errors:
@@ -1322,6 +1344,7 @@ class McpHubGovernancePackService:
             "policy_assignments": [],
         }
         governance_pack_id: int | None = None
+        normalized_source_metadata = _normalized_source_metadata(source_metadata)
         approval_policy_ids_by_template: dict[str, int] = {}
         profile_ids_by_template: dict[str, int] = {}
         persona_ids_by_template: dict[str, str] = {
@@ -1349,6 +1372,17 @@ class McpHubGovernancePackService:
                     manifest=_dump_model(manifest),
                     normalized_ir=normalized_ir.to_dict(),
                     actor_id=actor_id,
+                    source_type=normalized_source_metadata.get("source_type"),
+                    source_location=normalized_source_metadata.get("source_location"),
+                    source_ref_requested=normalized_source_metadata.get("source_ref_requested"),
+                    source_ref_kind=normalized_source_metadata.get("source_ref_kind"),
+                    source_subpath=normalized_source_metadata.get("source_subpath"),
+                    source_commit_resolved=normalized_source_metadata.get("source_commit_resolved"),
+                    pack_content_digest=normalized_source_metadata.get("pack_content_digest"),
+                    source_verified=normalized_source_metadata.get("source_verified"),
+                    source_verification_mode=normalized_source_metadata.get("source_verification_mode"),
+                    source_fetched_at=normalized_source_metadata.get("source_fetched_at"),
+                    fetched_by=normalized_source_metadata.get("fetched_by"),
                 )
             except Exception as exc:
                 if _is_duplicate_governance_pack_error(exc):

@@ -58,8 +58,19 @@ class AssignmentTemplate(BaseModel):
 
 @dataclass
 class GovernancePack:
-    source_path: Path
+    """Loaded governance-pack content plus source-resolution metadata."""
+
+    source_path: Path | None
     manifest: GovernancePackManifest
+    source_type: str = "local_path"
+    source_location: str | None = None
+    source_ref_requested: str | None = None
+    source_ref_kind: str | None = None
+    source_subpath: str | None = None
+    source_commit_resolved: str | None = None
+    pack_content_digest: str | None = None
+    source_verified: bool | None = None
+    source_verification_mode: str | None = None
     profiles: list[CapabilityProfile] = field(default_factory=list)
     approvals: list[ApprovalTemplate] = field(default_factory=list)
     personas: list[PersonaTemplate] = field(default_factory=list)
@@ -72,5 +83,7 @@ class GovernancePack:
 
 @dataclass
 class GovernancePackValidationResult:
+    """Validation result for a governance-pack payload."""
+
     manifest: GovernancePackManifest | None
     errors: list[str] = field(default_factory=list)

@@ -785,6 +785,91 @@ class GovernancePackImportRequest(BaseModel):
     pack: GovernancePackDocumentRequest
 
 
+class GovernancePackSourceRequest(BaseModel):
+    source_type: Literal["local_path", "git"]
+    local_path: str | None = None
+    repo_url: str | None = None
+    ref: str | None = None
+    ref_kind: Literal["branch", "tag", "commit"] | None = None
+    subpath: str | None = None
+
+
+class GovernancePackSourcePrepareRequest(BaseModel):
+    source: GovernancePackSourceRequest
+
+
+class GovernancePackSourceCandidateResponse(BaseModel):
+    id: int
+    source_type: str
+    source_location: str
+    source_ref_requested: str | None = None
+    source_ref_kind: Literal["branch", "tag", "commit"] | None = None
+    source_subpath: str | None = None
+    source_commit_resolved: str | None = None
+    pack_content_digest: str
+    source_verified: bool | None = None
+    source_verification_mode: str | None = None
+    source_fetched_at: datetime | str | None = None
+    fetched_by: int | None = None
+
+
+class GovernancePackSourcePrepareResponse(BaseModel):
+    candidate: GovernancePackSourceCandidateResponse
+    manifest: GovernancePackReportManifestResponse
+
+
+class GovernancePackSourceDryRunRequest(BaseModel):
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    candidate_id: int = Field(..., ge=1)
+
+
+class GovernancePackSourceImportRequest(BaseModel):
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    candidate_id: int = Field(..., ge=1)
+
+
+GovernancePackSourceUpdateStatus = Literal[
+    "newer_version_available",
+    "no_update",
+    "source_drift_same_version",
+]
+
+
+class GovernancePackSourceUpdateCheckResponse(BaseModel):
+    governance_pack_id: int
+    status: GovernancePackSourceUpdateStatus
+    installed_manifest: GovernancePackReportManifestResponse
+    candidate_manifest: GovernancePackReportManifestResponse | None = None
+    source_commit_resolved: str | None = None
+    pack_content_digest: str | None = None
+
+
+class GovernancePackSourceUpgradePrepareResponse(BaseModel):
+    status: GovernancePackSourceUpdateStatus
+    installed_manifest: GovernancePackReportManifestResponse
+    candidate_manifest: GovernancePackReportManifestResponse | None = None
+    candidate: GovernancePackSourceCandidateResponse
+    manifest: GovernancePackReportManifestResponse
+
+
+class GovernancePackSourceUpgradeDryRunRequest(BaseModel):
+    source_governance_pack_id: int = Field(..., ge=1)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    candidate_id: int = Field(..., ge=1)
+
+
+class GovernancePackSourceUpgradeExecuteRequest(BaseModel):
+    source_governance_pack_id: int = Field(..., ge=1)
+    owner_scope_type: ScopeType = Field(default="user")
+    owner_scope_id: int | None = None
+    candidate_id: int = Field(..., ge=1)
+    planner_inputs_fingerprint: str = Field(..., min_length=1)
+    adapter_state_fingerprint: str = Field(..., min_length=1)
+
+
 class GovernancePackUpgradeDryRunRequest(BaseModel):
     """Request body for governance-pack upgrade planning."""
 
@@ -933,6 +1018,17 @@ class GovernancePackSummaryResponse(BaseModel):
     owner_scope_type: ScopeType
     owner_scope_id: int | None = None
     bundle_digest: str
+    source_type: str | None = None
+    source_location: str | None = None
+    source_ref_requested: str | None = None
+    source_ref_kind: Literal["branch", "tag", "commit"] | None = None
+    source_subpath: str | None = None
+    source_commit_resolved: str | None = None
+    pack_content_digest: str | None = None
+    source_verified: bool | None = None
+    source_verification_mode: str | None = None
+    source_fetched_at: datetime | str | None = None
+    fetched_by: int | None = None
     manifest: dict[str, Any] = Field(default_factory=dict)
     is_active_install: bool = True
     superseded_by_governance_pack_id: int | None = None
@@ -953,3 +1049,27 @@ class GovernancePackImportResponse(BaseModel):
     imported_object_counts: dict[str, int] = Field(default_factory=dict)
     blocked_objects: list[str] = Field(default_factory=list)
     report: GovernancePackDryRunReportResponse
+
+
+class GovernancePackTrustPolicyRequest(BaseModel):
+    """Request payload for updating the deployment-wide governance-pack trust policy."""
+    allow_local_path_sources: bool = False
+    allowed_local_roots: list[str] = Field(default_factory=list)
+    allow_git_sources: bool = False
+    allowed_git_hosts: list[str] = Field(default_factory=list)
+    allowed_git_repositories: list[str] = Field(default_factory=list)
+    allowed_git_ref_kinds: list[str] = Field(default_factory=list)
+    require_git_signature_verification: bool = False
+    trusted_git_key_fingerprints: list[str] = Field(default_factory=list)
+
+
+class GovernancePackTrustPolicyResponse(BaseModel):
+    """Deployment-wide governance-pack trust policy response payload."""
+    allow_local_path_sources: bool = False
+    allowed_local_roots: list[str] = Field(default_factory=list)
+    allow_git_sources: bool = False
+    allowed_git_hosts: list[str] = Field(default_factory=list)
+    allowed_git_repositories: list[str] = Field(default_factory=list)
+    allowed_git_ref_kinds: list[str] = Field(default_factory=list)
+    require_git_signature_verification: bool = False
+    trusted_git_key_fingerprints: list[str] = Field(default_factory=list)

@@ -8,6 +8,13 @@ const mocks = vi.hoisted(() => ({
   getGovernancePackDetail: vi.fn(),
   dryRunGovernancePack: vi.fn(),
   importGovernancePack: vi.fn(),
+  prepareGovernancePackSourceCandidate: vi.fn(),
+  dryRunGovernancePackSourceCandidate: vi.fn(),
+  importGovernancePackSourceCandidate: vi.fn(),
+  checkGovernancePackUpdates: vi.fn(),
+  prepareGovernancePackUpgradeCandidate: vi.fn(),
+  dryRunGovernancePackSourceUpgrade: vi.fn(),
+  executeGovernancePackSourceUpgrade: vi.fn(),
   dryRunGovernancePackUpgrade: vi.fn(),
   executeGovernancePackUpgrade: vi.fn(),
   listGovernancePackUpgradeHistory: vi.fn()
@@ -18,6 +25,19 @@ vi.mock("@/services/tldw/mcp-hub", () => ({
   getGovernancePackDetail: (...args: unknown[]) => mocks.getGovernancePackDetail(...args),
   dryRunGovernancePack: (...args: unknown[]) => mocks.dryRunGovernancePack(...args),
   importGovernancePack: (...args: unknown[]) => mocks.importGovernancePack(...args),
+  prepareGovernancePackSourceCandidate: (...args: unknown[]) =>
+    mocks.prepareGovernancePackSourceCandidate(...args),
+  dryRunGovernancePackSourceCandidate: (...args: unknown[]) =>
+    mocks.dryRunGovernancePackSourceCandidate(...args),
+  importGovernancePackSourceCandidate: (...args: unknown[]) =>
+    mocks.importGovernancePackSourceCandidate(...args),
+  checkGovernancePackUpdates: (...args: unknown[]) => mocks.checkGovernancePackUpdates(...args),
+  prepareGovernancePackUpgradeCandidate: (...args: unknown[]) =>
+    mocks.prepareGovernancePackUpgradeCandidate(...args),
+  dryRunGovernancePackSourceUpgrade: (...args: unknown[]) =>
+    mocks.dryRunGovernancePackSourceUpgrade(...args),
+  executeGovernancePackSourceUpgrade: (...args: unknown[]) =>
+    mocks.executeGovernancePackSourceUpgrade(...args),
   dryRunGovernancePackUpgrade: (...args: unknown[]) => mocks.dryRunGovernancePackUpgrade(...args),
   executeGovernancePackUpgrade: (...args: unknown[]) => mocks.executeGovernancePackUpgrade(...args),
   listGovernancePackUpgradeHistory: (...args: unknown[]) => mocks.listGovernancePackUpgradeHistory(...args)
@@ -38,6 +58,14 @@ describe("GovernancePacksTab", () => {
         owner_scope_type: "user",
         owner_scope_id: 7,
         bundle_digest: "a".repeat(64),
+        source_type: "git",
+        source_location: "https://github.com/example/researcher-pack.git",
+        source_ref_requested: "main",
+        source_subpath: "packs/researcher",
+        source_commit_resolved: "abc123",
+        pack_content_digest: "c".repeat(64),
+        source_verified: true,
+        source_verification_mode: "git_signature",
         is_active_install: true,
         manifest: {
           pack_id: "researcher-pack",
@@ -54,6 +82,8 @@ describe("GovernancePacksTab", () => {
         owner_scope_type: "user",
         owner_scope_id: 7,
         bundle_digest: "b".repeat(64),
+        source_type: "git",
+        source_location: "https://github.com/example/researcher-pack.git",
         is_active_install: false,
         superseded_by_governance_pack_id: 81,
         manifest: {
@@ -72,6 +102,14 @@ describe("GovernancePacksTab", () => {
       owner_scope_type: "user",
       owner_scope_id: 7,
       bundle_digest: "a".repeat(64),
+      source_type: "git",
+      source_location: "https://github.com/example/researcher-pack.git",
+      source_ref_requested: "main",
+      source_subpath: "packs/researcher",
+      source_commit_resolved: "abc123",
+      pack_content_digest: "c".repeat(64),
+      source_verified: true,
+      source_verification_mode: "git_signature",
       is_active_install: true,
       manifest: {
         pack_id: "researcher-pack",
@@ -200,6 +238,160 @@ describe("GovernancePacksTab", () => {
         verdict: "importable"
       }
     })
+    mocks.prepareGovernancePackSourceCandidate.mockResolvedValue({
+      candidate: {
+        id: 501,
+        source_type: "local_path",
+        source_location: "/srv/packs/researcher-pack",
+        source_commit_resolved: null,
+        pack_content_digest: "c".repeat(64)
+      },
+      manifest: {
+        pack_id: "researcher-pack",
+        pack_version: "1.0.0",
+        title: "Researcher Pack",
+        description: "Portable research governance pack"
+      }
+    })
+    mocks.dryRunGovernancePackSourceCandidate.mockResolvedValue({
+      report: {
+        manifest: {
+          pack_id: "researcher-pack",
+          pack_version: "1.0.0",
+          title: "Researcher Pack",
+          description: "Portable research governance pack"
+        },
+        digest: "c".repeat(64),
+        resolved_capabilities: ["filesystem.read", "tool.invoke.research"],
+        unresolved_capabilities: [],
+        warnings: [],
+        blocked_objects: [],
+        verdict: "importable"
+      }
+    })
+    mocks.importGovernancePackSourceCandidate.mockResolvedValue({
+      governance_pack_id: 81,
+      imported_object_counts: {
+        approval_policies: 1,
+        permission_profiles: 1,
+        policy_assignments: 1
+      },
+      blocked_objects: [],
+      report: {
+        manifest: {
+          pack_id: "researcher-pack",
+          pack_version: "1.0.0",
+          title: "Researcher Pack",
+          description: "Portable research governance pack"
+        },
+        digest: "c".repeat(64),
+        resolved_capabilities: ["filesystem.read", "tool.invoke.research"],
+        unresolved_capabilities: [],
+        warnings: [],
+        blocked_objects: [],
+        verdict: "importable"
+      }
+    })
+    mocks.checkGovernancePackUpdates.mockResolvedValue({
+      governance_pack_id: 81,
+      status: "newer_version_available",
+      installed_manifest: {
+        pack_id: "researcher-pack",
+        pack_version: "1.0.0",
+        title: "Researcher Pack",
+        description: "Portable research governance pack"
+      },
+      candidate_manifest: {
+        pack_id: "researcher-pack",
+        pack_version: "1.1.0",
+        title: "Researcher Pack",
+        description: "Portable research governance pack"
+      },
+      source_commit_resolved: "def456",
+      pack_content_digest: "d".repeat(64)
+    })
+    mocks.prepareGovernancePackUpgradeCandidate.mockResolvedValue({
+      status: "newer_version_available",
+      installed_manifest: {
+        pack_id: "researcher-pack",
+        pack_version: "1.0.0",
+        title: "Researcher Pack",
+        description: "Portable research governance pack"
+      },
+      candidate_manifest: {
+        pack_id: "researcher-pack",
+        pack_version: "1.1.0",
+        title: "Researcher Pack",
+        description: "Portable research governance pack"
+      },
+      candidate: {
+        id: 502,
+        source_type: "git",
+        source_location: "https://github.com/example/researcher-pack.git",
+        source_ref_requested: "main",
+        source_subpath: "packs/researcher",
+        source_commit_resolved: "def456",
+        pack_content_digest: "d".repeat(64),
+        source_verified: true,
+        source_verification_mode: "git_signature"
+      },
+      manifest: {
+        pack_id: "researcher-pack",
+        pack_version: "1.1.0",
+        title: "Researcher Pack",
+        description: "Portable research governance pack"
+      }
+    })
+    mocks.dryRunGovernancePackSourceUpgrade.mockResolvedValue({
+      plan: {
+        source_governance_pack_id: 81,
+        source_manifest: {
+          pack_id: "researcher-pack",
+          pack_version: "1.0.0",
+          title: "Researcher Pack"
+        },
+        target_manifest: {
+          pack_id: "researcher-pack",
+          pack_version: "1.1.0",
+          title: "Researcher Pack"
+        },
+        object_diff: [
+          {
+            object_type: "permission_profile",
+            source_object_id: "researcher.profile",
+            change_type: "modified",
+            previous_digest: "1".repeat(64),
+            next_digest: "2".repeat(64)
+          }
+        ],
+        dependency_impact: [],
+        structural_conflicts: [],
+        behavioral_conflicts: [],
+        warnings: [],
+        planner_inputs_fingerprint: "plan-fingerprint",
+        adapter_state_fingerprint: "adapter-fingerprint",
+        upgradeable: true
+      }
+    })
+    mocks.executeGovernancePackSourceUpgrade.mockResolvedValue({
+      upgrade_id: 13,
+      source_governance_pack_id: 81,
+      target_governance_pack_id: 82,
+      from_pack_version: "1.0.0",
+      to_pack_version: "1.1.0",
+      planner_inputs_fingerprint: "plan-fingerprint",
+      adapter_state_fingerprint: "adapter-fingerprint",
+      imported_object_ids: {
+        approval_policies: [31],
+        permission_profiles: [41],
+        policy_assignments: [51]
+      },
+      imported_object_counts: {
+        approval_policies: 1,
+        permission_profiles: 1,
+        policy_assignments: 1
+      }
+    })
   })
 
   it("renders dry-run compatibility findings before import", async () => {
@@ -267,8 +459,108 @@ describe("GovernancePacksTab", () => {
 
     expect(await screen.findByText("Active install")).toBeTruthy()
     expect(await screen.findByText("Inactive install")).toBeTruthy()
+    expect(await screen.findByText("Git Source")).toBeTruthy()
+    expect(await screen.findByText("Verified Commit")).toBeTruthy()
     expect(await screen.findByText("Upgrade History")).toBeTruthy()
     expect(screen.getByText("0.9.0 -> 1.0.0")).toBeTruthy()
+  })
+
+  it("renders local-path and git source install forms", async () => {
+    render(<GovernancePacksTab />)
+
+    expect(await screen.findByLabelText(/local path/i)).toBeTruthy()
+    expect(screen.getByLabelText(/git repository url/i)).toBeTruthy()
+    expect(screen.getByLabelText(/git ref/i)).toBeTruthy()
+    expect(screen.getByLabelText(/git subpath/i)).toBeTruthy()
+  })
+
+  it("previews and imports a local source candidate", async () => {
+    const user = userEvent.setup()
+    render(<GovernancePacksTab />)
+
+    await screen.findAllByText("Researcher Pack")
+    await user.clear(screen.getByLabelText(/local path/i))
+    await user.type(screen.getByLabelText(/local path/i), "/srv/packs/researcher-pack")
+    await user.click(screen.getByRole("button", { name: /preview local source/i }))
+
+    expect(await screen.findByText("Prepared candidate")).toBeTruthy()
+    expect(screen.getByText("/srv/packs/researcher-pack")).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: /import local source/i }))
+
+    expect(mocks.prepareGovernancePackSourceCandidate).toHaveBeenCalledTimes(1)
+    expect(mocks.importGovernancePackSourceCandidate).toHaveBeenCalledWith({
+      owner_scope_type: "user",
+      candidate_id: 501
+    })
+  })
+
+  it("checks for updates and previews a prepared source upgrade", async () => {
+    const user = userEvent.setup()
+    render(<GovernancePacksTab />)
+
+    await screen.findAllByText("Researcher Pack")
+    await user.click(screen.getByRole("button", { name: /check for updates/i }))
+
+    expect(await screen.findByText(/newer version available/i)).toBeTruthy()
+    expect(screen.getByRole("button", { name: /preview source upgrade/i })).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: /preview source upgrade/i }))
+
+    expect(await screen.findByRole("dialog")).toBeTruthy()
+    expect(await screen.findByText("Prepared source candidate")).toBeTruthy()
+    expect(screen.getByText("def456")).toBeTruthy()
+    expect(mocks.prepareGovernancePackUpgradeCandidate).toHaveBeenCalledWith(81)
+    expect(mocks.dryRunGovernancePackSourceUpgrade).toHaveBeenCalledWith({
+      source_governance_pack_id: 81,
+      owner_scope_type: "user",
+      candidate_id: 502
+    })
+  })
+
+  it("renders no-update and source-drift statuses", async () => {
+    mocks.checkGovernancePackUpdates
+      .mockResolvedValueOnce({
+        governance_pack_id: 81,
+        status: "no_update",
+        installed_manifest: {
+          pack_id: "researcher-pack",
+          pack_version: "1.0.0",
+          title: "Researcher Pack",
+          description: "Portable research governance pack"
+        },
+        candidate_manifest: null,
+        source_commit_resolved: "abc123",
+        pack_content_digest: "c".repeat(64)
+      })
+      .mockResolvedValueOnce({
+        governance_pack_id: 81,
+        status: "source_drift_same_version",
+        installed_manifest: {
+          pack_id: "researcher-pack",
+          pack_version: "1.0.0",
+          title: "Researcher Pack",
+          description: "Portable research governance pack"
+        },
+        candidate_manifest: {
+          pack_id: "researcher-pack",
+          pack_version: "1.0.0",
+          title: "Researcher Pack",
+          description: "Portable research governance pack"
+        },
+        source_commit_resolved: "fedcba",
+        pack_content_digest: "e".repeat(64)
+      })
+
+    const user = userEvent.setup()
+    render(<GovernancePacksTab />)
+
+    await screen.findAllByText("Researcher Pack")
+    await user.click(screen.getByRole("button", { name: /check for updates/i }))
+    expect(await screen.findByText(/no update available/i)).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: /check for updates/i }))
+    expect(await screen.findByText(/source drift detected at the same version/i)).toBeTruthy()
   })
 
   it("opens the upgrade modal and renders dry-run object diffs", async () => {
