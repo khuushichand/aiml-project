@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import secrets
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
@@ -29,6 +30,12 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     key_hint_for_api_key,
     loads_envelope,
 )
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.Telegram.session_mapper import (
+    build_telegram_session_key,
+    derive_telegram_assistant_conversation_id,
+)
+from tldw_Server_API.app.services.telegram_delivery_service import TelegramDeliveryService
 
 _PROVIDER = "telegram"
 _DEFAULT_BOT_USERNAME = "example_bot"
@@ -65,6 +72,9 @@ class TelegramMessagePolicy:
     should_process: bool
     reason: str | None = None
     command: TelegramCommand | None = None
+
+
+_TELEGRAM_REQUEST_NAMESPACE = uuid.UUID("f3b8b11f-6a65-4a2a-a7fd-8f9d9cf3f3d4")
 
 
 def _coerce_nonempty_string(value: Any) -> str | None:
@@ -258,6 +268,30 @@ def _extract_message_chat_type(payload: dict[str, Any]) -> str | None:
     return _coerce_nonempty_string(chat.get("type"))
 
 
+def _extract_message_chat_id(payload: dict[str, Any]) -> int | None:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return None
+    chat = message.get("chat")
+    if not isinstance(chat, dict):
+        return None
+    return _coerce_int(chat.get("id"))
+
+
+def _extract_message_thread_id(payload: dict[str, Any]) -> int | None:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return None
+    return _coerce_int(message.get("message_thread_id"))
+
+
+def _extract_message_id(payload: dict[str, Any]) -> int | None:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return None
+    return _coerce_int(message.get("message_id"))
+
+
 def _message_reply_to_bot(
     payload: dict[str, Any],
     *,
@@ -279,6 +313,70 @@ def _message_reply_to_bot(
     if reply_username is None or configured_username is None:
         return False
     return reply_username == configured_username
+
+
+def _build_telegram_tenant_id(scope: TelegramScope) -> str:
+    return f"{scope.scope_type}:{scope.scope_id}"
+
+
+def _build_telegram_request_id(scope: TelegramScope, update_id: int) -> str:
+    return str(uuid.uuid5(_TELEGRAM_REQUEST_NAMESPACE, f"{scope.scope_type}:{scope.scope_id}:{update_id}"))
+
+
+def _build_telegram_ask_job_payload(
+    *,
+    scope: TelegramScope,
+    update_id: int,
+    message_id: int | None,
+    telegram_user_id: int,
+    text: str,
+    chat_type: str | None,
+    reply_to_bot: bool,
+    configured_bot_username: str,
+    command: TelegramCommand,
+    linked_actor: dict[str, Any],
+    telegram_chat_id: int | None,
+    telegram_thread_id: int | None,
+    request_id: str,
+) -> dict[str, Any]:
+    tenant_id = _build_telegram_tenant_id(scope)
+    session_key = build_telegram_session_key(
+        tenant_id=tenant_id,
+        chat_type=chat_type or "private",
+        telegram_user_id=telegram_user_id,
+        telegram_chat_id=telegram_chat_id,
+        topic_or_thread_id=telegram_thread_id,
+    )
+    return {
+        "telegram": {
+            "scope_type": scope.scope_type,
+            "scope_id": scope.scope_id,
+            "update_id": update_id,
+            "message_id": message_id,
+            "chat_type": chat_type,
+            "telegram_user_id": telegram_user_id,
+            "telegram_chat_id": telegram_chat_id,
+            "topic_or_thread_id": telegram_thread_id,
+            "text": text,
+            "reply_to_bot": reply_to_bot,
+            "bot_username": configured_bot_username,
+            "command": {
+                "action": command.action,
+                "input": command.input,
+                "target_bot_username": command.target_bot_username,
+            },
+            "linked_actor": {
+                "auth_user_id": str(linked_actor["auth_user_id"]),
+                "telegram_user_id": telegram_user_id,
+            },
+        },
+        "session": {
+            "tenant_id": tenant_id,
+            "session_key": session_key,
+            "assistant_conversation_id": derive_telegram_assistant_conversation_id(session_key),
+        },
+        "request_id": request_id,
+    }
 
 
 def _normalize_bot_config_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -475,6 +573,7 @@ async def _resolve_webhook_scope_from_secret(
 async def telegram_webhook_impl(
     *,
     request: Request,
+    job_manager: JobManager | None = None,
     get_org_secret_repo: Callable[[], Awaitable[Any]] = _get_org_secret_repo,
     dedupe_receipts: TTLReceiptStore = _WEBHOOK_RECEIPTS,
     dedupe_ttl_seconds: int = _WEBHOOK_REPLAY_WINDOW_SECONDS,
@@ -517,6 +616,9 @@ async def telegram_webhook_impl(
 
     telegram_user_id, text = _extract_message_actor_and_text(payload)
     chat_type = _extract_message_chat_type(payload)
+    telegram_chat_id = _extract_message_chat_id(payload)
+    telegram_thread_id = _extract_message_thread_id(payload)
+    message_id = _extract_message_id(payload)
     reply_to_bot = _message_reply_to_bot(payload, configured_bot_username=configured_bot_username)
     message_policy = evaluate_telegram_message_policy(
         chat_type=chat_type,
@@ -527,9 +629,47 @@ async def telegram_webhook_impl(
     if not message_policy.should_process:
         return JSONResponse(status_code=200, content={"ok": True, "status": "ignored"})
 
+    linked_actor = _resolve_telegram_actor_link(scope, telegram_user_id) if telegram_user_id is not None else None
+
     if _is_privileged_telegram_command(message_policy.command):
-        if telegram_user_id is None or _resolve_telegram_actor_link(scope, telegram_user_id) is None:
+        if linked_actor is None:
             return _telegram_webhook_error(status.HTTP_403_FORBIDDEN, "account_link_required")
+
+    if message_policy.command is not None and message_policy.command.action == "ask" and linked_actor is not None:
+        if job_manager is None:
+            from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
+
+            job_manager = get_job_manager()
+        request_id = _build_telegram_request_id(scope, update_id_int)
+        payload = _build_telegram_ask_job_payload(
+            scope=scope,
+            update_id=update_id_int,
+            message_id=message_id,
+            telegram_user_id=telegram_user_id,
+            text=text or "",
+            chat_type=chat_type,
+            reply_to_bot=reply_to_bot,
+            configured_bot_username=configured_bot_username,
+            command=message_policy.command,
+            linked_actor=linked_actor,
+            telegram_chat_id=telegram_chat_id,
+            telegram_thread_id=telegram_thread_id,
+            request_id=request_id,
+        )
+        queued_job = TelegramDeliveryService(job_manager).queue_inbound_ask(
+            owner_user_id=str(linked_actor["auth_user_id"]),
+            request_id=request_id,
+            payload=payload,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": True,
+                "status": "queued",
+                "request_id": request_id,
+                "job_id": queued_job.get("id"),
+            },
+        )
 
     return JSONResponse(status_code=200, content={"ok": True, "status": "accepted"})
 
