@@ -14,6 +14,7 @@ from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import TTLReceiptSto
 from tldw_Server_API.app.api.v1.schemas.telegram_schemas import (
     TelegramBotConfigResponse,
     TelegramBotConfigUpdate,
+    TELEGRAM_WEBHOOK_SECRET_MIN_LENGTH,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
@@ -183,6 +184,17 @@ def _telegram_webhook_error(
     )
 
 
+def _coerce_valid_webhook_secret_header(request: Request) -> str | None:
+    webhook_secret = _coerce_nonempty_string(
+        request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    )
+    if not webhook_secret:
+        return None
+    if len(webhook_secret) < TELEGRAM_WEBHOOK_SECRET_MIN_LENGTH:
+        return None
+    return webhook_secret
+
+
 async def _resolve_webhook_scope_from_secret(
     *,
     repo: AuthnzOrgProviderSecretsRepo,
@@ -241,6 +253,10 @@ async def telegram_webhook_impl(
     dedupe_receipts: TTLReceiptStore = _WEBHOOK_RECEIPTS,
     dedupe_ttl_seconds: int = _WEBHOOK_REPLAY_WINDOW_SECONDS,
 ) -> JSONResponse:
+    webhook_secret = _coerce_valid_webhook_secret_header(request)
+    if not webhook_secret:
+        return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
+
     raw_body = await request.body()
     try:
         payload = json.loads(raw_body.decode("utf-8") or "{}")
@@ -258,10 +274,6 @@ async def telegram_webhook_impl(
             detail="update_id is required",
         )
     update_id_int = update_id
-
-    webhook_secret = _coerce_nonempty_string(request.headers.get("X-Telegram-Bot-Api-Secret-Token"))
-    if not webhook_secret:
-        return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
 
     repo = await get_org_secret_repo()
     scope = await _resolve_webhook_scope_from_secret(

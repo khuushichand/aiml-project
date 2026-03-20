@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import pytest
 from fastapi import Request
@@ -8,6 +9,7 @@ from fastapi import Request
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     _reset_telegram_webhook_state_for_tests,
+    telegram_webhook_impl,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
@@ -49,6 +51,24 @@ def _override_principal(client, principal: AuthPrincipal) -> None:
         return principal
 
     client.app.dependency_overrides[get_auth_principal] = _fake_get_auth_principal
+
+
+def _build_request(body: bytes, *, secret: str | None) -> Request:
+    headers: list[tuple[bytes, bytes]] = [(b"content-type", b"application/json")]
+    if secret is not None:
+        headers.append((b"x-telegram-bot-api-secret-token", secret.encode("utf-8")))
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/telegram/webhook",
+        "query_string": b"",
+        "headers": headers,
+    }
+
+    async def _receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(scope, _receive)
 
 
 @pytest.fixture()
@@ -118,6 +138,59 @@ def test_telegram_webhook_accepts_and_dedupes_replayed_update(client, principal_
     assert first.json() == {"ok": True, "status": "accepted"}
     assert second.status_code == 200
     assert second.json() == {"ok": True, "status": "duplicate"}
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_rejects_short_secret_before_body_parse():
+    async def _failing_repo():
+        raise AssertionError("repo lookup should not happen before secret validation")
+
+    request = _build_request(b"not-json", secret="short")
+    response = await telegram_webhook_impl(request=request, get_org_secret_repo=_failing_repo)
+
+    assert response.status_code == 401
+    assert json.loads(response.body) == {"ok": False, "error": "invalid_secret"}
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_rejects_missing_secret_before_body_parse():
+    async def _failing_repo():
+        raise AssertionError("repo lookup should not happen before secret validation")
+
+    request = _build_request(b"not-json", secret=None)
+    response = await telegram_webhook_impl(request=request, get_org_secret_repo=_failing_repo)
+
+    assert response.status_code == 401
+    assert json.loads(response.body) == {"ok": False, "error": "invalid_secret"}
+
+
+def test_telegram_webhook_rejects_ambiguous_secret_collision(client, principal_override):
+    shared_secret = "shared-secret"
+    _seed_telegram_bot(
+        client,
+        principal_override,
+        scope_type="team",
+        scope_id=55,
+        bot_token="123:jkl",
+        webhook_secret=shared_secret,
+    )
+    _seed_telegram_bot(
+        client,
+        principal_override,
+        scope_type="org",
+        scope_id=66,
+        bot_token="123:mno",
+        webhook_secret=shared_secret,
+    )
+
+    response = client.post(
+        "/api/v1/telegram/webhook",
+        json={"update_id": 5003, "message": {"message_id": 12, "chat": {"id": 444, "type": "private"}}},
+        headers={"X-Telegram-Bot-Api-Secret-Token": shared_secret},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_secret"
 
 
 def test_telegram_webhook_rejects_invalid_secret(client, principal_override):

@@ -4,12 +4,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+TELEGRAM_WEBHOOK_SECRET_MIN_LENGTH = 8
+
 
 class TelegramBotConfigUpdate(BaseModel):
     """Update payload for Telegram bot configuration."""
 
     bot_token: str = Field(...)
-    webhook_secret: str = Field(...)
+    webhook_secret: str = Field(..., min_length=TELEGRAM_WEBHOOK_SECRET_MIN_LENGTH)
     enabled: bool = True
 
     @field_validator("bot_token", "webhook_secret", mode="before")

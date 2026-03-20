@@ -17,3 +17,8 @@ def test_telegram_bot_config_requires_bot_token_and_webhook_secret():
 
     with pytest.raises(ValidationError):
         TelegramBotConfigUpdate(bot_token="123:abc")
+
+
+def test_telegram_bot_config_rejects_short_webhook_secret():
+    with pytest.raises(ValidationError):
+        TelegramBotConfigUpdate(bot_token="123:abc", webhook_secret="short")
