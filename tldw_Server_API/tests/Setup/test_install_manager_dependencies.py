@@ -186,8 +186,9 @@ def test_cuda_available_accepts_verified_nvidia_smi(monkeypatch):
     monkeypatch.delenv("CUDA_PATH", raising=False)
     monkeypatch.setattr(install_manager.shutil, "which", lambda _name: "/usr/bin/nvidia-smi")
 
-    def fake_run(cmd, check, capture_output, text):  # noqa: ARG001
+    def fake_run(cmd, check, capture_output, text, timeout):  # noqa: ARG001
         assert cmd == ["/usr/bin/nvidia-smi", "-L"]
+        assert timeout == 3
         return types.SimpleNamespace(returncode=0, stdout="GPU 0: Test GPU\n", stderr="")
 
     monkeypatch.setattr(install_manager.subprocess, "run", fake_run)

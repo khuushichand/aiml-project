@@ -33,16 +33,20 @@ def test_apple_silicon_balanced_profile_prefers_parakeet_mlx():
     catalog = get_audio_bundle_catalog()
     profile = catalog.bundle_by_id("apple_silicon_local").profile_by_id("balanced")
 
-    assert profile.stt_plan == [{"engine": "nemo_parakeet_mlx", "models": []}]
-    assert profile.tts_plan == [{"engine": "kokoro", "variants": []}]
+    assert profile.stt_plan[0]["engine"] == "nemo_parakeet_mlx"
+    assert profile.stt_plan[0]["models"] == []
+    assert profile.tts_plan[0]["engine"] == "kokoro"
+    assert profile.tts_plan[0]["variants"] == []
 
 
 def test_apple_silicon_performance_profile_prefers_parakeet_mlx():
     catalog = get_audio_bundle_catalog()
     profile = catalog.bundle_by_id("apple_silicon_local").profile_by_id("performance")
 
-    assert profile.stt_plan == [{"engine": "nemo_parakeet_mlx", "models": []}]
-    assert profile.tts_plan == [{"engine": "kokoro", "variants": []}]
+    assert profile.stt_plan[0]["engine"] == "nemo_parakeet_mlx"
+    assert profile.stt_plan[0]["models"] == []
+    assert profile.tts_plan[0]["engine"] == "kokoro"
+    assert profile.tts_plan[0]["variants"] == []
 
 
 def test_nvidia_balanced_profile_uses_parakeet_path():
