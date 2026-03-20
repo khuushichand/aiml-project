@@ -416,6 +416,31 @@ async def test_governance_pack_trust_service_rejects_blank_repo_binding(
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_trust_service_rejects_blank_legacy_fingerprint(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    with pytest.raises(ValueError, match="fingerprint entries cannot be blank"):
+        await service.update_policy(
+            {
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/packs"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_git_key_fingerprints": ["   "],
+            },
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_governance_pack_trust_service_filters_signers_by_repo_bindings_when_evaluating_git_sources(
     tmp_path,
     monkeypatch,
