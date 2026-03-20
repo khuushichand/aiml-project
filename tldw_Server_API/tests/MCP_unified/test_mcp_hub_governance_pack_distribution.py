@@ -1384,6 +1384,69 @@ async def test_distribution_service_derives_summary_fields_from_structured_verif
 
 
 @pytest.mark.asyncio
+async def test_distribution_service_revalidates_prepared_candidate_with_revoked_signer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    repo_url, _commit = _init_git_pack_repo(tmp_path)
+    trust_service = _FakeGitTrustService(
+        verification_required=True,
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+    service = McpHubGovernancePackDistributionService(
+        trust_service=trust_service,
+        repo=repo,
+    )
+
+    async def _verify_trusted(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "verified": True,
+            "verification_mode": "git_signature",
+            "verified_object_type": "commit",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "verified_and_trusted",
+            "warning_code": None,
+        }
+
+    async def _verify_revoked(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "verified": False,
+            "verification_mode": "git_signature",
+            "verified_object_type": "commit",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "signer_revoked",
+            "warning_code": None,
+        }
+
+    monkeypatch.setattr(service, "_verify_git_revision", _verify_trusted)
+    prepared = await service.prepare_source_candidate(
+        source={
+            "source_type": "git",
+            "repo_url": repo_url,
+            "ref": "HEAD",
+            "ref_kind": "commit",
+            "subpath": "packs/researcher",
+        },
+        actor_id=7,
+    )
+
+    monkeypatch.setattr(service, "_verify_git_revision", _verify_revoked)
+    with pytest.raises(ValueError, match="verification requirements"):
+        await service.load_prepared_candidate(
+            int(prepared["candidate"]["id"]),
+            actor_id=7,
+            revalidate_trust=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_distribution_service_rejects_option_like_git_refs(
     tmp_path: Path,
 ) -> None:

@@ -47,6 +47,41 @@ def _pack_content_digest(pack: GovernancePack) -> str:
     return hashlib.sha256(_canonical_json(normalized).encode("utf-8")).hexdigest()
 
 
+def _verification_summary(pack: GovernancePack | None) -> dict[str, Any]:
+    """Project verification metadata from a pack onto API/update response fields."""
+    if not isinstance(pack, GovernancePack):
+        return {
+            "signer_fingerprint": None,
+            "signer_identity": None,
+            "verified_object_type": None,
+            "verification_result_code": None,
+            "verification_warning_code": None,
+        }
+    return {
+        "signer_fingerprint": str(getattr(pack, "signer_fingerprint", "") or "").strip() or None,
+        "signer_identity": str(getattr(pack, "signer_identity", "") or "").strip() or None,
+        "verified_object_type": str(getattr(pack, "verified_object_type", "") or "").strip() or None,
+        "verification_result_code": str(getattr(pack, "verification_result_code", "") or "").strip() or None,
+        "verification_warning_code": str(getattr(pack, "verification_warning_code", "") or "").strip() or None,
+    }
+
+
+def _apply_update_signer_warning(installed: dict[str, Any], candidate_pack: GovernancePack) -> None:
+    """Annotate update candidates when signer provenance differs from the installed pack."""
+    if str(getattr(candidate_pack, "verification_warning_code", "") or "").strip():
+        return
+    candidate_signer = str(getattr(candidate_pack, "signer_fingerprint", "") or "").strip().upper() or None
+    candidate_result = str(getattr(candidate_pack, "verification_result_code", "") or "").strip().lower() or None
+    if candidate_result != "verified_and_trusted" or not candidate_signer:
+        return
+    installed_signer = str(installed.get("signer_fingerprint") or "").strip().upper() or None
+    if not installed_signer:
+        candidate_pack.verification_warning_code = "unknown_previous_signer"
+        return
+    if installed_signer != candidate_signer:
+        candidate_pack.verification_warning_code = "signer_rotated_trusted"
+
+
 def _normalize_git_subpath(subpath: str | None) -> str | None:
     """Normalize a requested Git pack subpath and reject traversal."""
     raw = str(subpath or "").strip().replace("\\", "/")
@@ -388,6 +423,7 @@ class McpHubGovernancePackDistributionService:
             ) from last_error
         if candidate_pack.manifest.pack_id != str(installed.get("pack_id") or "").strip():
             raise ValueError("Resolved governance-pack update candidate pack_id does not match installed pack")
+        _apply_update_signer_warning(installed, candidate_pack)
 
         try:
             installed_version = Version(str(installed.get("pack_version") or "").strip())
@@ -422,6 +458,7 @@ class McpHubGovernancePackDistributionService:
             },
             "source_commit_resolved": candidate_pack.source_commit_resolved,
             "pack_content_digest": candidate_pack.pack_content_digest,
+            **_verification_summary(candidate_pack),
         }
 
     def _checkout_git_source_sync(
@@ -741,6 +778,11 @@ class McpHubGovernancePackDistributionService:
             ),
             "source_commit_resolved": update.get("source_commit_resolved"),
             "pack_content_digest": update.get("pack_content_digest"),
+            "signer_fingerprint": update.get("signer_fingerprint"),
+            "signer_identity": update.get("signer_identity"),
+            "verified_object_type": update.get("verified_object_type"),
+            "verification_result_code": update.get("verification_result_code"),
+            "verification_warning_code": update.get("verification_warning_code"),
         }
 
     async def prepare_upgrade_candidate(
@@ -766,6 +808,11 @@ class McpHubGovernancePackDistributionService:
             "candidate_manifest": dict(update.get("candidate_manifest") or {}),
             "candidate": prepared["candidate"],
             "manifest": prepared["manifest"],
+            "signer_fingerprint": update.get("signer_fingerprint"),
+            "signer_identity": update.get("signer_identity"),
+            "verified_object_type": update.get("verified_object_type"),
+            "verification_result_code": update.get("verification_result_code"),
+            "verification_warning_code": update.get("verification_warning_code"),
         }
 
     async def validate_prepared_upgrade_candidate(

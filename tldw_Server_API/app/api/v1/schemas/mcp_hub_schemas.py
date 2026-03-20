@@ -850,6 +850,11 @@ class GovernancePackSourceUpdateCheckResponse(BaseModel):
     candidate_manifest: GovernancePackReportManifestResponse | None = None
     source_commit_resolved: str | None = None
     pack_content_digest: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
 
 
 class GovernancePackSourceUpgradePrepareResponse(BaseModel):
@@ -858,6 +863,11 @@ class GovernancePackSourceUpgradePrepareResponse(BaseModel):
     candidate_manifest: GovernancePackReportManifestResponse | None = None
     candidate: GovernancePackSourceCandidateResponse
     manifest: GovernancePackReportManifestResponse
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
 
 
 class GovernancePackSourceUpgradeDryRunRequest(BaseModel):
