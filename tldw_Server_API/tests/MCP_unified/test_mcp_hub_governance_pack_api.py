@@ -363,6 +363,14 @@ class _FakeGovernancePackTrustService:
             "allowed_git_ref_kinds": ["commit", "tag"],
             "require_git_signature_verification": True,
             "trusted_git_key_fingerprints": ["ABCD1234"],
+            "trusted_signers": [
+                {
+                    "fingerprint": "ABCD1234",
+                    "display_name": "Release Bot",
+                    "repo_bindings": ["github.com/example/researcher-pack"],
+                    "status": "active",
+                }
+            ],
         }
         self.update_calls: list[dict[str, object]] = []
 
@@ -370,11 +378,56 @@ class _FakeGovernancePackTrustService:
         return dict(self.policy)
 
     async def update_policy(self, policy: dict[str, object], *, actor_id: int | None) -> dict[str, object]:
+        from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+            _normalize_repo_binding,
+        )
+
         self.update_calls.append({"policy": dict(policy), "actor_id": actor_id})
         self.policy = {
             **self.policy,
             **dict(policy),
         }
+        normalized_signers: list[dict[str, object]] = []
+        seen_fingerprints: set[str] = set()
+        for signer in self.policy.get("trusted_signers", []):
+            fingerprint = str(signer.get("fingerprint") or "").strip().upper()
+            if not fingerprint:
+                continue
+            repo_bindings: list[str] = []
+            seen_bindings: set[str] = set()
+            for binding in signer.get("repo_bindings", []):
+                cleaned = str(binding or "").strip()
+                if not cleaned:
+                    continue
+                normalized_binding = _normalize_repo_binding(cleaned)
+                if normalized_binding in seen_bindings:
+                    continue
+                seen_bindings.add(normalized_binding)
+                repo_bindings.append(normalized_binding)
+            normalized_signers.append(
+                {
+                    "fingerprint": fingerprint,
+                    "display_name": signer.get("display_name"),
+                    "repo_bindings": repo_bindings,
+                    "status": str(signer.get("status") or "active").strip().lower(),
+                }
+            )
+            seen_fingerprints.add(fingerprint)
+        for fingerprint in self.policy.get("trusted_git_key_fingerprints", []):
+            cleaned = str(fingerprint or "").strip().upper()
+            if not cleaned or cleaned in seen_fingerprints:
+                continue
+            normalized_signers.append(
+                {
+                    "fingerprint": cleaned,
+                    "display_name": None,
+                    "repo_bindings": [],
+                    "status": "active",
+                }
+            )
+            seen_fingerprints.add(cleaned)
+        self.policy["trusted_signers"] = normalized_signers
+        self.policy["trusted_git_key_fingerprints"] = [signer["fingerprint"] for signer in normalized_signers]
         return dict(self.policy)
 
 
@@ -1132,7 +1185,18 @@ def test_governance_pack_trust_policy_round_trip() -> None:
                 "allowed_git_repositories": ["github.com/example/researcher-pack"],
                 "allowed_git_ref_kinds": ["tag"],
                 "require_git_signature_verification": True,
-                "trusted_git_key_fingerprints": ["EFGH5678"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "efgh5678",
+                        "display_name": "Release Bot",
+                        "repo_bindings": [
+                            "github.com/example/researcher-pack",
+                            "github.com/example/",
+                        ],
+                        "status": "active",
+                    }
+                ],
+                "trusted_git_key_fingerprints": ["ijkl9012"],
             },
         )
 
@@ -1144,4 +1208,13 @@ def test_governance_pack_trust_policy_round_trip() -> None:
     assert payload["allowed_local_roots"] == ["/srv/trusted-packs"]
     assert payload["allowed_git_ref_kinds"] == ["tag"]
     assert payload["require_git_signature_verification"] is True
+    assert payload["trusted_signers"][0]["fingerprint"] == "EFGH5678"
+    assert payload["trusted_signers"][0]["display_name"] == "Release Bot"
+    assert payload["trusted_signers"][0]["repo_bindings"] == [
+        "github.com/example/researcher-pack",
+        "github.com/example/",
+    ]
+    assert payload["trusted_signers"][1]["fingerprint"] == "IJKL9012"
+    assert payload["trusted_signers"][1]["repo_bindings"] == []
+    assert payload["trusted_git_key_fingerprints"] == ["EFGH5678", "IJKL9012"]
     assert trust_service.update_calls[0]["actor_id"] == 7

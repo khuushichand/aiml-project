@@ -36,6 +36,7 @@ WorkspaceSourceMode = Literal["inline", "named"]
 WorkspaceTrustSource = Literal["user_local", "shared_registry"]
 ExternalAuthTemplateTargetType = Literal["header", "env"]
 CredentialSlotPrivilegeClass = Literal["read", "write", "admin"]
+TrustSignerBindingStatus = Literal["active", "inactive", "revoked"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -1051,6 +1052,13 @@ class GovernancePackImportResponse(BaseModel):
     report: GovernancePackDryRunReportResponse
 
 
+class GovernancePackTrustedSignerBinding(BaseModel):
+    fingerprint: str = Field(..., min_length=1, max_length=256)
+    display_name: str | None = Field(default=None, max_length=200)
+    repo_bindings: list[str] = Field(default_factory=list)
+    status: TrustSignerBindingStatus = "active"
+
+
 class GovernancePackTrustPolicyRequest(BaseModel):
     """Request payload for updating the deployment-wide governance-pack trust policy."""
     allow_local_path_sources: bool = False
@@ -1060,6 +1068,7 @@ class GovernancePackTrustPolicyRequest(BaseModel):
     allowed_git_repositories: list[str] = Field(default_factory=list)
     allowed_git_ref_kinds: list[str] = Field(default_factory=list)
     require_git_signature_verification: bool = False
+    trusted_signers: list[GovernancePackTrustedSignerBinding] = Field(default_factory=list)
     trusted_git_key_fingerprints: list[str] = Field(default_factory=list)
 
 
@@ -1072,4 +1081,5 @@ class GovernancePackTrustPolicyResponse(BaseModel):
     allowed_git_repositories: list[str] = Field(default_factory=list)
     allowed_git_ref_kinds: list[str] = Field(default_factory=list)
     require_git_signature_verification: bool = False
+    trusted_signers: list[GovernancePackTrustedSignerBinding] = Field(default_factory=list)
     trusted_git_key_fingerprints: list[str] = Field(default_factory=list)

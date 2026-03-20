@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 
 _ALLOWED_REF_KINDS = frozenset({"branch", "tag", "commit"})
+_ALLOWED_SIGNER_STATUSES = frozenset({"active", "inactive", "revoked"})
 _SSH_REPO_RE = re.compile(r"^(?:[^@]+@)?(?P<host>[^:]+):(?P<path>.+)$")
 
 
@@ -74,6 +75,99 @@ def _canonicalize_git_host(repo_url: str) -> str:
     return _canonicalize_git_repository(repo_url).split("/", 1)[0]
 
 
+def _normalize_repo_binding(repo_binding: Any) -> str:
+    """Normalize a signer repo binding as an exact canonical repo id or prefix binding."""
+    cleaned = str(repo_binding or "").strip()
+    if not cleaned:
+        raise ValueError("repo binding is required")
+    is_prefix = cleaned.endswith("/")
+    canonical = _canonicalize_git_repository(cleaned[:-1] if is_prefix else cleaned)
+    return f"{canonical}/" if is_prefix else canonical
+
+
+def _normalize_trusted_signer_entry(
+    signer: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Normalize a signer entry into the canonical trust-store representation."""
+    fingerprint = str(signer.get("fingerprint") or "").strip().upper()
+    if not fingerprint:
+        return None
+    display_name = str(signer.get("display_name") or "").strip() or None
+    repo_bindings: list[str] = []
+    seen_bindings: set[str] = set()
+    for entry in _normalize_string_list(signer.get("repo_bindings")):
+        normalized_binding = _normalize_repo_binding(entry)
+        if normalized_binding in seen_bindings:
+            continue
+        seen_bindings.add(normalized_binding)
+        repo_bindings.append(normalized_binding)
+    status = str(signer.get("status") or "active").strip().lower()
+    if status not in _ALLOWED_SIGNER_STATUSES:
+        status = "active"
+    return {
+        "fingerprint": fingerprint,
+        "display_name": display_name,
+        "repo_bindings": repo_bindings,
+        "status": status,
+    }
+
+
+def _normalize_trusted_signers(
+    signers: Any,
+    legacy_fingerprints: Any,
+) -> list[dict[str, Any]]:
+    """Normalize structured and legacy signer inputs into a canonical signer list."""
+    normalized: list[dict[str, Any]] = []
+    by_fingerprint: dict[str, dict[str, Any]] = {}
+
+    def _merge_signer_entry(entry: dict[str, Any]) -> None:
+        fingerprint = str(entry.get("fingerprint") or "").strip().upper()
+        if not fingerprint:
+            return
+        existing = by_fingerprint.get(fingerprint)
+        if existing is None:
+            canonical = {
+                "fingerprint": fingerprint,
+                "display_name": entry.get("display_name"),
+                "repo_bindings": list(entry.get("repo_bindings") or []),
+                "status": str(entry.get("status") or "active").strip().lower() or "active",
+            }
+            by_fingerprint[fingerprint] = canonical
+            normalized.append(canonical)
+            return
+
+        if not existing.get("display_name") and entry.get("display_name"):
+            existing["display_name"] = entry["display_name"]
+        for repo_binding in entry.get("repo_bindings") or []:
+            if repo_binding not in existing["repo_bindings"]:
+                existing["repo_bindings"].append(repo_binding)
+        if str(existing.get("status") or "").strip().lower() != "active":
+            status = str(entry.get("status") or "").strip().lower()
+            if status == "active":
+                existing["status"] = status
+
+    for raw_signer in signers or []:
+        if not isinstance(raw_signer, dict):
+            continue
+        normalized_signer = _normalize_trusted_signer_entry(raw_signer)
+        if normalized_signer is not None:
+            _merge_signer_entry(normalized_signer)
+
+    for fingerprint in _normalize_string_list(legacy_fingerprints):
+        normalized_signer = _normalize_trusted_signer_entry(
+            {
+                "fingerprint": fingerprint,
+                "display_name": None,
+                "repo_bindings": [],
+                "status": "active",
+            }
+        )
+        if normalized_signer is not None:
+            _merge_signer_entry(normalized_signer)
+
+    return normalized
+
+
 class McpHubGovernancePackTrustService:
     """Deployment-wide trust-policy storage and evaluation for governance-pack sources."""
 
@@ -91,6 +185,7 @@ class McpHubGovernancePackTrustService:
             "allowed_git_repositories": [],
             "allowed_git_ref_kinds": [],
             "require_git_signature_verification": False,
+            "trusted_signers": [],
             "trusted_git_key_fingerprints": [],
         }
 
@@ -102,6 +197,10 @@ class McpHubGovernancePackTrustService:
             for kind in (entry.strip().lower() for entry in _normalize_string_list(raw.get("allowed_git_ref_kinds")))
             if kind in _ALLOWED_REF_KINDS
         ]
+        trusted_signers = _normalize_trusted_signers(
+            raw.get("trusted_signers"),
+            raw.get("trusted_git_key_fingerprints"),
+        )
         return {
             "allow_local_path_sources": bool(raw.get("allow_local_path_sources", False)),
             "allowed_local_roots": [str(Path(entry).resolve()) for entry in _normalize_string_list(raw.get("allowed_local_roots"))],
@@ -112,7 +211,8 @@ class McpHubGovernancePackTrustService:
             ],
             "allowed_git_ref_kinds": ref_kinds,
             "require_git_signature_verification": bool(raw.get("require_git_signature_verification", False)),
-            "trusted_git_key_fingerprints": _normalize_string_list(raw.get("trusted_git_key_fingerprints")),
+            "trusted_signers": trusted_signers,
+            "trusted_git_key_fingerprints": [signer["fingerprint"] for signer in trusted_signers],
         }
 
     async def get_policy(self) -> dict[str, Any]:
@@ -154,6 +254,7 @@ class McpHubGovernancePackTrustService:
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
                 "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
+                "trusted_signers": list(policy["trusted_signers"]),
             }
         if host not in set(policy["allowed_git_hosts"]):
             return {
@@ -162,6 +263,7 @@ class McpHubGovernancePackTrustService:
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
                 "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
+                "trusted_signers": list(policy["trusted_signers"]),
             }
         if canonical_repository not in set(policy["allowed_git_repositories"]):
             return {
@@ -170,6 +272,7 @@ class McpHubGovernancePackTrustService:
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
                 "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
+                "trusted_signers": list(policy["trusted_signers"]),
             }
         if normalized_ref_kind not in set(policy["allowed_git_ref_kinds"]):
             return {
@@ -178,6 +281,7 @@ class McpHubGovernancePackTrustService:
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
                 "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
+                "trusted_signers": list(policy["trusted_signers"]),
             }
         return {
             "allowed": True,
@@ -185,4 +289,5 @@ class McpHubGovernancePackTrustService:
             "canonical_repository": canonical_repository,
             "verification_required": bool(policy["require_git_signature_verification"]),
             "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
+            "trusted_signers": list(policy["trusted_signers"]),
         }

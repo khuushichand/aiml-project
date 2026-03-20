@@ -217,6 +217,62 @@ async def test_governance_pack_trust_policy_persists_as_deployment_wide_config(
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_trust_service_normalizes_structured_signers_and_legacy_fingerprints(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    policy = await service.update_policy(
+        {
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/packs"],
+            "allowed_git_ref_kinds": ["tag"],
+            "require_git_signature_verification": True,
+            "trusted_signers": [
+                {
+                    "fingerprint": "abc123",
+                    "display_name": "Release Bot",
+                    "repo_bindings": [
+                        "github.com/example/packs",
+                        "github.com/example/",
+                    ],
+                    "status": "active",
+                },
+                {
+                    "fingerprint": "def456",
+                    "repo_bindings": ["github.com/example"],
+                    "status": "inactive",
+                },
+            ],
+            "trusted_git_key_fingerprints": ["legacy789"],
+        },
+        actor_id=1,
+    )
+
+    assert policy["trusted_signers"][0]["fingerprint"] == "ABC123"
+    assert policy["trusted_signers"][0]["display_name"] == "Release Bot"
+    assert policy["trusted_signers"][0]["repo_bindings"] == [
+        "github.com/example/packs",
+        "github.com/example/",
+    ]
+    assert policy["trusted_signers"][0]["status"] == "active"
+    assert policy["trusted_signers"][1]["fingerprint"] == "DEF456"
+    assert policy["trusted_signers"][1]["repo_bindings"] == ["github.com/example"]
+    assert policy["trusted_signers"][1]["status"] == "inactive"
+    assert policy["trusted_signers"][2]["fingerprint"] == "LEGACY789"
+    assert policy["trusted_signers"][2]["repo_bindings"] == []
+    assert policy["trusted_signers"][2]["status"] == "active"
+    assert policy["trusted_git_key_fingerprints"] == ["ABC123", "DEF456", "LEGACY789"]
+
+
+@pytest.mark.asyncio
 async def test_distribution_service_resolves_allowed_local_pack_and_digest(
     tmp_path: Path,
     monkeypatch,
