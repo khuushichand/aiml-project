@@ -465,6 +465,81 @@ class TelegramRuntimeRepo:
         )
         return self._row_to_dict(row) if row else None
 
+    async def list_actor_links(
+        self,
+        *,
+        scope_type: str,
+        scope_id: int,
+    ) -> list[dict[str, Any]]:
+        scope_type_value = _normalize_scope_type(scope_type)
+        scope_id_value = int(scope_id)
+        if getattr(self.db_pool, "pool", None) is not None:
+            rows = await self.db_pool.fetchall(
+                """
+                SELECT id, scope_type, scope_id, telegram_user_id, auth_user_id,
+                       telegram_username, created_at, updated_at
+                FROM telegram_actor_links
+                WHERE scope_type = $1
+                  AND scope_id = $2
+                ORDER BY updated_at DESC, id DESC
+                """,
+                scope_type_value,
+                scope_id_value,
+            )
+            return [self._row_to_dict(row) for row in rows]
+
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, scope_type, scope_id, telegram_user_id, auth_user_id,
+                   telegram_username, created_at, updated_at
+            FROM telegram_actor_links
+            WHERE scope_type = ?
+              AND scope_id = ?
+            ORDER BY datetime(updated_at) DESC, id DESC
+            """,
+            (scope_type_value, scope_id_value),
+        )
+        return [self._row_to_dict(row) for row in rows]
+
+    async def delete_actor_link(
+        self,
+        *,
+        link_id: int,
+        scope_type: str,
+        scope_id: int,
+    ) -> bool:
+        scope_type_value = _normalize_scope_type(scope_type)
+        scope_id_value = int(scope_id)
+        link_id_value = int(link_id)
+        if getattr(self.db_pool, "pool", None) is not None:
+            result = await self.db_pool.execute(
+                """
+                DELETE FROM telegram_actor_links
+                WHERE id = $1
+                  AND scope_type = $2
+                  AND scope_id = $3
+                """,
+                link_id_value,
+                scope_type_value,
+                scope_id_value,
+            )
+            if isinstance(result, str):
+                parts = result.split()
+                if parts and parts[-1].isdigit():
+                    return int(parts[-1]) > 0
+            return True
+
+        cursor = await self.db_pool.execute(
+            """
+            DELETE FROM telegram_actor_links
+            WHERE id = ?
+              AND scope_type = ?
+              AND scope_id = ?
+            """,
+            (link_id_value, scope_type_value, scope_id_value),
+        )
+        return getattr(cursor, "rowcount", 0) > 0
+
     async def clear_all_for_tests(self) -> None:
         await self.db_pool.execute("DELETE FROM telegram_webhook_receipts")
         await self.db_pool.execute("DELETE FROM telegram_pairing_codes")

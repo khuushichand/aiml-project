@@ -16,6 +16,8 @@ from pydantic import ValidationError
 from tldw_Server_API.app.api.v1.schemas.telegram_schemas import (
     TelegramBotConfigResponse,
     TelegramBotConfigUpdate,
+    TelegramLinkedActorListResponse,
+    TelegramLinkedActorRevokeResponse,
     TelegramWebhookUpdate,
     TELEGRAM_WEBHOOK_SECRET_MIN_LENGTH,
 )
@@ -1054,6 +1056,49 @@ async def telegram_admin_start_link_impl(
         "scope_id": record["scope_id"],
         "expires_at": expires_at.isoformat() if expires_at is not None else str(record.get("expires_at") or ""),
     }
+
+
+async def telegram_admin_list_linked_actors_impl(
+    *,
+    principal: AuthPrincipal,
+    request: Request | None = None,
+    get_telegram_runtime_repo: Callable[[], Awaitable[Any]] = get_telegram_runtime_repo,
+) -> TelegramLinkedActorListResponse:
+    scope = _resolve_shared_scope(principal=principal, request=request)
+    runtime_repo = await get_telegram_runtime_repo()
+    items = await runtime_repo.list_actor_links(scope_type=scope.scope_type, scope_id=scope.scope_id)
+    return TelegramLinkedActorListResponse(
+        scope_type=scope.scope_type,
+        scope_id=scope.scope_id,
+        items=items,
+    )
+
+
+async def telegram_admin_revoke_linked_actor_impl(
+    *,
+    link_id: int,
+    principal: AuthPrincipal,
+    request: Request | None = None,
+    get_telegram_runtime_repo: Callable[[], Awaitable[Any]] = get_telegram_runtime_repo,
+) -> TelegramLinkedActorRevokeResponse:
+    scope = _resolve_shared_scope(principal=principal, request=request)
+    runtime_repo = await get_telegram_runtime_repo()
+    deleted = await runtime_repo.delete_actor_link(
+        link_id=link_id,
+        scope_type=scope.scope_type,
+        scope_id=scope.scope_id,
+    )
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="linked_actor_not_found",
+        )
+    return TelegramLinkedActorRevokeResponse(
+        deleted=True,
+        id=int(link_id),
+        scope_type=scope.scope_type,
+        scope_id=scope.scope_id,
+    )
 
 
 async def telegram_admin_put_bot_impl(

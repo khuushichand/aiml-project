@@ -9,13 +9,17 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     telegram_admin_get_bot_impl,
+    telegram_admin_list_linked_actors_impl,
     telegram_admin_put_bot_impl,
+    telegram_admin_revoke_linked_actor_impl,
     telegram_admin_start_link_impl,
     telegram_webhook_impl,
 )
 from tldw_Server_API.app.api.v1.schemas.telegram_schemas import (
     TelegramBotConfigResponse,
     TelegramBotConfigUpdate,
+    TelegramLinkedActorListResponse,
+    TelegramLinkedActorRevokeResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.services.telegram_execution_identity_service import (
@@ -48,6 +52,27 @@ async def telegram_admin_start_link(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     return await telegram_admin_start_link_impl(principal=principal, request=request)
+
+
+@router.get("/admin/links", dependencies=[Depends(require_roles("admin"))], response_model=TelegramLinkedActorListResponse)
+async def telegram_admin_list_links(
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TelegramLinkedActorListResponse:
+    return await telegram_admin_list_linked_actors_impl(principal=principal, request=request)
+
+
+@router.delete(
+    "/admin/links/{link_id}",
+    dependencies=[Depends(require_roles("admin"))],
+    response_model=TelegramLinkedActorRevokeResponse,
+)
+async def telegram_admin_revoke_link(
+    link_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TelegramLinkedActorRevokeResponse:
+    return await telegram_admin_revoke_linked_actor_impl(link_id=link_id, principal=principal, request=request)
 
 
 @router.post("/webhook", dependencies=[Depends(check_rate_limit)])

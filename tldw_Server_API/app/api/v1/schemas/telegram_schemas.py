@@ -1,7 +1,8 @@
-"""Schemas for Telegram bot configuration."""
+"""Schemas for Telegram bot configuration and admin link inventory."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
@@ -52,6 +53,38 @@ class TelegramBotConfigResponse(BaseModel):
     scope_id: int
     bot_username: str
     enabled: bool
+
+
+class TelegramLinkedActorItem(BaseModel):
+    """Linked Telegram actor visible to workspace admins."""
+
+    id: int
+    scope_type: Literal["org", "team"]
+    scope_id: int
+    telegram_user_id: int
+    auth_user_id: int
+    telegram_username: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class TelegramLinkedActorListResponse(BaseModel):
+    """Admin response for linked Telegram actors in a workspace scope."""
+
+    ok: bool = True
+    scope_type: Literal["org", "team"]
+    scope_id: int
+    items: list[TelegramLinkedActorItem] = Field(default_factory=list)
+
+
+class TelegramLinkedActorRevokeResponse(BaseModel):
+    """Admin response for revoking a linked Telegram actor."""
+
+    ok: bool = True
+    deleted: bool
+    id: int
+    scope_type: Literal["org", "team"]
+    scope_id: int
 
 
 class TelegramWebhookActor(BaseModel):
