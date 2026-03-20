@@ -112,6 +112,16 @@ def test_parse_telegram_command_ask():
     assert command == TelegramCommand(action="ask", input="summarize the last report")
 
 
+def test_parse_telegram_command_with_target_bot():
+    command = parse_telegram_command("/ask@ourbot summarize the last report")
+
+    assert command == TelegramCommand(
+        action="ask",
+        input="summarize the last report",
+        target_bot_username="ourbot",
+    )
+
+
 def test_group_freeform_message_without_reply_is_ignored():
     policy = evaluate_telegram_message_policy(chat_type="group", text="hello everyone", reply_to_bot=False)
 
@@ -166,6 +176,36 @@ def test_telegram_webhook_ignores_group_freeform_message_without_reply(client, p
     assert response.json() == {"ok": True, "status": "ignored"}
 
 
+def test_telegram_webhook_ignores_group_command_for_other_bot(client, principal_override):
+    principal = _make_principal(active_team_id=22, team_ids=[22], org_ids=[1])
+    principal_override(principal)
+    _seed_telegram_bot(
+        client,
+        principal_override,
+        scope_type="team",
+        scope_id=22,
+        bot_token="123:abc",
+        webhook_secret="secret-123",
+    )
+
+    response = client.post(
+        "/api/v1/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-123"},
+        json={
+            "update_id": 9003,
+            "message": {
+                "message_id": 7,
+                "chat": {"id": 123, "type": "group"},
+                "from": {"id": 77, "username": "unknown"},
+                "text": "/ask@otherbot summarize the last report",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "status": "ignored"}
+
+
 def test_replayed_ignored_group_freeform_message_is_deduped(client, principal_override):
     principal = _make_principal(active_team_id=22, team_ids=[22], org_ids=[1])
     principal_override(principal)
@@ -196,3 +236,38 @@ def test_replayed_ignored_group_freeform_message_is_deduped(client, principal_ov
     assert first.json() == {"ok": True, "status": "ignored"}
     assert second.status_code == 200
     assert second.json() == {"ok": True, "status": "duplicate"}
+
+
+def test_telegram_webhook_ignores_group_reply_to_different_bot(client, principal_override):
+    principal = _make_principal(active_team_id=22, team_ids=[22], org_ids=[1])
+    principal_override(principal)
+    _seed_telegram_bot(
+        client,
+        principal_override,
+        scope_type="team",
+        scope_id=22,
+        bot_token="123:abc",
+        webhook_secret="secret-123",
+    )
+
+    response = client.post(
+        "/api/v1/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-123"},
+        json={
+            "update_id": 9004,
+            "message": {
+                "message_id": 8,
+                "chat": {"id": 123, "type": "group"},
+                "from": {"id": 77, "username": "unknown"},
+                "reply_to_message": {
+                    "message_id": 2,
+                    "from": {"id": 88, "is_bot": True, "username": "otherbot"},
+                    "text": "previous bot message",
+                },
+                "text": "please summarize this",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "status": "ignored"}

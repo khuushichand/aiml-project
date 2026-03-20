@@ -48,9 +48,16 @@ class TelegramScope:
 
 
 @dataclass(frozen=True)
+class TelegramWebhookContext:
+    scope: TelegramScope
+    bot_username: str
+
+
+@dataclass(frozen=True)
 class TelegramCommand:
     action: str
     input: str
+    target_bot_username: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +153,30 @@ def _resolve_telegram_actor_link(scope: TelegramScope, telegram_user_id: int) ->
         return dict(link) if link else None
 
 
+def _normalize_telegram_bot_username(value: Any) -> str | None:
+    username = _coerce_nonempty_string(value)
+    if not username:
+        return None
+    if username.startswith("@"):
+        username = username[1:]
+    username = username.strip().lower()
+    return username or None
+
+
+def _command_targets_configured_bot(
+    command: TelegramCommand | None,
+    configured_bot_username: Any,
+) -> bool:
+    if command is None:
+        return False
+    if command.target_bot_username is None:
+        return True
+    normalized_bot_username = _normalize_telegram_bot_username(configured_bot_username)
+    if normalized_bot_username is None:
+        return False
+    return command.target_bot_username == normalized_bot_username
+
+
 def parse_telegram_command(text: Any) -> TelegramCommand | None:
     normalized = _coerce_nonempty_string(text)
     if not normalized:
@@ -157,20 +188,32 @@ def parse_telegram_command(text: Any) -> TelegramCommand | None:
     command_token = parts[0][1:]
     if not command_token:
         return None
-    action = command_token.split("@", 1)[0].strip().lower()
+    action_token, target_username = (command_token.split("@", 1) + [None])[:2]
+    action = action_token.strip().lower()
     if not action:
         return None
     argument = _coerce_nonempty_string(parts[1]) if len(parts) > 1 else ""
-    return TelegramCommand(action=action, input=argument or "")
+    return TelegramCommand(
+        action=action,
+        input=argument or "",
+        target_bot_username=_normalize_telegram_bot_username(target_username),
+    )
 
 
 def evaluate_telegram_message_policy(
     *,
     chat_type: Any,
     text: Any,
+    bot_username: Any = None,
     reply_to_bot: bool = False,
 ) -> TelegramMessagePolicy:
     command = parse_telegram_command(text)
+    if command is not None and not _command_targets_configured_bot(command, bot_username):
+        return TelegramMessagePolicy(
+            should_process=False,
+            reason="command_not_for_configured_bot",
+            command=command,
+        )
     if command is not None:
         return TelegramMessagePolicy(should_process=True, command=command)
 
@@ -215,7 +258,11 @@ def _extract_message_chat_type(payload: dict[str, Any]) -> str | None:
     return _coerce_nonempty_string(chat.get("type"))
 
 
-def _message_reply_to_bot(payload: dict[str, Any]) -> bool:
+def _message_reply_to_bot(
+    payload: dict[str, Any],
+    *,
+    configured_bot_username: Any = None,
+) -> bool:
     message = payload.get("message")
     if not isinstance(message, dict):
         return False
@@ -225,7 +272,13 @@ def _message_reply_to_bot(payload: dict[str, Any]) -> bool:
     reply_from = reply_to_message.get("from")
     if not isinstance(reply_from, dict):
         return False
-    return bool(reply_from.get("is_bot"))
+    if not bool(reply_from.get("is_bot")):
+        return False
+    reply_username = _normalize_telegram_bot_username(reply_from.get("username"))
+    configured_username = _normalize_telegram_bot_username(configured_bot_username)
+    if reply_username is None or configured_username is None:
+        return False
+    return reply_username == configured_username
 
 
 def _normalize_bot_config_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -366,7 +419,7 @@ async def _resolve_webhook_scope_from_secret(
     *,
     repo: AuthnzOrgProviderSecretsRepo,
     webhook_secret: str,
-) -> TelegramScope | None:
+) -> TelegramWebhookContext | None:
     try:
         rows = await repo.list_secrets(provider=_PROVIDER)
     except Exception as exc:
@@ -376,7 +429,7 @@ async def _resolve_webhook_scope_from_secret(
             detail="Telegram bot configuration is unavailable",
         ) from exc
 
-    matches: list[TelegramScope] = []
+    matches: list[TelegramWebhookContext] = []
     for row in rows:
         scope_type = str(row.get("scope_type") or "").strip().lower()
         scope_id = _coerce_int(row.get("scope_id"))
@@ -405,7 +458,13 @@ async def _resolve_webhook_scope_from_secret(
             continue
         if not bool(payload.get("enabled")):
             continue
-        matches.append(TelegramScope(scope_type=scope_type, scope_id=scope_id))
+        matches.append(
+            TelegramWebhookContext(
+                scope=TelegramScope(scope_type=scope_type, scope_id=scope_id),
+                bot_username=_normalize_telegram_bot_username(payload.get("bot_username"))
+                or _DEFAULT_BOT_USERNAME,
+            )
+        )
         if len(matches) > 1:
             logger.warning("Ambiguous Telegram webhook secret matched multiple scopes; rejecting request")
             return None
@@ -425,12 +484,14 @@ async def telegram_webhook_impl(
         return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
 
     repo = await get_org_secret_repo()
-    scope = await _resolve_webhook_scope_from_secret(
+    webhook_context = await _resolve_webhook_scope_from_secret(
         repo=repo,
         webhook_secret=webhook_secret,
     )
-    if scope is None:
+    if webhook_context is None:
         return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
+    scope = webhook_context.scope
+    configured_bot_username = webhook_context.bot_username
 
     raw_body = await request.body()
     try:
@@ -456,10 +517,11 @@ async def telegram_webhook_impl(
 
     telegram_user_id, text = _extract_message_actor_and_text(payload)
     chat_type = _extract_message_chat_type(payload)
-    reply_to_bot = _message_reply_to_bot(payload)
+    reply_to_bot = _message_reply_to_bot(payload, configured_bot_username=configured_bot_username)
     message_policy = evaluate_telegram_message_policy(
         chat_type=chat_type,
         text=text,
+        bot_username=configured_bot_username,
         reply_to_bot=reply_to_bot,
     )
     if not message_policy.should_process:
