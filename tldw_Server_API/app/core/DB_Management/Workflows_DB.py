@@ -2485,6 +2485,29 @@ class WorkflowsDatabase:
             else:
                 raise
 
+    def reset_research_wait_for_retry(self, *, wait_id: str) -> None:
+        now = _utcnow_iso()
+        query = """
+            UPDATE workflow_research_waits
+            SET wait_status = 'waiting', updated_at = ?
+            WHERE wait_id = ? AND wait_status = 'resuming'
+        """
+        params = (now, str(wait_id))
+        if self._using_backend():
+            with self.backend.transaction() as conn:  # type: ignore[union-attr]
+                self._execute_backend(query, params, connection=conn)
+            return
+
+        try:
+            self._conn.execute(query, params)
+            self._conn.commit()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                self._sqlite_retry_execute(query, params)
+                self._sqlite_retry_commit()
+            else:
+                raise
+
     def cancel_research_wait_links_for_run(self, *, workflow_run_id: str) -> None:
         now = _utcnow_iso()
         query = """

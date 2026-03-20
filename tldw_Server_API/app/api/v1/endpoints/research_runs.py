@@ -64,16 +64,19 @@ async def create_research_run(
     current_user: User = Depends(get_request_user),
     service: ResearchService = Depends(get_research_service),
 ) -> ResearchRunResponse:
-    session = service.create_session(
-        owner_user_id=str(current_user.id),
-        query=payload.query,
-        source_policy=payload.source_policy,
-        autonomy_mode=payload.autonomy_mode,
-        limits_json=payload.limits_json,
-        provider_overrides=payload.provider_overrides,
-        chat_handoff=payload.chat_handoff.model_dump() if payload.chat_handoff is not None else None,
-        follow_up=payload.follow_up.model_dump() if payload.follow_up is not None else None,
-    )
+    try:
+        session = service.create_session(
+            owner_user_id=str(current_user.id),
+            query=payload.query,
+            source_policy=payload.source_policy,
+            autonomy_mode=payload.autonomy_mode,
+            limits_json=payload.limits_json,
+            provider_overrides=payload.provider_overrides,
+            chat_handoff=payload.chat_handoff.model_dump() if payload.chat_handoff is not None else None,
+            follow_up=payload.follow_up.model_dump() if payload.follow_up is not None else None,
+        )
+    except (KeyError, ValueError) as exc:
+        _raise_research_http_error(exc)
     return ResearchRunResponse.model_validate(session)
 
 

@@ -1081,6 +1081,95 @@ async def test_resume_workflows_waiting_on_research_checkpoint_resumes_only_matc
     assert other_link["wait_status"] == "waiting"
 
 
+@pytest.mark.asyncio
+async def test_resume_workflows_waiting_on_research_checkpoint_keeps_failed_schedule_retryable(
+    tmp_path,
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Workflows import research_wait_bridge
+
+    db = WorkflowsDatabase(str(tmp_path / "workflow-research-waits-retry.db"))
+
+    definition = {
+        "name": "resume-bridge-retry",
+        "version": 1,
+        "steps": [
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {"run_id": "{{ inputs.run_id }}"},
+            }
+        ],
+    }
+
+    db.create_run(
+        run_id="wf-retry",
+        tenant_id="default",
+        user_id="1",
+        inputs={"run_id": "research-session-31"},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot=definition,
+    )
+    db.update_run_status("wf-retry", status="waiting_human", status_reason="awaiting_review")
+    step_run_id = "wf-retry:wait:1"
+    db.create_step_run(
+        step_run_id=step_run_id,
+        tenant_id="default",
+        run_id="wf-retry",
+        step_id="wait",
+        name="wait",
+        step_type="deep_research_wait",
+    )
+    wait_payload = {
+        "__status__": "waiting_human",
+        "reason": "research_checkpoint",
+        "run_id": "research-session-31",
+        "research_checkpoint_id": "checkpoint-31",
+        "research_checkpoint_type": "sources_review",
+        "active_poll_seconds": 1.25,
+    }
+    db.complete_step_run(
+        step_run_id=step_run_id,
+        status="waiting_human",
+        outputs=wait_payload,
+    )
+    db.upsert_research_wait_link(
+        wait_id="wf-retry:wait",
+        tenant_id="default",
+        workflow_run_id="wf-retry",
+        step_id="wait",
+        research_run_id="research-session-31",
+        checkpoint_id="checkpoint-31",
+        checkpoint_type="sources_review",
+        wait_status="waiting",
+        wait_payload=wait_payload,
+        active_poll_seconds=1.25,
+    )
+
+    monkeypatch.setattr(research_wait_bridge, "_build_workflows_db", lambda: db)
+
+    def _boom(**_kwargs):
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(research_wait_bridge, "_schedule_resume", _boom)
+
+    resumed = await research_wait_bridge.resume_workflows_waiting_on_research_checkpoint(
+        research_run_id="research-session-31",
+        checkpoint_id="checkpoint-31",
+    )
+
+    assert resumed == 0
+    link = db.get_research_wait_link(workflow_run_id="wf-retry", step_id="wait")
+    assert link is not None
+    assert link["wait_status"] == "waiting"
+    claimed_again = db.claim_research_waits_for_resume(
+        research_run_id="research-session-31",
+        checkpoint_id="checkpoint-31",
+    )
+    assert [row["wait_id"] for row in claimed_again] == ["wf-retry:wait"]
+
+
 def test_research_checkpoint_approval_auto_resumes_waiting_workflow(
     monkeypatch,
     client_with_workflows_db: TestClient,

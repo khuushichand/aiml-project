@@ -237,7 +237,8 @@ describe("research-run-status", () => {
       getChatReturnedResearchBannerState({
         run: buildRun({
           status: "running",
-          phase: "collecting"
+          phase: "collecting",
+          latest_checkpoint_id: "cp_123"
         }),
         explicitReturn: true
       })
@@ -245,6 +246,23 @@ describe("research-run-status", () => {
       mode: "review_cleared",
       primaryActionLabel: "Continue with reviewed research",
       supportingText: "Your review is reflected in this run."
+    })
+  })
+
+  it("keeps explicit returns generic when the run never entered a checkpoint review", () => {
+    expect(
+      getChatReturnedResearchBannerState({
+        run: buildRun({
+          status: "running",
+          phase: "collecting",
+          latest_checkpoint_id: null
+        }),
+        explicitReturn: true
+      })
+    ).toMatchObject({
+      mode: "generic",
+      primaryActionLabel: "Open in Research",
+      supportingText: null
     })
   })
 

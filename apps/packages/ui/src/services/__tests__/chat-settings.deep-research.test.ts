@@ -75,6 +75,21 @@ describe("chat settings deep research attachment", () => {
     expect(settings?.deepResearchAttachment).toBeUndefined()
   })
 
+  it("canonicalizes persisted deep research attachment links from run_id", () => {
+    const settings = normalizeChatSettingsRecord({
+      schemaVersion: 2,
+      updatedAt: "2026-03-08T20:00:00Z",
+      deepResearchAttachment: {
+        ...buildAttachment(),
+        research_url: "https://example.com/not-research"
+      }
+    })
+
+    expect(settings?.deepResearchAttachment?.research_url).toBe(
+      "/research?run=run_123"
+    )
+  })
+
   it("prefers the newer attachment timestamp during merge even when top-level settings are older", () => {
     const local = normalizeChatSettingsRecord({
       schemaVersion: 2,

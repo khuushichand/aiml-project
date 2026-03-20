@@ -7877,7 +7877,9 @@ export const PlaygroundForm = ({
                                   )}
                                 </button>
                                 <Link
-                                  to={attachedResearchContextPinned.research_url}
+                                  to={buildResearchLaunchPath({
+                                    run: attachedResearchContextPinned.run_id
+                                  })}
                                   className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
                                 >
                                   {t(
@@ -9548,7 +9550,9 @@ export const PlaygroundForm = ({
                         )}
                       </label>
                       <Input
-                        value={attachedResearchContextDraft.research_url}
+                        value={buildResearchLaunchPath({
+                          run: attachedResearchContextDraft.run_id
+                        })}
                         readOnly
                       />
                     </div>

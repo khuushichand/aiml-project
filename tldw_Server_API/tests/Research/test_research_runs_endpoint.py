@@ -238,6 +238,36 @@ def test_create_research_run_passes_follow_up_payload_to_service():
     assert response.json()["id"] == "rs_3"
 
 
+def test_create_research_run_returns_400_for_invalid_chat_handoff():
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+
+    app = FastAPI()
+    app.include_router(research_runs.router, prefix="/api/v1")
+    app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
+
+    class StubService:
+        def create_session(self, **_kwargs):
+            raise ValueError(
+                "chat_handoff.chat_id is not owned by the current user or was not found"
+            )
+
+    app.dependency_overrides[research_runs.get_research_service] = lambda: StubService()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/research/runs",
+            json={
+                "query": "What should we check next?",
+                "chat_handoff": {"chat_id": "chat_missing"},
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "chat_handoff.chat_id is not owned by the current user or was not found"
+    )
+
+
 def test_research_run_create_request_rejects_malformed_follow_up_background():
     from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import ResearchRunCreateRequest
 

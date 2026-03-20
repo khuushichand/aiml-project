@@ -152,6 +152,19 @@ class TestChatCompletionRequest:
             )
 
     @pytest.mark.unit
+    def test_request_rejects_oversized_research_context(self):
+        """Test bounded research_context enforces caps instead of accepting arbitrarily large payloads."""
+        bad_context = self._bounded_research_context_payload()
+        bad_context["outline"] = [{"title": f"Section {index}"} for index in range(8)]
+
+        with pytest.raises(ValidationError):
+            ChatCompletionRequest(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Use the attached research."}],
+                research_context=bad_context,
+            )
+
+    @pytest.mark.unit
     def test_request_with_all_parameters(self):
         """Test request with all optional parameters."""
         request = ChatCompletionRequest(

@@ -456,7 +456,7 @@ describe("PlaygroundChat linked research status integration", () => {
         status: "running",
         phase: "collecting",
         control_state: "running",
-        latest_checkpoint_id: null,
+        latest_checkpoint_id: "cp_reviewed",
         updated_at: "2026-03-19T20:04:00+00:00"
       }
     ])

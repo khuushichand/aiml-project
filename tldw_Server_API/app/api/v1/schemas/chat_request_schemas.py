@@ -706,7 +706,7 @@ class TLDWContinuationSpec(BaseModel):
 class ResearchChatContextOutlineSection(BaseModel):
     """Bounded outline section attached from a completed deep research run."""
 
-    title: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=200)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -714,7 +714,7 @@ class ResearchChatContextOutlineSection(BaseModel):
 class ResearchChatContextClaim(BaseModel):
     """Bounded key claim attached from a completed deep research run."""
 
-    text: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=1_000)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -738,15 +738,15 @@ class ResearchChatContextSourceTrustSummary(BaseModel):
 class ResearchChatContext(BaseModel):
     """Bounded deep research context attached to a chat request."""
 
-    run_id: str = Field(..., min_length=1)
-    query: str = Field(..., min_length=1)
-    question: str = Field(..., min_length=1)
-    outline: list[ResearchChatContextOutlineSection] = Field(default_factory=list)
-    key_claims: list[ResearchChatContextClaim] = Field(default_factory=list)
-    unresolved_questions: list[str] = Field(default_factory=list)
+    run_id: str = Field(..., min_length=1, max_length=255)
+    query: str = Field(..., min_length=1, max_length=2_000)
+    question: str = Field(..., min_length=1, max_length=2_000)
+    outline: list[ResearchChatContextOutlineSection] = Field(default_factory=list, max_length=7)
+    key_claims: list[ResearchChatContextClaim] = Field(default_factory=list, max_length=5)
+    unresolved_questions: list[str] = Field(default_factory=list, max_length=5)
     verification_summary: Optional[ResearchChatContextVerificationSummary] = None
     source_trust_summary: Optional[ResearchChatContextSourceTrustSummary] = None
-    research_url: str = Field(..., min_length=1)
+    research_url: str = Field(..., min_length=1, max_length=512)
 
     model_config = ConfigDict(extra="forbid")
 

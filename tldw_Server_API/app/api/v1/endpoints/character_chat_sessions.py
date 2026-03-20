@@ -139,6 +139,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.LLM_Calls.routing import (
     InMemoryRoutingDecisionStore,
     RouterRequest,
@@ -754,8 +756,14 @@ def _convert_db_message_to_response(msg_data: dict[str, Any]) -> MessageResponse
         version=msg_data.get('version', 1)
     )
 
-def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
+def _validate_chat_settings_payload(
+    settings: dict[str, Any],
+    *,
+    owner_user_id: str | None = None,
+    strip_invalid_deep_research: bool = False,
+) -> dict[str, Any]:
     """Validate settings payload size, shape, and known enum fields."""
+    settings = dict(settings)
     try:
         encoded = json.dumps(settings).encode("utf-8")
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
@@ -814,15 +822,11 @@ def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
             detail="Invalid updatedAt. Expected ISO timestamp string"
         )
 
-    _validate_deep_research_attachment(
-        settings.get("deepResearchAttachment"),
-        detail_prefix="deepResearchAttachment",
+    settings = _normalize_chat_settings_deep_research_fields(
+        settings,
+        owner_user_id=owner_user_id,
+        strip_invalid_reference=strip_invalid_deep_research,
     )
-    _validate_deep_research_attachment(
-        settings.get("deepResearchPinnedAttachment"),
-        detail_prefix="deepResearchPinnedAttachment",
-    )
-    _validate_deep_research_attachment_history(settings.get("deepResearchAttachmentHistory"))
 
     memory_by_id = settings.get("characterMemoryById")
     if memory_by_id is not None:
@@ -944,6 +948,19 @@ def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Invalid summary.updatedAt. Expected ISO timestamp string"
             )
+    try:
+        normalized_encoded = json.dumps(settings).encode("utf-8")
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid settings payload: {exc}"
+        ) from exc
+    if len(normalized_encoded) > MAX_CHAT_SETTINGS_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Settings payload exceeds {MAX_CHAT_SETTINGS_BYTES} bytes"
+        )
+    return settings
 
 
 def _parse_iso_timestamp(value: Any) -> Optional[float]:
@@ -962,9 +979,34 @@ def _parse_iso_timestamp(value: Any) -> Optional[float]:
     return dt.timestamp()
 
 
-def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> None:
+def _build_canonical_research_attachment_url(run_id: str) -> str:
+    return f"/research?run={run_id}"
+
+
+def _load_owned_research_attachment_run(
+    *,
+    owner_user_id: str,
+    run_id: str,
+) -> Any | None:
+    try:
+        db = ResearchSessionsDB(DatabasePaths.get_research_sessions_db_path(owner_user_id))
+        session = db.get_session(run_id)
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+        return None
+    if session is None or str(session.owner_user_id) != str(owner_user_id):
+        return None
+    return session
+
+
+def _validate_deep_research_attachment(
+    value: Any,
+    *,
+    detail_prefix: str,
+    owner_user_id: str | None = None,
+    strip_invalid_reference: bool = False,
+) -> Optional[dict[str, Any]]:
     if value is None:
-        return
+        return None
     if not isinstance(value, dict):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -981,6 +1023,7 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
             ),
         )
 
+    normalized: dict[str, Any] = {}
     required_string_fields = ("run_id", "query", "question", "research_url")
     for key in required_string_fields:
         raw = value.get(key)
@@ -989,6 +1032,7 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Invalid {detail_prefix}.{key}. Expected non-empty string",
             )
+        normalized[key] = raw.strip()
 
     for timestamp_key in ("attached_at", "updatedAt"):
         raw = value.get(timestamp_key)
@@ -1000,6 +1044,7 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                     "Expected ISO timestamp string"
                 ),
             )
+        normalized[timestamp_key] = raw
 
     outline = value.get("outline")
     if not isinstance(outline, list):
@@ -1007,6 +1052,7 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid {detail_prefix}.outline. Expected array",
         )
+    normalized_outline: list[dict[str, str]] = []
     for index, section in enumerate(outline):
         if not isinstance(section, dict) or set(section.keys()) != {"title"}:
             raise HTTPException(
@@ -1025,6 +1071,8 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                     "Expected non-empty string"
                 ),
             )
+        normalized_outline.append({"title": title.strip()})
+    normalized["outline"] = normalized_outline
 
     key_claims = value.get("key_claims")
     if not isinstance(key_claims, list):
@@ -1040,6 +1088,7 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                 f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS} entries"
             ),
         )
+    normalized_key_claims: list[dict[str, str]] = []
     for index, claim in enumerate(key_claims):
         if not isinstance(claim, dict) or set(claim.keys()) != {"text"}:
             raise HTTPException(
@@ -1058,6 +1107,8 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                     "Expected non-empty string"
                 ),
             )
+        normalized_key_claims.append({"text": text.strip()})
+    normalized["key_claims"] = normalized_key_claims
 
     unresolved_questions = value.get("unresolved_questions")
     if not isinstance(unresolved_questions, list):
@@ -1073,6 +1124,7 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                 f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS} entries"
             ),
         )
+    normalized_unresolved_questions: list[str] = []
     for index, question in enumerate(unresolved_questions):
         if not isinstance(question, str) or not question.strip():
             raise HTTPException(
@@ -1082,6 +1134,8 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                     "Expected non-empty string"
                 ),
             )
+        normalized_unresolved_questions.append(question.strip())
+    normalized["unresolved_questions"] = normalized_unresolved_questions
 
     verification_summary = value.get("verification_summary")
     if verification_summary is not None:
@@ -1111,6 +1165,13 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                     ".unsupported_claim_count. Expected non-negative integer"
                 ),
             )
+        normalized["verification_summary"] = (
+            {"unsupported_claim_count": unsupported_claim_count}
+            if unsupported_claim_count is not None
+            else {}
+        )
+    else:
+        normalized["verification_summary"] = None
 
     source_trust_summary = value.get("source_trust_summary")
     if source_trust_summary is not None:
@@ -1140,11 +1201,52 @@ def _validate_deep_research_attachment(value: Any, *, detail_prefix: str) -> Non
                     ".high_trust_count. Expected non-negative integer"
                 ),
             )
+        normalized["source_trust_summary"] = (
+            {"high_trust_count": high_trust_count}
+            if high_trust_count is not None
+            else {}
+        )
+    else:
+        normalized["source_trust_summary"] = None
+
+    if owner_user_id is not None:
+        session = _load_owned_research_attachment_run(
+            owner_user_id=str(owner_user_id),
+            run_id=normalized["run_id"],
+        )
+        if session is None:
+            if strip_invalid_reference:
+                return None
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.run_id. "
+                    "Expected an owned completed deep research run"
+                ),
+            )
+        if str(session.status) != "completed":
+            if strip_invalid_reference:
+                return None
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.run_id. "
+                    "Attachment must reference a completed deep research run"
+                ),
+            )
+
+    normalized["research_url"] = _build_canonical_research_attachment_url(normalized["run_id"])
+    return normalized
 
 
-def _validate_deep_research_attachment_history(value: Any) -> None:
+def _validate_deep_research_attachment_history(
+    value: Any,
+    *,
+    owner_user_id: str | None = None,
+    strip_invalid_reference: bool = False,
+) -> Optional[list[dict[str, Any]]]:
     if value is None:
-        return
+        return None
     if not isinstance(value, list):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1158,11 +1260,104 @@ def _validate_deep_research_attachment_history(value: Any) -> None:
                 f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY} entries"
             ),
         )
+    normalized_history: list[dict[str, Any]] = []
     for index, entry in enumerate(value):
-        _validate_deep_research_attachment(
+        normalized_entry = _validate_deep_research_attachment(
             entry,
             detail_prefix=f"deepResearchAttachmentHistory[{index}]",
+            owner_user_id=owner_user_id,
+            strip_invalid_reference=strip_invalid_reference,
         )
+        if normalized_entry is not None:
+            normalized_history.append(normalized_entry)
+    return normalized_history
+
+
+def _normalize_chat_settings_deep_research_fields(
+    settings: dict[str, Any],
+    *,
+    owner_user_id: str | None = None,
+    strip_invalid_reference: bool = False,
+) -> dict[str, Any]:
+    normalized = dict(settings)
+
+    active_present = "deepResearchAttachment" in normalized
+    active_raw = normalized.get("deepResearchAttachment")
+    active_attachment = (
+        _validate_deep_research_attachment(
+            active_raw,
+            detail_prefix="deepResearchAttachment",
+            owner_user_id=owner_user_id,
+            strip_invalid_reference=strip_invalid_reference,
+        )
+        if active_present
+        else None
+    )
+    if active_present:
+        if active_raw is None:
+            normalized["deepResearchAttachment"] = None
+        elif active_attachment is None:
+            normalized.pop("deepResearchAttachment", None)
+        else:
+            normalized["deepResearchAttachment"] = active_attachment
+
+    pinned_present = "deepResearchPinnedAttachment" in normalized
+    pinned_raw = normalized.get("deepResearchPinnedAttachment")
+    pinned_attachment = (
+        _validate_deep_research_attachment(
+            pinned_raw,
+            detail_prefix="deepResearchPinnedAttachment",
+            owner_user_id=owner_user_id,
+            strip_invalid_reference=strip_invalid_reference,
+        )
+        if pinned_present
+        else None
+    )
+    if pinned_present:
+        if pinned_raw is None:
+            normalized["deepResearchPinnedAttachment"] = None
+        elif pinned_attachment is None:
+            normalized.pop("deepResearchPinnedAttachment", None)
+        else:
+            normalized["deepResearchPinnedAttachment"] = pinned_attachment
+
+    history_present = "deepResearchAttachmentHistory" in normalized
+    history_raw = normalized.get("deepResearchAttachmentHistory")
+    history_entries = (
+        _validate_deep_research_attachment_history(
+            history_raw,
+            owner_user_id=owner_user_id,
+            strip_invalid_reference=strip_invalid_reference,
+        )
+        if history_present
+        else None
+    )
+    if history_present:
+        if history_raw is None:
+            normalized["deepResearchAttachmentHistory"] = None
+            return normalized
+        excluded_run_ids = {
+            run_id
+            for run_id in (
+                active_attachment.get("run_id") if isinstance(active_attachment, dict) else None,
+                pinned_attachment.get("run_id") if isinstance(pinned_attachment, dict) else None,
+            )
+            if isinstance(run_id, str) and run_id
+        }
+        deduped_history: list[dict[str, Any]] = []
+        seen_run_ids: set[str] = set()
+        for entry in history_entries or []:
+            run_id = str(entry.get("run_id") or "")
+            if not run_id or run_id in excluded_run_ids or run_id in seen_run_ids:
+                continue
+            seen_run_ids.add(run_id)
+            deduped_history.append(entry)
+        if deduped_history:
+            normalized["deepResearchAttachmentHistory"] = deduped_history
+        else:
+            normalized.pop("deepResearchAttachmentHistory", None)
+
+    return normalized
 
 
 def _merge_deep_research_attachment_history(
@@ -2621,7 +2816,7 @@ def _persist_auto_summary_to_settings(
     merged_settings["updatedAt"] = now_iso
 
     try:
-        _validate_chat_settings_payload(merged_settings)
+        merged_settings = _validate_chat_settings_payload(merged_settings)
         db.upsert_conversation_settings(chat_id, merged_settings)
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
@@ -5260,6 +5455,12 @@ async def get_chat_settings(
         if settings and set(settings.keys()) <= {"greetingsChecksum"}:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
 
+        settings = _validate_chat_settings_payload(
+            settings,
+            owner_user_id=str(current_user.id),
+            strip_invalid_deep_research=True,
+        )
+
         # Normalize stored enum values so the client always gets valid scopes.
         _SCOPE_DEFAULTS = {
             "greetingScope": ("chat", {"chat", "character"}),
@@ -5325,13 +5526,18 @@ async def update_chat_settings(
         conversation = db.get_conversation_by_id(chat_id)
         _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
-        incoming_settings = payload.settings or {}
-        _validate_chat_settings_payload(incoming_settings)
+        incoming_settings = _validate_chat_settings_payload(
+            payload.settings or {},
+            owner_user_id=str(current_user.id),
+        )
 
         existing_row = db.get_conversation_settings(chat_id)
         existing_settings = (existing_row or {}).get("settings") or {}
         merged_settings = _merge_conversation_settings(existing_settings, incoming_settings)
-        _validate_chat_settings_payload(merged_settings)
+        merged_settings = _validate_chat_settings_payload(
+            merged_settings,
+            owner_user_id=str(current_user.id),
+        )
 
         if not db.upsert_conversation_settings(chat_id, merged_settings):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update chat settings")

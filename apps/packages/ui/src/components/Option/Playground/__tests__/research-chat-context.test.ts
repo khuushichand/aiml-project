@@ -214,6 +214,19 @@ describe("research-chat-context", () => {
     expect(resetAttachedResearchContext(null)).toBeNull()
   })
 
+  it("canonicalizes the research link from run_id during sanitization", () => {
+    expect(
+      sanitizeAttachedResearchContext(
+        buildContext("run_123", {
+          research_url: "https://example.com/not-research"
+        })
+      )
+    ).toMatchObject({
+      run_id: "run_123",
+      research_url: "/research?run=run_123"
+    })
+  })
+
   it("attaching a different run pushes the old active attachment into history and resets baseline", () => {
     const active = buildContext("run_active")
     const prior = buildContext("run_prior", {

@@ -197,7 +197,7 @@ export const sanitizeAttachedResearchContext = (
       highTrustCount === null
         ? undefined
         : { high_trust_count: highTrustCount },
-    research_url: value.research_url
+    research_url: buildChatLinkedResearchPath(value.run_id)
   }
 }
 

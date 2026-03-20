@@ -3,6 +3,7 @@ import { Link } from "react-router-dom"
 import { FlaskConical, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
+import { buildResearchLaunchPath } from "@/routes/route-paths"
 import type {
   AttachedResearchContext,
   ResearchFollowUpTarget
@@ -119,7 +120,7 @@ export const AttachedResearchContextChip = ({
           </button>
         )}
         <Link
-          to={context.research_url}
+          to={buildResearchLaunchPath({ run: context.run_id })}
           className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
         >
           {t("playground:actions.openInResearch", "Open in Research")}

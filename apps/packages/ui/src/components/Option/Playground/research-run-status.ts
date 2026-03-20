@@ -143,7 +143,12 @@ export const getChatReturnedResearchBannerState = ({
     }
   }
 
-  if (explicitReturn) {
+  if (
+    explicitReturn &&
+    run.latest_checkpoint_id !== null &&
+    run.status !== "failed" &&
+    run.status !== "cancelled"
+  ) {
     return {
       mode: "review_cleared",
       supportingText: "Your review is reflected in this run.",

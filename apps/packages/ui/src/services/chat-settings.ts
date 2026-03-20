@@ -1,5 +1,6 @@
 import { createSafeStorage } from "@/utils/safe-storage"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { buildChatLinkedResearchPath } from "@/components/Option/Playground/research-run-status"
 import {
   CHAT_SETTINGS_SCHEMA_VERSION,
   ChatSettingsRecord,
@@ -108,11 +109,10 @@ const sanitizeDeepResearchAttachment = (
   const runId = asNonEmptyString(value.run_id)
   const query = asNonEmptyString(value.query)
   const question = asNonEmptyString(value.question)
-  const researchUrl = asNonEmptyString(value.research_url)
   const attachedAt = asIsoString(value.attached_at)
   const updatedAt = asIsoString(value.updatedAt)
 
-  if (!runId || !query || !question || !researchUrl || !attachedAt || !updatedAt) {
+  if (!runId || !query || !question || !attachedAt || !updatedAt) {
     return null
   }
 
@@ -162,7 +162,7 @@ const sanitizeDeepResearchAttachment = (
       highTrustCount === null
         ? undefined
         : { high_trust_count: highTrustCount },
-    research_url: researchUrl,
+    research_url: buildChatLinkedResearchPath(runId),
     attached_at: attachedAt,
     updatedAt
   }

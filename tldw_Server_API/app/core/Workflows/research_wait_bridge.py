@@ -90,6 +90,7 @@ async def resume_workflows_waiting_on_research_checkpoint(
             workflow_run_id = str(item.get("workflow_run_id") or "")
             step_id = str(item.get("step_id") or "")
             wait_payload = _coerce_wait_payload(item.get("wait_payload_json"))
+            should_mark_resumed = False
 
             try:
                 if not workflow_run_id or not step_id:
@@ -118,6 +119,7 @@ async def resume_workflows_waiting_on_research_checkpoint(
                     wait_payload=wait_payload,
                 )
                 resumed += 1
+                should_mark_resumed = True
             except Exception:
                 logger.exception(
                     "Failed to schedule workflow resume for research checkpoint "
@@ -130,10 +132,13 @@ async def resume_workflows_waiting_on_research_checkpoint(
             finally:
                 if wait_id:
                     try:
-                        db.mark_research_wait_resumed(wait_id=wait_id)
+                        if should_mark_resumed:
+                            db.mark_research_wait_resumed(wait_id=wait_id)
+                        else:
+                            db.reset_research_wait_for_retry(wait_id=wait_id)
                     except Exception:
                         logger.exception(
-                            "Failed to mark research wait resumed "
+                            "Failed to update research wait status "
                             "research_run_id={} checkpoint_id={} wait_id={}",
                             research_run_id,
                             checkpoint_id,
