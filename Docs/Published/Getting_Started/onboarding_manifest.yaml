@@ -16,6 +16,16 @@ profiles:
     path: "Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md"
     published_path: "Getting_Started/Profile_Docker_Multi_User_Postgres.md"
     profile_type: "docker_postgres"
+  first_time_audio_cpu:
+    title: "First-time audio setup: CPU systems"
+    path: "Docs/Getting_Started/First_Time_Audio_Setup_CPU.md"
+    published_path: "Getting_Started/First_Time_Audio_Setup_CPU.md"
+    profile_type: "audio_cpu"
+  first_time_audio_gpu_accelerated:
+    title: "First-time audio setup: GPU/accelerated systems"
+    path: "Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md"
+    published_path: "Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md"
+    profile_type: "audio_accelerated"
   gpu_stt_addon:
     title: "GPU/STT Add-on"
     path: "Docs/Getting_Started/GPU_STT_Addon.md"
