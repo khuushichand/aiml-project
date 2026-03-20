@@ -5,10 +5,8 @@ import type { ResearchFollowUpTarget } from "./research-chat-context"
 
 import {
   CHAT_LINKED_RESEARCH_VISIBLE_TERMINAL_ROWS,
-  buildChatLinkedResearchPath,
-  getChatLinkedResearchReviewReason,
+  getChatLinkedResearchActionPolicy,
   getChatLinkedResearchStatusLabel,
-  isCheckpointReviewRun,
   isTerminalResearchRun,
   orderChatLinkedResearchRuns
 } from "./research-run-status"
@@ -64,8 +62,7 @@ export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
         <div className="space-y-2">
           {visibleRuns.map((run) => {
             const statusLabel = getChatLinkedResearchStatusLabel(run)
-            const reviewReason = getChatLinkedResearchReviewReason(run)
-            const isCheckpointReview = isCheckpointReviewRun(run)
+            const actionPolicy = getChatLinkedResearchActionPolicy(run)
             return (
               <div
                 key={run.run_id}
@@ -80,39 +77,39 @@ export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
                     >
                       {statusLabel}
                     </span>
-                    {reviewReason ? <span>{reviewReason}</span> : null}
+                    {actionPolicy.reasonLabel ? <span>{actionPolicy.reasonLabel}</span> : null}
                     <span className="truncate">{run.run_id}</span>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
-                  {run.status === "completed" && !isCheckpointReview && (
-                    <>
-                      <button
-                        type="button"
-                        className="text-sm font-medium text-text hover:text-primary"
-                        onClick={() => onUseInChat?.(run)}
-                      >
-                        Use in Chat
-                      </button>
-                      <button
-                        type="button"
-                        className="text-sm font-medium text-text hover:text-primary"
-                        onClick={() =>
-                          onFollowUp?.({
-                            run_id: run.run_id,
-                            query: run.query
-                          })
-                        }
-                      >
-                        Follow up
-                      </button>
-                    </>
+                  {actionPolicy.canUseInChat && (
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-text hover:text-primary"
+                      onClick={() => onUseInChat?.(run)}
+                    >
+                      Use in Chat
+                    </button>
+                  )}
+                  {actionPolicy.canFollowUp && (
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-text hover:text-primary"
+                      onClick={() =>
+                        onFollowUp?.({
+                          run_id: run.run_id,
+                          query: run.query
+                        })
+                      }
+                    >
+                      Follow up
+                    </button>
                   )}
                   <a
-                    href={buildChatLinkedResearchPath(run.run_id)}
+                    href={actionPolicy.researchHref}
                     className="text-sm font-medium text-primary hover:underline"
                   >
-                    {isCheckpointReview ? "Review in Research" : "Open in Research"}
+                    {actionPolicy.primaryActionLabel}
                   </a>
                 </div>
               </div>
