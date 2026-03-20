@@ -14,7 +14,7 @@
 **Goal:** Add a focused failing test that proves `/api/v1/audio/speech` routes `model="kitten_tts"` through the current backend path.
 **Success Criteria:** The backend test fails before implementation changes, then passes by exercising the real endpoint/service/provider resolution path with mocked adapter behavior.
 **Tests:** `tldw_Server_API/tests/Audio/test_tts_provider_inference.py`, `tldw_Server_API/tests/Audio/test_audio_speech_kittentts_integration.py`
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 1: Add the failing endpoint integration test
 
@@ -91,7 +91,7 @@ git commit -m "test(audio): cover kitten_tts speech routing"
 **Goal:** Extend the curated bundle model so `cpu_local.light` and `cpu_local.balanced` expose both `kokoro` and `kitten_tts` as peer choices without duplicating bundles.
 **Success Criteria:** Bundle/profile data contains explicit curated TTS choices and a stable default choice; no profile provisions both engines by default.
 **Tests:** `tldw_Server_API/tests/Setup/test_audio_bundle_catalog.py`
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 2: Add the failing catalog tests
 
@@ -158,7 +158,7 @@ git commit -m "feat(setup): add curated kitten_tts choices to cpu audio profiles
 **Goal:** Add `tts_choice` to setup selection identity and resolve it into a concrete one-engine installer plan.
 **Success Criteria:** Provision/install/readiness metadata distinguishes `cpu_local:balanced:kokoro` from `cpu_local:balanced:kitten_tts`, and install-plan generation provisions only the chosen engine.
 **Tests:** `tldw_Server_API/tests/Setup/test_audio_bundle_provisioning.py`, `tldw_Server_API/tests/Setup/test_audio_readiness_store.py`, `tldw_Server_API/tests/Setup/test_audio_pack_service.py`
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 3: Add failing persistence and plan-resolution tests
 
@@ -239,7 +239,7 @@ git commit -m "feat(setup): persist curated tts choice for cpu audio bundles"
 **Goal:** Carry `tts_choice` through provision/verify requests, verification results, and the shared installer UI selector.
 **Success Criteria:** The admin installer renders a TTS selector only for profiles with curated choices, submits `tts_choice`, and verification checks the selected provider path.
 **Tests:** `tldw_Server_API/tests/Setup/test_audio_bundle_verification.py`, `tldw_Server_API/tests/Setup/test_setup_audio_installer_lifecycle_api.py`, `apps/packages/ui/src/components/Option/Setup/__tests__/AudioInstallerPanel.test.tsx`
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 4: Add failing API, verification, and UI tests
 
@@ -320,7 +320,7 @@ git commit -m "feat(setup): add curated kitten_tts choice to audio installer"
 **Goal:** Run the focused verification suite, update docs if needed, and leave the branch ready for execution or PR work.
 **Success Criteria:** Focused backend and frontend tests pass, touched scope is Bandit-clean, and the plan reflects completion status.
 **Tests:** Focused pytest + Vitest + Bandit on touched paths
-**Status:** Not Started
+**Status:** Complete
 
 ### Task 5: Run focused verification and update plan status
 
