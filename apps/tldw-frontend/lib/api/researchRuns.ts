@@ -46,6 +46,7 @@ export interface ResearchRun {
   active_job_id?: string | null;
   latest_checkpoint_id?: string | null;
   completed_at?: string | null;
+  chat_id?: string | null;
 }
 
 export interface ResearchRunListItem extends ResearchRun {

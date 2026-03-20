@@ -329,6 +329,34 @@ describe('ResearchRunsPage', () => {
     expect(await screen.findByText('Selected run: Newly created run')).toBeInTheDocument();
   });
 
+  it('shows a back-to-chat link only for runs with linked chat context', async () => {
+    mocks.getResearchRun.mockResolvedValue(
+      makeRun({
+        id: 'rs_1',
+        chat_id: 'chat_123',
+      })
+    );
+
+    renderWithProviders(<ResearchRunsPage />);
+
+    const link = await screen.findByRole('link', { name: 'Back to Chat' });
+    expect(link).toHaveAttribute('href', '/chat?settingsServerChatId=chat_123');
+  });
+
+  it('does not show a back-to-chat link for unlinked runs', async () => {
+    mocks.getResearchRun.mockResolvedValue(
+      makeRun({
+        id: 'rs_1',
+        chat_id: null,
+      })
+    );
+
+    renderWithProviders(<ResearchRunsPage />);
+
+    await screen.findByText('Selected run: Investigate local evidence');
+    expect(screen.queryByRole('link', { name: 'Back to Chat' })).not.toBeInTheDocument();
+  });
+
   it('prefills the research question from launch query params', async () => {
     window.history.replaceState(
       {},

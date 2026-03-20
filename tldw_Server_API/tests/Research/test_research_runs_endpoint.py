@@ -362,6 +362,7 @@ def test_read_research_run_bundle_and_artifact():
                 "active_job_id": None,
                 "latest_checkpoint_id": "cp_1",
                 "completed_at": "2026-03-07T00:00:00+00:00",
+                "chat_id": "chat_123",
             }
 
         def get_bundle(self, **kwargs):
@@ -393,6 +394,7 @@ def test_read_research_run_bundle_and_artifact():
         assert run_resp.json()["control_state"] == "running"
         assert run_resp.json()["progress_percent"] == 100.0
         assert run_resp.json()["progress_message"] == "packaging results"
+        assert run_resp.json()["chat_id"] == "chat_123"
         assert bundle_resp.status_code == 200
         assert bundle_resp.json()["question"] == "What changed?"
         assert artifact_resp.status_code == 200

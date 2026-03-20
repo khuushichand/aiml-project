@@ -144,9 +144,18 @@ class ResearchService:
 
     @staticmethod
     def _validate_chat_handoff_chat_id(*, owner_user_id: str, chat_id: str) -> None:
+        if ResearchService._resolve_chat_handoff_chat_id(
+            owner_user_id=owner_user_id,
+            chat_id=chat_id,
+        ):
+            return
+        raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found")
+
+    @staticmethod
+    def _resolve_chat_handoff_chat_id(*, owner_user_id: str, chat_id: str) -> str | None:
         chat_db_path = DatabasePaths.get_chacha_db_path(owner_user_id)
         if not chat_db_path.exists() and not ResearchService._has_explicit_chat_db_base():
-            raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found")
+            return None
         request_user_id = str(owner_user_id).strip()
         try:
             with sqlite3.connect(str(chat_db_path)) as conn:
@@ -155,13 +164,14 @@ class ResearchService:
                     "SELECT client_id FROM conversations WHERE id = ? AND deleted = 0",
                     (chat_id,),
                 ).fetchone()
-        except sqlite3.Error as exc:
-            raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found") from exc
+        except sqlite3.Error:
+            return None
         if row is None:
-            raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found")
+            return None
         stored_client_id = str(row["client_id"] or "").strip()
         if stored_client_id != request_user_id:
-            raise ValueError("chat_handoff.chat_id is not owned by the current user or was not found")
+            return None
+        return str(chat_id).strip()
 
     @staticmethod
     def _is_executable_phase(phase: str) -> bool:
@@ -558,6 +568,15 @@ class ResearchService:
         session = db.get_session(session_id)
         if session is None:
             raise KeyError(session_id)
+        handoff = db.get_chat_handoff(session_id)
+        chat_id = None
+        if handoff is not None:
+            chat_id = self._resolve_chat_handoff_chat_id(
+                owner_user_id=owner_user_id,
+                chat_id=handoff.chat_id,
+            )
+        if session.chat_id != chat_id:
+            session = replace(session, chat_id=chat_id)
         numeric_job_id = self._numeric_job_id(session.active_job_id)
         if numeric_job_id is None:
             return session

@@ -1,6 +1,7 @@
 import React, { useEffect, useReducer, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { buildChatThreadPath } from '@/routes/route-paths';
 import { useToast } from '@web/components/ui/ToastProvider';
 import {
   approveResearchCheckpoint,
@@ -928,6 +929,9 @@ export default function ResearchRunsPage() {
 
   const selectedSnapshot = state.snapshot;
   const selectedRun = selectedSnapshot?.run ?? selectedRunQuery.data ?? selectedListItem;
+  const backToChatHref = selectedRun?.chat_id
+    ? buildChatThreadPath({ serverChatId: selectedRun.chat_id })
+    : null;
   const trustView = deriveTrustView(state.bundle, state.artifactContents);
   const loadedTrustArtifactNames = TRUST_ARTIFACT_NAMES.filter(
     (artifactName) => state.artifactContents[artifactName] !== undefined
@@ -1322,6 +1326,14 @@ export default function ResearchRunsPage() {
               )}
             </div>
             <div className="flex flex-wrap gap-2">
+              {backToChatHref && (
+                <a
+                  className="rounded-full border border-border px-3 py-2 text-sm hover:bg-muted"
+                  href={backToChatHref}
+                >
+                  Back to Chat
+                </a>
+              )}
               <button
                 type="button"
                 className="rounded-full border border-border px-3 py-2 text-sm hover:bg-muted"

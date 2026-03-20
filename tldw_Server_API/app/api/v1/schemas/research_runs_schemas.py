@@ -123,6 +123,7 @@ class ResearchRunResponse(BaseModel):
     active_job_id: str | None = None
     latest_checkpoint_id: str | None = None
     completed_at: str | None = None
+    chat_id: str | None = None
 
 
 class ResearchRunListItemResponse(ResearchRunResponse):

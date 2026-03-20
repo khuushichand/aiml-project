@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { RESEARCH_PATH, buildResearchLaunchPath } from "../route-paths"
+import { CHAT_PATH, RESEARCH_PATH, buildChatThreadPath, buildResearchLaunchPath } from "../route-paths"
+import { SETTINGS_SERVER_CHAT_ID_PARAM } from "../../utils/settings-return"
 
 describe("route-paths deep research launch", () => {
   it("exports the canonical research path", () => {
@@ -44,5 +45,15 @@ describe("route-paths deep research launch", () => {
     expect(parsed.searchParams.get("autonomy_mode")).toBeNull()
     expect(parsed.searchParams.get("autorun")).toBeNull()
     expect(parsed.searchParams.get("from")).toBeNull()
+  })
+
+  it("builds an exact chat-thread path for server-backed return handoff", () => {
+    const href = buildChatThreadPath({
+      serverChatId: "chat_123"
+    })
+    const parsed = new URL(href, "https://example.local")
+
+    expect(parsed.pathname).toBe(CHAT_PATH)
+    expect(parsed.searchParams.get(SETTINGS_SERVER_CHAT_ID_PARAM)).toBe("chat_123")
   })
 })

@@ -258,4 +258,27 @@ git commit -m "docs(research): finalize return handoff plan"
 
 ## Execution Notes
 
-- Not started.
+- Task 1 used the existing backend seams instead of the stale filename in the original draft:
+  - route coverage landed in `tldw_Server_API/tests/Research/test_research_runs_endpoint.py`
+  - service/read-time linkage validation coverage landed in `tldw_Server_API/tests/Research/test_research_jobs_service.py`
+- Backend changes:
+  - added optional `chat_id` to the owned research run read schema
+  - extended `ResearchSessionRow` with `chat_id`
+  - added read-time chat linkage resolution in `ResearchService.get_session(...)`
+  - stale or inaccessible chat linkage now resolves to `chat_id = null` instead of echoing persisted handoff state
+- Route/bootstrap decision:
+  - the exact-thread return path reuses the existing chat bootstrap contract based on `settingsServerChatId`
+  - new helper: `buildChatThreadPath({ serverChatId })`
+  - no new `/chat?chat_id=...` bootstrap path was introduced
+- Web console changes:
+  - `apps/tldw-frontend/lib/api/researchRuns.ts` now includes optional `chat_id` on run reads
+  - `apps/tldw-frontend/pages/research.tsx` renders `Back to Chat` only when the selected run has `chat_id`
+- Focused verification:
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Research/test_research_runs_endpoint.py tldw_Server_API/tests/Research/test_research_jobs_service.py -q`
+    - result: `52 passed`
+  - `./apps/packages/ui/node_modules/.bin/vitest run src/routes/__tests__/route-paths.research.test.ts`
+    - result: `4 passed`
+  - `./apps/tldw-frontend/node_modules/.bin/vitest run __tests__/pages/research-run-console.test.tsx`
+    - result: `15 passed`
+  - `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/api/v1/schemas/research_runs_schemas.py tldw_Server_API/app/core/Research/service.py tldw_Server_API/app/core/DB_Management/ResearchSessionsDB.py -f json -o /tmp/bandit_research_back_to_chat.json`
+    - result: `0` findings, `0` errors

@@ -1,3 +1,5 @@
+import { SETTINGS_SERVER_CHAT_ID_PARAM } from "@/utils/settings-return"
+
 export const CHAT_PATH = "/chat"
 export const RESEARCH_PATH = "/research"
 export const WORKSPACE_PLAYGROUND_PATH = "/workspace-playground"
@@ -48,6 +50,10 @@ type BuildResearchLaunchPathOptions = {
   launchMessageId?: string | null
 }
 
+type BuildChatThreadPathOptions = {
+  serverChatId?: string | null
+}
+
 const setTrimmedSearchParam = (
   params: URLSearchParams,
   key: string,
@@ -75,4 +81,17 @@ export const buildResearchLaunchPath = (
   }
   const encoded = params.toString()
   return encoded ? `${RESEARCH_PATH}?${encoded}` : RESEARCH_PATH
+}
+
+export const buildChatThreadPath = (
+  options: BuildChatThreadPathOptions = {}
+): string => {
+  const params = new URLSearchParams()
+  setTrimmedSearchParam(
+    params,
+    SETTINGS_SERVER_CHAT_ID_PARAM,
+    options.serverChatId
+  )
+  const encoded = params.toString()
+  return encoded ? `${CHAT_PATH}?${encoded}` : CHAT_PATH
 }
