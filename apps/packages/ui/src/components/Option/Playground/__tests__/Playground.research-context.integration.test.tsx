@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { Playground } from "../Playground"
@@ -168,7 +168,7 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
           .join(",")}
       >
         {props.attachedResearchContext ? (
-          <>
+          <div data-testid="active-attachment-surface">
             <button
               type="button"
               onClick={() =>
@@ -211,13 +211,13 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
                   })
                 }
               >
-                Follow up attached research
+                Follow up
               </button>
             ) : null}
-          </>
+          </div>
         ) : null}
         {props.attachedResearchContextPinned ? (
-          <>
+          <div data-testid="pinned-attachment-surface">
             <button
               type="button"
               onClick={() => props.onRestorePinnedResearchContext?.()}
@@ -240,13 +240,16 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
                   })
                 }
               >
-                Follow up pinned research
+                Follow up
               </button>
             ) : null}
-          </>
+          </div>
         ) : null}
         {(props.attachedResearchContextHistory || []).map((entry) => (
-          <React.Fragment key={entry.run_id}>
+          <div
+            key={entry.run_id}
+            data-testid={`history-attachment-surface-${entry.run_id}`}
+          >
             <button
               type="button"
               onClick={() =>
@@ -283,10 +286,10 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
                   })
                 }
               >
-                {`Follow up history ${entry.run_id}`}
+                Follow up
               </button>
             ) : null}
-          </React.Fragment>
+          </div>
         ))}
         {pendingFollowUp ? (
           <div data-testid="follow-up-confirmation">
@@ -307,7 +310,7 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
               type="button"
               onClick={() => setPendingFollowUp(null)}
             >
-              Cancel follow-up
+              Cancel
             </button>
           </div>
         ) : null}
@@ -499,9 +502,9 @@ describe("Playground research context integration", () => {
 
     render(<Playground />)
 
-    const followUpButton = await screen.findByRole("button", {
-      name: "Follow up"
-    })
+    const followUpButton = await within(
+      await screen.findByTestId("active-attachment-surface")
+    ).findByRole("button", { name: "Follow up" })
     fireEvent.click(followUpButton)
 
     expect(
@@ -527,9 +530,9 @@ describe("Playground research context integration", () => {
 
     render(<Playground />)
 
-    const followUpButton = await screen.findByRole("button", {
-      name: "Follow up"
-    })
+    const followUpButton = await within(
+      await screen.findByTestId("pinned-attachment-surface")
+    ).findByRole("button", { name: "Follow up" })
     fireEvent.click(followUpButton)
 
     expect(
@@ -555,9 +558,9 @@ describe("Playground research context integration", () => {
 
     render(<Playground />)
 
-    const followUpButton = await screen.findByRole("button", {
-      name: "Follow up"
-    })
+    const followUpButton = await within(
+      await screen.findByTestId("history-attachment-surface-run_hist_1")
+    ).findByRole("button", { name: "Follow up" })
     fireEvent.click(followUpButton)
 
     expect(
@@ -583,14 +586,15 @@ describe("Playground research context integration", () => {
 
     render(<Playground />)
 
-    const followUpButton = await screen.findByRole("button", {
-      name: "Follow up"
-    })
+    const followUpButton = await within(
+      await screen.findByTestId("active-attachment-surface")
+    ).findByRole("button", { name: "Follow up" })
     fireEvent.click(followUpButton)
     fireEvent.click(screen.getByRole("button", { name: "Prepare follow-up" }))
 
-    expect(researchClientMocks.getResearchBundle).toHaveBeenCalledWith(
-      "run_active"
+    expect(researchClientMocks.getResearchBundle).not.toHaveBeenCalled()
+    expect(storeOptionState.value.setSelectedQuickPrompt).toHaveBeenCalledWith(
+      "Follow up on this research: Active battery recycling run"
     )
     expect(
       screen.getByRole("button", { name: "Use history run_hist_1" })

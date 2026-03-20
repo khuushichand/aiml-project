@@ -1571,6 +1571,7 @@ export const Playground = () => {
               onRestorePinnedResearchContext={
                 handleRestorePinnedResearchContext
               }
+              onPrepareResearchFollowUp={handlePrepareResearchFollowUp}
               onSelectAttachedResearchContextHistory={
                 handleSelectAttachedResearchContextHistory
               }

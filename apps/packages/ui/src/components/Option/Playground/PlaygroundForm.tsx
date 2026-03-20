@@ -238,7 +238,8 @@ import {
   applyAttachedResearchContextEdits,
   resetAttachedResearchContext,
   toChatResearchContext,
-  type AttachedResearchContext
+  type AttachedResearchContext,
+  type ResearchFollowUpTarget
 } from "./research-chat-context"
 
 const FOLLOW_UP_RESEARCH_PROMPT_PREFIX = "Follow up on this research:"
@@ -261,6 +262,7 @@ type Props = {
   onSelectAttachedResearchContextHistory?: (
     context: AttachedResearchContext
   ) => void
+  onPrepareResearchFollowUp?: (target: ResearchFollowUpTarget) => void
 }
 
 type DefaultCharacterPreferenceQueryResult = {
@@ -397,7 +399,8 @@ export const PlaygroundForm = ({
   onUnpinAttachedResearchContext,
   onRestorePinnedResearchContext,
   onPinAttachedResearchContextHistory,
-  onSelectAttachedResearchContextHistory
+  onSelectAttachedResearchContextHistory,
+  onPrepareResearchFollowUp
 }: Props) => {
   const { t } = useTranslation(["playground", "common", "option"])
   const notificationApi = useAntdNotification()
@@ -415,6 +418,8 @@ export const PlaygroundForm = ({
     includeAttachedResearchAsBackground,
     setIncludeAttachedResearchAsBackground
   ] = React.useState(Boolean(attachedResearchContext))
+  const [pendingAttachmentFollowUp, setPendingAttachmentFollowUp] =
+    React.useState<ResearchFollowUpTarget | null>(null)
   const [followUpResearchPending, setFollowUpResearchPending] =
     React.useState(false)
   const followUpResearchPendingRef = React.useRef(false)
@@ -7828,6 +7833,7 @@ export const PlaygroundForm = ({
                         onPin={() => onPinAttachedResearchContext?.()}
                         onUnpin={() => onUnpinAttachedResearchContext?.()}
                         onRestorePinned={() => onRestorePinnedResearchContext?.()}
+                        onPrepareResearchFollowUp={onPrepareResearchFollowUp}
                         onPinHistory={onPinAttachedResearchContextHistory}
                         onSelectHistory={onSelectAttachedResearchContextHistory}
                       />
@@ -7889,7 +7895,70 @@ export const PlaygroundForm = ({
                                     "Unpin"
                                   )}
                                 </button>
+                                {onPrepareResearchFollowUp ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPendingAttachmentFollowUp({
+                                        run_id: attachedResearchContextPinned.run_id,
+                                        query: attachedResearchContextPinned.query
+                                      })
+                                    }
+                                    className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                  >
+                                    {t("playground:actions.followUp", "Follow up")}
+                                  </button>
+                                ) : null}
                               </div>
+                              {pendingAttachmentFollowUp?.run_id ===
+                              attachedResearchContextPinned.run_id ? (
+                                <div
+                                  data-testid="pinned-research-follow-up-confirmation"
+                                  className="rounded-md border border-border bg-surface px-3 py-2 text-[11px] text-text"
+                                >
+                                  <div className="font-medium">
+                                    {t(
+                                      "playground:actions.prepareFollowUpTitle",
+                                      "Prepare follow-up?"
+                                    )}
+                                  </div>
+                                  <div className="mt-1">
+                                    {t(
+                                      "playground:actions.prepareFollowUpBody",
+                                      'This will use "{{query}}" and prefill a follow-up research prompt in the composer.',
+                                      {
+                                        query: pendingAttachmentFollowUp.query
+                                      }
+                                    )}
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        onPrepareResearchFollowUp?.(
+                                          pendingAttachmentFollowUp
+                                        )
+                                        setPendingAttachmentFollowUp(null)
+                                      }}
+                                      className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                    >
+                                      {t(
+                                        "playground:actions.prepareFollowUp",
+                                        "Prepare follow-up"
+                                      )}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setPendingAttachmentFollowUp(null)
+                                      }
+                                      className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                    >
+                                      {t("common:cancel", "Cancel")}
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         ) : null}
@@ -7925,6 +7994,70 @@ export const PlaygroundForm = ({
                                   >
                                     {`${t("playground:actions.pinResearchContext", "Pin")} ${entry.query}`}
                                   </button>
+                                  {onPrepareResearchFollowUp ? (
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation()
+                                        setPendingAttachmentFollowUp({
+                                          run_id: entry.run_id,
+                                          query: entry.query
+                                        })
+                                      }}
+                                      className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                    >
+                                      {t("playground:actions.followUp", "Follow up")}
+                                    </button>
+                                  ) : null}
+                                  {pendingAttachmentFollowUp?.run_id ===
+                                  entry.run_id ? (
+                                    <div
+                                      data-testid={`history-follow-up-confirmation-${entry.run_id}`}
+                                      className="w-full rounded-md border border-border bg-surface px-3 py-2 text-[11px] text-text"
+                                    >
+                                      <div className="font-medium">
+                                        {t(
+                                          "playground:actions.prepareFollowUpTitle",
+                                          "Prepare follow-up?"
+                                        )}
+                                      </div>
+                                      <div className="mt-1">
+                                        {t(
+                                          "playground:actions.prepareFollowUpBody",
+                                          'This will use "{{query}}" and prefill a follow-up research prompt in the composer.',
+                                          {
+                                            query: pendingAttachmentFollowUp.query
+                                          }
+                                        )}
+                                      </div>
+                                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            onPrepareResearchFollowUp?.(
+                                              pendingAttachmentFollowUp
+                                            )
+                                            setPendingAttachmentFollowUp(null)
+                                          }}
+                                          className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                        >
+                                          {t(
+                                            "playground:actions.prepareFollowUp",
+                                            "Prepare follow-up"
+                                          )}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setPendingAttachmentFollowUp(null)
+                                          }
+                                          className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                        >
+                                          {t("common:cancel", "Cancel")}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : null}
                                 </React.Fragment>
                               ))}
                             </div>

@@ -3,7 +3,10 @@ import { Link } from "react-router-dom"
 import { FlaskConical, X } from "lucide-react"
 import { useTranslation } from "react-i18next"
 
-import type { AttachedResearchContext } from "./research-chat-context"
+import type {
+  AttachedResearchContext,
+  ResearchFollowUpTarget
+} from "./research-chat-context"
 
 type AttachedResearchContextChipProps = {
   context: AttachedResearchContext
@@ -14,6 +17,7 @@ type AttachedResearchContextChipProps = {
   onPin?: () => void
   onUnpin?: () => void
   onRestorePinned?: () => void
+  onPrepareResearchFollowUp?: (target: ResearchFollowUpTarget) => void
   onPinHistory?: (context: AttachedResearchContext) => void
   onSelectHistory?: (context: AttachedResearchContext) => void
 }
@@ -27,11 +31,29 @@ export const AttachedResearchContextChip = ({
   onPin,
   onUnpin,
   onRestorePinned,
+  onPrepareResearchFollowUp,
   onPinHistory,
   onSelectHistory
 }: AttachedResearchContextChipProps) => {
   const { t } = useTranslation(["playground", "common"])
   const pinnedMatchesActive = pinned?.run_id === context.run_id
+  const [pendingFollowUp, setPendingFollowUp] =
+    React.useState<ResearchFollowUpTarget | null>(null)
+
+  const openFollowUpConfirmation = React.useCallback(
+    (target: ResearchFollowUpTarget) => {
+      setPendingFollowUp(target)
+    },
+    []
+  )
+
+  const confirmFollowUp = React.useCallback(() => {
+    if (!pendingFollowUp) {
+      return
+    }
+    onPrepareResearchFollowUp?.(pendingFollowUp)
+    setPendingFollowUp(null)
+  }, [onPrepareResearchFollowUp, pendingFollowUp])
 
   return (
     <div
@@ -63,6 +85,20 @@ export const AttachedResearchContextChip = ({
               "playground:actions.previewAttachedResearchContext",
               "Edit attached research"
             )}
+          </button>
+        ) : null}
+        {onPrepareResearchFollowUp ? (
+          <button
+            type="button"
+            onClick={() =>
+              openFollowUpConfirmation({
+                run_id: context.run_id,
+                query: context.query
+              })
+            }
+            className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
+          >
+            {t("playground:actions.followUp", "Follow up")}
           </button>
         ) : null}
         {pinnedMatchesActive ? (
@@ -130,6 +166,20 @@ export const AttachedResearchContextChip = ({
           >
             {t("playground:actions.unpinResearchContext", "Unpin")}
           </button>
+          {onPrepareResearchFollowUp ? (
+            <button
+              type="button"
+              onClick={() =>
+                openFollowUpConfirmation({
+                  run_id: pinned.run_id,
+                  query: pinned.query
+                })
+              }
+              className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+            >
+              {t("playground:actions.followUp", "Follow up")}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {history.length > 0 ? (
@@ -159,8 +209,56 @@ export const AttachedResearchContextChip = ({
               >
                 {`${t("playground:actions.pinResearchContext", "Pin")} ${entry.query}`}
               </button>
+              {onPrepareResearchFollowUp ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    openFollowUpConfirmation({
+                      run_id: entry.run_id,
+                      query: entry.query
+                    })
+                  }}
+                  className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+                >
+                  {`${t("playground:actions.followUp", "Follow up")} ${entry.query}`}
+                </button>
+              ) : null}
             </React.Fragment>
           ))}
+        </div>
+      ) : null}
+      {pendingFollowUp ? (
+        <div
+          data-testid="attached-research-follow-up-confirmation"
+          className="flex w-full flex-col gap-2 border-t border-primary/20 pt-2 text-[11px] text-primaryStrong"
+        >
+          <div className="font-medium">
+            {t("playground:actions.prepareFollowUpTitle", "Prepare follow-up?")}
+          </div>
+          <div>
+            {t(
+              "playground:actions.prepareFollowUpBody",
+              'This will use "{{query}}" and prefill a follow-up research prompt in the composer.',
+              { query: pendingFollowUp.query }
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={confirmFollowUp}
+              className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+            >
+              {t("playground:actions.prepareFollowUp", "Prepare follow-up")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingFollowUp(null)}
+              className="rounded border border-primary/20 bg-surface px-2 py-0.5 text-[11px] text-primaryStrong hover:bg-primary/10"
+            >
+              {t("common:cancel", "Cancel")}
+            </button>
+          </div>
         </div>
       ) : null}
     </div>
