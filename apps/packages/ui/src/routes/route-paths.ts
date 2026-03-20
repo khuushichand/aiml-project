@@ -1,4 +1,7 @@
-import { SETTINGS_SERVER_CHAT_ID_PARAM } from "@/utils/settings-return"
+import {
+  RESEARCH_RETURN_RUN_ID_PARAM,
+  SETTINGS_SERVER_CHAT_ID_PARAM
+} from "@/utils/settings-return"
 
 export const CHAT_PATH = "/chat"
 export const RESEARCH_PATH = "/research"
@@ -52,6 +55,7 @@ type BuildResearchLaunchPathOptions = {
 
 type BuildChatThreadPathOptions = {
   serverChatId?: string | null
+  researchReturnRunId?: string | null
 }
 
 const setTrimmedSearchParam = (
@@ -91,6 +95,11 @@ export const buildChatThreadPath = (
     params,
     SETTINGS_SERVER_CHAT_ID_PARAM,
     options.serverChatId
+  )
+  setTrimmedSearchParam(
+    params,
+    RESEARCH_RETURN_RUN_ID_PARAM,
+    options.researchReturnRunId
   )
   const encoded = params.toString()
   return encoded ? `${CHAT_PATH}?${encoded}` : CHAT_PATH

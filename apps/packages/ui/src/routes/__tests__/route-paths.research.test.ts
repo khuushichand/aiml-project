@@ -49,11 +49,13 @@ describe("route-paths deep research launch", () => {
 
   it("builds an exact chat-thread path for server-backed return handoff", () => {
     const href = buildChatThreadPath({
-      serverChatId: "chat_123"
+      serverChatId: "chat_123",
+      researchReturnRunId: "rs_1"
     })
     const parsed = new URL(href, "https://example.local")
 
     expect(parsed.pathname).toBe(CHAT_PATH)
     expect(parsed.searchParams.get(SETTINGS_SERVER_CHAT_ID_PARAM)).toBe("chat_123")
+    expect(parsed.searchParams.get("researchReturnRunId")).toBe("rs_1")
   })
 })

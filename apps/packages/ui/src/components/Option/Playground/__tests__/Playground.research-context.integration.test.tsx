@@ -323,8 +323,23 @@ vi.mock("@/components/Option/Playground/PlaygroundChat", () => ({
   PlaygroundChat: (props: {
     onAttachResearchContext?: (context: ReturnType<typeof buildAttachedContext>) => void
     onPrepareResearchFollowUp?: (target: { run_id: string; query: string }) => void
+    returnedResearchRunId?: string | null
+    onDismissReturnedResearchRun?: () => void
   }) => (
     <div data-testid="playground-chat">
+      {props.returnedResearchRunId ? (
+        <div
+          data-testid="returned-research-banner"
+          data-returned-run-id={props.returnedResearchRunId}
+        >
+          <button
+            type="button"
+            onClick={() => props.onDismissReturnedResearchRun?.()}
+          >
+            Dismiss returned research
+          </button>
+        </div>
+      ) : null}
       <button
         type="button"
         onClick={() =>
@@ -457,6 +472,7 @@ vi.mock("@/hooks/useCharacterGreeting", () => ({
 describe("Playground research context integration", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.history.replaceState({}, "", "/chat")
     mobileViewportState.value = false
     artifactsState.value.isOpen = false
     storeOptionState.value.compareParentByHistory = {}
@@ -485,6 +501,26 @@ describe("Playground research context integration", () => {
     )
     expect(storeOptionState.value.setSelectedQuickPrompt).toHaveBeenCalledWith(
       "Follow up on this research: Battery recycling supply chain"
+    )
+  })
+
+  it("consumes researchReturnRunId once and passes the returned run marker to PlaygroundChat", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/chat?settingsServerChatId=chat-1&researchReturnRunId=run_returned"
+    )
+
+    render(<Playground />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("returned-research-banner")).toHaveAttribute(
+        "data-returned-run-id",
+        "run_returned"
+      )
+    )
+    await waitFor(() =>
+      expect(window.location.search).toBe("")
     )
   })
 

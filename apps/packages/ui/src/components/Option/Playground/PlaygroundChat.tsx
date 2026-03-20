@@ -76,6 +76,8 @@ type PlaygroundChatProps = {
   activeSearchMessageIndex?: number | null
   onAttachResearchContext?: (context: AttachedResearchContext) => void
   onPrepareResearchFollowUp?: (target: ResearchFollowUpTarget) => void
+  returnedResearchRunId?: string | null
+  onDismissReturnedResearchRun?: () => void
 }
 
 const PerModelMiniComposer: React.FC<{
@@ -172,7 +174,9 @@ export const PlaygroundChat = ({
   matchedMessageIndices,
   activeSearchMessageIndex = null,
   onAttachResearchContext,
-  onPrepareResearchFollowUp
+  onPrepareResearchFollowUp,
+  returnedResearchRunId = null,
+  onDismissReturnedResearchRun
 }: PlaygroundChatProps) => {
   const { t } = useTranslation(["playground", "common"])
   const notification = useAntdNotification()
@@ -322,6 +326,20 @@ export const PlaygroundChat = ({
       ? linkedResearchRunsQuery.data.runs
       : []
   }, [linkedResearchRunsEnabled, linkedResearchRunsQuery.data?.runs, linkedResearchRunsQuery.isSuccess])
+  const returnedResearchRun = React.useMemo(
+    () =>
+      returnedResearchRunId
+        ? linkedResearchRuns.find((run) => run.run_id === returnedResearchRunId) ?? null
+        : null,
+    [linkedResearchRuns, returnedResearchRunId]
+  )
+  const returnedResearchActionPolicy = React.useMemo(
+    () =>
+      returnedResearchRun
+        ? getChatLinkedResearchActionPolicy(returnedResearchRun)
+        : null,
+    [returnedResearchRun]
+  )
   const handleAttachResearchRun = React.useCallback(
     async (runId: string, query: string) => {
       if (!onAttachResearchContext) {
@@ -1030,6 +1048,74 @@ export const PlaygroundChat = ({
           serverChatId={serverChatId}
           className="mb-6 mt-4"
         />
+        {returnedResearchRun && returnedResearchActionPolicy ? (
+          <section
+            className="mb-4 w-full max-w-5xl px-4"
+            data-testid="returned-research-banner"
+          >
+            <div className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-text-subtle">
+                    {t("playground:research.returnedBanner.label", "Returned from Research")}
+                  </div>
+                  <div className="mt-1 truncate text-sm font-medium text-text">
+                    {returnedResearchRun.query}
+                  </div>
+                  {returnedResearchActionPolicy.reasonLabel ? (
+                    <div className="mt-1 text-xs text-text-subtle">
+                      {returnedResearchActionPolicy.reasonLabel}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  {returnedResearchActionPolicy.canUseInChat ? (
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-text hover:text-primary"
+                      onClick={() => {
+                        void handleAttachResearchRun(
+                          returnedResearchRun.run_id,
+                          returnedResearchRun.query
+                        )
+                      }}
+                    >
+                      {t("playground:research.useInChat", "Use in Chat")}
+                    </button>
+                  ) : null}
+                  {returnedResearchActionPolicy.canFollowUp &&
+                  onPrepareResearchFollowUp ? (
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-text hover:text-primary"
+                      onClick={() =>
+                        onPrepareResearchFollowUp({
+                          run_id: returnedResearchRun.run_id,
+                          query: returnedResearchRun.query
+                        })
+                      }
+                    >
+                      {t("playground:research.followUp", "Follow up")}
+                    </button>
+                  ) : null}
+                  <a
+                    className="text-sm font-medium text-primary hover:underline"
+                    href={returnedResearchActionPolicy.researchHref}
+                  >
+                    {returnedResearchActionPolicy.primaryActionLabel}
+                  </a>
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-text-subtle hover:text-text"
+                    onClick={() => onDismissReturnedResearchRun?.()}
+                  >
+                    {t("common:dismiss", "Dismiss")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        ) : null}
         <ResearchRunStatusStack
           runs={linkedResearchRuns}
           onUseInChat={(run) => {

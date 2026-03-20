@@ -340,7 +340,10 @@ describe('ResearchRunsPage', () => {
     renderWithProviders(<ResearchRunsPage />);
 
     const link = await screen.findByRole('link', { name: 'Back to Chat' });
-    expect(link).toHaveAttribute('href', '/chat?settingsServerChatId=chat_123');
+    expect(link).toHaveAttribute(
+      'href',
+      '/chat?settingsServerChatId=chat_123&researchReturnRunId=rs_1'
+    );
   });
 
   it('does not show a back-to-chat link for unlinked runs', async () => {

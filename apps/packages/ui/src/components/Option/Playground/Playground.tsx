@@ -60,6 +60,7 @@ import {
   getWrappedMatchIndex
 } from "./playground-thread-search"
 import {
+  RESEARCH_RETURN_RUN_ID_PARAM,
   SETTINGS_HISTORY_ID_PARAM,
   SETTINGS_SERVER_CHAT_ID_PARAM
 } from "@/utils/settings-return"
@@ -83,6 +84,10 @@ export const Playground = () => {
     React.useState<AttachedResearchContext | null>(null)
   const [attachedResearchContextHistory, setAttachedResearchContextHistory] =
     React.useState<AttachedResearchContext[]>([])
+  const [pendingReturnedResearchRunId, setPendingReturnedResearchRunId] =
+    React.useState<string | null>(null)
+  const [dismissedReturnedResearchRunId, setDismissedReturnedResearchRunId] =
+    React.useState<string | null>(null)
   const { t } = useTranslation(["playground", "common"])
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const [stickyChatInput] = useStorage(
@@ -740,22 +745,33 @@ export const Playground = () => {
     if (typeof window === "undefined") {
       return {
         historyId: null as string | null,
-        serverChatId: null as string | null
+        serverChatId: null as string | null,
+        researchReturnRunId: null as string | null
       }
     }
     const params = new URLSearchParams(window.location.search)
     const historyId = params.get(SETTINGS_HISTORY_ID_PARAM)?.trim() || null
     const serverChatId =
       params.get(SETTINGS_SERVER_CHAT_ID_PARAM)?.trim() || null
-    return { historyId, serverChatId }
+    const researchReturnRunId =
+      params.get(RESEARCH_RETURN_RUN_ID_PARAM)?.trim() || null
+    return { historyId, serverChatId, researchReturnRunId }
   }, [])
 
   const returnHistoryIdFromSettings = settingsReturnContext.historyId
   const returnServerChatIdFromSettings = settingsReturnContext.serverChatId
+  const returnResearchRunIdFromSettings =
+    settingsReturnContext.researchReturnRunId
 
   React.useEffect(() => {
     if (!playgroundReady) return
-    if (!returnHistoryIdFromSettings && !returnServerChatIdFromSettings) return
+    if (
+      !returnHistoryIdFromSettings &&
+      !returnServerChatIdFromSettings &&
+      !returnResearchRunIdFromSettings
+    ) {
+      return
+    }
 
     let cancelled = false
 
@@ -791,10 +807,18 @@ export const Playground = () => {
         setServerChatId(returnServerChatIdFromSettings)
       }
 
+      if (
+        returnResearchRunIdFromSettings &&
+        returnResearchRunIdFromSettings !== dismissedReturnedResearchRunId
+      ) {
+        setPendingReturnedResearchRunId(returnResearchRunIdFromSettings)
+      }
+
       if (typeof window !== "undefined") {
         const url = new URL(window.location.href)
         url.searchParams.delete(SETTINGS_HISTORY_ID_PARAM)
         url.searchParams.delete(SETTINGS_SERVER_CHAT_ID_PARAM)
+        url.searchParams.delete(RESEARCH_RETURN_RUN_ID_PARAM)
         const nextQuery = url.searchParams.toString()
         const nextPath = `${url.pathname}${nextQuery ? `?${nextQuery}` : ""}${url.hash}`
         window.history.replaceState(window.history.state, "", nextPath)
@@ -811,9 +835,11 @@ export const Playground = () => {
     loadLocalConversation,
     playgroundReady,
     returnHistoryIdFromSettings,
+    returnResearchRunIdFromSettings,
     returnServerChatIdFromSettings,
     serverChatId,
-    setServerChatId
+    setServerChatId,
+    dismissedReturnedResearchRunId
   ])
 
   const pendingTimelineActionRef = React.useRef<TimelineActionDetail | null>(null)
@@ -1561,6 +1587,14 @@ export const Playground = () => {
                   activeSearchMessageIndex={threadSearchActiveMessageIndex}
                   onAttachResearchContext={handleAttachResearchContext}
                   onPrepareResearchFollowUp={handlePrepareResearchFollowUp}
+                  returnedResearchRunId={pendingReturnedResearchRunId}
+                  onDismissReturnedResearchRun={() => {
+                    if (!pendingReturnedResearchRunId) {
+                      return
+                    }
+                    setDismissedReturnedResearchRunId(pendingReturnedResearchRunId)
+                    setPendingReturnedResearchRunId(null)
+                  }}
                 />
               </ChatErrorBoundary>
             </div>

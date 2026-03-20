@@ -238,6 +238,27 @@ git add Docs/Plans/2026-03-19-deep-research-chat-return-banner-implementation-pl
 git commit -m "docs(research): finalize chat return banner plan"
 ```
 
+## Execution Notes
+
+- `Back to Chat` now carries both `settingsServerChatId` and `researchReturnRunId` through the shared package route helper.
+- `Playground.tsx` owns URL consumption for `researchReturnRunId`, captures it into coordinator state before cleanup, clears the query param from the URL, and keeps dismissal state page-local so the banner does not replay on child remount.
+- `PlaygroundChat.tsx` owns the visible `Returned from Research` banner. It resolves the returned run id against the current linked-run query, reuses `getChatLinkedResearchActionPolicy(...)`, and wires `Use in Chat` / `Follow up` / `Review in Research` through the same handlers already used by linked-run status rows.
+- No backend files changed in this slice, so Bandit was not applicable.
+
+Focused verification that passed:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/routes/__tests__/route-paths.research.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx
+# 37/37 passed
+
+./apps/tldw-frontend/node_modules/.bin/vitest run \
+  apps/tldw-frontend/__tests__/pages/research-run-console.test.tsx
+# 15/15 passed
+```
+
 ---
 
 ## Execution Notes

@@ -930,7 +930,10 @@ export default function ResearchRunsPage() {
   const selectedSnapshot = state.snapshot;
   const selectedRun = selectedSnapshot?.run ?? selectedRunQuery.data ?? selectedListItem;
   const backToChatHref = selectedRun?.chat_id
-    ? buildChatThreadPath({ serverChatId: selectedRun.chat_id })
+    ? buildChatThreadPath({
+        serverChatId: selectedRun.chat_id,
+        researchReturnRunId: selectedRun.id,
+      })
     : null;
   const trustView = deriveTrustView(state.bundle, state.artifactContents);
   const loadedTrustArtifactNames = TRUST_ARTIFACT_NAMES.filter(

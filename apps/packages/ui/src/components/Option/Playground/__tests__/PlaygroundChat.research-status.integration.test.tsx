@@ -379,6 +379,96 @@ describe("PlaygroundChat linked research status integration", () => {
     )
   })
 
+  it("shows a returned-from-research banner for a completed run with completed actions", () => {
+    const dismissSpy = vi.fn()
+
+    setLinkedRuns([
+      {
+        run_id: "rs_completed",
+        query: "Completed query",
+        status: "completed",
+        phase: "completed",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-08T20:02:00+00:00"
+      }
+    ])
+
+    renderChat({
+      returnedResearchRunId: "rs_completed",
+      onDismissReturnedResearchRun: dismissSpy,
+      onPrepareResearchFollowUp: vi.fn(),
+      onAttachResearchContext: vi.fn()
+    })
+
+    const banner = screen.getByTestId("returned-research-banner")
+    expect(within(banner).getByText("Returned from Research")).toBeInTheDocument()
+    expect(within(banner).getByText("Completed query")).toBeInTheDocument()
+    expect(within(banner).getByRole("button", { name: "Use in Chat" })).toBeInTheDocument()
+    expect(within(banner).getByRole("button", { name: "Follow up" })).toBeInTheDocument()
+    expect(within(banner).getByRole("link", { name: "Open in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=rs_completed"
+    )
+
+    fireEvent.click(within(banner).getByRole("button", { name: "Dismiss" }))
+    expect(dismissSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows review-only returned-from-research actions when the returned run needs checkpoint review", () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_plan",
+        query: "Plan review query",
+        status: "waiting_human",
+        phase: "awaiting_plan_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_plan",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      }
+    ])
+
+    renderChat({
+      returnedResearchRunId: "rs_plan",
+      onDismissReturnedResearchRun: vi.fn(),
+      onPrepareResearchFollowUp: vi.fn(),
+      onAttachResearchContext: vi.fn()
+    })
+
+    const banner = screen.getByTestId("returned-research-banner")
+    expect(within(banner).getByText("Returned from Research")).toBeInTheDocument()
+    expect(within(banner).getByText("Plan review needed")).toBeInTheDocument()
+    expect(within(banner).getByRole("link", { name: "Review in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=rs_plan"
+    )
+    expect(within(banner).queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+    expect(within(banner).queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+  })
+
+  it("does not show a returned-from-research banner when the run is missing from linked runs", () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_completed",
+        query: "Completed query",
+        status: "completed",
+        phase: "completed",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-08T20:02:00+00:00"
+      }
+    ])
+
+    renderChat({
+      returnedResearchRunId: "rs_missing",
+      onDismissReturnedResearchRun: vi.fn(),
+      onPrepareResearchFollowUp: vi.fn(),
+      onAttachResearchContext: vi.fn()
+    })
+
+    expect(screen.queryByText("Returned from Research")).not.toBeInTheDocument()
+  })
+
   it("renders plan review handoff rows with a specific reason label and review action", () => {
     setLinkedRuns([
       {
