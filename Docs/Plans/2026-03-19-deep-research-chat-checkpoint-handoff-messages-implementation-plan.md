@@ -114,6 +114,7 @@ Expected:
 
 ```bash
 git add \
+  apps/packages/ui/src/components/Common/Playground/Message.tsx \
   apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx \
   apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx
 git commit -m "feat(chat): add checkpoint-aware handoff messages"
@@ -156,3 +157,18 @@ Add:
 git add Docs/Plans/2026-03-19-deep-research-chat-checkpoint-handoff-messages-implementation-plan.md
 git commit -m "docs(research): finalize checkpoint handoff messages plan"
 ```
+
+---
+
+## Execution Notes
+
+- Task 1 extended [PlaygroundChat.research-use-in-chat.integration.test.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx) with red coverage for checkpoint-needed research handoff messages, including plan, sources, outline, unknown review fallback, and the no-current-run regression. The red test commit is `4a23c8889` (`test(chat): cover checkpoint handoff messages`).
+- Task 2 reused the existing checkpoint helper layer in [PlaygroundChat.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx) and added a narrow message action-area prop seam in [Message.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Common/Playground/Message.tsx) so genuine handoff messages can render `Review in Research` plus a compact reason label without changing transcript body text. The implementation commit is `0b83134e9` (`feat(chat): add checkpoint-aware handoff messages`).
+- Focused verification commands run:
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx`
+  - Result: red at Task 1 with the intended checkpoint-handoff message failures
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/research-run-status.test.ts`
+  - Result: `26/26` passed
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/research-run-status.test.ts apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx`
+  - Result: `47/47` passed
+- Bandit was not run for this slice because the change set is frontend/package TypeScript and docs only.
