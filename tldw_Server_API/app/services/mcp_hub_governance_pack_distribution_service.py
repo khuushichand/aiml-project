@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -23,6 +24,8 @@ from tldw_Server_API.app.core.MCP_unified.governance_packs import (
 )
 
 _VALIDSIG_RE = re.compile(r"\bVALIDSIG\s+([0-9A-Fa-f]+)\b")
+_GOODSIG_RE = re.compile(r"\bGOODSIG\s+[0-9A-Fa-f]+\s+(.+)")
+_GOOD_SIGNATURE_RE = re.compile(r'Good signature from "?([^"\n]+)"?')
 
 
 def _canonical_json(value: Any) -> str:
@@ -42,6 +45,41 @@ def _pack_content_digest(pack: GovernancePack) -> str:
     """Compute a stable digest for normalized governance-pack content."""
     normalized = normalize_governance_pack(pack).to_dict()
     return hashlib.sha256(_canonical_json(normalized).encode("utf-8")).hexdigest()
+
+
+def _verification_summary(pack: GovernancePack | None) -> dict[str, Any]:
+    """Project verification metadata from a pack onto API/update response fields."""
+    if not isinstance(pack, GovernancePack):
+        return {
+            "signer_fingerprint": None,
+            "signer_identity": None,
+            "verified_object_type": None,
+            "verification_result_code": None,
+            "verification_warning_code": None,
+        }
+    return {
+        "signer_fingerprint": str(getattr(pack, "signer_fingerprint", "") or "").strip() or None,
+        "signer_identity": str(getattr(pack, "signer_identity", "") or "").strip() or None,
+        "verified_object_type": str(getattr(pack, "verified_object_type", "") or "").strip() or None,
+        "verification_result_code": str(getattr(pack, "verification_result_code", "") or "").strip() or None,
+        "verification_warning_code": str(getattr(pack, "verification_warning_code", "") or "").strip() or None,
+    }
+
+
+def _apply_update_signer_warning(installed: dict[str, Any], candidate_pack: GovernancePack) -> None:
+    """Annotate update candidates when signer provenance differs from the installed pack."""
+    if str(getattr(candidate_pack, "verification_warning_code", "") or "").strip():
+        return
+    candidate_signer = str(getattr(candidate_pack, "signer_fingerprint", "") or "").strip().upper() or None
+    candidate_result = str(getattr(candidate_pack, "verification_result_code", "") or "").strip().lower() or None
+    if candidate_result != "verified_and_trusted" or not candidate_signer:
+        return
+    installed_signer = str(installed.get("signer_fingerprint") or "").strip().upper() or None
+    if not installed_signer:
+        candidate_pack.verification_warning_code = "unknown_previous_signer"
+        return
+    if installed_signer != candidate_signer:
+        candidate_pack.verification_warning_code = "signer_rotated_trusted"
 
 
 def _normalize_git_subpath(subpath: str | None) -> str | None:
@@ -106,6 +144,28 @@ def _verified_signature_fingerprints(output: str) -> set[str]:
     return {match.upper() for match in _VALIDSIG_RE.findall(output or "")}
 
 
+def _verification_output(stdout: str, stderr: str) -> str:
+    """Collapse Git verification streams into a single parseable payload."""
+    return "\n".join(part for part in (str(stdout or ""), str(stderr or "")) if part)
+
+
+def _verified_signer_identity(output: str) -> str | None:
+    """Extract a signer identity from Git/GPG verification output when available."""
+    for pattern in (_GOOD_SIGNATURE_RE, _GOODSIG_RE):
+        match = pattern.search(output or "")
+        if match:
+            identity = str(match.group(1) or "").strip()
+            if identity:
+                return identity
+    return None
+
+
+def _looks_like_gpg_verification_output(output: str) -> bool:
+    """Return True when the verification output appears to come from Git/GPG."""
+    lowered = str(output or "").lower()
+    return "[gnupg:]" in lowered or "gpg:" in lowered or "gpgv:" in lowered
+
+
 def _manifest_summary(pack: GovernancePack) -> dict[str, Any]:
     """Return a stable manifest payload for governance-pack API responses."""
     return pack.manifest.model_dump(exclude_none=True)
@@ -122,6 +182,37 @@ class McpHubGovernancePackDistributionService:
         if self.repo is None:
             raise ValueError("governance-pack source candidate storage is unavailable")
         return self.repo
+
+    def _verification_result(
+        self,
+        *,
+        verified: bool,
+        verified_object_type: str,
+        result_code: str,
+        signer_fingerprint: str | None = None,
+        signer_identity: str | None = None,
+        warning_code: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "verified": bool(verified),
+            "verification_mode": "git_signature",
+            "verified_object_type": verified_object_type,
+            "signer_fingerprint": signer_fingerprint,
+            "signer_identity": signer_identity,
+            "result_code": result_code,
+            "warning_code": warning_code,
+        }
+
+    async def _evaluate_signer_trust(self, *, signer_fingerprint: str, repo_url: str) -> dict[str, Any] | None:
+        evaluator = getattr(self.trust_service, "evaluate_signer_for_repository", None)
+        if not callable(evaluator):
+            return None
+        result = evaluator(signer_fingerprint, repo_url)
+        if inspect.isawaitable(result):
+            result = await result
+        if isinstance(result, dict):
+            return result
+        return None
 
     @staticmethod
     def _candidate_ref_kind(candidate: dict[str, Any]) -> str:
@@ -166,6 +257,11 @@ class McpHubGovernancePackDistributionService:
         commit: str,
         verified: bool | None,
         verification_required: bool,
+        signer_fingerprint: str | None = None,
+        signer_identity: str | None = None,
+        verified_object_type: str | None = None,
+        verification_result_code: str | None = None,
+        verification_warning_code: str | None = None,
     ) -> GovernancePack:
         """Load a governance pack from a checked-out Git worktree."""
         pack = load_governance_pack_directory(
@@ -181,6 +277,11 @@ class McpHubGovernancePackDistributionService:
         )
         pack.source_path = None
         pack.pack_content_digest = _pack_content_digest(pack)
+        pack.signer_fingerprint = str(signer_fingerprint or "").strip() or None
+        pack.signer_identity = str(signer_identity or "").strip() or None
+        pack.verified_object_type = str(verified_object_type or "").strip() or None
+        pack.verification_result_code = str(verification_result_code or "").strip() or None
+        pack.verification_warning_code = str(verification_warning_code or "").strip() or None
         return pack
 
     async def _persist_prepared_candidate(
@@ -201,6 +302,11 @@ class McpHubGovernancePackDistributionService:
             pack_document=self._pack_document(pack),
             source_verified=pack.source_verified,
             source_verification_mode=pack.source_verification_mode,
+            signer_fingerprint=getattr(pack, "signer_fingerprint", None),
+            signer_identity=getattr(pack, "signer_identity", None),
+            verified_object_type=getattr(pack, "verified_object_type", None),
+            verification_result_code=getattr(pack, "verification_result_code", None),
+            verification_warning_code=getattr(pack, "verification_warning_code", None),
             fetched_by=actor_id,
         )
         if not candidate:
@@ -253,14 +359,15 @@ class McpHubGovernancePackDistributionService:
                 ref_kind="commit",
                 checkout_root=checkout_root,
             )
-            verified = await self._verify_git_revision(
+            verification_result = await self._verify_git_revision(
                 checkout_root=checkout_root,
+                repo_url=source_location,
                 ref=resolved_commit,
                 ref_kind="commit",
                 commit=commit,
                 trusted_git_key_fingerprints=trusted_fingerprints,
             )
-            if not verified:
+            if not bool(verification_result.get("verified")):
                 raise ValueError("Prepared governance-pack source candidate no longer satisfies Git verification requirements")
 
     async def _resolve_update_candidate(self, governance_pack_id: int) -> dict[str, Any]:
@@ -316,6 +423,7 @@ class McpHubGovernancePackDistributionService:
             ) from last_error
         if candidate_pack.manifest.pack_id != str(installed.get("pack_id") or "").strip():
             raise ValueError("Resolved governance-pack update candidate pack_id does not match installed pack")
+        _apply_update_signer_warning(installed, candidate_pack)
 
         try:
             installed_version = Version(str(installed.get("pack_version") or "").strip())
@@ -350,6 +458,7 @@ class McpHubGovernancePackDistributionService:
             },
             "source_commit_resolved": candidate_pack.source_commit_resolved,
             "pack_content_digest": candidate_pack.pack_content_digest,
+            **_verification_summary(candidate_pack),
         }
 
     def _checkout_git_source_sync(
@@ -408,12 +517,14 @@ class McpHubGovernancePackDistributionService:
         self,
         *,
         checkout_root: Path,
+        repo_url: str,
         ref: str | None,
         ref_kind: str,
         commit: str,
         trusted_git_key_fingerprints: list[str] | None = None,
-    ) -> bool:
-        """Verify the checked-out Git revision and optionally enforce trusted fingerprints."""
+    ) -> dict[str, Any]:
+        """Verify the checked-out Git revision and return a structured trust result."""
+        verified_object_type = "tag" if ref_kind == "tag" and ref else "commit"
         command = [_git_executable(), "-C", str(checkout_root)]
         if ref_kind == "tag" and ref:
             command.extend(["verify-tag", "--raw", "--", str(ref).strip()])
@@ -425,41 +536,83 @@ class McpHubGovernancePackDistributionService:
             capture_output=True,
             text=True,
         )
+        output = _verification_output(str(completed.stdout or ""), str(completed.stderr or ""))
+        signer_identity = _verified_signer_identity(output)
         if completed.returncode != 0:
-            return False
-        trusted_fingerprints = _normalize_fingerprints(trusted_git_key_fingerprints or [])
-        if not trusted_fingerprints:
-            return True
-        observed = _verified_signature_fingerprints(
-            "\n".join(
-                part
-                for part in (
-                    str(completed.stdout or ""),
-                    str(completed.stderr or ""),
-                )
-                if part
+            return self._verification_result(
+                verified=False,
+                verified_object_type=verified_object_type,
+                signer_identity=signer_identity,
+                result_code="signature_invalid",
             )
+        trusted_fingerprints = _normalize_fingerprints(trusted_git_key_fingerprints or [])
+        observed = _verified_signature_fingerprints(output)
+        signer_fingerprint = next(iter(sorted(observed)), None)
+        if not signer_fingerprint:
+            result_code = (
+                "signer_unknown"
+                if _looks_like_gpg_verification_output(output)
+                else "unsupported_signature_backend"
+            )
+            return self._verification_result(
+                verified=False,
+                verified_object_type=verified_object_type,
+                signer_identity=signer_identity,
+                result_code=result_code,
+            )
+        if trusted_fingerprints and signer_fingerprint not in trusted_fingerprints:
+            return self._verification_result(
+                verified=False,
+                verified_object_type=verified_object_type,
+                signer_fingerprint=signer_fingerprint,
+                signer_identity=signer_identity,
+                result_code="signer_not_allowed_for_repo",
+            )
+        return self._verification_result(
+            verified=True,
+            verified_object_type=verified_object_type,
+            signer_fingerprint=signer_fingerprint,
+            signer_identity=signer_identity,
+            result_code="verified_and_trusted",
         )
-        return bool(observed & trusted_fingerprints)
 
     async def _verify_git_revision(
         self,
         *,
         checkout_root: Path,
+        repo_url: str,
         ref: str | None,
         ref_kind: str,
         commit: str,
         trusted_git_key_fingerprints: list[str] | None = None,
-    ) -> bool:
-        """Verify the checked-out Git revision and optionally enforce trusted fingerprints."""
-        return await asyncio.to_thread(
+    ) -> dict[str, Any]:
+        """Verify the checked-out Git revision and return a structured trust result."""
+        result = await asyncio.to_thread(
             self._verify_git_revision_sync,
             checkout_root=checkout_root,
+            repo_url=repo_url,
             ref=ref,
             ref_kind=ref_kind,
             commit=commit,
             trusted_git_key_fingerprints=trusted_git_key_fingerprints,
         )
+        if not bool(result.get("verified")):
+            return result
+        signer_fingerprint = str(result.get("signer_fingerprint") or "").strip()
+        if not signer_fingerprint:
+            return result
+        signer_decision = await self._evaluate_signer_trust(
+            signer_fingerprint=signer_fingerprint,
+            repo_url=repo_url,
+        )
+        if not isinstance(signer_decision, dict):
+            return result
+        if bool(signer_decision.get("allowed")):
+            result["result_code"] = "verified_and_trusted"
+            return result
+        result["verified"] = False
+        result["result_code"] = str(signer_decision.get("result_code") or "signer_not_allowed_for_repo")
+        return result
 
     async def resolve_local_path(self, path: str) -> GovernancePack:
         """Resolve a governance pack from a trusted local filesystem path."""
@@ -498,17 +651,20 @@ class McpHubGovernancePackDistributionService:
                 ref_kind=ref_kind,
                 checkout_root=checkout_root,
             )
-            verified: bool | None = None
+            verification_result: dict[str, Any] | None = None
             if verification_required:
-                verified = await self._verify_git_revision(
+                verification_result = await self._verify_git_revision(
                     checkout_root=checkout_root,
+                    repo_url=repo_url,
                     ref=normalized_ref,
                     ref_kind=ref_kind,
                     commit=commit,
                     trusted_git_key_fingerprints=trusted_fingerprints,
                 )
-                if not verified:
-                    raise ValueError("Git source verification failed")
+                if not bool(verification_result.get("verified")):
+                    raise ValueError(
+                        f"Git source verification failed: {verification_result.get('result_code') or 'verification_failed'}"
+                    )
             pack_root = _resolve_pack_root(checkout_root, normalized_subpath)
             return await asyncio.to_thread(
                 self._load_git_pack_sync,
@@ -518,8 +674,37 @@ class McpHubGovernancePackDistributionService:
                 ref_kind=ref_kind,
                 subpath=normalized_subpath,
                 commit=commit,
-                verified=verified,
+                verified=(
+                    bool(verification_result.get("verified"))
+                    if verification_result is not None
+                    else None
+                ),
                 verification_required=verification_required,
+                signer_fingerprint=(
+                    str(verification_result.get("signer_fingerprint") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
+                signer_identity=(
+                    str(verification_result.get("signer_identity") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
+                verified_object_type=(
+                    str(verification_result.get("verified_object_type") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
+                verification_result_code=(
+                    str(verification_result.get("result_code") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
+                verification_warning_code=(
+                    str(verification_result.get("warning_code") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
             )
 
     async def prepare_source_candidate(
@@ -590,6 +775,11 @@ class McpHubGovernancePackDistributionService:
             ),
             "source_commit_resolved": update.get("source_commit_resolved"),
             "pack_content_digest": update.get("pack_content_digest"),
+            "signer_fingerprint": update.get("signer_fingerprint"),
+            "signer_identity": update.get("signer_identity"),
+            "verified_object_type": update.get("verified_object_type"),
+            "verification_result_code": update.get("verification_result_code"),
+            "verification_warning_code": update.get("verification_warning_code"),
         }
 
     async def prepare_upgrade_candidate(
@@ -615,6 +805,11 @@ class McpHubGovernancePackDistributionService:
             "candidate_manifest": dict(update.get("candidate_manifest") or {}),
             "candidate": prepared["candidate"],
             "manifest": prepared["manifest"],
+            "signer_fingerprint": update.get("signer_fingerprint"),
+            "signer_identity": update.get("signer_identity"),
+            "verified_object_type": update.get("verified_object_type"),
+            "verification_result_code": update.get("verification_result_code"),
+            "verification_warning_code": update.get("verification_warning_code"),
         }
 
     async def validate_prepared_upgrade_candidate(

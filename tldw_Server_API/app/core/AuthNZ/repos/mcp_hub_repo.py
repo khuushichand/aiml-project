@@ -177,6 +177,10 @@ def _load_json_list(raw: Any) -> list[Any]:
     return []
 
 
+def _dump_canonical_json_dict(value: dict[str, Any] | None) -> str:
+    return json.dumps(value or {}, sort_keys=True, separators=(",", ":"))
+
+
 def _normalize_string_list(values: Any) -> list[str]:
     if values is None:
         return []
@@ -432,6 +436,11 @@ class McpHubRepo:
         out["source_verified"] = None if source_verified is None else _to_bool(source_verified)
         out["superseded_by_governance_pack_id"] = out.get("superseded_by_governance_pack_id")
         out["installed_from_upgrade_id"] = out.get("installed_from_upgrade_id")
+        out["signer_fingerprint"] = str(out.get("signer_fingerprint") or "").strip() or None
+        out["signer_identity"] = str(out.get("signer_identity") or "").strip() or None
+        out["verified_object_type"] = str(out.get("verified_object_type") or "").strip() or None
+        out["verification_result_code"] = str(out.get("verification_result_code") or "").strip() or None
+        out["verification_warning_code"] = str(out.get("verification_warning_code") or "").strip() or None
         out["manifest"] = _load_json_dict(out.pop("manifest_json", None))
         out["normalized_ir"] = _load_json_dict(out.pop("normalized_ir_json", None))
         return out
@@ -445,6 +454,11 @@ class McpHubRepo:
         out = dict(row)
         source_verified = out.get("source_verified")
         out["source_verified"] = None if source_verified is None else _to_bool(source_verified)
+        out["signer_fingerprint"] = str(out.get("signer_fingerprint") or "").strip() or None
+        out["signer_identity"] = str(out.get("signer_identity") or "").strip() or None
+        out["verified_object_type"] = str(out.get("verified_object_type") or "").strip() or None
+        out["verification_result_code"] = str(out.get("verification_result_code") or "").strip() or None
+        out["verification_warning_code"] = str(out.get("verification_warning_code") or "").strip() or None
         out["pack_document"] = _load_json_dict(out.pop("pack_document_json", None))
         return out
 
@@ -455,6 +469,7 @@ class McpHubRepo:
         if row is None:
             return None
         out = dict(row)
+        out["policy_document_json_raw"] = str(out.get("policy_document_json") or "").strip() or "{}"
         out["policy_document"] = _load_json_dict(out.pop("policy_document_json", None))
         return out
 
@@ -570,6 +585,11 @@ class McpHubRepo:
         pack_content_digest: str | None = None,
         source_verified: bool | None = None,
         source_verification_mode: str | None = None,
+        signer_fingerprint: str | None = None,
+        signer_identity: str | None = None,
+        verified_object_type: str | None = None,
+        verification_result_code: str | None = None,
+        verification_warning_code: str | None = None,
         source_fetched_at: datetime | str | None = None,
         fetched_by: int | None = None,
         conn: Any | None = None,
@@ -610,6 +630,11 @@ class McpHubRepo:
             str(pack_content_digest or "").strip() or None,
             source_verified_value,
             str(source_verification_mode or "").strip() or None,
+            str(signer_fingerprint or "").strip() or None,
+            str(signer_identity or "").strip() or None,
+            str(verified_object_type or "").strip() or None,
+            str(verification_result_code or "").strip() or None,
+            str(verification_warning_code or "").strip() or None,
             source_fetched_ts,
             fetched_by,
             json.dumps(manifest or {}),
@@ -626,9 +651,10 @@ class McpHubRepo:
                 adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
                 bundle_digest, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                 source_commit_resolved, pack_content_digest, source_verified,
-                source_verification_mode, source_fetched_at, fetched_by, manifest_json,
+                source_verification_mode, signer_fingerprint, signer_identity, verified_object_type,
+                verification_result_code, verification_warning_code, source_fetched_at, fetched_by, manifest_json,
                 normalized_ir_json, is_active_install, created_by, updated_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         if conn is None:
             await self.db_pool.execute(query, params)
@@ -690,7 +716,8 @@ class McpHubRepo:
                    adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
                    bundle_digest, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                    source_commit_resolved, pack_content_digest, source_verified,
-                   source_verification_mode, source_fetched_at, fetched_by, manifest_json,
+                   source_verification_mode, signer_fingerprint, signer_identity, verified_object_type,
+                   verification_result_code, verification_warning_code, source_fetched_at, fetched_by, manifest_json,
                    normalized_ir_json, is_active_install, superseded_by_governance_pack_id,
                    installed_from_upgrade_id, created_by, updated_by, created_at, updated_at
             FROM mcp_governance_packs
@@ -829,7 +856,8 @@ class McpHubRepo:
                    adapter_contract_version, title, description, owner_scope_type, owner_scope_id,
                    bundle_digest, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                    source_commit_resolved, pack_content_digest, source_verified,
-                   source_verification_mode, source_fetched_at, fetched_by, manifest_json,
+                   source_verification_mode, signer_fingerprint, signer_identity, verified_object_type,
+                   verification_result_code, verification_warning_code, source_fetched_at, fetched_by, manifest_json,
                    normalized_ir_json, is_active_install, superseded_by_governance_pack_id,
                    installed_from_upgrade_id, created_by, updated_by, created_at, updated_at
             FROM mcp_governance_packs
@@ -870,6 +898,11 @@ class McpHubRepo:
         pack_document: dict[str, Any] | None = None,
         source_verified: bool | None = None,
         source_verification_mode: str | None = None,
+        signer_fingerprint: str | None = None,
+        signer_identity: str | None = None,
+        verified_object_type: str | None = None,
+        verification_result_code: str | None = None,
+        verification_warning_code: str | None = None,
         source_fetched_at: datetime | str | None = None,
         fetched_by: int | None = None,
         conn: Any | None = None,
@@ -898,6 +931,11 @@ class McpHubRepo:
             json.dumps(pack_document or {}),
             source_verified_value,
             str(source_verification_mode or "").strip() or None,
+            str(signer_fingerprint or "").strip() or None,
+            str(signer_identity or "").strip() or None,
+            str(verified_object_type or "").strip() or None,
+            str(verification_result_code or "").strip() or None,
+            str(verification_warning_code or "").strip() or None,
             source_fetched_ts,
             fetched_by,
             ts,
@@ -906,8 +944,9 @@ class McpHubRepo:
             INSERT INTO mcp_governance_pack_source_candidates (
                 source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                 source_commit_resolved, pack_content_digest, pack_document_json, source_verified,
-                source_verification_mode, source_fetched_at, fetched_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_verification_mode, signer_fingerprint, signer_identity, verified_object_type,
+                verification_result_code, verification_warning_code, source_fetched_at, fetched_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         row: dict[str, Any] | None = None
         if conn is None:
@@ -941,7 +980,8 @@ class McpHubRepo:
         query = """
             SELECT id, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                    source_commit_resolved, pack_content_digest, pack_document_json, source_verified,
-                   source_verification_mode, source_fetched_at, fetched_by, created_at
+                   source_verification_mode, signer_fingerprint, signer_identity, verified_object_type,
+                   verification_result_code, verification_warning_code, source_fetched_at, fetched_by, created_at
             FROM mcp_governance_pack_source_candidates
             WHERE id = ?
             """
@@ -958,7 +998,8 @@ class McpHubRepo:
             """
             SELECT id, source_type, source_location, source_ref_requested, source_ref_kind, source_subpath,
                    source_commit_resolved, pack_content_digest, pack_document_json, source_verified,
-                   source_verification_mode, source_fetched_at, fetched_by, created_at
+                   source_verification_mode, signer_fingerprint, signer_identity, verified_object_type,
+                   verification_result_code, verification_warning_code, source_fetched_at, fetched_by, created_at
             FROM mcp_governance_pack_source_candidates
             ORDER BY id
             """
@@ -981,6 +1022,7 @@ class McpHubRepo:
             return {
                 "id": 1,
                 "policy_document": {},
+                "policy_document_json_raw": "{}",
                 "updated_by": None,
                 "updated_at": None,
             }
@@ -991,29 +1033,51 @@ class McpHubRepo:
         *,
         policy_document: dict[str, Any],
         actor_id: int | None,
+        expected_policy_document_json: str | None = None,
         conn: Any | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Insert or replace the deployment-wide governance-pack trust policy."""
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
-        query = """
-            INSERT INTO mcp_governance_pack_trust_policy (
-                id, policy_document_json, updated_by, updated_at
-            ) VALUES (1, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                policy_document_json = excluded.policy_document_json,
-                updated_by = excluded.updated_by,
-                updated_at = excluded.updated_at
-            """
-        params = (
-            json.dumps(policy_document or {}),
-            actor_id,
-            ts,
-        )
-        if conn is None:
-            await self.db_pool.execute(query, params)
+        policy_json = _dump_canonical_json_dict(policy_document)
+        if expected_policy_document_json is None:
+            query = """
+                INSERT INTO mcp_governance_pack_trust_policy (
+                    id, policy_document_json, updated_by, updated_at
+                ) VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    policy_document_json = excluded.policy_document_json,
+                    updated_by = excluded.updated_by,
+                    updated_at = excluded.updated_at
+                """
+            params = (
+                policy_json,
+                actor_id,
+                ts,
+            )
         else:
-            await self._conn_execute(conn, query, params)
+            query = """
+                INSERT INTO mcp_governance_pack_trust_policy (
+                    id, policy_document_json, updated_by, updated_at
+                ) VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    policy_document_json = excluded.policy_document_json,
+                    updated_by = excluded.updated_by,
+                    updated_at = excluded.updated_at
+                WHERE mcp_governance_pack_trust_policy.policy_document_json = ?
+                """
+            params = (
+                policy_json,
+                actor_id,
+                ts,
+                str(expected_policy_document_json),
+            )
+        if conn is None:
+            result = await self.db_pool.execute(query, params)
+        else:
+            result = await self._conn_execute(conn, query, params)
+        if expected_policy_document_json is not None and not self._command_touched_rows(result):
+            return None
         return await self.get_governance_pack_trust_policy()
 
     async def create_governance_pack_upgrade(

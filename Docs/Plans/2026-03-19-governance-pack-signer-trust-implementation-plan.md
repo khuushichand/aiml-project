@@ -468,3 +468,24 @@ Mark every task complete in this plan file and record any deviations from the or
 git add Docs/Plans/2026-03-19-governance-pack-signer-trust-implementation-plan.md
 git commit -m "docs: finalize governance pack signer trust plan"
 ```
+
+## Final Status
+
+- Task 1: Complete
+- Task 2: Complete
+- Task 3: Complete
+- Task 4: Complete
+- Task 5: Complete
+- Task 6: Complete
+- Task 7: Complete
+
+## Verification Summary
+
+- Backend focused governance-pack suite: `84 passed`
+- UI signer-trust vitest slice: `17 passed`
+- Bandit on touched backend governance-pack scope: `0 findings`
+- `git diff --check`: clean
+
+## Deviations
+
+- Task 5 expanded the MCP Hub update-check response shape to carry signer diagnostics at the top level, not only inside prepared candidates. This was necessary so Task 6 could surface signer rotation and unknown-previous-signer warnings directly in the update banner without making an extra fetch.
