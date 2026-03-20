@@ -96,57 +96,41 @@ class SubscriptionService:
         """
         List all publicly available subscription plans.
 
-        Returns plans from database, falling back to defaults if none exist.
+        Returns plans from the database. OSS no longer synthesizes a public
+        paid fallback catalog when the database is empty, but it does
+        synthesize the neutral free/self-host tier so the public endpoint
+        never returns an empty catalog on a fresh install.
         """
         repo = await self._get_billing_repo()
         plans = await repo.list_plans(active_only=True, public_only=True)
-
         if plans:
             return plans
 
-        # Fallback to default plans
-        return [
-            {
-                "name": "free",
-                "display_name": "Free",
-                "description": "Basic features for personal use",
-                "price_usd_monthly": 0,
-                "price_usd_yearly": 0,
-                "limits": get_plan_limits("free"),
-            },
-            {
-                "name": "pro",
-                "display_name": "Pro",
-                "description": "Advanced features for professionals",
-                "price_usd_monthly": 29,
-                "price_usd_yearly": 290,
-                "limits": get_plan_limits("pro"),
-            },
-            {
-                "name": "enterprise",
-                "display_name": "Enterprise",
-                "description": "Full features for organizations",
-                "price_usd_monthly": 199,
-                "price_usd_yearly": 1990,
-                "limits": get_plan_limits("enterprise"),
-            },
-        ]
+        free_plan = await self.get_plan("free")
+        return [free_plan] if free_plan else []
 
     async def get_plan(self, plan_name: str) -> dict[str, Any] | None:
-        """Get a specific plan by name."""
+        """Get a specific plan by name.
+
+        Only the neutral free/self-host fallback is synthesized when the
+        database does not contain a matching plan row.
+        """
         repo = await self._get_billing_repo()
         plan = await repo.get_plan_by_name(plan_name)
         if plan:
             return plan
-        # Fallback to defaults
-        limits = get_plan_limits(plan_name)
-        if limits:
-            return {
-                "name": plan_name,
-                "display_name": plan_name.title(),
-                "limits": limits,
-            }
-        return None
+        if str(plan_name).strip().lower() != "free":
+            return None
+        return {
+            "name": "free",
+            "display_name": "Free",
+            "description": "Internal/self-host default plan",
+            "price_usd_monthly": 0,
+            "price_usd_yearly": 0,
+            "limits": get_plan_limits("free"),
+            "is_active": True,
+            "is_public": False,
+        }
 
     async def get_plan_for_checkout(self, plan_name: str) -> dict[str, Any] | None:
         """
@@ -274,7 +258,7 @@ class SubscriptionService:
 
         Args:
             org_id: Organization ID
-            plan_name: Target plan (pro, enterprise)
+            plan_name: Target plan name
             billing_cycle: monthly or yearly
             success_url: Redirect URL on success
             cancel_url: Redirect URL on cancel

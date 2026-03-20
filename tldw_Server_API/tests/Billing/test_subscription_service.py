@@ -147,6 +147,14 @@ class _FakeBillingRepo:
         return dict(self.last_payment)
 
 
+class _EmptyPlansRepo:
+    async def list_plans(self, *, active_only: bool = True, public_only: bool = True):
+        return []
+
+    async def get_plan_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        return None
+
+
 class _FakeStripeClient:
     """Minimal Stripe client stub for checkout tests."""
 
@@ -286,6 +294,40 @@ async def test_resume_subscription_propagates_runtime_error_without_local_mutati
 
     assert repo.updated_rows == []
     assert repo.logged_actions == []
+
+
+@pytest.mark.asyncio
+async def test_list_available_plans_returns_neutral_free_fallback_when_repository_has_no_public_plans() -> None:
+    """OSS should expose the neutral free tier when no public plans exist."""
+
+    service = SubscriptionService(billing_repo=_EmptyPlansRepo())
+
+    plans = await service.list_available_plans()
+
+    assert len(plans) == 1
+    assert plans[0]["name"] == "free"
+    assert plans[0]["display_name"] == "Free"
+    assert plans[0]["price_usd_monthly"] == 0
+    assert plans[0]["price_usd_yearly"] == 0
+    assert plans[0]["is_public"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_plan_only_synthesizes_neutral_free_fallback() -> None:
+    """Only the neutral free plan should be synthesized without a database row."""
+
+    service = SubscriptionService(billing_repo=_EmptyPlansRepo())
+
+    free_plan = await service.get_plan("free")
+    paid_plan = await service.get_plan("pro")
+
+    assert free_plan is not None
+    assert free_plan["name"] == "free"
+    assert free_plan["display_name"] == "Free"
+    assert free_plan["price_usd_monthly"] == 0
+    assert free_plan["price_usd_yearly"] == 0
+    assert free_plan["limits"]["storage_mb"] > 0
+    assert paid_plan is None
 
 
 @pytest.mark.asyncio

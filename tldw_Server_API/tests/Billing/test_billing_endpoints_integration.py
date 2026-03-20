@@ -97,9 +97,9 @@ class TestBillingPlansEndpoint:
         data = response.json()
         assert "plans" in data
 
-    def test_list_plans_returns_default_tiers(self):
+    def test_list_plans_returns_neutral_public_tiers(self):
 
-        """Plans endpoint should return default plan tiers."""
+        """Plans endpoint should not synthesize a commercial catalog."""
         response = self.client.get("/api/v1/billing/plans")
 
         if response.status_code == 404:
@@ -108,9 +108,16 @@ class TestBillingPlansEndpoint:
         data = response.json()
         plans = data["plans"]
 
-        # Should have at least the default tiers
         plan_names = [p["name"] for p in plans]
-        assert "free" in plan_names or len(plans) > 0
+        assert plan_names, "plans endpoint returned an empty catalog"
+        assert "pro" not in plan_names
+        assert "plus" not in plan_names
+        assert "enterprise" not in plan_names
+        assert plan_names == ["free"]
+        assert plans[0]["display_name"] == "Free"
+        assert plans[0]["price_usd_monthly"] == 0
+        assert plans[0]["price_usd_yearly"] == 0
+        assert plans[0]["is_public"] is False
 
     def test_plans_include_limits(self):
 

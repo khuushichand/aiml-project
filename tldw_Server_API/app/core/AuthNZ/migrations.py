@@ -2492,7 +2492,7 @@ def rollback_029_drop_org_invite_redemptions_table(conn: sqlite3.Connection) -> 
 
 
 def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
-    """Create subscription_plans table for plan tier definitions."""
+    """Create subscription_plans table for neutral OSS/self-host defaults."""
     logger.info("Migration 030: START subscription_plans table")
     conn.execute(
         """
@@ -2508,7 +2508,7 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
             price_usd_yearly REAL DEFAULT 0,
             limits_json TEXT NOT NULL,
             is_active INTEGER DEFAULT 1,
-            is_public INTEGER DEFAULT 1,
+            is_public INTEGER DEFAULT 0,
             sort_order INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -2518,7 +2518,7 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)")
 
-    # Seed default plans
+    # Seed only the neutral free/self-host default plan.
     default_plans = [
         {
             "name": "free",
@@ -2542,102 +2542,6 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
                 "features": ["basic_search", "basic_chat"]
             })
         },
-        {
-            "name": "starter",
-            "display_name": "Starter",
-            "description": "For individuals getting started",
-            "price_usd_monthly": 10,
-            "price_usd_yearly": 100,
-            "sort_order": 1,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 2048,
-                "api_calls_day": 1000,
-                "api_calls_month": 30000,
-                "llm_tokens_month": 4000000,
-                "llm_tokens_premium_month": 80000,
-                "max_context_tokens": 64000,
-                "byok_enabled": True,
-                "byok_keys_saved": 1,
-                "notebooks": 100,
-                "sources_per_notebook": 50,
-                "ingestion_pages_month": 2000,
-                "ingestion_pages_day": 150,
-                "scheduled_refresh": "manual",
-                "max_upload_mb": 50,
-                "transcription_minutes_month": 120,
-                "tts_minutes_month": 30,
-                "rag_queries_day": 1000,
-                "concurrent_jobs": 2,
-                "team_members": 1,
-                "rate_limit_rpm": 20,
-                "features": ["basic_search", "basic_chat", "byok"]
-            })
-        },
-        {
-            "name": "plus",
-            "display_name": "Plus",
-            "description": "For power users who need more capacity",
-            "price_usd_monthly": 20,
-            "price_usd_yearly": 200,
-            "sort_order": 2,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 10240,
-                "api_calls_day": 5000,
-                "api_calls_month": 150000,
-                "llm_tokens_month": 12000000,
-                "llm_tokens_premium_month": 200000,
-                "max_context_tokens": 128000,
-                "byok_enabled": True,
-                "byok_keys_saved": 3,
-                "notebooks": 300,
-                "sources_per_notebook": 100,
-                "ingestion_pages_month": 10000,
-                "ingestion_pages_day": 750,
-                "scheduled_refresh": "weekly",
-                "max_upload_mb": 200,
-                "transcription_minutes_month": 300,
-                "tts_minutes_month": 90,
-                "rag_queries_day": 5000,
-                "concurrent_jobs": 5,
-                "team_members": 1,
-                "rate_limit_rpm": 60,
-                "features": ["*", "byok", "rag_advanced", "vector_search"]
-            })
-        },
-        {
-            "name": "pro",
-            "display_name": "Pro",
-            "description": "For teams and professional usage",
-            "price_usd_monthly": 30,
-            "price_usd_yearly": 300,
-            "sort_order": 3,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 30720,
-                "api_calls_day": 15000,
-                "api_calls_month": 450000,
-                "llm_tokens_month": 18000000,
-                "llm_tokens_premium_month": 300000,
-                "max_context_tokens": 200000,
-                "byok_enabled": True,
-                "byok_keys_saved": 10,
-                "notebooks": 1000,
-                "sources_per_notebook": 300,
-                "ingestion_pages_month": 30000,
-                "ingestion_pages_day": 2000,
-                "scheduled_refresh": "daily",
-                "max_upload_mb": 500,
-                "transcription_minutes_month": 500,
-                "tts_minutes_month": 150,
-                "rag_queries_day": 15000,
-                "concurrent_jobs": 10,
-                "team_members": 5,
-                "rate_limit_rpm": 120,
-                "features": ["*", "byok", "rag_advanced", "vector_search", "priority_support", "audit_logs"]
-            })
-        }
     ]
 
     for plan in default_plans:
@@ -2652,7 +2556,7 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
         )
 
     conn.commit()
-    logger.info("Migration 030: Created subscription_plans table with default plans")
+    logger.info("Migration 030: Created subscription_plans table with neutral default plan")
 
 
 def rollback_030_drop_subscription_plans_table(conn: sqlite3.Connection) -> None:
