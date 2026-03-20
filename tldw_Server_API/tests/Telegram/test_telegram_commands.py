@@ -164,3 +164,35 @@ def test_telegram_webhook_ignores_group_freeform_message_without_reply(client, p
 
     assert response.status_code == 200
     assert response.json() == {"ok": True, "status": "ignored"}
+
+
+def test_replayed_ignored_group_freeform_message_is_deduped(client, principal_override):
+    principal = _make_principal(active_team_id=22, team_ids=[22], org_ids=[1])
+    principal_override(principal)
+    _seed_telegram_bot(
+        client,
+        principal_override,
+        scope_type="team",
+        scope_id=22,
+        bot_token="123:abc",
+        webhook_secret="secret-123",
+    )
+
+    payload = {
+        "update_id": 9002,
+        "message": {
+            "message_id": 6,
+            "chat": {"id": 123, "type": "group"},
+            "from": {"id": 77, "username": "unknown"},
+            "text": "hello everyone",
+        },
+    }
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "secret-123"}
+
+    first = client.post("/api/v1/telegram/webhook", headers=headers, json=payload)
+    second = client.post("/api/v1/telegram/webhook", headers=headers, json=payload)
+
+    assert first.status_code == 200
+    assert first.json() == {"ok": True, "status": "ignored"}
+    assert second.status_code == 200
+    assert second.json() == {"ok": True, "status": "duplicate"}

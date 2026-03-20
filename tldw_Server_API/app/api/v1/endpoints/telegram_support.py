@@ -450,6 +450,10 @@ async def telegram_webhook_impl(
         )
     update_id_int = update_id
 
+    dedupe_key = f"{scope.scope_type}:{scope.scope_id}:{update_id_int}"
+    if dedupe_receipts.seen_or_store(dedupe_key, dedupe_ttl_seconds):
+        return JSONResponse(status_code=200, content={"ok": True, "status": "duplicate"})
+
     telegram_user_id, text = _extract_message_actor_and_text(payload)
     chat_type = _extract_message_chat_type(payload)
     reply_to_bot = _message_reply_to_bot(payload)
@@ -460,10 +464,6 @@ async def telegram_webhook_impl(
     )
     if not message_policy.should_process:
         return JSONResponse(status_code=200, content={"ok": True, "status": "ignored"})
-
-    dedupe_key = f"{scope.scope_type}:{scope.scope_id}:{update_id_int}"
-    if dedupe_receipts.seen_or_store(dedupe_key, dedupe_ttl_seconds):
-        return JSONResponse(status_code=200, content={"ok": True, "status": "duplicate"})
 
     if _is_privileged_telegram_command(message_policy.command):
         if telegram_user_id is None or _resolve_telegram_actor_link(scope, telegram_user_id) is None:
