@@ -160,7 +160,6 @@ const deriveSelection = (
 const logNonFatalRefreshError = (context: string, err: unknown) => {
   console.warn(`Audio installer status refresh failed during ${context}.`, err)
 }
-
 export const useAudioInstaller = () => {
   const selectionRef = React.useRef<{
     bundleId: string | null

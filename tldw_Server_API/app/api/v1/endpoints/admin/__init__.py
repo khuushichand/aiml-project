@@ -45,7 +45,6 @@ from . import admin_tools as admin_tools_endpoints
 from . import admin_usage as admin_usage_endpoints
 from . import admin_router_analytics as admin_router_analytics_endpoints
 from . import admin_acp_agents as admin_acp_agents_endpoints
-from . import admin_billing as admin_billing_endpoints
 from . import admin_events_stream as admin_events_stream_endpoints
 from . import admin_identity_providers as admin_identity_providers_endpoints
 from . import admin_storage_quotas as admin_storage_quotas_endpoints
@@ -135,7 +134,6 @@ router.include_router(admin_bundle_ops_endpoints.router)
 router.include_router(admin_network_endpoints.router)
 router.include_router(admin_circuit_breakers_endpoints.router)
 router.include_router(admin_acp_agents_endpoints.router)
-router.include_router(admin_billing_endpoints.router)
 router.include_router(admin_events_stream_endpoints.router)
 router.include_router(admin_identity_providers_endpoints.router)
 router.include_router(admin_storage_quotas_endpoints.router)

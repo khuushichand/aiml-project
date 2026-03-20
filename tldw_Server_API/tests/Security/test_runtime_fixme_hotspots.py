@@ -111,6 +111,29 @@ def test_production_cors_requires_explicit_origin_list() -> None:
         importlib.reload(app_main)
 
 
+def test_non_production_empty_cors_origin_list_falls_back_to_local_defaults() -> None:
+    prior_env = os.getenv("ENV")
+    prior_disable_cors = os.getenv("DISABLE_CORS")
+    prior_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS")
+    prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
+    try:
+        os.environ["ENV"] = "development"
+        os.environ["DISABLE_CORS"] = "false"
+        os.environ["CORS_ALLOW_CREDENTIALS"] = "false"
+        os.environ["ALLOWED_ORIGINS"] = "[]"
+        app = build_app_for_test()
+        origins = get_cors_allow_origins(app)
+        assert "http://localhost:3000" in origins  # nosec B101
+        assert "http://127.0.0.1:8080" in origins  # nosec B101
+    finally:
+        _restore_env("ENV", prior_env)
+        _restore_env("DISABLE_CORS", prior_disable_cors)
+        _restore_env("CORS_ALLOW_CREDENTIALS", prior_allow_credentials)
+        _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
+        importlib.reload(config_mod)
+        importlib.reload(app_main)
+
+
 @pytest.mark.asyncio
 async def test_sync_endpoint_enforces_fts_update_path(monkeypatch) -> None:
     async def _fake_to_thread(*_args, **_kwargs):

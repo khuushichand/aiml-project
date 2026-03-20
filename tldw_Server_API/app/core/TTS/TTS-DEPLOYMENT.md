@@ -10,6 +10,7 @@ This guide provides comprehensive instructions for deploying and configuring the
 - **RAM**:
   - 4GB for API-only providers
   - 8GB for Kokoro (ONNX)
+  - 4GB for KittenTTS
   - 16GB for Higgs/Chatterbox/Dia
   - 32GB for VibeVoice-7B
   - 12GB+ for IndexTTS2 (emotion + codec pipelines)
@@ -23,6 +24,7 @@ This guide provides comprehensive instructions for deploying and configuring the
 - **NVIDIA GPU**: CUDA 11.8+ for PyTorch models
 - **VRAM**:
   - 4GB for Kokoro (optional)
+  - 2GB for KittenTTS (optional; CPU works)
   - 6GB for Higgs/Chatterbox
   - 8GB for Dia
   - 16GB for VibeVoice-7B
@@ -74,8 +76,8 @@ pip install \
     librosa \
     onnxruntime \
     kokoro-onnx \
-    phonemizer \
-    espeak-phonemizer \
+    phonemizer-fork \
+    espeakng_loader \
     huggingface-hub \
     "index-tts @ git+https://github.com/index-tts/index-tts.git"
 
@@ -178,6 +180,16 @@ providers:
     device: cpu  # or cuda
     phonemizer_backend: espeak
 
+  kitten_tts:
+    enabled: true
+    model: KittenML/kitten-tts-nano-0.8
+    model_revision: 8d6d5a1851ffd13c894c40227c888302c2a86ef7
+    device: cpu
+    auto_download: true
+    extra_params:
+      cache_dir: ./cache/kitten_tts
+      clean_text: false
+
   higgs:
     enabled: true
     model_path: bosonai/higgs-audio-v2-generation-3B-base
@@ -253,6 +265,12 @@ fallback:
   max_attempts: 3
   retry_delay_ms: 1000
   backoff_multiplier: 2
+
+### KittenTTS Notes
+
+- KittenTTS requires `espeak-ng` to be installed on the host because phonemization is initialized through `espeakng_loader`.
+- The provider keeps voice catalog metadata static so `/api/v1/audio/voices/catalog` does not trigger model downloads.
+- If you change `model`, also update `model_revision` to the matching immutable Hugging Face commit hash.
 
 # Circuit breaker configuration
 circuit_breaker:
@@ -673,12 +691,12 @@ python Helper_Scripts/download_kokoro_assets.py \
   --model-path models/kokoro/onnx/model.onnx \
   --voices-dir models/kokoro/voices
 ```
-Manual (huggingface-cli):
+Manual (`hf` CLI):
 ```bash
-pip install huggingface-hub
+pip install -U "huggingface_hub"
 mkdir -p models/kokoro
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
 ```
 Resulting layout:
 ```
@@ -689,16 +707,16 @@ models/kokoro/
 
 #### Higgs Audio V2
 ```bash
-# Using huggingface-cli
-pip install huggingface-hub
-huggingface-cli download bosonai/higgs-audio-v2-generation-3B-base \
+# Using the hf CLI
+pip install -U "huggingface_hub"
+hf download bosonai/higgs-audio-v2-generation-3B-base \
     --local-dir models/higgs
 ```
 
 #### Chatterbox
 ```bash
 # Download from Resemble AI
-huggingface-cli download resemble-ai/chatterbox \
+hf download resemble-ai/chatterbox \
     --local-dir models/chatterbox
 ```
 
@@ -711,15 +729,15 @@ pip install -e .
 
 # Models auto-download on first use, or pre-download:
 # 1.5B model
-huggingface-cli download microsoft/VibeVoice-1.5B \
+hf download microsoft/VibeVoice-1.5B \
     --local-dir models/vibevoice-1.5b
 
 # 7B model (larger, better quality)
-huggingface-cli download vibevoice/VibeVoice-7B \
+hf download vibevoice/VibeVoice-7B \
     --local-dir models/vibevoice-7b
 
 # Optional: Community 8-bit quantized 7B variant (reduced VRAM)
-huggingface-cli download FabioSarracino/VibeVoice-Large-Q8 \
+hf download FabioSarracino/VibeVoice-Large-Q8 \
     --local-dir models/vibevoice-7b-q8
 ```
 

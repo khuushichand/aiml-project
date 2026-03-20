@@ -32,7 +32,6 @@ const renderInstallerError = (entry: unknown) => {
   if (entry == null) return "Unknown installer error"
   return String(entry)
 }
-
 export const AudioInstallerPanel: React.FC = () => {
   const { t } = useTranslation(["settings", "common", "option"])
   const {

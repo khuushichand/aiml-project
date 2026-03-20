@@ -24,10 +24,10 @@ describe("deployment mode", () => {
     expect(isHostedSaaSMode()).toBe(false)
   })
 
-  it("returns hosted for NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=hosted", () => {
+  it("stays self_host when NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=hosted", () => {
     process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "hosted"
 
-    expect(getDeploymentMode()).toBe("hosted")
-    expect(isHostedSaaSMode()).toBe(true)
+    expect(getDeploymentMode()).toBe("self_host")
+    expect(isHostedSaaSMode()).toBe(false)
   })
 })

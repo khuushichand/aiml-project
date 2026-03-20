@@ -138,6 +138,9 @@ class AudiobookJobError(Exception):
         self.retryable = retryable
 
 
+DEFAULT_KITTEN_TTS_MODEL = "KittenML/kitten-tts-nano-0.8"
+
+
 def _normalize_tts_provider(value: str | None) -> str | None:
     if value is None:
         return None
@@ -165,6 +168,8 @@ def _resolve_tts_model(provider: str | None, model: str | None) -> str:
     provider_norm = str(provider).strip().lower() if provider else ""
     if provider_norm == "openai":
         return "tts-1"
+    if provider_norm == "kitten_tts":
+        return DEFAULT_KITTEN_TTS_MODEL
     if provider_norm in {"", "kokoro"}:
         return "kokoro"
     return ""
@@ -176,6 +181,13 @@ def _infer_tts_provider_from_model(model: str | None) -> str | None:
     m = str(model).strip().lower()
     if m in {"tts-1", "tts-1-hd"}:
         return "openai"
+    if (
+        m.startswith("kitten_tts")
+        or m.startswith("kitten-tts")
+        or m.startswith("kittentts")
+        or m.startswith("kittenml/kitten-tts")
+    ):
+        return "kitten_tts"
     if m.startswith("kokoro"):
         return "kokoro"
     if m.startswith("higgs"):

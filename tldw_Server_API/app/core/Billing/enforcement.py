@@ -26,7 +26,7 @@ BILLING_CACHE_TTL_SECONDS = float(os.environ.get("BILLING_CACHE_TTL_SECONDS", "6
 
 from tldw_Server_API.app.core.Billing.overage_config import OveragePolicy
 from tldw_Server_API.app.core.Billing.plan_limits import SOFT_LIMIT_PERCENT
-from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
+from tldw_Server_API.app.core.Billing.runtime_flags import is_billing_enabled
 
 _BILLING_ENFORCEMENT_COERCE_EXCEPTIONS = (
     AttributeError,

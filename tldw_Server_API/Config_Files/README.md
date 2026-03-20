@@ -35,10 +35,13 @@ How to apply changes
   - Accepts absolute URLs (`https://...`) or same-origin paths (`/docs`, `/login`, etc.).
 
 ## [Server]
-- `disable_cors` (bool): Disable CORS protections for development.
+- `disable_cors` (bool): Disable browser-origin checks entirely. Leave this `false` for normal self-hosting; localhost and loopback browser access already work by default.
 - `cors_allow_credentials` (bool): Include `Access-Control-Allow-Credentials` on CORS responses.
   - Default: `false` (safer; compatible with wildcard origins in local/test).
   - Env override: `CORS_ALLOW_CREDENTIALS=true|false`
+- `ALLOWED_ORIGINS` (env): Optional browser-origin allowlist for non-default setups.
+  - Local first-run self-hosting already allows common `localhost` and `127.0.0.1` origins.
+  - Set this only when your browser UI runs from a different origin, such as another host, LAN IP, or custom port.
 - `trusted_proxies` (csv): Proxy IPs/CIDRs trusted for X-Forwarded-For/X-Real-IP processing.
   - If the socket peer is in this list, the server uses the leftmost X-Forwarded-For IP as the client.
   - Env override: `TLDW_TRUSTED_PROXIES="10.0.0.0/8,192.168.0.0/16,127.0.0.1"`
@@ -308,6 +311,12 @@ AllTalk:
 - `default_alltalk_tts_*`, `alltalk_api_ip`
 Kokoro (local):
 - `kokoro_model_path`, `default_kokoro_tts_*`
+KittenTTS (local):
+- Configure in `tts_providers_config.yaml` under `providers.kitten_tts`.
+- Key fields: `model`, `model_revision`, `device`, `auto_download`, and `extra_params.cache_dir`.
+- `model_revision` should remain an immutable Hugging Face commit hash. The shipped default pins the bundled nano model to a vetted commit.
+- Voices are static English presets: `Bella`, `Jasper`, `Luna`, `Bruno`, `Rosie`, `Hugo`, `Kiki`, `Leo`.
+- First-use downloads can be disabled globally with `auto_download_local_models = false` or per-provider with `providers.kitten_tts.auto_download: false`.
 Custom OpenAI-compatible TTS:
 - `default_custom_openai_*`
 VibeVoice:

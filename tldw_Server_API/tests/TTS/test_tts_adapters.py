@@ -373,6 +373,38 @@ class TestAdapterRegistry:
         assert TTSProvider.OPENAI in caps
         assert caps[TTSProvider.OPENAI].provider_name == "OpenAI"
 
+    async def test_get_all_capabilities_uses_static_kitten_capabilities_without_init(self):
+        """Static KittenTTS capability discovery should not initialize the runtime."""
+
+        class StaticKittenAdapter(TTSAdapter):
+            STATIC_CAPABILITY_DISCOVERY = True
+
+            async def initialize(self) -> bool:
+                raise AssertionError("Kitten static capability discovery should not initialize the adapter")
+
+            async def generate(self, request: TTSRequest) -> TTSResponse:
+                return TTSResponse(audio_data=b"unused")
+
+            async def get_capabilities(self) -> TTSCapabilities:
+                return TTSCapabilities(
+                    provider_name="KittenTTS",
+                    supported_languages={"en"},
+                    supported_voices=[VoiceInfo(id="Bella", name="Bella")],
+                    supported_formats={AudioFormat.WAV, AudioFormat.MP3, AudioFormat.PCM},
+                    max_text_length=5000,
+                    supports_streaming=True,
+                    sample_rate=24000,
+                    default_format=AudioFormat.WAV,
+                )
+
+        registry = TTSAdapterRegistry({"providers": {"kitten_tts": {"enabled": True}}})
+        registry.register_adapter(TTSProvider.KITTEN_TTS, StaticKittenAdapter)
+
+        caps = await registry.get_all_capabilities()
+
+        assert TTSProvider.KITTEN_TTS in caps
+        assert caps[TTSProvider.KITTEN_TTS].provider_name == "KittenTTS"
+
     def test_status_summary(self):
         """Test status summary"""
         registry = TTSAdapterRegistry()
@@ -416,6 +448,9 @@ class TestTTSAdapterFactory:
 
         assert factory.get_provider_for_model("open_ai") == TTSProvider.OPENAI
         assert factory.get_provider_for_model("vibevoice-realtime") == TTSProvider.VIBEVOICE_REALTIME
+        assert factory.get_provider_for_model("kitten_tts") == TTSProvider.KITTEN_TTS
+        assert factory.get_provider_for_model("kitten-tts") == TTSProvider.KITTEN_TTS
+        assert factory.get_provider_for_model("KittenML/kitten-tts-nano-0.8") == TTSProvider.KITTEN_TTS
 
     async def test_get_best_adapter(self):
         """Test getting best adapter for requirements"""

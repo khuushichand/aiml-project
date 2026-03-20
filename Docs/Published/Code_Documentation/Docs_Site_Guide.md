@@ -10,6 +10,8 @@ This document explains how the tldw_Server documentation site is organized, buil
 - Build root: `Docs/Published/` (MkDocs `docs_dir`)
 - Deployment: GitHub Pages via GitHub Actions
 
+The public docs site is for OSS, self-host, and developer documentation. Hosted/commercial docs are excluded from the published site and should live in the private repo instead of this public docs pipeline.
+
 ## What Gets Published
 
 Only these folders are included on the public site:
@@ -23,6 +25,8 @@ Only these folders are included on the public site:
 
 The curated content is synced into `Docs/Published/`. Do not manually edit files in `Docs/Published/` - they can be overwritten by the refresh script or CI.
 
+Hosted/commercial docs are excluded from this curated set even when they live under similarly named source areas. If a page exists mainly to run, sell, support, or differentiate the hosted SaaS service, keep it in the private repo rather than adding it to the public docs tree.
+
 ## Refreshing Curated Docs
 
 - Script: `Helper_Scripts/refresh_docs_published.sh`
@@ -32,6 +36,8 @@ The curated content is synced into `Docs/Published/`. Do not manually edit files
   - Removes the nested `Monitoring` under `Deployment` to avoid duplication
   - Preserves each section's `index.md` landing page
   - Copies `Docs/Logo.png` into `Docs/Published/assets/` as `logo.png` and `favicon.png`
+
+If you are working on hosted SaaS runbooks, billing/customer-surface guides, or other commercial operating material, use the private repo instead of expanding this public refresh flow.
 
 Run locally:
 
@@ -104,6 +110,7 @@ Notes:
 - Keep file names stable after they’re published to avoid broken links
 - Use relative links within the allowed folders; avoid linking to WIP docs outside the curated set
 - Prefer images stored under `Docs/assets/` or section subfolders; the refresh script copies section contents
+- Avoid linking to hosted/private docs from public pages; those references belong in the private repo
 
 ## Deployment
 
@@ -128,3 +135,4 @@ If a deploy fails:
 - Use the refresh script to curate and sync
 - Keep `mkdocs.yml` `nav:` updated for sidebar visibility and order
 - CI builds and deploys automatically to GitHub Pages
+- Hosted/commercial docs are excluded from the public docs site and belong in the private repo

@@ -1875,10 +1875,21 @@ test.describe('Watchlists playground smoke', () => {
       .poll(async () => page.evaluate(() => (window as any).__watchlistsKeyboardReviewUpdates))
       .toBeGreaterThanOrEqual(1)
 
+    const openedUrlsBeforeShortcut = await page.evaluate(
+      () => ((window as any).__watchlistsOpenedUrls || []) as string[]
+    )
     await page.keyboard.press('o')
     await expect
       .poll(async () => page.evaluate(() => (window as any).__watchlistsOpenedUrls.length))
-      .toBe(1)
+      .toBe(openedUrlsBeforeShortcut.length + 1)
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const opened = ((window as any).__watchlistsOpenedUrls || []) as string[]
+          return opened[opened.length - 1] || null
+        })
+      )
+      .toBe('https://example.com/keyboard-1')
 
     const fetchCountBeforeRefresh = await page.evaluate(
       () => (window as any).__watchlistsKeyboardItemsFetches

@@ -27,8 +27,8 @@ def _get_all_route_paths() -> set[str]:
 class TestAdminRouterRegistration:
     """Verify that every admin sub-router is included in the main router."""
 
-    def test_admin_init_imports_all_sub_routers(self) -> None:
-        """The admin __init__ module should import all expected sub-router modules."""
+    def test_admin_init_does_not_import_admin_billing_router(self) -> None:
+        """OSS admin router assembly should not import admin billing revenue operations."""
         admin_init = importlib.import_module(
             "tldw_Server_API.app.api.v1.endpoints.admin"
         )
@@ -56,7 +56,6 @@ class TestAdminRouterRegistration:
             "admin_usage",
             "admin_router_analytics",
             "admin_acp_agents",
-            "admin_billing",
             "admin_events_stream",
             "admin_storage_quotas",
             "admin_user",
@@ -68,7 +67,8 @@ class TestAdminRouterRegistration:
             assert hasattr(admin_init, attr_name), (
                 f"admin __init__ missing attribute '{attr_name}' -- "
                 f"sub-router '{submod_name}' may not be imported"
-            )
+            )  # nosec B101
+        assert not hasattr(admin_init, "admin_billing_endpoints")  # nosec B101
 
 
 class TestAdminKeyEndpointsExist:
@@ -86,7 +86,22 @@ class TestAdminKeyEndpointsExist:
     def test_key_endpoints_present(self) -> None:
         paths = _get_all_route_paths()
         for ep in self.EXPECTED_ENDPOINTS:
-            assert ep in paths, f"Expected endpoint {ep!r} not found in route table"
+            assert ep in paths, f"Expected endpoint {ep!r} not found in route table"  # nosec B101
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/admin/billing/overview",
+            "/api/v1/admin/billing/subscriptions",
+            "/api/v1/admin/billing/subscriptions/{user_id}",
+            "/api/v1/admin/billing/subscriptions/{user_id}/override",
+            "/api/v1/admin/billing/subscriptions/{user_id}/credits",
+            "/api/v1/admin/billing/events",
+        ],
+    )
+    def test_admin_billing_endpoints_absent_from_oss_route_table(self, path: str) -> None:
+        paths = _get_all_route_paths()
+        assert path not in paths, f"OSS route table should not expose {path!r}"  # nosec B101
 
 
 class TestAdminSchemaImports:
@@ -94,16 +109,12 @@ class TestAdminSchemaImports:
 
     def test_cleanup_settings_schemas(self) -> None:
         from tldw_Server_API.app.api.v1.endpoints.admin import admin_settings as mod
-        assert hasattr(mod, "router")
+        assert hasattr(mod, "router")  # nosec B101
 
     def test_registration_settings_schemas(self) -> None:
         from tldw_Server_API.app.api.v1.endpoints.admin import admin_registration as mod
-        assert hasattr(mod, "router")
-
-    def test_billing_schemas(self) -> None:
-        from tldw_Server_API.app.api.v1.endpoints.admin import admin_billing as mod
-        assert hasattr(mod, "router")
+        assert hasattr(mod, "router")  # nosec B101
 
     def test_tenant_provisioning_schemas(self) -> None:
         from tldw_Server_API.app.api.v1.endpoints.admin import admin_tenant_provisioning as mod
-        assert hasattr(mod, "router")
+        assert hasattr(mod, "router")  # nosec B101

@@ -5142,6 +5142,7 @@ async def _display_startup_info_and_warm():
 from tldw_Server_API.app.core.config import (
     ALLOWED_ORIGINS,
     API_V1_PREFIX,
+    resolve_runtime_allowed_origins,
     is_production_environment,
     route_enabled,
     should_allow_cors_credentials,
@@ -5152,7 +5153,14 @@ from tldw_Server_API.app.core.config import (
 if should_disable_cors():
     logger.warning("CORS middleware disabled via configuration/ENV flag.")
 else:
-    origins = _resolve_cors_origins_or_raise(ALLOWED_ORIGINS)
+    origins, _cors_origin_source, _cors_origin_fallback = resolve_runtime_allowed_origins(ALLOWED_ORIGINS)
+    if _cors_origin_fallback:
+        logger.warning(
+            "ALLOWED_ORIGINS resolved to an empty list outside production. "
+            "Using local browser defaults (localhost/127.0.0.1) so self-hosted setup keeps working. "
+            "Set ALLOWED_ORIGINS only if you need a different browser origin."
+        )
+    origins = _resolve_cors_origins_or_raise(origins)
     _cors_allow_credentials = should_allow_cors_credentials()
     _cors_enforce_explicit_origins = is_production_environment()
     _validate_cors_configuration_or_raise(
@@ -5686,20 +5694,6 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_health_router, tags=["rag-health"])
     except _IMPORT_EXCEPTIONS as _rag_health_min_err:
         logger.debug(f"Skipping rag_health router in minimal test app: {_rag_health_min_err}")
-    # Billing endpoints (required by billing integration tests)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
-
-        app.include_router(billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except _IMPORT_EXCEPTIONS as _billing_min_err:
-        logger.debug(f"Skipping billing router in minimal test app: {_billing_min_err}")
-    # Billing webhooks (optional; keep consistent with full app)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
-
-        app.include_router(billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except _IMPORT_EXCEPTIONS as _billing_webhooks_min_err:
-        logger.debug(f"Skipping billing webhooks router in minimal test app: {_billing_webhooks_min_err}")
     # Consent management endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
@@ -6249,20 +6243,6 @@ else:
         _include_if_enabled("org-invites", org_invites_router, prefix=f"{API_V1_PREFIX}", tags=["invites"])
     except ImportError as _inv_err:
         logger.warning(f"Skipping org_invites router due to import error: {_inv_err}")
-    # Billing and subscription management endpoints
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
-
-        _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except ImportError as _bill_err:
-        logger.warning(f"Skipping billing router due to import error: {_bill_err}")
-    # Stripe webhook handler (no auth required)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
-
-        _include_if_enabled("billing-webhooks", billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except ImportError as _wh_err:
-        logger.warning(f"Skipping billing_webhooks router due to import error: {_wh_err}")
     if _HAS_MEDIA:
         _include_if_enabled("media", media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
     try:

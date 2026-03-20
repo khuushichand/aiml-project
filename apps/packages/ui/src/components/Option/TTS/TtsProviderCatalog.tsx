@@ -15,6 +15,7 @@ type ProviderEntry = {
 
 const KNOWN_TTS_ENGINES: ProviderEntry[] = [
   { key: "kokoro", label: "Kokoro", category: "local", hint: "Default local engine" },
+  { key: "kitten_tts", label: "KittenTTS", category: "local", hint: "Fast local ONNX voices" },
   { key: "pocket_tts", label: "PocketTTS", category: "local", hint: "Voice cloning" },
   { key: "lux_tts", label: "LuxTTS", category: "local", hint: "ZipVoice cloning" },
   { key: "neutts", label: "NeuTTS", category: "local", hint: "Instant cloning" },

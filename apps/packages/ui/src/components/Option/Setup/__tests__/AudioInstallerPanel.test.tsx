@@ -187,7 +187,6 @@ describe("AudioInstallerPanel", () => {
     fireEvent.mouseDown(screen.getByRole("combobox"))
     expect(await screen.findAllByRole("option", { name: "Apple Silicon Local" })).toHaveLength(1)
   })
-
   it("provisions the selected bundle and polls install status while active", async () => {
     let installStatusCallCount = 0
 

@@ -358,7 +358,7 @@ def test_validate_model_path_missing_no_download(tmp_path):
         qwen3._validate_model_path(missing_path, allow_download=False)
 
     assert "does not exist" in str(exc_info.value)
-    assert "huggingface-cli download" in str(exc_info.value)
+    assert "hf download" in str(exc_info.value)
 
 
 @pytest.mark.unit

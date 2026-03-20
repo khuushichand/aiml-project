@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from tldw_Server_API.app.core.Billing.subscription_service import SubscriptionService
-from tldw_Server_API.app.core.Billing.stripe_client import CheckoutSession
+from tldw_Server_API.app.core.Billing.subscription_service import CheckoutSession, SubscriptionService
 
 
 class _FakeStripeClient:

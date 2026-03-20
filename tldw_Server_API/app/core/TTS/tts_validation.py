@@ -121,6 +121,13 @@ class ProviderLimits:
             "min_speed": 0.25,
             "max_speed": 4.0
         },
+        "kitten_tts": {
+            "max_text_length": 5000,
+            "languages": ["en"],
+            "valid_formats": {"mp3", "wav", "pcm"},
+            "min_speed": 0.25,
+            "max_speed": 4.0,
+        },
         "lux_tts": {
             "max_text_length": 5000,
             "languages": ["en"],
@@ -232,6 +239,7 @@ class TTSInputValidator:
         "supertonic": 15000,
         "supertonic2": 15000,
         "pocket_tts": 5000,
+        "kitten_tts": 5000,
         "echo_tts": 768,
         "lux_tts": 5000,
         "qwen3_tts": 5000,
@@ -264,6 +272,7 @@ class TTSInputValidator:
         "supertonic": {"en"},
         "supertonic2": {"en", "ko", "es", "pt", "fr"},
         "pocket_tts": {"en"},
+        "kitten_tts": {"en"},
         "echo_tts": {"en"},
         "lux_tts": {"en"},
         "qwen3_tts": {"auto", "zh", "en", "ja", "ko", "de", "fr", "ru", "pt", "es", "it"},
@@ -284,6 +293,7 @@ class TTSInputValidator:
         "supertonic": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic2": {AudioFormat.MP3, AudioFormat.WAV},
         "pocket_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
+        "kitten_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.PCM},
         "echo_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
         "lux_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
         "qwen3_tts": {AudioFormat.MP3, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.WAV, AudioFormat.PCM},
@@ -910,7 +920,7 @@ class TTSInputValidator:
         elif provider == "elevenlabs":
             # ElevenLabs specific rules
             return text
-        elif provider in ["kokoro", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts", "lux_tts"]:
+        elif provider in ["kokoro", "kitten_tts", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts", "lux_tts"]:
             # Local model specific rules - more conservative
             # Remove URLs and email addresses
             text = re.sub(r'https?://\S+', '[URL]', text)
