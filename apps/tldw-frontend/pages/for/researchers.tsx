@@ -13,16 +13,11 @@ import {
   LandingFeatures,
   LandingTestimonials,
   LandingComparison,
-  LandingPricing,
   LandingCTA,
 } from "@web/components/landing"
-import { isHostedSaaSMode } from "@web/lib/deployment-mode"
 
 export default function ResearchersPage() {
-  const hostedMode = isHostedSaaSMode()
-  const description = hostedMode
-    ? "Hosted tldw launches with the core qualitative workflow: signup, secure ingest, chat, and search. Self-host remains the path for IRB-constrained or institution-managed deployments."
-    : "Self-hosted AI transcription and semantic search for qualitative research. IRB-compliant by design—your participant data never leaves your infrastructure."
+  const description = "Self-hosted AI transcription and semantic search for qualitative research. IRB-compliant by design—your participant data never leaves your infrastructure."
   return (
     <LandingLayout
       title="tldw for Academic Researchers"
@@ -32,16 +27,8 @@ export default function ResearchersPage() {
       <LandingHero
         headline="Your Research Data Deserves Better Than\n$1.50/Minute Transcription and NVivo"
         subheadline={description}
-        primaryCTA={
-          hostedMode
-            ? { text: "Start Hosted Trial", href: "/signup" }
-            : { text: "Start Self-Hosting Free", href: "/docs/self-hosting" }
-        }
-        secondaryCTA={
-          hostedMode
-            ? { text: "View Self-Host Docs", href: "/docs/self-hosting" }
-            : { text: "View Documentation", href: "/docs" }
-        }
+        primaryCTA={{ text: "Start Self-Hosting Free", href: "/docs/self-hosting" }}
+        secondaryCTA={{ text: "View Documentation", href: "/docs" }}
         badges={["Open Source", "IRB Compliant", "Self-Hosted"]}
       />
 
@@ -127,65 +114,11 @@ export default function ResearchersPage() {
         ]}
       />
 
-      <LandingPricing
-        headline="Priced for Academic Budgets"
-        tiers={[
-          {
-            name: "Self-Hosted",
-            price: "Free",
-            description: "Perfect for PhD students, unfunded projects",
-            features: [
-              "Unlimited transcription",
-              "Full search and RAG",
-              "All file formats",
-              "Community support",
-            ],
-            cta: { text: "Download", href: "/docs/self-hosting" },
-          },
-          {
-            name: "Researcher Pro",
-            price: "$29",
-            period: "month",
-            description: "Perfect for funded projects, small labs",
-            features: [
-              "Cloud sync and backup",
-              "20 hours transcription/month",
-              "Priority support",
-              "Citation export",
-            ],
-            cta: { text: "Start Trial", href: "/signup" },
-            highlighted: true,
-          },
-          {
-            name: "Lab License",
-            price: "$199",
-            period: "month",
-            description: "Perfect for research groups, centers",
-            features: [
-              "10 seats included",
-              "Shared knowledge bases",
-              "Collaboration tools",
-              "University SSO",
-            ],
-            cta: { text: "Contact Us", href: "/contact" },
-          },
-        ]}
-        footnote="40% off with .edu email. 60% student discount with verification."
-      />
-
       <LandingCTA
         headline="Your Research Deserves Modern Tools"
         description="Stop paying for transcription by the minute or struggling with decade-old software. Get AI-powered research infrastructure on your own terms."
-        primaryCTA={
-          hostedMode
-            ? { text: "Start Hosted Trial", href: "/signup" }
-            : { text: "Download Free", href: "/docs/self-hosting" }
-        }
-        secondaryCTA={
-          hostedMode
-            ? { text: "View Self-Host Docs", href: "/docs/self-hosting" }
-            : { text: "Read the Docs", href: "/docs" }
-        }
+        primaryCTA={{ text: "Download Free", href: "/docs/self-hosting" }}
+        secondaryCTA={{ text: "Read the Docs", href: "/docs" }}
       />
     </LandingLayout>
   )

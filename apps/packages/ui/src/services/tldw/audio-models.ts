@@ -10,6 +10,11 @@ const FALLBACK_MODELS = [
   "tts-1",
   "tts-1-hd",
   "kokoro",
+  "kitten_tts",
+  "KittenML/kitten-tts-nano-0.8",
+  "KittenML/kitten-tts-nano-0.8-int8",
+  "KittenML/kitten-tts-micro-0.8",
+  "KittenML/kitten-tts-mini-0.8",
   "higgs",
   "dia",
   "chatterbox",
@@ -176,7 +181,12 @@ export const fetchTldwTtsModels = async (): Promise<TldwTtsModel[]> => {
         if (match && match[1]) {
           const parts = match[1]
             .split(",")
-            .map((s) => s.trim())
+            .map((s) =>
+              s
+                .trim()
+                .replace(/^and\s+/i, "")
+                .replace(/[.)]+$/g, "")
+            )
             .filter(Boolean)
           for (const p of parts) {
             const id = p

@@ -79,7 +79,7 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details.
+**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details. If your first goal is local speech, follow the hardware-specific audio guides after your base profile is healthy: [CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md) or [GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md).
 
 ## Start Here (Self-Hosting Profiles)
 
@@ -96,7 +96,9 @@ Recommended default:
 
 Optional add-on:
 
-- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) for accelerated speech-to-text after your base path is working.
+- [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md)
+- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md) for NVIDIA GPUs and Apple Silicon
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) now redirects to the accelerated guide
 
 
 ## Current Status
@@ -534,7 +536,7 @@ NEXT_PUBLIC_API_VERSION=v1
 # Optional for single-user mode:
 # NEXT_PUBLIC_X_API_KEY=your_api_key
 ```
-3) Install and run the dev server (use port 8080 to match default CORS):
+3) Install and run the dev server (use port 8080 to match the server's built-in local browser defaults):
 ```bash
 bun install
 bun run dev -- -p 8080
@@ -554,6 +556,7 @@ Access from another device on your network (for example, phone/tablet):
 python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
 
 # tldw_Server_API/Config_Files/.env
+# Only needed when the browser connects from a non-localhost origin:
 # ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
 
 # apps/tldw-frontend/.env.local
@@ -1069,7 +1072,9 @@ Run locally
 - [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) - local API development path
 - [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) - self-host with Docker
 - [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) - team deployment baseline
-- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) - optional acceleration and speech-to-text setup
+- [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md) - local-first STT and TTS for CPU boxes
+- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md) - NVIDIA and Apple Silicon speech setup
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) - legacy pointer to the accelerated guide
 
 **Reference:**
 - `Docs/Documentation.md` - documentation index and developer guide links

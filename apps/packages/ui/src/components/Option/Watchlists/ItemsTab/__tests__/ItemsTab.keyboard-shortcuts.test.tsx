@@ -222,6 +222,29 @@ describe("ItemsTab keyboard shortcuts", () => {
     expect(useWatchlistsStore.getState().sourceFormOpen).toBe(true)
   })
 
+  it("opens the selected article only once after reader focus and review toggle interactions", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null)
+    render(<ItemsTab />)
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watchlists-item-row-101")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("watchlists-item-reader"))
+    fireEvent.keyDown(document, { key: " " })
+    await waitFor(() => {
+      expect(serviceMocks.updateScrapedItem).toHaveBeenCalledWith(101, { reviewed: true })
+    })
+
+    fireEvent.keyDown(document, { key: "o" })
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://example.com/one",
+      "_blank",
+      "noopener,noreferrer"
+    )
+  })
+
   it("ignores navigation shortcuts when focus is inside contenteditable regions", async () => {
     render(<ItemsTab />)
 

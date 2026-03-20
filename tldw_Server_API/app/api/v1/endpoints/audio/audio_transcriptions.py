@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import mimetypes
 import os
 import re
 import tempfile
@@ -73,6 +74,76 @@ _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+
+_AUDIO_UPLOAD_SUFFIX_BY_CONTENT_TYPE: dict[str, str] = {
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/wave": ".wav",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/m4a": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/flac": ".flac",
+    "audio/ogg": ".ogg",
+    "audio/opus": ".opus",
+    "audio/webm": ".webm",
+}
+
+_AUDIO_UPLOAD_SUFFIX_NORMALIZATION: dict[str, str] = {
+    ".jpeg": ".jpg",
+    ".mpga": ".mp3",
+    ".oga": ".ogg",
+    ".weba": ".webm",
+    ".wave": ".wav",
+}
+
+
+def _sniff_audio_upload_suffix(sample: bytes) -> str:
+    """Best-effort audio format sniffing for uploads without a filename suffix."""
+    if len(sample) >= 12 and sample.startswith(b"RIFF") and sample[8:12] == b"WAVE":
+        return ".wav"
+    if sample.startswith(b"ID3") or (
+        len(sample) >= 2 and sample[0] == 0xFF and (sample[1] & 0xE0) == 0xE0
+    ):
+        return ".mp3"
+    if sample.startswith(b"fLaC"):
+        return ".flac"
+    if sample.startswith(b"OggS"):
+        if b"OpusHead" in sample[:64]:
+            return ".opus"
+        return ".ogg"
+    if len(sample) >= 12 and sample[4:8] == b"ftyp":
+        return ".m4a"
+    if sample.startswith(b"\x1A\x45\xDF\xA3"):
+        return ".webm"
+    return ""
+
+
+def _resolve_audio_upload_suffix(
+    filename: str | None,
+    content_type: str | None,
+    sample: bytes | None = None,
+) -> str:
+    """Return a usable temp-file suffix for staged audio uploads."""
+    suffix = PathLib(filename or "").suffix.lower()
+    if suffix:
+        return _AUDIO_UPLOAD_SUFFIX_NORMALIZATION.get(suffix, suffix)
+
+    sniffed_suffix = _sniff_audio_upload_suffix(sample or b"")
+    if sniffed_suffix:
+        return sniffed_suffix
+
+    normalized_content_type = str(content_type or "").split(";")[0].strip().lower()
+    if normalized_content_type in _AUDIO_UPLOAD_SUFFIX_BY_CONTENT_TYPE:
+        return _AUDIO_UPLOAD_SUFFIX_BY_CONTENT_TYPE[normalized_content_type]
+
+    guessed_suffix = mimetypes.guess_extension(normalized_content_type, strict=False) or ""
+    guessed_suffix = guessed_suffix.lower()
+    if guessed_suffix:
+        return _AUDIO_UPLOAD_SUFFIX_NORMALIZATION.get(guessed_suffix, guessed_suffix)
+
+    return ".audio"
 
 
 def _audio_shim_attr(name: str):
@@ -507,13 +578,22 @@ async def create_transcription(
     temp_audio_path = None
     canonical_path = None
     try:
-        file_extension = os.path.splitext(file.filename)[1] if file.filename else ".wav"
+        first_chunk = await file.read(upload_chunk_size)
+        file_extension = _resolve_audio_upload_suffix(
+            file.filename,
+            file.content_type,
+            first_chunk,
+        )
         total_read = 0
         with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as tmp_file:
+            pending_chunk = first_chunk
             while True:
-                chunk = await file.read(upload_chunk_size)
+                chunk = pending_chunk
+                pending_chunk = None
                 if not chunk:
-                    break
+                    chunk = await file.read(upload_chunk_size)
+                    if not chunk:
+                        break
                 total_read += len(chunk)
                 if total_read > max_file_size:
                     temp_audio_path = tmp_file.name

@@ -203,6 +203,76 @@ def _hybrid_resource_profiles() -> dict[str, AudioResourceProfile]:
     }
 
 
+def _apple_silicon_resource_profiles() -> dict[str, AudioResourceProfile]:
+    return {
+        "light": AudioResourceProfile(
+            profile_id="light",
+            label="Light",
+            description="Lowest-footprint local speech profile for Apple Silicon.",
+            stt_plan=[{"engine": "faster_whisper", "models": ["tiny"]}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
+            verification_targets=["stt_default", "tts_default"],
+            estimated_disk_gb=1.0,
+            resource_class="low",
+        ),
+        "balanced": AudioResourceProfile(
+            profile_id="balanced",
+            label="Balanced",
+            description="Recommended Apple Silicon profile using MLX Parakeet for STT.",
+            stt_plan=[{"engine": "nemo_parakeet_mlx", "models": []}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
+            verification_targets=["stt_default", "tts_default"],
+            estimated_disk_gb=3.0,
+            resource_class="medium",
+        ),
+        "performance": AudioResourceProfile(
+            profile_id="performance",
+            label="Performance",
+            description="Higher-throughput Apple Silicon speech profile using MLX Parakeet.",
+            stt_plan=[{"engine": "nemo_parakeet_mlx", "models": []}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
+            verification_targets=["stt_default", "tts_default"],
+            estimated_disk_gb=4.5,
+            resource_class="high",
+        ),
+    }
+
+
+def _nvidia_resource_profiles() -> dict[str, AudioResourceProfile]:
+    return {
+        "light": AudioResourceProfile(
+            profile_id="light",
+            label="Light",
+            description="Lowest-footprint CUDA-capable speech profile.",
+            stt_plan=[{"engine": "faster_whisper", "models": ["small"]}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
+            verification_targets=["stt_default", "tts_default"],
+            estimated_disk_gb=2.0,
+            resource_class="low",
+        ),
+        "balanced": AudioResourceProfile(
+            profile_id="balanced",
+            label="Balanced",
+            description="Recommended NVIDIA profile using Parakeet with Kokoro TTS.",
+            stt_plan=[{"engine": "nemo_parakeet_onnx", "models": []}],
+            tts_plan=[{"engine": "kokoro", "variants": []}],
+            verification_targets=["stt_default", "tts_default"],
+            estimated_disk_gb=4.5,
+            resource_class="medium",
+        ),
+        "performance": AudioResourceProfile(
+            profile_id="performance",
+            label="Performance",
+            description="Higher-quality NVIDIA speech profile using Parakeet and Dia TTS.",
+            stt_plan=[{"engine": "nemo_parakeet_standard", "models": []}],
+            tts_plan=[{"engine": "dia", "variants": []}],
+            verification_targets=["stt_default", "tts_default"],
+            estimated_disk_gb=9.0,
+            resource_class="high",
+        ),
+    }
+
+
 def get_audio_bundle_catalog() -> AudioBundleCatalog:
     """Return the current curated audio setup bundles."""
 
@@ -252,12 +322,7 @@ def get_audio_bundle_catalog() -> AudioBundleCatalog:
                     automation_tier=AutomationTier.AUTOMATIC,
                 )
             ],
-            resource_profiles=_local_resource_profiles(
-                light_model="tiny",
-                balanced_model="small",
-                performance_model="medium",
-                disk_estimates_gb=(1.0, 2.0, 4.0),
-            ),
+            resource_profiles=_apple_silicon_resource_profiles(),
         ),
         AudioBundle(
             bundle_id="nvidia_local",
@@ -278,12 +343,7 @@ def get_audio_bundle_catalog() -> AudioBundleCatalog:
                     automation_tier=AutomationTier.AUTOMATIC,
                 )
             ],
-            resource_profiles=_local_resource_profiles(
-                light_model="small",
-                balanced_model="medium",
-                performance_model="large-v3",
-                disk_estimates_gb=(2.0, 4.0, 8.0),
-            ),
+            resource_profiles=_nvidia_resource_profiles(),
         ),
         AudioBundle(
             bundle_id="hosted_plus_local_backup",

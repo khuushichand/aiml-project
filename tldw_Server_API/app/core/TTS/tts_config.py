@@ -43,6 +43,7 @@ class ProviderConfig(BaseModel):
     base_url: Optional[str] = None
     runtime: Optional[str] = None
     model: Optional[str] = None
+    model_revision: Optional[str] = None
     model_path: Optional[str] = None
     mlx_model: Optional[str] = None
     capability_override: dict[str, Any] = Field(default_factory=dict)
@@ -302,6 +303,7 @@ class TTSConfigManager:
 
                     for provider in [
                         'kokoro',
+                        'kitten_tts',
                         'higgs',
                         'dia',
                         'chatterbox',
@@ -321,6 +323,7 @@ class TTSConfigManager:
                         config_dict['providers'] = {}
                     for provider in [
                         'kokoro',
+                        'kitten_tts',
                         'higgs',
                         'dia',
                         'chatterbox',

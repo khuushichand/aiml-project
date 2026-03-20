@@ -8,13 +8,15 @@
 
 **Tech Stack:** Python 3.11+, FastAPI, ONNX Runtime, Hugging Face Hub, `phonemizer-fork`, `espeakng_loader`, NumPy, Loguru, pytest, setup installer helpers, Bandit.
 
+**Completion Notes:** Implemented. Backend provider/runtime/setup integration is complete, WebUI surfaces KittenTTS as a selectable local engine, and Kitten HF downloads are pinned to immutable revisions with targeted Bandit-clean touched files. Broader frontend verification is still blocked by an unrelated syntax error in `apps/packages/ui/src/services/tldw/TldwApiClient.ts` (`export export const ...` at line 58).
+
 ---
 
 ## Stage 1: Provider Routing and Config Plumbing
 **Goal**: Make `kitten_tts` a recognized provider everywhere the backend resolves local TTS engines.
 **Success Criteria**: Provider aliases and HF repo IDs resolve to `kitten_tts`; YAML config accepts the provider; local-device and auto-download fanout includes `kitten_tts`.
 **Tests**: `tldw_Server_API/tests/TTS/test_tts_adapters.py`, `tldw_Server_API/tests/TTS/test_tts_service_v2.py`, `tldw_Server_API/tests/Config/test_effective_config_api.py`
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 1: Add failing routing/config tests
 
@@ -90,7 +92,7 @@ git commit -m "feat(tts): register kitten_tts provider routing and config"
 **Goal**: Build a small in-repo Kitten runtime that uses the upstream asset layout but performs PR #25 eSpeak initialization itself.
 **Success Criteria**: The runtime downloads or locates Kitten assets, initializes eSpeak paths through `espeakng_loader`, and exposes a minimal generation API without importing `misaki`.
 **Tests**: `tldw_Server_API/tests/TTS/adapters/test_kittentts_compat.py`
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 2: Add failing compatibility-runtime tests
 
@@ -186,7 +188,7 @@ git commit -m "feat(tts): add KittenTTS compatibility runtime"
 **Goal**: Add a real `KittenTTSAdapter` that plugs into the current TTS service and exposes static capabilities/voices.
 **Success Criteria**: The adapter initializes cleanly, validates voices, emits TTSResponse payloads for streaming and non-streaming requests, and does not download models for voice-catalog reads.
 **Tests**: `tldw_Server_API/tests/TTS/adapters/test_kittentts_adapter_mock.py`
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 3: Add failing adapter tests
 
@@ -259,7 +261,7 @@ git commit -m "feat(tts): add KittenTTS adapter"
 **Goal**: Verify the new provider works end-to-end through the service and `/api/v1/audio/voices/catalog`.
 **Success Criteria**: Service routing works for both provider aliases and HF model repo IDs; voice catalog returns Kitten voices; endpoint tests pass with mocked adapter output.
 **Tests**: `tldw_Server_API/tests/TTS/test_tts_service_v2.py`, `tldw_Server_API/tests/TTS/test_supertonic2_endpoint_integration.py` or new targeted endpoint tests
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 4: Add failing service/endpoint tests
 
@@ -330,7 +332,7 @@ git commit -m "test(tts): cover KittenTTS service routing and voice catalog"
 **Goal**: Add KittenTTS to the advanced setup engine picker and dependency provisioning path.
 **Success Criteria**: Setup schema accepts `kitten_tts`; installer dependencies and install routine support it; setup JS advertises it in the engine picker.
 **Tests**: `tldw_Server_API/tests/Setup/test_install_manager_dependencies.py`, `tldw_Server_API/tests/integration/test_setup_installation.py`
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 5: Add failing setup tests
 
@@ -400,7 +402,7 @@ git commit -m "feat(setup): add KittenTTS provisioning support"
 **Goal**: Update touched documentation and verify the entire change set with tests and Bandit.
 **Success Criteria**: Relevant docs mention KittenTTS configuration/setup; targeted tests pass; Bandit is clean on touched backend paths.
 **Tests**: targeted pytest suites below, Bandit scan on touched Python paths
-**Status**: Not Started
+**Status**: Complete
 
 ### Task 6: Final verification
 

@@ -12,7 +12,9 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 ## Core Server
 - `tldw_production`: Enable production guards (`true|false`). Masks API key in logs and enforces DB/secret checks.
 - `ENABLE_OPENAPI`: Show OpenAPI/Swagger UI when `true`. Defaults to hidden in production unless explicitly enabled.
-- `ALLOWED_ORIGINS`: CORS allowlist. Comma-separated or JSON array.
+- `ALLOWED_ORIGINS`: Optional browser-origin allowlist. Comma-separated or JSON array.
+  - Local self-hosting already permits common `localhost` and `127.0.0.1` browser origins by default.
+  - Set this only when your browser UI runs from another origin, such as a LAN IP, reverse proxy host, or custom port.
 - `CORS_ALLOW_CREDENTIALS`: Enable credentialed CORS responses (`true|false`). Default `false`.
 - `TLDW_CONFIG_PATH`: Absolute path to the primary `config.txt`. When set, the parent directory is treated as the config root for auxiliary assets (e.g., `Synonyms/`).
 - `TLDW_CONFIG_DIR`: Explicit directory containing `config.txt` and related config assets. Checked after `TLDW_CONFIG_PATH`.

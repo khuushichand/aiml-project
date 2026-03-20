@@ -73,6 +73,17 @@ async def _require_admin_for_remote(request: Request) -> None:
     )
 
 
+async def require_shared_audio_installer_access(request: Request) -> None:
+    """Require authenticated admin-style access for shared audio installer routes.
+
+    Shared installer actions are intentionally decoupled from loopback/local-only
+    checks so they can be used from the shared UI after setup completes. This
+    accepts principals with admin-equivalent claims, including the bootstrapped
+    single-user principal.
+    """
+    await _require_admin_for_remote(request)
+
+
 def reset_remote_access_cache(value: bool | None = None) -> None:
     """Reset the cached remote access flag (test helper/administrative hook)."""
     _set_remote_access_cache(value)

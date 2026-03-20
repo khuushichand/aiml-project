@@ -851,6 +851,59 @@ export type McpHubGovernancePackObjectProvenance = {
   source_object_id: string
 }
 
+export type McpHubGovernancePackSourceType = "local_path" | "git"
+export type McpHubGovernancePackGitRefKind = "branch" | "tag" | "commit"
+export type McpHubGovernancePackSourceUpdateStatus =
+  | "newer_version_available"
+  | "no_update"
+  | "source_drift_same_version"
+
+export type McpHubGovernancePackSourceRequest = {
+  source_type: McpHubGovernancePackSourceType
+  local_path?: string | null
+  repo_url?: string | null
+  ref?: string | null
+  ref_kind?: McpHubGovernancePackGitRefKind | null
+  subpath?: string | null
+}
+
+export type McpHubGovernancePackSourceCandidate = {
+  id: number
+  source_type: McpHubGovernancePackSourceType | string
+  source_location: string
+  source_ref_requested?: string | null
+  source_ref_kind?: McpHubGovernancePackGitRefKind | null
+  source_subpath?: string | null
+  source_commit_resolved?: string | null
+  pack_content_digest: string
+  source_verified?: boolean | null
+  source_verification_mode?: string | null
+  source_fetched_at?: string | null
+  fetched_by?: number | null
+}
+
+export type McpHubGovernancePackSourcePrepareResponse = {
+  candidate: McpHubGovernancePackSourceCandidate
+  manifest: McpHubGovernancePackDryRunReport["manifest"]
+}
+
+export type McpHubGovernancePackSourceUpdateCheck = {
+  governance_pack_id: number
+  status: McpHubGovernancePackSourceUpdateStatus
+  installed_manifest: McpHubGovernancePackDryRunReport["manifest"]
+  candidate_manifest?: McpHubGovernancePackDryRunReport["manifest"] | null
+  source_commit_resolved?: string | null
+  pack_content_digest?: string | null
+}
+
+export type McpHubGovernancePackSourceUpgradePrepareResponse = {
+  status: McpHubGovernancePackSourceUpdateStatus
+  installed_manifest: McpHubGovernancePackDryRunReport["manifest"]
+  candidate_manifest?: McpHubGovernancePackDryRunReport["manifest"] | null
+  candidate: McpHubGovernancePackSourceCandidate
+  manifest: McpHubGovernancePackDryRunReport["manifest"]
+}
+
 export type McpHubGovernancePackSummary = {
   id: number
   pack_id: string
@@ -860,6 +913,17 @@ export type McpHubGovernancePackSummary = {
   owner_scope_type: McpHubScopeType
   owner_scope_id?: number | null
   bundle_digest: string
+  source_type?: McpHubGovernancePackSourceType | string | null
+  source_location?: string | null
+  source_ref_requested?: string | null
+  source_ref_kind?: McpHubGovernancePackGitRefKind | null
+  source_subpath?: string | null
+  source_commit_resolved?: string | null
+  pack_content_digest?: string | null
+  source_verified?: boolean | null
+  source_verification_mode?: string | null
+  source_fetched_at?: string | null
+  fetched_by?: number | null
   manifest: Record<string, unknown>
   is_active_install: boolean
   superseded_by_governance_pack_id?: number | null
@@ -1663,6 +1727,28 @@ export const dryRunGovernancePack = async (payload: {
   })
 }
 
+export const prepareGovernancePackSourceCandidate = async (payload: {
+  source: McpHubGovernancePackSourceRequest
+}): Promise<McpHubGovernancePackSourcePrepareResponse> => {
+  return await bgRequestClient<McpHubGovernancePackSourcePrepareResponse>({
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/source/prepare"),
+    method: "POST",
+    body: payload
+  })
+}
+
+export const dryRunGovernancePackSourceCandidate = async (payload: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  candidate_id: number
+}): Promise<McpHubGovernancePackDryRunResponse> => {
+  return await bgRequestClient<McpHubGovernancePackDryRunResponse>({
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/source/dry-run"),
+    method: "POST",
+    body: payload
+  })
+}
+
 export const dryRunGovernancePackUpgrade = async (payload: {
   source_governance_pack_id: number
   owner_scope_type?: McpHubScopeType
@@ -1688,6 +1774,49 @@ export const importGovernancePack = async (payload: {
   })
 }
 
+export const importGovernancePackSourceCandidate = async (payload: {
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  candidate_id: number
+}): Promise<McpHubGovernancePackImportResponse> => {
+  return await bgRequestClient<McpHubGovernancePackImportResponse>({
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/source/import"),
+    method: "POST",
+    body: payload
+  })
+}
+
+export const checkGovernancePackUpdates = async (
+  governancePackId: number
+): Promise<McpHubGovernancePackSourceUpdateCheck> => {
+  return await bgRequestClient<McpHubGovernancePackSourceUpdateCheck>({
+    path: asClientPath(`/api/v1/mcp/hub/governance-packs/${governancePackId}/check-updates`),
+    method: "POST"
+  })
+}
+
+export const prepareGovernancePackUpgradeCandidate = async (
+  governancePackId: number
+): Promise<McpHubGovernancePackSourceUpgradePrepareResponse> => {
+  return await bgRequestClient<McpHubGovernancePackSourceUpgradePrepareResponse>({
+    path: asClientPath(`/api/v1/mcp/hub/governance-packs/${governancePackId}/prepare-upgrade-candidate`),
+    method: "POST"
+  })
+}
+
+export const dryRunGovernancePackSourceUpgrade = async (payload: {
+  source_governance_pack_id: number
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  candidate_id: number
+}): Promise<McpHubGovernancePackUpgradeDryRunResponse> => {
+  return await bgRequestClient<McpHubGovernancePackUpgradeDryRunResponse>({
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/source/dry-run-upgrade"),
+    method: "POST",
+    body: payload
+  })
+}
+
 export const executeGovernancePackUpgrade = async (payload: {
   source_governance_pack_id: number
   owner_scope_type?: McpHubScopeType
@@ -1698,6 +1827,21 @@ export const executeGovernancePackUpgrade = async (payload: {
 }): Promise<McpHubGovernancePackUpgradeExecutionResponse> => {
   return await bgRequestClient<McpHubGovernancePackUpgradeExecutionResponse>({
     path: asClientPath("/api/v1/mcp/hub/governance-packs/execute-upgrade"),
+    method: "POST",
+    body: payload
+  })
+}
+
+export const executeGovernancePackSourceUpgrade = async (payload: {
+  source_governance_pack_id: number
+  owner_scope_type?: McpHubScopeType
+  owner_scope_id?: number | null
+  candidate_id: number
+  planner_inputs_fingerprint: string
+  adapter_state_fingerprint: string
+}): Promise<McpHubGovernancePackUpgradeExecutionResponse> => {
+  return await bgRequestClient<McpHubGovernancePackUpgradeExecutionResponse>({
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/source/execute-upgrade"),
     method: "POST",
     body: payload
   })

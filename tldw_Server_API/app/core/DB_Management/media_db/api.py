@@ -7,6 +7,8 @@ from typing import Any, Protocol
 from tldw_Server_API.app.core.DB_Management.media_db.repositories import (
     MediaRepository,
 )
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_state
+from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
     MediaDbRuntimeConfig,
 )
@@ -97,6 +99,26 @@ def get_media_repository(db: MediaDbLike | MediaWriterLike) -> MediaRepository |
     return MediaRepository.from_legacy_db(db)
 
 
+def check_media_exists(db: MediaDbLike, media_id: int) -> bool:
+    """Return whether an active media row exists."""
+    return legacy_state.check_media_exists(db_instance=db, media_id=media_id)
+
+
+def get_document_version(
+    db: MediaDbLike,
+    media_id: int,
+    version_number: int | None,
+    include_content: bool = True,
+) -> dict[str, Any] | None:
+    """Return a specific media version using the legacy wrapper implementation."""
+    return legacy_wrappers.get_document_version(
+        db_instance=db,
+        media_id=media_id,
+        version_number=version_number,
+        include_content=include_content,
+    )
+
+
 __all__ = [
     "MediaDbFactory",
     "MediaDbRuntimeConfig",
@@ -106,4 +128,6 @@ __all__ = [
     "create_media_database",
     "managed_media_database",
     "get_media_repository",
+    "check_media_exists",
+    "get_document_version",
 ]

@@ -44,7 +44,7 @@ The adapter loads upstream weights via `ChatterboxTTS.from_pretrained()` or `Cha
 Pre-download (recommended for servers/CI):
 ```bash
 # Populates the local HF cache and a mirror directory
-huggingface-cli download ResembleAI/chatterbox --local-dir ./models/chatterbox
+hf download ResembleAI/chatterbox --local-dir ./models/chatterbox
 ```
 
 Offline mode (use only local cache):
@@ -178,7 +178,7 @@ The WebUI uses the same `/api/v1/audio/speech` endpoint under the hood and will 
 - Adapter streams by encoding waveform into small chunks (~200ms) for immediate playback.
 
 ## Offline & Caching Checklist
-- Pre-download model with `huggingface-cli` (see above).
+- Pre-download model with `hf` (see above).
 - Set `CHATTERBOX_AUTO_DOWNLOAD=0`, `TTS_AUTO_DOWNLOAD=0`.
 - Set `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`.
 - Ensure HF cache contains required safetensors and tokenizer files.
@@ -188,7 +188,7 @@ The WebUI uses the same `/api/v1/audio/speech` endpoint under the hood and will 
 - Install upstream package: `pip install chatterbox-tts`, or use repo’s vendored module with `pip install -e .[TTS_chatterbox]`.
 
 2) Model download blocked/offline
-- Pre-download via `huggingface-cli download ResembleAI/chatterbox --local-dir ./models/chatterbox` and set offline env vars.
+- Pre-download via `hf download ResembleAI/chatterbox --local-dir ./models/chatterbox` and set offline env vars.
 
 3) Voice cloning fails or sounds wrong
 - Use 5-20s single-speaker WAV/FLAC at 24kHz; avoid noisy or clipped audio.

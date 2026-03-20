@@ -72,6 +72,7 @@ class TTSProvider(Enum):
     ECHO_TTS = "echo_tts"
     QWEN3_TTS = "qwen3_tts"
     LUX_TTS = "lux_tts"
+    KITTEN_TTS = "kitten_tts"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -106,6 +107,7 @@ def _build_tts_provider_aliases() -> dict[str, TTSProvider]:
         "elevenlabs-tts": TTSProvider.ELEVENLABS,
         "qwen3tts": TTSProvider.QWEN3_TTS,
         "echotts": TTSProvider.ECHO_TTS,
+        "kittentts": TTSProvider.KITTEN_TTS,
         "vibevoice-asr": TTSProvider.VIBEVOICE,
     }
     for alias, provider in explicit_aliases.items():
@@ -142,6 +144,7 @@ class TTSAdapterRegistry:
         TTSProvider.ECHO_TTS: "tldw_Server_API.app.core.TTS.adapters.echo_tts_adapter.EchoTTSAdapter",
         TTSProvider.QWEN3_TTS: "tldw_Server_API.app.core.TTS.adapters.qwen3_tts_adapter.Qwen3TTSAdapter",
         TTSProvider.LUX_TTS: "tldw_Server_API.app.core.TTS.adapters.luxtts_adapter.LuxTTSAdapter",
+        TTSProvider.KITTEN_TTS: "tldw_Server_API.app.core.TTS.adapters.kitten_tts_adapter.KittenTTSAdapter",
     }
 
     @classmethod
@@ -720,13 +723,23 @@ class TTSAdapterRegistry:
 
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
-            if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
+            if provider in [TTSProvider.KOKORO, TTSProvider.KITTEN_TTS, TTSProvider.HIGGS, TTSProvider.DIA,
                            TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.VIBEVOICE_REALTIME,
                            TTSProvider.SUPERTONIC, TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS,
                            TTSProvider.QWEN3_TTS] and enabled_flag is not True:
                 continue
 
             try:
+                adapter_spec = self._adapter_specs.get(provider)
+                if adapter_spec is not None:
+                    adapter_class = self._resolve_adapter_class(adapter_spec)
+                    if getattr(adapter_class, "STATIC_CAPABILITY_DISCOVERY", False):
+                        static_adapter = adapter_class(config=self._get_provider_config(provider))
+                        caps = await static_adapter.get_capabilities()
+                        if caps:
+                            capabilities[provider] = caps
+                            continue
+
                 # Try to get adapter with a timeout to avoid hanging
                 adapter = await asyncio.wait_for(self.get_adapter(provider), timeout=5.0)
                 if adapter:
@@ -1072,6 +1085,16 @@ class TTSAdapterFactory:
         "qwen/qwen3-tts-12hz-1.7b-voicedesign": TTSProvider.QWEN3_TTS,
         "qwen/qwen3-tts-12hz-1.7b-base": TTSProvider.QWEN3_TTS,
         "qwen/qwen3-tts-12hz-0.6b-base": TTSProvider.QWEN3_TTS,
+
+        # KittenTTS models
+        "kitten_tts": TTSProvider.KITTEN_TTS,
+        "kitten-tts": TTSProvider.KITTEN_TTS,
+        "kittentts": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-mini-0.8": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-micro-0.8": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-nano-0.8": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-nano-0.8-fp32": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-nano-0.8-int8": TTSProvider.KITTEN_TTS,
     }
 
     def __init__(self, config: Optional[dict[str, Any]] = None):

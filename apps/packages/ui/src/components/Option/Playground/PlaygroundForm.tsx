@@ -860,10 +860,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     toggleCompareMode,
     handleAddCompareModel,
     handleRemoveCompareModel,
-    sendLabel,
-    compareHasPromptContext,
-    compareSharedContextLabels,
-    compareInteroperabilityNotices
+    sendLabel
   } = modelComparison
 
   const voiceChatModelOptions = React.useMemo(() => {
@@ -2991,7 +2988,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     t
   })
   const {
-    compareHasPromptContext,
     compareSharedContextLabels,
     compareInteroperabilityNotices,
     contextConflictWarnings

@@ -32,6 +32,13 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
         return "openai"
     if m.startswith("kokoro"):
         return "kokoro"
+    if (
+        m.startswith("kitten_tts")
+        or m.startswith("kitten-tts")
+        or m.startswith("kittentts")
+        or m.startswith("kittenml/kitten-tts")
+    ):
+        return "kitten_tts"
     if m.startswith("higgs"):
         return "higgs"
     if m.startswith("dia"):

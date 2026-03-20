@@ -119,6 +119,26 @@ def test_boundary_checker_exists() -> None:
         "Docs/Published" in checker,
         "expected boundary checker to scan public docs paths",
     )
+    _require(
+        "billing_webhooks.py" in checker,
+        "expected commercial billing runtime denylist in the boundary checker",
+    )
+    _require(
+        "stripe_metering_service.py" in checker,
+        "expected commercial metering runtime denylist in the boundary checker",
+    )
+    _require(
+        "admin_billing.py" in checker,
+        "expected admin billing runtime denylist in the boundary checker",
+    )
+    _require(
+        "pages/account/index.tsx" in checker,
+        "expected public account marker denylist in the boundary checker",
+    )
+    _require(
+        "pages/billing/index.tsx" in checker,
+        "expected public billing marker denylist in the boundary checker",
+    )
 
 
 def test_public_curated_tree_does_not_ship_hosted_deployment_docs() -> None:
@@ -158,6 +178,23 @@ def test_public_repo_does_not_ship_hosted_ops_and_asset_paths() -> None:
         _require(
             not path.exists(),
             f"expected hosted asset to be absent from public repo: {path}",
+        )
+
+
+def test_public_repo_does_not_ship_extracted_commercial_runtime_files() -> None:
+    commercial_runtime_paths = [
+        Path("tldw_Server_API/app/api/v1/endpoints/billing.py"),
+        Path("tldw_Server_API/app/api/v1/endpoints/billing_webhooks.py"),
+        Path("tldw_Server_API/app/core/Billing/stripe_client.py"),
+        Path("tldw_Server_API/app/services/stripe_metering_service.py"),
+        Path("tldw_Server_API/app/api/v1/endpoints/admin/admin_billing.py"),
+        Path("tldw_Server_API/app/services/admin_billing_service.py"),
+    ]
+
+    for path in commercial_runtime_paths:
+        _require(
+            not path.exists(),
+            f"expected extracted commercial runtime file to be absent from public repo: {path}",
         )
 
 

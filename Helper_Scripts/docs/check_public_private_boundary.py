@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that public docs, deploy assets, and frontend entrypoints avoid private SaaS references."""
+"""Check that public OSS surfaces avoid private hosted and commercial runtime references."""
 
 from __future__ import annotations
 
@@ -48,9 +48,17 @@ DENYLIST = {
     "Caddyfile.hosted-saas.prod.compose": "public surfaces should not point to hosted production Caddy samples",
     "@web/components/hosted": "public frontend entrypoints should not import hosted private components",
     "@web/lib/hosted-route-allowlist": "public frontend entrypoints should not import hosted route gating helpers",
+    "tldw_Server_API/app/api/v1/endpoints/billing.py": "public OSS surfaces should not reference the extracted commercial billing runtime",
+    "tldw_Server_API/app/api/v1/endpoints/billing_webhooks.py": "public OSS surfaces should not reference Stripe webhook runtime",
+    "tldw_Server_API/app/core/Billing/stripe_client.py": "public OSS surfaces should not reference Stripe client runtime",
+    "tldw_Server_API/app/services/stripe_metering_service.py": "public OSS surfaces should not reference Stripe metering runtime",
+    "tldw_Server_API/app/api/v1/endpoints/admin/admin_billing.py": "public OSS surfaces should not reference extracted admin billing runtime",
+    "tldw_Server_API/app/services/admin_billing_service.py": "public OSS surfaces should not reference extracted admin billing services",
+    "apps/tldw-frontend/pages/account/index.tsx": "public OSS surfaces should not point to hosted customer account pages",
+    "apps/tldw-frontend/pages/billing/index.tsx": "public OSS surfaces should not point to hosted billing pages",
 }
 
-TEXT_SUFFIXES = {".md", ".tsx", ".ts", ".yml", ".yaml", ".sh"}
+TEXT_SUFFIXES = {".md", ".py", ".sh", ".ts", ".tsx", ".yaml", ".yml"}
 
 
 def _iter_candidate_files() -> list[Path]:
@@ -105,7 +113,9 @@ def main() -> int:
             print(f"- {violation}")
         return 1
 
-    print("OK: public docs, deploy assets, and frontend entrypoints do not reference private SaaS assets.")
+    print(
+        "OK: public OSS surfaces do not reference private hosted assets or extracted commercial runtime."
+    )
     return 0
 
 

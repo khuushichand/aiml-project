@@ -199,7 +199,7 @@ with httpx.Client(timeout=None) as client:
   - Set `vibevoice_use_quantization = true` (CUDA only) and/or reduce `vibevoice_variant` to `1.5B`.
 
 - Model not downloaded:
-  - Ensure `vibevoice_auto_download = true`, or pre-download with `huggingface-cli download` and point `vibevoice_model_dir`.
+  - Ensure `vibevoice_auto_download = true`, or pre-download with `hf download` and point `vibevoice_model_dir`.
 
 - Streaming starts late:
   - Current adapter streams chunks after generation; for true model-level streaming (immediate playback), ask us to enable VibeVoice `AudioStreamer` integration in the adapter.
