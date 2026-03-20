@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { PlaygroundChat } from "../PlaygroundChat"
@@ -138,9 +138,15 @@ vi.mock("@/components/Common/Playground/Message", () => ({
     message: string
     onUseInChat?: () => void
     onFollowUp?: () => void
+    researchReviewReason?: string
+    researchReviewHref?: string
   }) => (
     <div data-testid="playground-message-mock">
       <div>{props.message}</div>
+      {props.researchReviewReason && <div>{props.researchReviewReason}</div>}
+      {props.researchReviewHref && (
+        <a href={props.researchReviewHref}>Review in Research</a>
+      )}
       {props.onUseInChat && (
         <button type="button" onClick={() => props.onUseInChat?.()}>
           Use in Chat
@@ -173,6 +179,25 @@ describe("PlaygroundChat research use-in-chat message integration", () => {
     useMessageOptionState.value.messages = []
     useMessageOptionState.value.serverChatId = "chat-1"
     useMessageOptionState.value.historyId = "history-1"
+  })
+
+  const completionMessage = (
+    runId: string,
+    query: string,
+    message = "Deep research finished."
+  ) => ({
+    isBot: true,
+    role: "assistant",
+    name: "Assistant",
+    message,
+    sources: [],
+    metadataExtra: {
+      deep_research_completion: {
+        run_id: runId,
+        query,
+        kind: "completion_handoff"
+      }
+    }
   })
 
   it("shows Use in Chat for completion handoff messages and not for unrelated assistant messages", async () => {
@@ -263,5 +288,199 @@ describe("PlaygroundChat research use-in-chat message integration", () => {
         })
       )
     )
+  })
+
+  it("shows checkpoint-aware review actions for plan review handoff messages", () => {
+    queryState.linkedRuns = [
+      {
+        run_id: "run_msg",
+        query: "Battery recycling supply chain",
+        status: "waiting_human",
+        phase: "awaiting_plan_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_1",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      }
+    ]
+    useMessageOptionState.value.messages = [
+      completionMessage(
+        "run_msg",
+        "Battery recycling supply chain",
+        "Deep research finished for plan review."
+      )
+    ]
+
+    renderChat({ onAttachResearchContext: vi.fn(), onPrepareResearchFollowUp: vi.fn() })
+
+    const message = within(
+      screen.getByText("Deep research finished for plan review.").closest(
+        '[data-testid="playground-message-mock"]'
+      ) as HTMLElement
+    )
+
+    expect(message.getByText("Plan review needed")).toBeInTheDocument()
+    expect(message.getByRole("link", { name: "Review in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=run_msg"
+    )
+    expect(message.queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+    expect(message.queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+  })
+
+  it("shows checkpoint-aware review actions for sources and outline handoff messages", () => {
+    queryState.linkedRuns = [
+      {
+        run_id: "run_sources",
+        query: "Battery recycling sources",
+        status: "waiting_human",
+        phase: "awaiting_sources_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_sources",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      },
+      {
+        run_id: "run_outline",
+        query: "Battery recycling outline",
+        status: "waiting_human",
+        phase: "awaiting_outline_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_outline",
+        updated_at: "2026-03-19T20:02:00+00:00"
+      }
+    ]
+    useMessageOptionState.value.messages = [
+      completionMessage(
+        "run_sources",
+        "Battery recycling sources",
+        "Deep research finished for sources."
+      ),
+      completionMessage(
+        "run_outline",
+        "Battery recycling outline",
+        "Deep research finished for outline."
+      )
+    ]
+
+    renderChat()
+
+    const sourcesMessage = within(
+      screen.getByText("Deep research finished for sources.").closest(
+        '[data-testid="playground-message-mock"]'
+      ) as HTMLElement
+    )
+    const outlineMessage = within(
+      screen.getByText("Deep research finished for outline.").closest(
+        '[data-testid="playground-message-mock"]'
+      ) as HTMLElement
+    )
+
+    expect(sourcesMessage.getByText("Sources review needed")).toBeInTheDocument()
+    expect(outlineMessage.getByText("Outline review needed")).toBeInTheDocument()
+    expect(sourcesMessage.getByRole("link", { name: "Review in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=run_sources"
+    )
+    expect(outlineMessage.getByRole("link", { name: "Review in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=run_outline"
+    )
+    expect(sourcesMessage.queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+    expect(sourcesMessage.queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+    expect(outlineMessage.queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+    expect(outlineMessage.queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+  })
+
+  it("falls back to a generic review label for unknown waiting_human phases", () => {
+    queryState.linkedRuns = [
+      {
+        run_id: "run_unknown",
+        query: "Battery recycling unknown review",
+        status: "waiting_human",
+        phase: "awaiting_custom_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_custom",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      }
+    ]
+    useMessageOptionState.value.messages = [
+      completionMessage(
+        "run_unknown",
+        "Battery recycling unknown review",
+        "Deep research finished for unknown review."
+      )
+    ]
+
+    renderChat()
+
+    const message = within(
+      screen.getByText("Deep research finished for unknown review.").closest(
+        '[data-testid="playground-message-mock"]'
+      ) as HTMLElement
+    )
+
+    expect(message.getByText("Review needed")).toBeInTheDocument()
+    expect(message.getByRole("link", { name: "Review in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=run_unknown"
+    )
+    expect(message.queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+    expect(message.queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+  })
+
+  it("keeps existing actions when no current linked-run match exists", () => {
+    useMessageOptionState.value.messages = [
+      completionMessage(
+        "run_msg",
+        "Battery recycling supply chain",
+        "Deep research finished for no current linked run."
+      )
+    ]
+
+    renderChat({ onAttachResearchContext: vi.fn(), onPrepareResearchFollowUp: vi.fn() })
+
+    expect(screen.getByRole("button", { name: "Use in Chat" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Follow up" })).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Review in Research" })).not.toBeInTheDocument()
+  })
+
+  it("leaves unrelated assistant messages without research handoff actions while a checkpoint run is active", () => {
+    queryState.linkedRuns = [
+      {
+        run_id: "run_msg",
+        query: "Battery recycling supply chain",
+        status: "waiting_human",
+        phase: "awaiting_plan_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_1",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      }
+    ]
+    useMessageOptionState.value.messages = [
+      completionMessage(
+        "run_msg",
+        "Battery recycling supply chain",
+        "Deep research finished for related handoff."
+      ),
+      {
+        isBot: true,
+        role: "assistant",
+        name: "Assistant",
+        message: "Ordinary assistant reply.",
+        sources: [],
+        metadataExtra: {}
+      }
+    ]
+
+    renderChat()
+
+    const unrelated = within(
+      screen.getByText("Ordinary assistant reply.").closest(
+        '[data-testid="playground-message-mock"]'
+      ) as HTMLElement
+    )
+
+    expect(unrelated.queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+    expect(unrelated.queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+    expect(unrelated.queryByRole("link", { name: "Review in Research" })).not.toBeInTheDocument()
   })
 })
