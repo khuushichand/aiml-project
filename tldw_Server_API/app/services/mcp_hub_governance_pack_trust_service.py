@@ -38,6 +38,29 @@ def _normalize_string_list(value: Any) -> list[str]:
     return out
 
 
+def _normalize_required_string_list(value: Any, *, field_name: str) -> list[str]:
+    """Normalize a string collection while rejecting whitespace-only entries."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        cleaned = str(item or "").strip()
+        if not cleaned:
+            raise ValueError(f"{field_name} entries cannot be blank")
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
+    return out
+
+
 def _canonicalize_git_repository(repo_url: str) -> str:
     """Normalize supported Git repository identifiers to host/org/repo form."""
     cleaned = str(repo_url or "").strip()
@@ -99,11 +122,11 @@ def _normalize_trusted_signer_entry(
     """Normalize a signer entry into the canonical trust-store representation."""
     fingerprint = str(signer.get("fingerprint") or "").strip().upper()
     if not fingerprint:
-        return None
+        raise ValueError("fingerprint is required")
     display_name = str(signer.get("display_name") or "").strip() or None
     repo_bindings: list[str] = []
     seen_bindings: set[str] = set()
-    for entry in _normalize_string_list(signer.get("repo_bindings")):
+    for entry in _normalize_required_string_list(signer.get("repo_bindings"), field_name="repo binding"):
         normalized_binding = _normalize_repo_binding(entry)
         if normalized_binding in seen_bindings:
             continue
@@ -147,7 +170,7 @@ def _normalize_trusted_signers(
         if normalized_signer is not None:
             _merge_signer_entry(normalized_signer)
 
-    for fingerprint in _normalize_string_list(legacy_fingerprints):
+    for fingerprint in _normalize_required_string_list(legacy_fingerprints, field_name="fingerprint"):
         normalized_signer = _normalize_trusted_signer_entry(
             {
                 "fingerprint": fingerprint,
