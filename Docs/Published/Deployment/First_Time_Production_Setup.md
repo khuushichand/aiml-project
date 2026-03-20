@@ -12,9 +12,7 @@ Related documents
 - Metrics and Grafana: `Docs/Deployment/Monitoring/Metrics_Cheatsheet.md`
 - Environment variables reference: `Env_Vars.md`
 - General installation (local/dev): `Docs/Getting_Started/README.md`
-- Production hardening checklist: `Docs/User_Guides/Server/Production_Hardening_Checklist.md`
-
-Hosted/commercial deployment runbooks intentionally live outside this public self-host guide set.
+- Production hardening checklist: `Docs/Published/User_Guides/Server/Production_Hardening_Checklist.md`
 
 ## 1) Prerequisites
 
@@ -29,7 +27,7 @@ Hosted/commercial deployment runbooks intentionally live outside this public sel
 Security preflight
 - Decide auth mode: `single_user` (API key) or `multi_user` (JWT).
 - Generate strong secrets:
-  - API key: `python -m tldw_Server_API.app.core.AuthNZ.initialize` (choose "Generate secure keys")
+  - API key: use the canonical profile guide steps in `Docs/Getting_Started/` for your selected deployment mode.
   - JWT secret: `openssl rand -base64 64`
 - Restrict CORS to your site(s) with `ALLOWED_ORIGINS`.
 - In production, set `tldw_production=true` to mask secrets in logs and harden defaults.
@@ -53,8 +51,6 @@ Production guidance for Compose deployments:
 - Terminate TLS at your reverse proxy and forward to `app:8000`.
 - Ensure WebSocket upgrade support for `/api/v1/audio/stream/transcribe` and `/api/v1/mcp/*`.
 - Configure `ALLOWED_ORIGINS` explicitly for your public domain(s).
-- Keep `PUBLIC_WEB_BASE_URL` aligned with the public app origin when you enable email-driven auth flows.
-- Hosted/commercial deployment overlays are intentionally omitted from this self-host guide set.
 
 ## 4) Option B - Bare-Metal (systemd + Nginx)
 
@@ -83,13 +79,6 @@ Reference implementations:
 - `ALLOWED_ORIGINS`: Comma-separated or JSON array of trusted origins.
 - `tldw_production`: `true` in production to mask secrets and enable production guards.
 - Provider keys: e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.
-
-Public web deployment additions:
-
-- Set `PUBLIC_WEB_BASE_URL` to the public web origin used in auth emails.
-- Require billing redirect hardening if you expose billing redirects on a public origin.
-- Use `AUTH_MODE=multi_user` plus PostgreSQL for multi-user internet-facing deployments.
-- Prefer a clear reverse-proxy boundary between the public web surface and internal services.
 
 See `Env_Vars.md` for the complete list and `Docs/AuthNZ/AUTHNZ_DATABASE_CONFIG.md` for AuthNZ DB details.
 

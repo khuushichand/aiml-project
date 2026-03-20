@@ -16,7 +16,9 @@ Canonical base profiles:
 
 Optional add-ons:
 
-- [GPU/STT Add-on](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/GPU_STT_Addon.md) (apply after your base profile is working)
+- [First-time audio setup: CPU systems](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/First_Time_Audio_Setup_CPU.md)
+- [First-time audio setup: GPU/accelerated systems](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md)
+- [GPU/STT Add-on](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/GPU_STT_Addon.md) (legacy pointer to the accelerated guide)
 
 ## How To Use These Guides
 
@@ -25,6 +27,7 @@ Optional add-ons:
 - Complete the guide sections in order: prerequisites, install, run, verify, troubleshoot.
 - Do not mix setup commands from other docs unless the guide explicitly links to them.
 - Apply add-ons only after your chosen base profile is healthy.
+- If speech is part of day-one setup, switch to the CPU or GPU/accelerated audio guide after the base profile is healthy instead of starting with the older STT/TTS reference pages.
 
 ## Notes
 

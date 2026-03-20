@@ -285,6 +285,14 @@ export const PROVIDER_REGISTRY: Record<string, ProviderMeta> = {
     label: "Kokoro",
     capabilities: ["tts-engine"]
   },
+  kitten_tts: {
+    label: "KittenTTS",
+    capabilities: ["tts-engine"]
+  },
+  kittentts: {
+    label: "KittenTTS",
+    capabilities: ["tts-engine"]
+  },
   higgs: {
     label: "Higgs",
     capabilities: ["tts-engine"]
@@ -456,6 +464,14 @@ const TTS_PROVIDER_RULES: ProviderInferenceRule[] = [
     provider: "openai",
     match: (value) =>
       value === "tts-1" || value === "tts-1-hd" || value.startsWith("gpt-")
+  },
+  {
+    provider: "kitten_tts",
+    match: (value) =>
+      value.startsWith("kitten_tts") ||
+      value.startsWith("kitten-tts") ||
+      value.startsWith("kittentts") ||
+      value.startsWith("kittenml/kitten-tts")
   },
   { provider: "kokoro", match: (value) => value.startsWith("kokoro") },
   { provider: "higgs", match: (value) => value.startsWith("higgs") },

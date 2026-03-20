@@ -1202,59 +1202,6 @@ _CREATE_AUTHNZ_CORE_TABLES = [
 _CREATE_BILLING_TABLES = [
     (
         """
-        CREATE TABLE IF NOT EXISTS subscription_plans (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            description TEXT,
-            stripe_product_id TEXT,
-            stripe_price_id TEXT,
-            stripe_price_id_yearly TEXT,
-            price_usd_monthly DOUBLE PRECISION DEFAULT 0,
-            price_usd_yearly DOUBLE PRECISION DEFAULT 0,
-            limits_json JSONB NOT NULL,
-            is_active BOOLEAN DEFAULT TRUE,
-            is_public BOOLEAN DEFAULT FALSE,
-            sort_order INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS org_subscriptions (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
-            plan_id INTEGER NOT NULL REFERENCES subscription_plans(id) ON DELETE RESTRICT,
-            stripe_customer_id TEXT,
-            stripe_subscription_id TEXT,
-            stripe_subscription_status TEXT,
-            billing_cycle TEXT DEFAULT 'monthly',
-            current_period_start TIMESTAMP,
-            current_period_end TIMESTAMP,
-            status TEXT DEFAULT 'active',
-            trial_start TIMESTAMP,
-            trial_end TIMESTAMP,
-            canceled_at TIMESTAMP,
-            cancel_at_period_end BOOLEAN DEFAULT FALSE,
-            custom_limits_json JSONB,
-            metadata JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)", ()),
-    (
-        """
         CREATE TABLE IF NOT EXISTS org_budgets (
             org_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
             budgets_json JSONB,
@@ -1265,64 +1212,6 @@ _CREATE_BILLING_TABLES = [
         (),
     ),
     ("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
-            id SERIAL PRIMARY KEY,
-            stripe_event_id TEXT UNIQUE NOT NULL,
-            event_type TEXT NOT NULL,
-            event_data JSONB NOT NULL,
-            status TEXT DEFAULT 'pending',
-            processed_at TIMESTAMPTZ,
-            error_message TEXT,
-            retry_count INTEGER DEFAULT 0,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS payment_history (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-            stripe_invoice_id TEXT,
-            stripe_payment_intent_id TEXT,
-            amount_cents INTEGER NOT NULL,
-            currency TEXT DEFAULT 'usd',
-            status TEXT NOT NULL,
-            description TEXT,
-            invoice_pdf_url TEXT,
-            receipt_url TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS billing_audit_log (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            action TEXT NOT NULL,
-            details TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)", ()),
 ]
 
 
@@ -2646,6 +2535,16 @@ def _normalize_budget_payload_pg(raw: Any) -> dict[str, Any]:
 
 async def _backfill_org_budgets_pg(db_pool: DatabasePool) -> None:
     try:
+        org_subscriptions_exists = await db_pool.fetchval(
+            "SELECT to_regclass('public.org_subscriptions')"
+        )
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"PG budgets backfill table probe failed: {exc}")
+        return
+    if not org_subscriptions_exists:
+        return
+
+    try:
         rows = await db_pool.fetch(
             """
             SELECT os.org_id, os.custom_limits_json, ob.budgets_json
@@ -2746,7 +2645,7 @@ async def ensure_billing_tables_pg(
     *,
     run_backfill: bool = True,
 ) -> bool:
-    """Ensure billing-related tables exist for PostgreSQL backends."""
+    """Ensure only OSS budget compatibility tables exist for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
         if getattr(db_pool, "pool", None) is None:
@@ -2762,52 +2661,6 @@ async def ensure_billing_tables_pg(
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure billing DDL failed: {exc}")
 
-        default_plans = [
-            {
-                "name": "free",
-                "display_name": "Free",
-                "description": "Internal/default plan (not publicly listed)",
-                "price_usd_monthly": 0,
-                "price_usd_yearly": 0,
-                "sort_order": 0,
-                "is_public": False,
-                "limits_json": json.dumps({
-                    "storage_mb": 1024,
-                    "api_calls_day": 100,
-                    "api_calls_month": 3000,
-                    "llm_tokens_day": 10000,
-                    "llm_tokens_month": 300000,
-                    "transcription_minutes_month": 10,
-                    "rag_queries_day": 50,
-                    "concurrent_jobs": 1,
-                    "team_members": 1,
-                    "rate_limit_rpm": 10,
-                    "features": ["basic_search", "basic_chat"],
-                }),
-            },
-        ]
-
-        for plan in default_plans:
-            try:
-                await db_pool.execute(
-                    """
-                    INSERT INTO subscription_plans
-                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order, is_public)
-                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
-                    ON CONFLICT (name) DO NOTHING
-                    """,
-                    plan["name"],
-                    plan["display_name"],
-                    plan["description"],
-                    plan["price_usd_monthly"],
-                    plan["price_usd_yearly"],
-                    plan["limits_json"],
-                    plan["sort_order"],
-                    plan.get("is_public", True),
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG ensure billing seed failed: {exc}")
-
         if run_backfill:
             try:
                 await _backfill_org_budgets_pg(db_pool)
@@ -2820,13 +2673,12 @@ async def ensure_billing_tables_pg(
                 logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
         logger.info(
-            "Ensured PostgreSQL billing tables "
-            "(subscription_plans, org_subscriptions, org_budgets, "
-            "stripe_webhook_events, payment_history, billing_audit_log)"
+            "Ensured PostgreSQL OSS budget compatibility tables "
+            "(org_budgets only; retired billing tables are left untouched if present)"
         )
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.warning(f"Failed to ensure PostgreSQL billing tables: {exc}")
+        logger.warning(f"Failed to ensure PostgreSQL OSS budget compatibility tables: {exc}")
         return False
 
 

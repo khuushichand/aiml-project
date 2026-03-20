@@ -32,6 +32,15 @@ _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
     json.JSONDecodeError,
 )
 
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Return True when the given SQLite table already exists."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
 #######################################################################################################################
 #
 # AuthNZ Migrations
@@ -2492,71 +2501,9 @@ def rollback_029_drop_org_invite_redemptions_table(conn: sqlite3.Connection) -> 
 
 
 def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
-    """Create subscription_plans table for neutral OSS/self-host defaults."""
-    logger.info("Migration 030: START subscription_plans table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscription_plans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            description TEXT,
-            stripe_product_id TEXT,
-            stripe_price_id TEXT,
-            stripe_price_id_yearly TEXT,
-            price_usd_monthly REAL DEFAULT 0,
-            price_usd_yearly REAL DEFAULT 0,
-            limits_json TEXT NOT NULL,
-            is_active INTEGER DEFAULT 1,
-            is_public INTEGER DEFAULT 0,
-            sort_order INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)")
-
-    # Seed only the neutral free/self-host default plan.
-    default_plans = [
-        {
-            "name": "free",
-            "display_name": "Free",
-            "description": "Internal/default plan (not publicly listed)",
-            "price_usd_monthly": 0,
-            "price_usd_yearly": 0,
-            "sort_order": 0,
-            "is_public": 0,
-            "limits_json": json.dumps({
-                "storage_mb": 1024,
-                "api_calls_day": 100,
-                "api_calls_month": 3000,
-                "llm_tokens_day": 10000,
-                "llm_tokens_month": 300000,
-                "transcription_minutes_month": 10,
-                "rag_queries_day": 50,
-                "concurrent_jobs": 1,
-                "team_members": 1,
-                "rate_limit_rpm": 10,
-                "features": ["basic_search", "basic_chat"]
-            })
-        },
-    ]
-
-    for plan in default_plans:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO subscription_plans
-            (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order, is_public)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (plan["name"], plan["display_name"], plan["description"],
-             plan["price_usd_monthly"], plan["price_usd_yearly"], plan["limits_json"], plan["sort_order"], plan.get("is_public", 1))
-        )
-
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 030: Created subscription_plans table with neutral default plan")
+    logger.info("Migration 030: Retired public billing plan schema bootstrap")
 
 
 def rollback_030_drop_subscription_plans_table(conn: sqlite3.Connection) -> None:
@@ -2567,40 +2514,9 @@ def rollback_030_drop_subscription_plans_table(conn: sqlite3.Connection) -> None
 
 
 def migration_031_create_org_subscriptions(conn: sqlite3.Connection) -> None:
-    """Create org_subscriptions table for organization subscription state."""
-    logger.info("Migration 031: START org_subscriptions table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS org_subscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL UNIQUE,
-            plan_id INTEGER NOT NULL,
-            stripe_customer_id TEXT,
-            stripe_subscription_id TEXT,
-            stripe_subscription_status TEXT,
-            billing_cycle TEXT DEFAULT 'monthly',
-            current_period_start TIMESTAMP,
-            current_period_end TIMESTAMP,
-            status TEXT DEFAULT 'active',
-            trial_start TIMESTAMP,
-            trial_end TIMESTAMP,
-            canceled_at TIMESTAMP,
-            cancel_at_period_end INTEGER DEFAULT 0,
-            custom_limits_json TEXT,
-            metadata TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-            FOREIGN KEY (plan_id) REFERENCES subscription_plans(id) ON DELETE RESTRICT
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 031: Created org_subscriptions table")
+    logger.info("Migration 031: Retired public org_subscriptions schema bootstrap")
 
 
 def rollback_031_drop_org_subscriptions_table(conn: sqlite3.Connection) -> None:
@@ -2611,28 +2527,9 @@ def rollback_031_drop_org_subscriptions_table(conn: sqlite3.Connection) -> None:
 
 
 def migration_032_create_stripe_webhook_events(conn: sqlite3.Connection) -> None:
-    """Create stripe_webhook_events table for idempotency and audit."""
-    logger.info("Migration 032: START stripe_webhook_events table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            stripe_event_id TEXT UNIQUE NOT NULL,
-            event_type TEXT NOT NULL,
-            event_data TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
-            processed_at TIMESTAMP,
-            error_message TEXT,
-            retry_count INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 032: Created stripe_webhook_events table")
+    logger.info("Migration 032: Retired public Stripe webhook schema bootstrap")
 
 
 def rollback_032_drop_stripe_webhook_events_table(conn: sqlite3.Connection) -> None:
@@ -2643,31 +2540,9 @@ def rollback_032_drop_stripe_webhook_events_table(conn: sqlite3.Connection) -> N
 
 
 def migration_033_create_payment_history(conn: sqlite3.Connection) -> None:
-    """Create payment_history table for invoice display."""
-    logger.info("Migration 033: START payment_history table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS payment_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL,
-            stripe_invoice_id TEXT,
-            stripe_payment_intent_id TEXT,
-            amount_cents INTEGER NOT NULL,
-            currency TEXT DEFAULT 'usd',
-            status TEXT NOT NULL,
-            description TEXT,
-            invoice_pdf_url TEXT,
-            receipt_url TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 033: Created payment_history table")
+    logger.info("Migration 033: Retired public payment history schema bootstrap")
 
 
 def rollback_033_drop_payment_history_table(conn: sqlite3.Connection) -> None:
@@ -2678,29 +2553,9 @@ def rollback_033_drop_payment_history_table(conn: sqlite3.Connection) -> None:
 
 
 def migration_034_create_billing_audit_log(conn: sqlite3.Connection) -> None:
-    """Create billing_audit_log table for billing operation audit trail."""
-    logger.info("Migration 034: START billing_audit_log table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS billing_audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL,
-            user_id INTEGER,
-            action TEXT NOT NULL,
-            details TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 034: Created billing_audit_log table")
+    logger.info("Migration 034: Retired public billing audit schema bootstrap")
 
 
 def rollback_034_drop_billing_audit_log_table(conn: sqlite3.Connection) -> None:
@@ -2737,29 +2592,29 @@ def migration_035_backfill_storage_mb_limits(conn: sqlite3.Connection) -> None:
             changed = True
         return json.dumps(data) if changed else None
 
-    # Update subscription plans.
-    cur = conn.execute("SELECT id, limits_json FROM subscription_plans")
-    rows = cur.fetchall()
-    for plan_id, limits_json in rows:
-        updated = _normalize_limits_json(limits_json)
-        if updated is not None:
-            conn.execute(
-                "UPDATE subscription_plans SET limits_json = ? WHERE id = ?",
-                (updated, plan_id),
-            )
+    if _sqlite_table_exists(conn, "subscription_plans"):
+        cur = conn.execute("SELECT id, limits_json FROM subscription_plans")
+        rows = cur.fetchall()
+        for plan_id, limits_json in rows:
+            updated = _normalize_limits_json(limits_json)
+            if updated is not None:
+                conn.execute(
+                    "UPDATE subscription_plans SET limits_json = ? WHERE id = ?",
+                    (updated, plan_id),
+                )
 
-    # Update org custom limits.
-    cur = conn.execute(
-        "SELECT id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
-    )
-    rows = cur.fetchall()
-    for sub_id, limits_json in rows:
-        updated = _normalize_limits_json(limits_json)
-        if updated is not None:
-            conn.execute(
-                "UPDATE org_subscriptions SET custom_limits_json = ? WHERE id = ?",
-                (updated, sub_id),
-            )
+    if _sqlite_table_exists(conn, "org_subscriptions"):
+        cur = conn.execute(
+            "SELECT id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
+        )
+        rows = cur.fetchall()
+        for sub_id, limits_json in rows:
+            updated = _normalize_limits_json(limits_json)
+            if updated is not None:
+                conn.execute(
+                    "UPDATE org_subscriptions SET custom_limits_json = ? WHERE id = ?",
+                    (updated, sub_id),
+                )
 
     conn.commit()
     logger.info("Migration 035: Completed storage_mb limit backfill")
@@ -3566,36 +3421,37 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
             payload["enforcement_mode"] = enforcement
         return payload
 
-    cur = conn.execute(
-        "SELECT org_id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
-    )
-    rows = cur.fetchall()
-    for org_id, custom_limits_json in rows:
-        if not custom_limits_json:
-            continue
-        try:
-            data = json.loads(custom_limits_json)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        legacy_budgets = data.get("budgets")
-        if not isinstance(legacy_budgets, dict):
-            continue
-        payload = _inflate_legacy_budgets(legacy_budgets)
-        if payload:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO org_budgets (org_id, budgets_json, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                """,
-                (org_id, json.dumps(payload)),
-            )
-        data.pop("budgets", None)
-        conn.execute(
-            "UPDATE org_subscriptions SET custom_limits_json = ? WHERE org_id = ?",
-            (json.dumps(data) if data else None, org_id),
+    if _sqlite_table_exists(conn, "org_subscriptions"):
+        cur = conn.execute(
+            "SELECT org_id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
         )
+        rows = cur.fetchall()
+        for org_id, custom_limits_json in rows:
+            if not custom_limits_json:
+                continue
+            try:
+                data = json.loads(custom_limits_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            legacy_budgets = data.get("budgets")
+            if not isinstance(legacy_budgets, dict):
+                continue
+            payload = _inflate_legacy_budgets(legacy_budgets)
+            if payload:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO org_budgets (org_id, budgets_json, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (org_id, json.dumps(payload)),
+                )
+            data.pop("budgets", None)
+            conn.execute(
+                "UPDATE org_subscriptions SET custom_limits_json = ? WHERE org_id = ?",
+                (json.dumps(data) if data else None, org_id),
+            )
 
     conn.commit()
     logger.info("Migration 042: Created org_budgets table and migrated legacy budgets")

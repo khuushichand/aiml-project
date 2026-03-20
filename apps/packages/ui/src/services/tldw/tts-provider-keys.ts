@@ -8,6 +8,8 @@ export const normalizeTtsProviderKey = (value?: string | null): string => {
 export const toServerTtsProviderKey = (value?: string | null): string => {
   const normalized = normalizeTtsProviderKey(value)
   switch (normalized) {
+    case "kittentts":
+      return "kitten_tts"
     case "pockettts":
       return "pocket_tts"
     case "vibevoicerealtime":

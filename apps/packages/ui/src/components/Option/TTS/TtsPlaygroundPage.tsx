@@ -375,6 +375,20 @@ const TtsPlaygroundPage: React.FC = () => {
     return []
   }, [providersInfo, activeProviderCaps, tldwVoiceCatalog])
 
+  React.useEffect(() => {
+    if (!isTldw || providerVoices.length === 0) {
+      return
+    }
+    const currentVoice = String(tldwVoice || "").trim()
+    const availableVoices = providerVoices
+      .map((voice) => voice.id || voice.name || "")
+      .filter(Boolean)
+    if (currentVoice && availableVoices.includes(currentVoice)) {
+      return
+    }
+    setTldwVoice(availableVoices[0])
+  }, [isTldw, providerVoices, tldwVoice])
+
   const openAiVoiceOptions = React.useMemo(() => {
     if (!openAiModel) {
       // If no model selected yet, show the union of known voices.

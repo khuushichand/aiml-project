@@ -13,8 +13,7 @@ from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.repos.billing_repo import AuthnzBillingRepo
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.Billing.plan_limits import check_limit, get_plan_limits
 from tldw_Server_API.app.core.Billing.runtime_flags import is_billing_enabled
 
@@ -73,22 +72,29 @@ class SubscriptionService:
     def __init__(
         self,
         db_pool: DatabasePool | None = None,
-        billing_repo: AuthnzBillingRepo | None = None,
+        billing_repo: Any | None = None,
         stripe_client: Any | None = None,
     ):
         self._db_pool = db_pool
         self._billing_repo = billing_repo
         self._stripe_client = stripe_client
 
-    async def _get_db_pool(self) -> DatabasePool:
-        if self._db_pool is None:
-            self._db_pool = await get_db_pool()
-        return self._db_pool
+    @staticmethod
+    def _free_plan_record() -> dict[str, Any]:
+        return {
+            "name": "free",
+            "display_name": "Free",
+            "description": "Internal/self-host default plan",
+            "price_usd_monthly": 0,
+            "price_usd_yearly": 0,
+            "limits": get_plan_limits("free"),
+            "is_active": True,
+            "is_public": False,
+        }
 
-    async def _get_billing_repo(self) -> AuthnzBillingRepo:
+    async def _require_billing_repo(self) -> Any:
         if self._billing_repo is None:
-            pool = await self._get_db_pool()
-            self._billing_repo = AuthnzBillingRepo(db_pool=pool)
+            raise RuntimeError("Legacy billing repository runtime is not available in OSS")
         return self._billing_repo
 
     def _get_stripe_client(self) -> Any:
@@ -109,13 +115,7 @@ class SubscriptionService:
         synthesize the neutral free/self-host tier so the public endpoint
         never returns an empty catalog on a fresh install.
         """
-        repo = await self._get_billing_repo()
-        plans = await repo.list_plans(active_only=True, public_only=True)
-        if plans:
-            return plans
-
-        free_plan = await self.get_plan("free")
-        return [free_plan] if free_plan else []
+        return [self._free_plan_record()]
 
     async def get_plan(self, plan_name: str) -> dict[str, Any] | None:
         """Get a specific plan by name.
@@ -123,22 +123,9 @@ class SubscriptionService:
         Only the neutral free/self-host fallback is synthesized when the
         database does not contain a matching plan row.
         """
-        repo = await self._get_billing_repo()
-        plan = await repo.get_plan_by_name(plan_name)
-        if plan:
-            return plan
         if str(plan_name).strip().lower() != "free":
             return None
-        return {
-            "name": "free",
-            "display_name": "Free",
-            "description": "Internal/self-host default plan",
-            "price_usd_monthly": 0,
-            "price_usd_yearly": 0,
-            "limits": get_plan_limits("free"),
-            "is_active": True,
-            "is_public": False,
-        }
+        return self._free_plan_record()
 
     async def get_plan_for_checkout(self, plan_name: str) -> dict[str, Any] | None:
         """
@@ -147,7 +134,7 @@ class SubscriptionService:
         Plans must exist in the subscription_plans table, be active, and be
         publicly purchasable.
         """
-        repo = await self._get_billing_repo()
+        repo = await self._require_billing_repo()
         plan = await repo.get_plan_by_name(plan_name)
         if not plan:
             return None
@@ -168,35 +155,16 @@ class SubscriptionService:
         Organizations without an explicit subscription are treated as being
         on the implicit free tier.
         """
-        repo = await self._get_billing_repo()
-        sub = await repo.get_org_subscription(org_id)
         limits = await self.get_org_limits(org_id)
-
-        if not sub:
-            # Return implicit free tier status
-            plan = await repo.get_plan_by_name("free")
-            plan_display_name = plan.get("display_name", "Free") if plan else "Free"
-            return SubscriptionStatus(
-                org_id=org_id,
-                plan_name="free",
-                plan_display_name=plan_display_name,
-                status="active",
-                billing_cycle=None,
-                current_period_end=None,
-                trial_end=None,
-                cancel_at_period_end=False,
-                limits=limits,
-            )
-
         return SubscriptionStatus(
             org_id=org_id,
-            plan_name=sub.get("plan_name", "free"),
-            plan_display_name=sub.get("plan_display_name", "Free"),
-            status=sub.get("status", "active"),
-            billing_cycle=sub.get("billing_cycle"),
-            current_period_end=sub.get("current_period_end"),
-            trial_end=sub.get("trial_end"),
-            cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
+            plan_name="free",
+            plan_display_name="Free",
+            status="active",
+            billing_cycle=None,
+            current_period_end=None,
+            trial_end=None,
+            cancel_at_period_end=False,
             limits=limits,
         )
 
@@ -214,7 +182,7 @@ class SubscriptionService:
         This creates the database record. For paid plans, a checkout session
         should be created separately.
         """
-        repo = await self._get_billing_repo()
+        repo = await self._require_billing_repo()
 
         # Get plan ID
         plan = await repo.get_plan_by_name(plan_name)
@@ -283,7 +251,7 @@ class SubscriptionService:
         if not stripe.is_available:
             raise RuntimeError("Stripe is not configured")
 
-        repo = await self._get_billing_repo()
+        repo = await self._require_billing_repo()
 
         # Get or create Stripe customer
         sub = await repo.get_org_subscription(org_id)
@@ -373,7 +341,7 @@ class SubscriptionService:
         if not stripe.is_available:
             raise RuntimeError("Stripe is not configured")
 
-        repo = await self._get_billing_repo()
+        repo = await self._require_billing_repo()
         sub = await repo.get_org_subscription(org_id)
 
         if not sub or not sub.get("stripe_customer_id"):
@@ -395,7 +363,7 @@ class SubscriptionService:
         ip_address: str | None = None,
     ) -> dict[str, Any]:
         """Cancel an organization's subscription."""
-        repo = await self._get_billing_repo()
+        repo = await self._require_billing_repo()
         sub = await repo.get_org_subscription(org_id)
 
         if not sub:
@@ -457,7 +425,7 @@ class SubscriptionService:
         user_id: int | None = None,
     ) -> dict[str, Any]:
         """Resume a subscription that was set to cancel."""
-        repo = await self._get_billing_repo()
+        repo = await self._require_billing_repo()
         sub = await repo.get_org_subscription(org_id)
 
         if not sub:
@@ -498,8 +466,8 @@ class SubscriptionService:
 
     async def get_org_limits(self, org_id: int) -> dict[str, Any]:
         """Get the effective limits for an organization."""
-        repo = await self._get_billing_repo()
-        return await repo.get_org_limits(org_id)
+        del org_id
+        return get_plan_limits("free")
 
     async def check_usage(
         self,
@@ -564,7 +532,7 @@ class SubscriptionService:
         Returns:
             Processing result
         """
-        repo = await self._get_billing_repo()
+        repo = await self._require_billing_repo()
 
         handlers = {
             "checkout.session.completed": self._handle_checkout_completed,
@@ -585,7 +553,7 @@ class SubscriptionService:
     async def _handle_checkout_completed(
         self,
         event_data: dict[str, Any],
-        repo: AuthnzBillingRepo,
+        repo: Any,
     ) -> dict[str, Any]:
         """Handle checkout.session.completed event."""
         session = event_data.get("object", {})
@@ -680,7 +648,7 @@ class SubscriptionService:
     async def _handle_subscription_updated(
         self,
         event_data: dict[str, Any],
-        repo: AuthnzBillingRepo,
+        repo: Any,
     ) -> dict[str, Any]:
         """Handle customer.subscription.updated event."""
         subscription = event_data.get("object", {})
@@ -758,7 +726,7 @@ class SubscriptionService:
     async def _handle_subscription_deleted(
         self,
         event_data: dict[str, Any],
-        repo: AuthnzBillingRepo,
+        repo: Any,
     ) -> dict[str, Any]:
         """Handle customer.subscription.deleted event."""
         subscription = event_data.get("object", {})
@@ -810,7 +778,7 @@ class SubscriptionService:
     async def _handle_invoice_paid(
         self,
         event_data: dict[str, Any],
-        repo: AuthnzBillingRepo,
+        repo: Any,
     ) -> dict[str, Any]:
         """Handle invoice.paid event."""
         invoice = event_data.get("object", {})
@@ -839,7 +807,7 @@ class SubscriptionService:
     async def _handle_payment_failed(
         self,
         event_data: dict[str, Any],
-        repo: AuthnzBillingRepo,
+        repo: Any,
     ) -> dict[str, Any]:
         """Handle invoice.payment_failed event."""
         invoice = event_data.get("object", {})
@@ -889,7 +857,7 @@ class SubscriptionService:
         offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
         """List payment/invoice history for an organization."""
-        repo = await self._get_billing_repo()
+        repo = await self._require_billing_repo()
         return await repo.list_payments(org_id, limit=limit, offset=offset)
 
 

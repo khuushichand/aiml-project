@@ -355,6 +355,13 @@ TTS_pocket_tts = [
   "huggingface_hub>=0.21.0"
 ]
 
+TTS_kitten_tts = [
+  "onnxruntime>=1.16.0",
+  "phonemizer-fork~=3.3.2",
+  "espeakng_loader",
+  "huggingface_hub>=0.23.0",
+]
+
 TTS_sovits = [
   "pydub>=0.25.0"
 ]

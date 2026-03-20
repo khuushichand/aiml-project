@@ -115,7 +115,7 @@ async def test_list_org_budgets_sqlite_backend_selection_uses_sqlite_mode(
 async def test_list_org_budgets_postgres_backend_selection_uses_postgres_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, bool] = {}
+    captured: dict[str, Any] = {}
 
     async def _fake_fetchval(db, query: str, params: list[Any], *, pg: bool) -> int:
         captured["pg"] = pg
@@ -123,6 +123,7 @@ async def test_list_org_budgets_postgres_backend_selection_uses_postgres_mode(
 
     async def _fake_fetchrows(db, query: str, params: list[Any], *, pg: bool) -> list[Any]:
         captured["rows_pg"] = pg
+        captured["query"] = query
         return []
 
     monkeypatch.setattr(admin_budgets_service, "_fetchval", _fake_fetchval)
@@ -139,3 +140,5 @@ async def test_list_org_budgets_postgres_backend_selection_uses_postgres_mode(
     assert total == 0
     assert captured["pg"] is True
     assert captured["rows_pg"] is True
+    assert "org_subscriptions" not in captured["query"]
+    assert "subscription_plans" not in captured["query"]

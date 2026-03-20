@@ -35,6 +35,14 @@ def test_readme_start_here_links_to_profile_index() -> None:
         "apps/DEVELOPMENT.md" in text,
         "README should link developers to apps/DEVELOPMENT.md",
     )
+    _require(
+        "First_Time_Audio_Setup_CPU.md" in text,
+        "README should link to the CPU first-time audio guide",
+    )
+    _require(
+        "First_Time_Audio_Setup_GPU_Accelerated.md" in text,
+        "README should link to the GPU/accelerated first-time audio guide",
+    )
 
 
 def test_readme_quickstart_defaults_to_webui_before_local_dev() -> None:
@@ -60,8 +68,8 @@ def test_readme_quickstart_defaults_to_webui_before_local_dev() -> None:
     )
 
 
-def test_getting_started_index_lists_all_profiles() -> None:
-    """The Getting Started index should still enumerate every base profile."""
+def test_getting_started_index_lists_profiles_and_audio_guides() -> None:
+    """The Getting Started index should enumerate base profiles and audio guides."""
     text = Path("Docs/Getting_Started/README.md").read_text()
     _require(
         "Choose exactly one base setup profile" in text,
@@ -76,6 +84,8 @@ def test_getting_started_index_lists_all_profiles() -> None:
         "Local single-user",
         "Docker single-user",
         "Docker multi-user + Postgres",
+        "First-time audio setup: CPU systems",
+        "First-time audio setup: GPU/accelerated systems",
         "GPU/STT Add-on",
     ]:
         _require(label in text, f"Getting Started index should include {label}")

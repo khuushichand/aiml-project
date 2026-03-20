@@ -12,25 +12,24 @@ pytestmark = pytest.mark.unit
 
 
 def test_sqlite_migration_030_seeds_only_neutral_free_plan() -> None:
-    """Fresh OSS SQLite migrations should not seed a public paid catalog."""
+    """Fresh OSS SQLite migrations should retire billing tables entirely."""
 
     conn = sqlite3.connect(":memory:")
     try:
         migrations.migration_030_create_subscription_plans(conn)
 
-        rows = conn.execute(
-            """
-            SELECT name, display_name, price_usd_monthly, price_usd_yearly, is_public
-            FROM subscription_plans
-            ORDER BY sort_order ASC, id ASC
-            """
-        ).fetchall()
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
 
-        assert [row[0] for row in rows] == ["free"]
-        assert rows[0][1] == "Free"
-        assert rows[0][2] == 0
-        assert rows[0][3] == 0
-        assert rows[0][4] == 0
+        assert "subscription_plans" not in tables
+        assert "org_subscriptions" not in tables
+        assert "stripe_webhook_events" not in tables
+        assert "payment_history" not in tables
+        assert "billing_audit_log" not in tables
     finally:
         conn.close()
 
@@ -46,7 +45,7 @@ class _FakeBillingPool:
 
 @pytest.mark.asyncio
 async def test_postgres_billing_ensure_seeds_only_neutral_free_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Postgres billing bootstrap should only seed the neutral free plan."""
+    """Postgres OSS bootstrap should only ensure budget storage compatibility."""
 
     async def _noop_ensure_authnz_core_tables_pg(_pool) -> None:
         return None
@@ -57,12 +56,10 @@ async def test_postgres_billing_ensure_seeds_only_neutral_free_plan(monkeypatch:
     ok = await pg_migrations.ensure_billing_tables_pg(pool, run_backfill=False)
 
     assert ok is True
-    inserts = [
-        params
-        for sql, params in pool.executed
-        if sql.strip().lower().startswith("insert into subscription_plans")
-    ]
-    assert len(inserts) == 1
-    assert inserts[0][0] == "free"
-    assert inserts[0][3] == 0
-    assert inserts[0][4] == 0
+    ddl = " ".join(sql.strip().lower() for sql, _params in pool.executed)
+    assert "create table if not exists org_budgets" in ddl
+    assert "create table if not exists subscription_plans" not in ddl
+    assert "create table if not exists org_subscriptions" not in ddl
+    assert "create table if not exists stripe_webhook_events" not in ddl
+    assert "create table if not exists payment_history" not in ddl
+    assert "create table if not exists billing_audit_log" not in ddl

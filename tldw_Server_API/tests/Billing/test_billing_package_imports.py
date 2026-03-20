@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 import pytest
 
 
-def test_billing_repo_import_does_not_circular() -> None:
-    """billing_repo should import cleanly without package-level cycles."""
-    module = importlib.import_module("tldw_Server_API.app.core.AuthNZ.repos.billing_repo")
-    assert hasattr(module, "AuthnzBillingRepo")
+def test_subscription_service_module_no_longer_imports_billing_repo_eagerly() -> None:
+    """OSS runtime should not depend on billing_repo at module import time."""
+    module = importlib.import_module("tldw_Server_API.app.core.Billing.subscription_service")
+    source = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "core.AuthNZ.repos.billing_repo" not in source
 
 
 def test_billing_package_lazy_subscription_exports() -> None:
@@ -33,12 +36,15 @@ def test_oss_runtime_removes_public_billing_modules(module_name: str) -> None:
 
 
 def test_pg_billing_table_ensure_includes_runtime_tables() -> None:
-    """Postgres billing ensure helper should include webhook/payment/audit tables."""
+    """Postgres OSS compatibility helper should only retain budget storage DDL."""
     module = importlib.import_module("tldw_Server_API.app.core.AuthNZ.pg_migrations_extra")
     ddl_statements = " ".join(
         sql.lower()
         for sql, _params in getattr(module, "_CREATE_BILLING_TABLES")
     )
-    assert "create table if not exists stripe_webhook_events" in ddl_statements
-    assert "create table if not exists payment_history" in ddl_statements
-    assert "create table if not exists billing_audit_log" in ddl_statements
+    assert "create table if not exists org_budgets" in ddl_statements
+    assert "create table if not exists subscription_plans" not in ddl_statements
+    assert "create table if not exists org_subscriptions" not in ddl_statements
+    assert "create table if not exists stripe_webhook_events" not in ddl_statements
+    assert "create table if not exists payment_history" not in ddl_statements
+    assert "create table if not exists billing_audit_log" not in ddl_statements

@@ -762,6 +762,39 @@ async def _fetchrows(db, query: str, params: list[Any], *, pg: bool) -> list[Any
     return await cur.fetchall()
 
 
+async def _table_exists(db, table_name: str, *, pg: bool) -> bool:
+    if pg:
+        return bool(await _fetchval(db, "SELECT to_regclass($1)", [f"public.{table_name}"], pg=True))
+    return bool(
+        await _fetchval(
+            db,
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            [table_name],
+            pg=False,
+        )
+    )
+
+
+async def _fetch_legacy_budget_context(
+    db,
+    *,
+    org_id: int,
+    pg: bool,
+) -> dict[str, Any] | None:
+    if not await _table_exists(db, "org_subscriptions", pg=pg):
+        return None
+    return await _fetchrow(
+        db,
+        """
+        SELECT org_id, custom_limits_json, updated_at
+        FROM org_subscriptions
+        WHERE org_id = $1
+        """,
+        [org_id],
+        pg=pg,
+    )
+
+
 async def list_org_budgets(
     db,
     *,
@@ -771,13 +804,6 @@ async def list_org_budgets(
 ) -> tuple[list[dict[str, Any]], int]:
     offset = (page - 1) * limit
     pg = _is_postgres_connection(db)
-    if pg:
-        try:
-            from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
-
-            await ensure_billing_tables_pg()
-        except Exception as exc:
-            logger.debug(f"admin budgets: ensure billing tables skipped/failed: {exc}")
     if org_ids is not None and len(org_ids) == 0:
         return [], 0
 
@@ -807,12 +833,8 @@ async def list_org_budgets(
 
     list_budgets_sql_template = (
         "SELECT o.id as org_id, o.name as org_name, o.slug as org_slug, "
-        "os.custom_limits_json, os.updated_at, "
         "ob.budgets_json, ob.updated_at as budgets_updated_at, "
-        "sp.name as plan_name, sp.display_name as plan_display_name, sp.limits_json as plan_limits_json "
         "FROM organizations o "
-        "LEFT JOIN org_subscriptions os ON os.org_id = o.id "
-        "LEFT JOIN subscription_plans sp ON os.plan_id = sp.id "
         "LEFT JOIN org_budgets ob ON ob.org_id = o.id "
         "{where_clause} "
         "ORDER BY o.name ASC LIMIT {limit_placeholder} OFFSET {offset_placeholder}"
@@ -823,6 +845,14 @@ async def list_org_budgets(
     items = []
     for row in rows:
         row_dict = dict(row) if not isinstance(row, dict) else row
+        legacy_row = await _fetch_legacy_budget_context(
+            db,
+            org_id=int(row_dict.get("org_id")),
+            pg=pg,
+        )
+        if legacy_row:
+            row_dict.setdefault("custom_limits_json", legacy_row.get("custom_limits_json"))
+            row_dict.setdefault("updated_at", legacy_row.get("updated_at"))
         items.append(_build_budget_item(row_dict))
     return items, total
 
@@ -835,13 +865,6 @@ async def upsert_org_budget(
     clear_budgets: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     pg = _is_postgres_connection(db)
-    if pg:
-        try:
-            from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
-
-            await ensure_billing_tables_pg(run_backfill=False)
-        except Exception as exc:
-            logger.debug(f"admin budgets: ensure billing tables skipped/failed: {exc}")
 
     org_row = await _fetchrow(
         db,
@@ -853,97 +876,8 @@ async def upsert_org_budget(
         raise ValueError("org_not_found")
     org_data = dict(org_row) if not isinstance(org_row, dict) else org_row
 
-    sub_row = await _fetchrow(
-        db,
-        """
-        SELECT os.org_id, os.custom_limits_json, os.updated_at,
-               sp.name as plan_name, sp.display_name as plan_display_name, sp.limits_json as plan_limits_json
-        FROM org_subscriptions os
-        JOIN subscription_plans sp ON os.plan_id = sp.id
-        WHERE os.org_id = $1
-        """,
-        [org_id],
-        pg=pg,
-    )
-
-    if not sub_row:
-        plan_row = await _fetchrow(
-            db,
-            "SELECT id, name, display_name, limits_json FROM subscription_plans WHERE name = $1",
-            ["free"],
-            pg=pg,
-        )
-        if not plan_row:
-            default_limits = get_plan_limits("free")
-            if pg:
-                await db.execute(
-                    """
-                    INSERT INTO subscription_plans
-                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
-                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
-                    ON CONFLICT (name) DO NOTHING
-                    """,
-                    "free",
-                    "Free",
-                    "Get started with basic features",
-                    0,
-                    0,
-                    json.dumps(default_limits),
-                    0,
-                )
-            else:
-                await db.execute(
-                    """
-                    INSERT OR IGNORE INTO subscription_plans
-                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        "free",
-                        "Free",
-                        "Get started with basic features",
-                        0,
-                        0,
-                        json.dumps(default_limits),
-                        0,
-                    ),
-                )
-            plan_row = await _fetchrow(
-                db,
-                "SELECT id, name, display_name, limits_json FROM subscription_plans WHERE name = $1",
-                ["free"],
-                pg=pg,
-            )
-        if not plan_row:
-            raise ValueError("plan_not_found")
-        plan_data = dict(plan_row) if not isinstance(plan_row, dict) else plan_row
-        plan_id = int(plan_data.get("id"))
-        await db.execute(
-            """
-            INSERT INTO org_subscriptions (org_id, plan_id, status)
-            VALUES ($1, $2, 'active')
-            ON CONFLICT (org_id) DO NOTHING
-            """,
-            org_id,
-            plan_id,
-        )
-        sub_row = await _fetchrow(
-            db,
-            """
-            SELECT os.org_id, os.custom_limits_json, os.updated_at,
-                   sp.name as plan_name, sp.display_name as plan_display_name, sp.limits_json as plan_limits_json
-            FROM org_subscriptions os
-            JOIN subscription_plans sp ON os.plan_id = sp.id
-            WHERE os.org_id = $1
-            """,
-            [org_id],
-            pg=pg,
-        )
-
-    if not sub_row:
-        raise ValueError("subscription_not_found")
-
-    row_dict = dict(sub_row) if not isinstance(sub_row, dict) else sub_row
+    sub_row = await _fetch_legacy_budget_context(db, org_id=org_id, pg=pg)
+    row_dict = dict(sub_row) if sub_row and not isinstance(sub_row, dict) else (sub_row or {})
     custom_limits = _parse_json_payload(row_dict.get("custom_limits_json"))
 
     budget_row = await _fetchrow(
