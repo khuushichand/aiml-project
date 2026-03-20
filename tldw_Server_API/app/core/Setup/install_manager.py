@@ -264,7 +264,7 @@ def _cuda_available() -> bool:
       1. Environment overrides:
          - TLDW_SETUP_FORCE_GPU=1 -> force GPU packages
          - TLDW_SETUP_FORCE_CPU=1 -> force CPU-only packages
-      2. Automatic detection via torch.cuda.is_available()
+      2. Conservative environment/tool detection (safe default: CPU)
     """
 
     def _truthy(value: str | None) -> bool:
@@ -278,12 +278,11 @@ def _cuda_available() -> bool:
     if _truthy(os.getenv("TLDW_SETUP_FORCE_GPU")):
         return True
 
-    try:
-        import torch
-
-        return bool(torch.cuda.is_available())
-    except Exception:
-        return False
+    if shutil.which("nvidia-smi"):
+        return True
+    if os.getenv("CUDA_HOME") or os.getenv("CUDA_PATH"):
+        return True
+    return False
 
 class InstallationStatus:
     """Persist installation progress to a status file."""
@@ -726,7 +725,9 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
     machine_profile = audio_profile_service.detect_machine_profile()
     selection_key = build_audio_selection_key(bundle_id, resource_profile, bundle.catalog_version)
     expected_stt_model = None
+    primary_stt_engine = None
     if selected_profile.stt_plan:
+        primary_stt_engine = selected_profile.stt_plan[0].get("engine")
         expected_stt_model = (
             (selected_profile.stt_plan[0].get("models") or [None])[0]
             if isinstance(selected_profile.stt_plan[0], dict)
@@ -765,14 +766,20 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
         remediation_items.append(
             _remediation_item(
                 "STT_UNUSABLE",
-                "Primary STT path is not usable. Rerun provisioning or inspect model downloads.",
+                (
+                    f"Primary STT path ({primary_stt_engine}) is not usable. "
+                    "Rerun provisioning or inspect model downloads."
+                ),
             )
         )
     if not tts_usable:
         remediation_items.append(
             _remediation_item(
                 "TTS_UNHEALTHY",
-                "Primary TTS path is not healthy. Rerun provisioning or inspect TTS logs.",
+                (
+                    f"Primary TTS path ({primary_tts_engine}) is not healthy. "
+                    "Rerun provisioning or inspect TTS logs."
+                ),
             )
         )
 
@@ -802,6 +809,7 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
         "bundle_id": bundle_id,
         "selected_resource_profile": resource_profile,
         "selection_key": selection_key,
+        "targets_checked": list(selected_profile.verification_targets),
         "status": status,
         "machine_profile": machine_profile.model_dump(),
         "stt_health": stt_health,
@@ -821,6 +829,7 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
             "bundle_id": bundle_id,
             "selected_resource_profile": resource_profile,
             "selection_key": selection_key,
+            "targets_checked": list(selected_profile.verification_targets),
             "verified_at": verified_at,
             "stt_health": stt_health,
             "tts_health": tts_health,
@@ -902,6 +911,8 @@ def _install_tts(plan: InstallPlan, status: InstallationStatus, errors: list[str
         try:
             if entry.engine == 'kokoro':
                 _install_kokoro(entry.variants)
+            elif entry.engine == 'kitten_tts':
+                _install_kitten_tts(entry.variants)
             elif entry.engine == 'dia':
                 _install_dia()
             elif entry.engine == 'higgs':
@@ -1067,6 +1078,33 @@ def _install_kokoro(variants: list[str]) -> None:
     if 'voices' in targets:
         # Download the voices directory
         _download_hf_dir(onnx_repo, 'voices', voices_dir)
+
+
+def _install_kitten_tts(variants: list[str]) -> None:
+    _ensure_downloads_allowed('KittenTTS model assets')
+    try:
+        from tldw_Server_API.app.core.TTS.vendors.kittentts_compat import download_model_assets
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError('KittenTTS compatibility runtime is required for asset downloads.') from exc
+
+    variant_to_repo = {
+        'nano': 'KittenML/kitten-tts-nano-0.8',
+        'nano-int8': 'KittenML/kitten-tts-nano-0.8-int8',
+        'micro': 'KittenML/kitten-tts-micro-0.8',
+        'mini': 'KittenML/kitten-tts-mini-0.8',
+    }
+    selected = variants or ['nano']
+    for variant in selected:
+        repo_id = variant_to_repo.get(str(variant).strip().lower(), str(variant).strip())
+        if not repo_id:
+            continue
+        logger.info('Prefetching KittenTTS assets for {}', repo_id)
+        try:
+            download_model_assets(repo_id, auto_download=True)
+        except Exception as exc:  # noqa: BLE001
+            if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
+                raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
+            raise
 
 
 def _install_dia() -> None:
@@ -1294,6 +1332,12 @@ TTS_DEPENDENCIES: dict[str, list[PipRequirement]] = {
         PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
         PipRequirement(package='phonemizer>=3.2.1', import_name='phonemizer'),
         PipRequirement(package='espeak-phonemizer>=1.0.1', import_name='espeak_phonemizer'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
+    ],
+    'kitten_tts': [
+        PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
+        PipRequirement(package='phonemizer-fork~=3.3.2', import_name='phonemizer'),
+        PipRequirement(package='espeakng_loader', import_name='espeakng_loader'),
         PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],
     'dia': [
