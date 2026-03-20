@@ -1,6 +1,8 @@
 """Schemas for Telegram bot configuration."""
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class TelegramBotConfigUpdate(BaseModel):
@@ -9,3 +11,24 @@ class TelegramBotConfigUpdate(BaseModel):
     bot_token: str = Field(...)
     webhook_secret: str = Field(...)
     enabled: bool = True
+
+    @field_validator("bot_token", "webhook_secret", mode="before")
+    @classmethod
+    def _strip_and_require_nonempty(cls, value):
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+
+class TelegramBotConfigResponse(BaseModel):
+    """Public Telegram bot configuration response."""
+
+    ok: bool = True
+    provider: Literal["telegram"] = "telegram"
+    scope_type: Literal["org", "team"]
+    scope_id: int
+    bot_username: str
+    enabled: bool
