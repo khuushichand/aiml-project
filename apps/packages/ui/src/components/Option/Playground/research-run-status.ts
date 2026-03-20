@@ -7,6 +7,13 @@ export const CHAT_LINKED_RESEARCH_ERROR_POLL_MS = 60_000
 export const CHAT_LINKED_RESEARCH_ERROR_BACKOFF_THRESHOLD = 3
 export const CHAT_LINKED_RESEARCH_VISIBLE_TERMINAL_ROWS = 3
 
+const CHECKPOINT_REVIEW_PHASE_REASONS: Record<string, string> = {
+  awaiting_plan_review: "Plan review needed",
+  awaiting_source_review: "Sources review needed",
+  awaiting_sources_review: "Sources review needed",
+  awaiting_outline_review: "Outline review needed"
+}
+
 export const isTerminalResearchRun = (run: ChatLinkedResearchRun): boolean =>
   run.status === "completed" || run.status === "failed" || run.status === "cancelled"
 
@@ -23,6 +30,25 @@ export const orderChatLinkedResearchRuns = (
     active.push(run)
   })
   return [...active, ...terminal]
+}
+
+export const isCheckpointReviewRun = (
+  run: ChatLinkedResearchRun
+): boolean =>
+  run.status === "waiting_human" &&
+  run.phase.startsWith("awaiting_") &&
+  run.phase.endsWith("_review")
+
+export const getChatLinkedResearchReviewReason = (
+  run: ChatLinkedResearchRun
+): string | null => {
+  if (!isCheckpointReviewRun(run)) {
+    return null
+  }
+  if (CHECKPOINT_REVIEW_PHASE_REASONS[run.phase]) {
+    return CHECKPOINT_REVIEW_PHASE_REASONS[run.phase]
+  }
+  return "Review needed"
 }
 
 export const getChatLinkedResearchStatusLabel = (
