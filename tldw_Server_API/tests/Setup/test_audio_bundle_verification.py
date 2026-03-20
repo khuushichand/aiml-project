@@ -1,3 +1,5 @@
+import pytest
+
 from tldw_Server_API.app.core.Setup import install_manager
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import get_audio_bundle_catalog
 from tldw_Server_API.app.core.Setup.audio_profile_service import MachineProfile
@@ -140,6 +142,65 @@ def test_verify_audio_bundle_uses_selected_profile_targets(mocker, tmp_path):
     assert result["bundle_id"] == "apple_silicon_local"
     assert result["selected_resource_profile"] == "balanced"
     assert "targets_checked" not in result
+
+
+def test_verify_audio_bundle_uses_selected_kitten_tts_choice(mocker, tmp_path):
+    store = AudioReadinessStore(tmp_path / "audio_readiness.json")
+
+    mocker.patch.object(
+        install_manager.audio_health,
+        "collect_setup_stt_health",
+        return_value={"usable": True, "model": "medium"},
+    )
+    mocker.patch.object(
+        install_manager.audio_health,
+        "collect_setup_tts_health",
+        return_value={
+            "status": "healthy",
+            "providers": {
+                "kitten_tts": {"status": "healthy"},
+            },
+        },
+    )
+    mocker.patch.object(
+        install_manager.audio_profile_service,
+        "detect_machine_profile",
+        return_value=MachineProfile(
+            platform="linux",
+            arch="x86_64",
+            apple_silicon=False,
+            cuda_available=False,
+            ffmpeg_available=True,
+            espeak_available=True,
+            free_disk_gb=64.0,
+            network_available_for_downloads=True,
+        ),
+    )
+    mocker.patch.object(
+        install_manager.audio_readiness_store,
+        "get_audio_readiness_store",
+        return_value=store,
+    )
+
+    result = install_manager.verify_audio_bundle(
+        "cpu_local",
+        resource_profile="balanced",
+        tts_choice="kitten_tts",
+    )
+
+    assert result["tts_choice"] == "kitten_tts"
+    readiness = store.load()
+    assert readiness["tts_choice"] == "kitten_tts"
+    assert readiness["selection_key"] == "v2:cpu_local:balanced:kitten_tts"
+
+
+def test_verify_audio_bundle_rejects_invalid_curated_tts_choice_with_value_error():
+    with pytest.raises(ValueError, match="Unknown curated TTS choice"):
+        install_manager.verify_audio_bundle(
+            "cpu_local",
+            resource_profile="balanced",
+            tts_choice="bogus_choice",
+        )
 
 
 def test_verification_remediation_uses_stable_codes_for_primary_paths(mocker, tmp_path):

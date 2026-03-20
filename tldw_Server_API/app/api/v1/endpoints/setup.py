@@ -70,6 +70,10 @@ class AudioBundleProvisionRequest(BaseModel):
         False,
         description="If true, skip bundle installation only when all expected install steps were previously completed.",
     )
+    tts_choice: str | None = Field(
+        None,
+        description="Optional curated TTS choice for profiles that expose multiple curated TTS engines.",
+    )
 
 
 class AudioBundleVerificationRequest(BaseModel):
@@ -78,6 +82,10 @@ class AudioBundleVerificationRequest(BaseModel):
         DEFAULT_AUDIO_RESOURCE_PROFILE,
         min_length=1,
         description="Selected resource profile within the curated audio bundle.",
+    )
+    tts_choice: str | None = Field(
+        None,
+        description="Optional curated TTS choice for profiles that expose multiple curated TTS engines.",
     )
 
 
@@ -91,6 +99,10 @@ class AudioPackExportRequest(BaseModel):
     pack_path: str | None = Field(
         None,
         description="Optional path to write the generated audio pack manifest.",
+    )
+    tts_choice: str | None = Field(
+        None,
+        description="Optional curated TTS choice for profiles that expose multiple curated TTS engines.",
     )
 
 
@@ -282,8 +294,11 @@ def _execute_audio_bundle_provision(
         return install_manager.execute_audio_bundle(
             payload.bundle_id,
             resource_profile=payload.resource_profile,
+            tts_choice=payload.tts_choice,
             safe_rerun=payload.safe_rerun,
         )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -310,7 +325,10 @@ async def _execute_audio_bundle_verification(
         return await install_manager.verify_audio_bundle_async(
             payload.bundle_id,
             resource_profile=payload.resource_profile,
+            tts_choice=payload.tts_choice,
         )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -384,6 +402,7 @@ async def export_audio_pack(
                 pack_path=payload.pack_path,
                 bundle_id=payload.bundle_id,
                 resource_profile=payload.resource_profile,
+                tts_choice=payload.tts_choice,
                 installed_assets=readiness.get("installed_asset_manifests"),
                 compatibility=compatibility,
             )
@@ -391,9 +410,12 @@ async def export_audio_pack(
             manifest = audio_pack_service.build_audio_pack_manifest(
                 bundle_id=payload.bundle_id,
                 resource_profile=payload.resource_profile,
+                tts_choice=payload.tts_choice,
                 installed_assets=readiness.get("installed_asset_manifests"),
                 compatibility=compatibility,
             )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -433,6 +455,8 @@ async def import_audio_pack(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Audio pack not found: {payload.pack_path}") from exc
     except json.JSONDecodeError as exc:  # noqa: F821
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Audio pack manifest is not valid JSON.") from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return result
 

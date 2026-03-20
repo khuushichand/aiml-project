@@ -1,5 +1,5 @@
 import { buildAuthHeaders, getApiBaseUrl, apiClient } from '@web/lib/api';
-import { captureSessionIdFromHeaders } from '@web/lib/session';
+import { streamStructuredSSE } from '@web/lib/sse';
 
 export type NotificationSeverity = 'info' | 'warning' | 'error';
 
@@ -65,85 +65,22 @@ async function readNotificationsStream(
     headers['Last-Event-ID'] = String(after);
   }
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers,
-    credentials: 'include',
-    signal,
-  });
-  captureSessionIdFromHeaders(response.headers);
-  if (!response.ok || !response.body) {
-    throw new Error(`notifications stream failed: ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
   let cursor = after;
-  let eventType = 'message';
-  let eventId: number | undefined;
-  let dataLines: string[] = [];
-
-  const flushFrame = () => {
-    if (!eventType && dataLines.length === 0 && eventId === undefined) {
-      return;
-    }
-    let payload: unknown = undefined;
-    if (dataLines.length > 0) {
-      const raw = dataLines.join('\n');
-      try {
-        payload = JSON.parse(raw);
-      } catch {
-        payload = raw;
+  await streamStructuredSSE(
+    url,
+    {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+      signal,
+    },
+    (event) => {
+      onEvent(event);
+      if (typeof event.id === 'number' && Number.isFinite(event.id) && event.id > cursor) {
+        cursor = event.id;
       }
     }
-    onEvent({
-      event: eventType || 'message',
-      id: eventId,
-      payload,
-    });
-    if (typeof eventId === 'number' && Number.isFinite(eventId) && eventId > cursor) {
-      cursor = eventId;
-    }
-    eventType = 'message';
-    eventId = undefined;
-    dataLines = [];
-  };
-
-  while (!signal.aborted) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    for (const rawLine of lines) {
-      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-      if (line === '') {
-        flushFrame();
-        continue;
-      }
-      if (line.startsWith(':')) {
-        continue;
-      }
-      if (line.startsWith('event:')) {
-        eventType = line.slice(6).trim() || 'message';
-        continue;
-      }
-      if (line.startsWith('id:')) {
-        const parsed = Number.parseInt(line.slice(3).trim(), 10);
-        eventId = Number.isFinite(parsed) ? parsed : undefined;
-        continue;
-      }
-      if (line.startsWith('data:')) {
-        dataLines.push(line.slice(5).trim());
-      }
-    }
-  }
-
-  if (buffer.trim().length > 0) {
-    dataLines.push(buffer.trim());
-  }
-  flushFrame();
+  );
   return cursor;
 }
 

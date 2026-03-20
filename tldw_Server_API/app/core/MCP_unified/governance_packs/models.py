@@ -71,6 +71,11 @@ class GovernancePack:
     pack_content_digest: str | None = None
     source_verified: bool | None = None
     source_verification_mode: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
     profiles: list[CapabilityProfile] = field(default_factory=list)
     approvals: list[ApprovalTemplate] = field(default_factory=list)
     personas: list[PersonaTemplate] = field(default_factory=list)

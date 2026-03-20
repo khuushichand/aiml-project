@@ -3,6 +3,7 @@ import React from "react"
 import { useMessageOption } from "~/hooks/useMessageOption"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import {
+  Checkbox,
   Dropdown,
   Input,
   InputNumber,
@@ -39,6 +40,7 @@ import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
+import { AttachedResearchContextChip } from "./AttachedResearchContextChip"
 import { MentionsDropdown } from "./MentionsDropdown"
 import { ComposerTextarea } from "./ComposerTextarea"
 import { ComposerToolbar } from "./ComposerToolbar"
@@ -58,7 +60,9 @@ import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { useMcpTools } from "@/hooks/useMcpTools"
 import {
-  tldwClient
+  tldwClient,
+  type ResearchRunCreateRequest,
+  type ResearchRunFollowUpBackground
 } from "@/services/tldw/TldwApiClient"
 // ChatRequestDebugSnapshot moved to usePlaygroundRawPreview
 import {
@@ -180,9 +184,33 @@ import {
   toText,
   estimateTokensFromText
 } from "./hooks"
+import {
+  applyAttachedResearchContextEdits,
+  resetAttachedResearchContext,
+  toChatResearchContext,
+  type AttachedResearchContext,
+  type ResearchFollowUpTarget
+} from "./research-chat-context"
 
 type Props = {
   droppedFiles: File[]
+  attachedResearchContext?: AttachedResearchContext | null
+  attachedResearchContextBaseline?: AttachedResearchContext | null
+  attachedResearchContextPinned?: AttachedResearchContext | null
+  attachedResearchContextHistory?: AttachedResearchContext[]
+  onApplyAttachedResearchContext?: (context: AttachedResearchContext) => void
+  onResetAttachedResearchContext?: () => void
+  onRemoveAttachedResearchContext?: () => void
+  onPinAttachedResearchContext?: () => void
+  onUnpinAttachedResearchContext?: () => void
+  onRestorePinnedResearchContext?: () => void
+  onPinAttachedResearchContextHistory?: (
+    context: AttachedResearchContext
+  ) => void
+  onSelectAttachedResearchContextHistory?: (
+    context: AttachedResearchContext
+  ) => void
+  onPrepareResearchFollowUp?: (target: ResearchFollowUpTarget) => void
 }
 
 type DefaultCharacterPreferenceQueryResult = {
@@ -195,10 +223,126 @@ type PlaygroundQueuedSourceContext = {
   isImageCommand?: boolean
 }
 
-export const PlaygroundForm = ({ droppedFiles }: Props) => {
+const FOLLOW_UP_RESEARCH_PROMPT_PREFIX = "Follow up on this research:"
+
+const buildFollowUpResearchBackground = (
+  context: AttachedResearchContext
+): ResearchRunFollowUpBackground => {
+  const unsupportedClaimCount =
+    typeof context.verification_summary?.unsupported_claim_count === "number" &&
+    Number.isFinite(context.verification_summary.unsupported_claim_count) &&
+    context.verification_summary.unsupported_claim_count >= 0
+      ? Math.trunc(context.verification_summary.unsupported_claim_count)
+      : 0
+  const highTrustCount =
+    typeof context.source_trust_summary?.high_trust_count === "number" &&
+    Number.isFinite(context.source_trust_summary.high_trust_count) &&
+    context.source_trust_summary.high_trust_count >= 0
+      ? Math.trunc(context.source_trust_summary.high_trust_count)
+      : 0
+
+  return {
+    question: context.question || context.query,
+    outline: Array.isArray(context.outline)
+      ? context.outline
+          .filter(
+            (section) =>
+              typeof section?.title === "string" && section.title.trim().length > 0
+          )
+          .map((section) => ({ title: section.title.trim() }))
+      : [],
+    key_claims: Array.isArray(context.key_claims)
+      ? context.key_claims
+          .map((claim, index) =>
+            typeof claim?.text === "string" && claim.text.trim().length > 0
+              ? {
+                  claim_id: `claim_${index + 1}`,
+                  text: claim.text.trim()
+                }
+              : null
+          )
+          .filter(
+            (claim): claim is { claim_id: string; text: string } => claim !== null
+          )
+      : [],
+    unresolved_questions: Array.isArray(context.unresolved_questions)
+      ? context.unresolved_questions.filter(
+          (question): question is string =>
+            typeof question === "string" && question.trim().length > 0
+        )
+      : [],
+    verification_summary: {
+      supported_claim_count: 0,
+      unsupported_claim_count: unsupportedClaimCount
+    },
+    source_trust_summary: {
+      high_trust_count: highTrustCount,
+      low_trust_count: 0
+    }
+  }
+}
+
+const cloneAttachedResearchContext = (
+  context: AttachedResearchContext | null
+): AttachedResearchContext | null =>
+  context
+    ? {
+        ...context,
+        outline: context.outline.map((section) => ({ ...section })),
+        key_claims: context.key_claims.map((claim) => ({ ...claim })),
+        unresolved_questions: [...context.unresolved_questions],
+        verification_summary: context.verification_summary
+          ? { ...context.verification_summary }
+          : undefined,
+        source_trust_summary: context.source_trust_summary
+          ? { ...context.source_trust_summary }
+          : undefined
+      }
+    : null
+
+const stringifyOutline = (context: AttachedResearchContext | null): string =>
+  context?.outline.map((section) => section.title).join("\n") ?? ""
+
+const stringifyKeyClaims = (context: AttachedResearchContext | null): string =>
+  context?.key_claims.map((claim) => claim.text).join("\n") ?? ""
+
+const stringifyUnresolvedQuestions = (
+  context: AttachedResearchContext | null
+): string => context?.unresolved_questions.join("\n") ?? ""
+
+export const PlaygroundForm = ({
+  droppedFiles,
+  attachedResearchContext = null,
+  attachedResearchContextBaseline = null,
+  attachedResearchContextPinned = null,
+  attachedResearchContextHistory = [],
+  onApplyAttachedResearchContext,
+  onResetAttachedResearchContext,
+  onRemoveAttachedResearchContext,
+  onPinAttachedResearchContext,
+  onUnpinAttachedResearchContext,
+  onRestorePinnedResearchContext,
+  onPinAttachedResearchContextHistory,
+  onSelectAttachedResearchContextHistory,
+  onPrepareResearchFollowUp
+}: Props) => {
   const { t } = useTranslation(["playground", "common", "option"])
   const notificationApi = useAntdNotification()
   const navigate = useNavigate()
+  const [attachedResearchContextDraft, setAttachedResearchContextDraft] =
+    React.useState<AttachedResearchContext | null>(null)
+  const [followUpResearchModalOpen, setFollowUpResearchModalOpen] =
+    React.useState(false)
+  const [
+    includeAttachedResearchAsBackground,
+    setIncludeAttachedResearchAsBackground
+  ] = React.useState(Boolean(attachedResearchContext))
+  const [pendingAttachmentFollowUp, setPendingAttachmentFollowUp] =
+    React.useState<ResearchFollowUpTarget | null>(null)
+  const [followUpResearchPending, setFollowUpResearchPending] =
+    React.useState(false)
+  const followUpResearchPendingRef = React.useRef(false)
+  const voiceChatSubmitFormRef = React.useRef<() => void>(() => undefined)
 
   const [checkWideMode] = useStorage("checkWideMode", false)
   const [allowExternalImages, setAllowExternalImages] = useStorage(
@@ -208,6 +352,13 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const [showMoodBadge, setShowMoodBadge] = useStorage(
     "chatShowMoodBadge",
     true
+  )
+  const researchContext = React.useMemo(
+    () =>
+      attachedResearchContext
+        ? toChatResearchContext(attachedResearchContext)
+        : undefined,
+    [attachedResearchContext]
   )
   const {
     onSubmit,
@@ -1939,7 +2090,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     autoSubmitVoiceMessage,
     speechToTextLanguage,
     setMessageValue,
-    submitForm,
+    submitForm: () => voiceChatSubmitFormRef.current(),
     notificationApi,
     isSending,
     isListening: false,
@@ -2052,6 +2203,90 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   })
 
+  const followUpResearchDraftQuery = React.useMemo(() => {
+    const trimmed = form.values.message.trim()
+    if (!trimmed.startsWith(FOLLOW_UP_RESEARCH_PROMPT_PREFIX)) {
+      return trimmed
+    }
+    const unwrapped = trimmed
+      .slice(FOLLOW_UP_RESEARCH_PROMPT_PREFIX.length)
+      .trim()
+    return unwrapped || trimmed
+  }, [form.values.message])
+  const canLaunchFollowUpResearch =
+    !temporaryChat &&
+    Boolean(serverChatId) &&
+    followUpResearchDraftQuery.length > 0
+
+  const openFollowUpResearchModal = React.useCallback(() => {
+    if (!canLaunchFollowUpResearch) return
+    setIncludeAttachedResearchAsBackground(Boolean(attachedResearchContext))
+    setFollowUpResearchModalOpen(true)
+  }, [attachedResearchContext, canLaunchFollowUpResearch])
+
+  const closeFollowUpResearchModal = React.useCallback(() => {
+    if (followUpResearchPendingRef.current) return
+    setFollowUpResearchModalOpen(false)
+  }, [])
+
+  const handleStartFollowUpResearch = React.useCallback(async () => {
+    if (followUpResearchPendingRef.current) return
+    if (!serverChatId || temporaryChat) return
+    if (!followUpResearchDraftQuery) return
+
+    const payload: ResearchRunCreateRequest = {
+      query: followUpResearchDraftQuery,
+      source_policy: "balanced",
+      autonomy_mode: "checkpointed",
+      chat_handoff: {
+        chat_id: serverChatId
+      },
+      follow_up: {
+        question: followUpResearchDraftQuery,
+        background:
+          includeAttachedResearchAsBackground && attachedResearchContext
+            ? buildFollowUpResearchBackground(attachedResearchContext)
+            : undefined
+      }
+    }
+
+    followUpResearchPendingRef.current = true
+    setFollowUpResearchPending(true)
+    try {
+      await tldwClient.createResearchRun(payload)
+      void queryClient.invalidateQueries({
+        queryKey: ["playground:chat-linked-research-runs", serverChatId]
+      })
+      setFollowUpResearchModalOpen(false)
+      notificationApi.success?.({
+        message: t(
+          "playground:actions.followUpResearchStarted",
+          "Follow-up research started."
+        )
+      })
+    } catch (error) {
+      notificationApi.error({
+        message: t(
+          "playground:actions.followUpResearchFailed",
+          "Unable to start follow-up research."
+        ),
+        description: error instanceof Error ? error.message : undefined
+      })
+    } finally {
+      followUpResearchPendingRef.current = false
+      setFollowUpResearchPending(false)
+    }
+  }, [
+    attachedResearchContext,
+    followUpResearchDraftQuery,
+    includeAttachedResearchAsBackground,
+    notificationApi,
+    queryClient,
+    serverChatId,
+    t,
+    temporaryChat
+  ])
+
   const queueMgmt = usePlaygroundQueueManagement({
     composerModels,
     isConnectionReady,
@@ -2162,6 +2397,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     pinnedSourceTokenEstimate,
     resolvedMaxContext,
     jsonMode: Boolean(currentChatModelSettings.jsonMode),
+    researchContext,
     sendMessage,
     clearSelectedDocuments,
     clearUploadedFiles,
@@ -2175,6 +2411,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     notificationApi,
     t
   })
+  React.useEffect(() => {
+    voiceChatSubmitFormRef.current = () => {
+      submitForm()
+    }
+  }, [submitForm])
 
   const handleKnowledgeAsk = React.useCallback(
     (text: string, options?: { ignorePinnedResults?: boolean }) => {
@@ -2595,6 +2836,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     resolveSubmissionIntent,
     formImage: form.values.image || "",
     formMessage: form.values.message || "",
+    researchContext: compareModeActive ? undefined : researchContext,
     notificationApi,
     t,
     setToolsPopoverOpen
@@ -2608,6 +2850,84 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     openRawRequestModal,
     copyRawRequestJson
   } = rawPreview
+  React.useEffect(() => {
+    setAttachedResearchContextDraft(
+      cloneAttachedResearchContext(attachedResearchContext)
+    )
+  }, [attachedResearchContext])
+  const attachedResearchPreviewSuppressed =
+    Boolean(attachedResearchContext) &&
+    Boolean(rawRequestSnapshot) &&
+    !(rawRequestSnapshot?.body as any)?.research_context
+
+  const applyAttachedResearchDraft = React.useCallback(() => {
+    if (!attachedResearchContext || !attachedResearchContextDraft) return
+    const nextContext = applyAttachedResearchContextEdits(
+      attachedResearchContext,
+      attachedResearchContextDraft
+    )
+    onApplyAttachedResearchContext?.(nextContext)
+    setAttachedResearchContextDraft(cloneAttachedResearchContext(nextContext))
+  }, [
+    attachedResearchContext,
+    attachedResearchContextDraft,
+    onApplyAttachedResearchContext
+  ])
+
+  const handleResetAttachedResearchDraft = React.useCallback(() => {
+    const resetContext = resetAttachedResearchContext(
+      attachedResearchContextBaseline
+    )
+    if (!resetContext) return
+    onResetAttachedResearchContext?.()
+    setAttachedResearchContextDraft(cloneAttachedResearchContext(resetContext))
+  }, [attachedResearchContextBaseline, onResetAttachedResearchContext])
+
+  const handleAttachedResearchDraftQuestionChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      const nextQuestion = event.target.value
+      setAttachedResearchContextDraft((current) =>
+        current ? { ...current, question: nextQuestion } : current
+      )
+    },
+    []
+  )
+
+  const handleAttachedResearchDraftOutlineChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const nextOutline = event.target.value
+        .split("\n")
+        .map((title) => ({ title }))
+      setAttachedResearchContextDraft((current) =>
+        current ? { ...current, outline: nextOutline } : current
+      )
+    },
+    []
+  )
+
+  const handleAttachedResearchDraftClaimsChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const nextClaims = event.target.value
+        .split("\n")
+        .map((text) => ({ text }))
+      setAttachedResearchContextDraft((current) =>
+        current ? { ...current, key_claims: nextClaims } : current
+      )
+    },
+    []
+  )
+
+  const handleAttachedResearchDraftUnresolvedChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const nextQuestions = event.target.value.split("\n")
+      setAttachedResearchContextDraft((current) =>
+        current
+          ? { ...current, unresolved_questions: nextQuestions }
+          : current
+      )
+    },
+    []
+  )
 
   const navigateToWebSearchSettings = React.useCallback(() => {
     navigate("/settings")
@@ -3354,6 +3674,111 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const startupTemplatePreset = startupTemplatePreview
     ? getPresetByKey(startupTemplatePreview.presetKey)
     : undefined
+  const rawRequestModalFooterExtras = attachedResearchContextDraft ? (
+    <>
+      <Button onClick={handleResetAttachedResearchDraft}>
+        {t(
+          "playground:actions.resetAttachedResearchContext",
+          "Reset to Attached Run"
+        )}
+      </Button>
+      <Button type="primary" onClick={applyAttachedResearchDraft}>
+        {t("playground:actions.applyAttachedResearchContext", "Apply")}
+      </Button>
+    </>
+  ) : null
+  const rawRequestAttachedResearchPanel = attachedResearchContextDraft ? (
+    <div
+      data-testid="attached-research-context-panel"
+      className="space-y-3 rounded-md border border-border bg-surface px-3 py-3"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium text-text">
+            {t(
+              "playground:tools.attachedResearchContextTitle",
+              "Attached Research Context"
+            )}
+          </h3>
+          <p className="text-xs text-text-muted">
+            {attachedResearchContextDraft.query}
+          </p>
+        </div>
+        <div className="space-y-1 text-right text-[11px] text-text-muted">
+          <div>
+            {t("playground:tools.attachedResearchRunId", "Run ID")}:{" "}
+            <span className="font-mono">{attachedResearchContextDraft.run_id}</span>
+          </div>
+          <div>
+            {t("playground:tools.attachedResearchAttachedAt", "Attached")}:{" "}
+            {new Date(attachedResearchContextDraft.attached_at).toLocaleString()}
+          </div>
+        </div>
+      </div>
+      {attachedResearchPreviewSuppressed ? (
+        <p className="text-xs text-text-muted">
+          {t(
+            "playground:tools.attachedResearchContextSuppressed",
+            "Attached research is active but omitted from this request preview."
+          )}
+        </p>
+      ) : null}
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-muted">
+            {t("playground:composer.context.question", "Question")}
+          </label>
+          <Input
+            data-testid="attached-research-context-question-input"
+            value={attachedResearchContextDraft.question}
+            onChange={handleAttachedResearchDraftQuestionChange}
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-muted">
+            {t("playground:tools.attachedResearchContextLink", "Research link")}
+          </label>
+          <Input value={attachedResearchContextDraft.research_url} readOnly />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-muted">
+            {t("playground:composer.context.outline", "Outline")}
+          </label>
+          <Input.TextArea
+            data-testid="attached-research-context-outline-input"
+            value={stringifyOutline(attachedResearchContextDraft)}
+            onChange={handleAttachedResearchDraftOutlineChange}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-muted">
+            {t("playground:composer.context.claims", "Key claims")}
+          </label>
+          <Input.TextArea
+            data-testid="attached-research-context-claims-input"
+            value={stringifyKeyClaims(attachedResearchContextDraft)}
+            onChange={handleAttachedResearchDraftClaimsChange}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+          />
+        </div>
+        <div className="space-y-1 md:col-span-2">
+          <label className="text-xs font-medium text-text-muted">
+            {t(
+              "playground:composer.context.unresolvedQuestions",
+              "Unresolved questions"
+            )}
+          </label>
+          <Input.TextArea
+            data-testid="attached-research-context-unresolved-input"
+            value={stringifyUnresolvedQuestions(attachedResearchContextDraft)}
+            onChange={handleAttachedResearchDraftUnresolvedChange}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+          />
+        </div>
+      </div>
+    </div>
+  ) : null
 
   return (
     <React.Profiler
@@ -3454,6 +3879,243 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ? "rounded-md border border-dashed border-border bg-surface2"
                         : ""
                     }`}>
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        onClick={openFollowUpResearchModal}
+                        disabled={!canLaunchFollowUpResearch || followUpResearchPending}
+                      >
+                        {t("playground:actions.followUpResearch", "Follow-up Research")}
+                      </Button>
+                    </div>
+                    {attachedResearchContext ? (
+                      <AttachedResearchContextChip
+                        context={attachedResearchContext}
+                        pinned={attachedResearchContextPinned}
+                        history={attachedResearchContextHistory}
+                        onPreview={openRawRequestModal}
+                        onRemove={() => onRemoveAttachedResearchContext?.()}
+                        onPin={() => onPinAttachedResearchContext?.()}
+                        onUnpin={() => onUnpinAttachedResearchContext?.()}
+                        onRestorePinned={() => onRestorePinnedResearchContext?.()}
+                        onPrepareResearchFollowUp={onPrepareResearchFollowUp}
+                        onPinHistory={onPinAttachedResearchContextHistory}
+                        onSelectHistory={onSelectAttachedResearchContextHistory}
+                      />
+                    ) : null}
+                    {!attachedResearchContext &&
+                    (attachedResearchContextPinned ||
+                      attachedResearchContextHistory.length > 0) ? (
+                      <div className="mb-2 flex flex-col gap-2">
+                        {attachedResearchContextPinned ? (
+                          <div
+                            data-testid="pinned-research-fallback-card"
+                            className="rounded-md border border-border bg-surface2 px-3 py-3 text-xs text-text"
+                          >
+                            <div className="flex flex-col gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium text-text-muted">
+                                  {t(
+                                    "playground:composer.pinnedResearch",
+                                    "Pinned research"
+                                  )}
+                                </span>
+                                <span className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text">
+                                  {attachedResearchContextPinned.query}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-text-muted">
+                                {t(
+                                  "playground:composer.pinnedResearchFallbackDescription",
+                                  "This thread keeps this research as its default context."
+                                )}
+                              </p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => onRestorePinnedResearchContext?.()}
+                                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                >
+                                  {t("playground:actions.usePinnedResearchNow", "Use now")}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onUnpinAttachedResearchContext?.()}
+                                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                >
+                                  {t("playground:actions.unpinResearchContext", "Unpin")}
+                                </button>
+                                <Link
+                                  to={attachedResearchContextPinned.research_url}
+                                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                >
+                                  {t("playground:actions.openInResearch", "Open in Research")}
+                                </Link>
+                                {onPrepareResearchFollowUp ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPendingAttachmentFollowUp({
+                                        run_id: attachedResearchContextPinned.run_id,
+                                        query: attachedResearchContextPinned.query
+                                      })
+                                    }
+                                    className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                  >
+                                    {t("playground:actions.followUp", "Follow up")}
+                                  </button>
+                                ) : null}
+                              </div>
+                              {pendingAttachmentFollowUp?.run_id ===
+                              attachedResearchContextPinned.run_id ? (
+                                <div className="space-y-2 rounded border border-border bg-surface px-3 py-2 text-[11px] text-text">
+                                  <div className="font-medium">
+                                    {t(
+                                      "playground:actions.prepareFollowUpTitle",
+                                      "Prepare follow-up?"
+                                    )}
+                                  </div>
+                                  <div className="text-text-muted">
+                                    {t(
+                                      "playground:actions.prepareFollowUpBody",
+                                      'This will use "{{query}}" and prefill a follow-up research prompt in the composer.',
+                                      { query: pendingAttachmentFollowUp.query }
+                                    )}
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        onPrepareResearchFollowUp?.(
+                                          pendingAttachmentFollowUp
+                                        )
+                                        setPendingAttachmentFollowUp(null)
+                                      }}
+                                      className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                    >
+                                      {t(
+                                        "playground:actions.prepareFollowUp",
+                                        "Prepare follow-up"
+                                      )}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setPendingAttachmentFollowUp(null)}
+                                      className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                    >
+                                      {t("common:cancel", "Cancel")}
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+                        {attachedResearchContextHistory.length > 0 ? (
+                          <div
+                            data-testid="pinned-research-history-block"
+                            className="rounded-md border border-border bg-surface2 px-3 py-3 text-xs text-text"
+                          >
+                            <div className="mb-2 font-medium text-text-muted">
+                              {t("playground:composer.recentResearch", "Recent research")}
+                            </div>
+                            <div className="flex flex-col gap-2">
+                              {attachedResearchContextHistory.map((entry) => (
+                                <div
+                                  key={entry.run_id}
+                                  className="rounded border border-border bg-surface px-3 py-2"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="truncate font-medium text-text">
+                                        {entry.query}
+                                      </div>
+                                      <div className="truncate text-[11px] text-text-muted">
+                                        {entry.question}
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          onSelectAttachedResearchContextHistory?.(entry)
+                                        }
+                                        className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                      >
+                                        {t("playground:actions.usePinnedResearchNow", "Use now")}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          onPinAttachedResearchContextHistory?.(entry)
+                                        }
+                                        className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                      >
+                                        {t("playground:actions.pinResearchContext", "Pin")}
+                                      </button>
+                                      {onPrepareResearchFollowUp ? (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setPendingAttachmentFollowUp({
+                                              run_id: entry.run_id,
+                                              query: entry.query
+                                            })
+                                          }
+                                          className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                        >
+                                          {t("playground:actions.followUp", "Follow up")}
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                  {pendingAttachmentFollowUp?.run_id === entry.run_id ? (
+                                    <div className="mt-2 space-y-2 rounded border border-border bg-surface2 px-3 py-2 text-[11px] text-text">
+                                      <div className="font-medium">
+                                        {t(
+                                          "playground:actions.prepareFollowUpTitle",
+                                          "Prepare follow-up?"
+                                        )}
+                                      </div>
+                                      <div className="text-text-muted">
+                                        {t(
+                                          "playground:actions.prepareFollowUpBody",
+                                          'This will use "{{query}}" and prefill a follow-up research prompt in the composer.',
+                                          { query: pendingAttachmentFollowUp.query }
+                                        )}
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            onPrepareResearchFollowUp?.(
+                                              pendingAttachmentFollowUp
+                                            )
+                                            setPendingAttachmentFollowUp(null)
+                                          }}
+                                          className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                        >
+                                          {t(
+                                            "playground:actions.prepareFollowUp",
+                                            "Prepare follow-up"
+                                          )}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setPendingAttachmentFollowUp(null)}
+                                          className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                        >
+                                          {t("common:cancel", "Cancel")}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <PlaygroundKnowledgeSection
                       contextToolsOpen={contextToolsOpen}
                       isConnectionReady={isConnectionReady}
@@ -3602,6 +4264,45 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ) : null}
                       </div>
                     )}
+                    {/* Guarded top-level notice/modal contract:
+                        Changed since last send:
+                        playground:composer.providerDegraded
+                        playground:composer.compareActivationTitle
+                        playground:composer.compareActivationBody
+                        playground:composer.compareActivationInteroperability
+                        compare-interoperability-notices
+                        playground:composer.validationCompareMinModelsInline
+                        playground:composer.jsonModeHint
+                        playground:composer.characterPendingNotice
+                        { mode: "voice" }
+                        previousSendStateRef
+                        tldw:focus-composer
+                        el.focus()
+                        tldw:toggle-compare-mode
+                        tldw:toggle-mode-launcher
+                        ContextFootprintPanel
+                        playground:composer.context.sessionStatus
+                        playground:composer.context.truncationRisk
+                        playground:composer.context.contextMix
+                        isSessionDegraded
+                        playground:composer.conflict.summaryCheckpointBudget
+                        playground:composer.conflict.contextFootprint
+                        evaluateSummaryCheckpointSuggestion
+                        resolveTokenBudgetRisk
+                        playground:tokens.truncationRisk
+                        tldw:playground-starter-selected
+                        SessionInsightsPanel
+                        ModelRecommendationsPanel
+                        buildSessionInsights
+                        buildModelRecommendations
+                        buildCompareInteroperabilityNotices
+                        data-testid="startup-template-controls"
+                        startup-template-preview-modal
+                        image-refine-with-llm
+                        image-prompt-refine-diff
+                        imageGenerationRefine
+                        playground:insights.modalTitle
+                        playground:composer.startupTemplatePreviewTitle */}
                     <PlaygroundComposerNotices
                       modeAnnouncement={modeAnnouncement}
                       characterPendingApply={characterPendingApply}
@@ -3814,6 +4515,66 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         onSubmit={submitImageGenerateModal}
         t={t}
       />
+      <Modal
+        open={followUpResearchModalOpen}
+        onCancel={closeFollowUpResearchModal}
+        destroyOnHidden
+        title={t(
+          "playground:actions.followUpResearch",
+          "Follow-up Research"
+        )}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              onClick={closeFollowUpResearchModal}
+              disabled={followUpResearchPending}
+            >
+              {t("common:cancel", "Cancel")}
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => {
+                void handleStartFollowUpResearch()
+              }}
+              disabled={!canLaunchFollowUpResearch || followUpResearchPending}
+              loading={followUpResearchPending}
+            >
+              {t("playground:actions.startResearch", "Start research")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-text-muted">
+            {t(
+              "playground:actions.followUpResearchBody",
+              "Start a new linked research run from the current draft without sending a chat message."
+            )}
+          </p>
+          <div className="rounded-md border border-border bg-surface px-3 py-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+              {t("playground:actions.followUpResearchQuery", "Query")}
+            </div>
+            <div className="mt-1 text-sm text-text">
+              {followUpResearchDraftQuery}
+            </div>
+          </div>
+          {attachedResearchContext ? (
+            <Checkbox
+              checked={includeAttachedResearchAsBackground}
+              onChange={(event) =>
+                setIncludeAttachedResearchAsBackground(event.target.checked)
+              }
+              disabled={followUpResearchPending}
+            >
+              {t(
+                "playground:actions.followUpResearchUseAttachedBackground",
+                "Use attached research as background"
+              )}
+            </Checkbox>
+          ) : null}
+        </div>
+      </Modal>
       <PlaygroundRawRequestModal
         open={rawRequestModalOpen}
         onClose={() => setRawRequestModalOpen(false)}
@@ -3821,6 +4582,8 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         json={rawRequestJson}
         onRefresh={refreshRawRequestSnapshot}
         onCopy={copyRawRequestJson}
+        extraFooter={rawRequestModalFooterExtras}
+        beforeJson={rawRequestAttachedResearchPanel}
         t={t}
       />
       <PlaygroundStartupTemplateModal

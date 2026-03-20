@@ -1,16 +1,19 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 import {
   MessageSquarePlus,
   HelpCircle,
   Sparkles,
   GitBranch,
   UserCircle2,
-  Search
+  Search,
+  Microscope
 } from "lucide-react"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useDemoMode } from "@/context/demo-mode"
 import { useHelpModal } from "@/store/tutorials"
+import { buildResearchLaunchPath } from "@/routes/route-paths"
 
 /** Clickable example prompts that populate the composer */
 const ExamplePromptChips: React.FC<{
@@ -44,6 +47,7 @@ export const PlaygroundEmpty = () => {
   const { t } = useTranslation(["playground", "common"])
   const { demoEnabled } = useDemoMode()
   const { open: openHelpModal } = useHelpModal()
+  const navigate = useNavigate()
 
   const dispatchStarter = React.useCallback(
     (mode: "general" | "compare" | "character" | "rag", prompt?: string) => {
@@ -100,6 +104,10 @@ export const PlaygroundEmpty = () => {
     )
   }, [])
 
+  const handleOpenDeepResearch = React.useCallback(() => {
+    navigate(buildResearchLaunchPath())
+  }, [navigate])
+
   const starterCards = React.useMemo(
     () => [
       {
@@ -141,9 +149,19 @@ export const PlaygroundEmpty = () => {
           "Open Search & Context, pin sources, then ask."
         ),
         action: () => dispatchStarter("rag")
+      },
+      {
+        key: "research",
+        icon: <Microscope className="h-4 w-4" />,
+        title: t("playground:empty.starterResearchTitle", "Deep Research"),
+        description: t(
+          "playground:empty.starterResearchBody",
+          "Open the long-running research console for cited, checkpointed investigations."
+        ),
+        action: handleOpenDeepResearch
       }
     ],
-    [dispatchStarter, t]
+    [dispatchStarter, handleOpenDeepResearch, t]
   )
 
   return (

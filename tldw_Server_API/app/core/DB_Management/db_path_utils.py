@@ -210,7 +210,6 @@ class DatabasePaths:
     GUARDIAN_DB_NAME = "Guardian.db"
     WORKFLOWS_DB_NAME = "workflows.db"
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
-    CHAT_WORKFLOWS_DB_NAME = "chat_workflows.db"
     RESEARCH_SESSIONS_DB_NAME = "ResearchSessions.db"
     KANBAN_DB_NAME = "Kanban.db"
     SLIDES_DB_NAME = "Slides.db"
@@ -222,7 +221,6 @@ class DatabasePaths:
     AUDIT_SUBDIR = "audit"
     EVALUATIONS_SUBDIR = "evaluations"
     WORKFLOWS_SUBDIR = "workflows"
-    CHAT_WORKFLOWS_SUBDIR = "chat_workflows"
     PROMPT_STUDIO_SUBDIR = "prompt_studio_dbs"
     OUTPUTS_SUBDIR = "outputs"
     OUTPUTS_TEMP_SUBDIR = "outputs_tmp"
@@ -443,20 +441,17 @@ class DatabasePaths:
         return workflows_dir / DatabasePaths.WORKFLOWS_DB_NAME
 
     @staticmethod
+    def get_chat_workflows_db_path(user_id: Optional[UserId]) -> Path:
+        """Backward-compatible alias for the per-user workflows database path."""
+        return DatabasePaths.get_workflows_db_path(user_id)
+
+    @staticmethod
     def get_workflows_scheduler_db_path(user_id: Optional[UserId]) -> Path:
         """Get the path to the user's workflows scheduler database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         workflows_dir = user_dir / DatabasePaths.WORKFLOWS_SUBDIR
         _ensure_dir(workflows_dir, label="workflows scheduler")
         return workflows_dir / DatabasePaths.WORKFLOWS_SCHEDULER_DB_NAME
-
-    @staticmethod
-    def get_chat_workflows_db_path(user_id: Optional[UserId]) -> Path:
-        """Get the path to the user's chat workflows database."""
-        user_dir = DatabasePaths.get_user_base_directory(user_id)
-        chat_workflows_dir = user_dir / DatabasePaths.CHAT_WORKFLOWS_SUBDIR
-        _ensure_dir(chat_workflows_dir, label="chat workflows")
-        return chat_workflows_dir / DatabasePaths.CHAT_WORKFLOWS_DB_NAME
 
     @staticmethod
     def get_research_sessions_db_path(user_id: Optional[UserId]) -> Path:
@@ -625,7 +620,6 @@ class DatabasePaths:
             "personalization": DatabasePaths.get_personalization_db_path(user_id),
             "workflows": DatabasePaths.get_workflows_db_path(user_id),
             "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path(user_id),
-            "chat_workflows": DatabasePaths.get_chat_workflows_db_path(user_id),
             "research_sessions": DatabasePaths.get_research_sessions_db_path(user_id),
             "kanban": DatabasePaths.get_kanban_db_path(user_id),
             "slides": DatabasePaths.get_slides_db_path(user_id),

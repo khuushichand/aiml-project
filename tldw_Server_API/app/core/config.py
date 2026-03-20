@@ -336,8 +336,16 @@ _DEFAULT_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8081",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
+    "http://[::1]",
+    "http://[::1]:8000",
+    "http://[::1]:8080",
+    "http://[::1]:8081",
+    "http://[::1]:3000",
+    "http://[::1]:3001",
     "https://localhost",
     "https://localhost:8080",
+    "https://[::1]",
+    "https://[::1]:8080",
 ]
 
 _ENV_ALLOWED = os.getenv("ALLOWED_ORIGINS")

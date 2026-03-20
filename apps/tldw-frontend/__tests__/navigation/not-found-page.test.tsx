@@ -37,7 +37,7 @@ describe('404 recovery controls', () => {
     expect(screen.getByRole('heading', { name: 'We could not find that route' })).toBeVisible();
     expect(screen.getByText('/missing-route?foo=bar')).toBeVisible();
     expect(screen.getByTestId('not-found-go-chat')).toBeVisible();
-    expect(screen.getByTestId('not-found-open-knowledge')).toBeVisible();
+    expect(screen.getByTestId('not-found-open-research')).toBeVisible();
     expect(screen.getByTestId('not-found-open-media')).toBeVisible();
     expect(screen.getByTestId('not-found-open-settings')).toBeVisible();
     expect(screen.getByTestId('not-found-go-back')).toBeVisible();
@@ -48,7 +48,7 @@ describe('404 recovery controls', () => {
     render(<NotFoundPage />);
 
     const goToChat = screen.getByTestId('not-found-go-chat');
-    const openKnowledge = screen.getByTestId('not-found-open-knowledge');
+    const openResearch = screen.getByTestId('not-found-open-research');
     const openMedia = screen.getByTestId('not-found-open-media');
     const openSettings = screen.getByTestId('not-found-open-settings');
     const goBack = screen.getByTestId('not-found-go-back');
@@ -57,7 +57,7 @@ describe('404 recovery controls', () => {
     expect(goToChat).toHaveFocus();
 
     await user.tab();
-    expect(openKnowledge).toHaveFocus();
+    expect(openResearch).toHaveFocus();
 
     await user.tab();
     expect(openMedia).toHaveFocus();

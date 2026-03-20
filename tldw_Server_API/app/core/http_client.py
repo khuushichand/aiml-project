@@ -754,6 +754,7 @@ _SENSITIVE_HEADER_KEYS = {
     "api-key",
     "x-auth-token",
 }
+_TELEGRAM_BOT_PATH_PATTERN = re.compile(r"^/bot[^/]+(?P<suffix>/.*)?$")
 
 
 def _redact_headers(h: dict[str, str] | None) -> dict[str, str]:
@@ -824,6 +825,36 @@ def _sanitize_accept_encoding_for_backend(headers: dict[str, str] | None, backen
     return hdrs
 
 
+def _redact_path_for_logging(host: str, path: str) -> str:
+    if host == "api.telegram.org":
+        match = _TELEGRAM_BOT_PATH_PATTERN.match(path or "/")
+        if match:
+            suffix = match.group("suffix") or ""
+            return f"/bot<redacted>{suffix}"
+    return path or "/"
+
+
+def _sanitize_url_for_logs(u: str | Any) -> str:
+    try:
+        s = str(u)
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+        return ""
+    try:
+        parsed = urlparse(s)
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        if not scheme or not host:
+            return s
+        port = parsed.port
+        path = _redact_path_for_logging(host, parsed.path or "/")
+        authority = host
+        if port is not None:
+            authority = f"{host}:{port}"
+        return f"{scheme}://{authority}{path}"
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+        return s
+
+
 def _url_parts(u: str | Any) -> tuple[str, str, str]:
     """Return (scheme, host, path) for logging; redacts query by omission."""
     try:
@@ -834,7 +865,7 @@ def _url_parts(u: str | Any) -> tuple[str, str, str]:
         p = urlparse(s)
         scheme = (p.scheme or "").lower()
         host = (p.hostname or "").lower()
-        path = p.path or "/"
+        path = _redact_path_for_logging(host, p.path or "/")
         return scheme, host, path  # noqa: TRY300
     except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return "", "", ""
@@ -1371,7 +1402,7 @@ def _build_aiohttp_form(data: Any | None, files: Any | None) -> aiohttp.FormData
 def _decorrelated_jitter_sleep(prev: float, base_ms: int, cap_s: int) -> float:
     base = max(0.001, base_ms / 1000.0)
     cap = max(base, float(cap_s))
-    sleep = base if prev <= 0 else min(cap, random.uniform(base, prev * 3))
+    sleep = base if prev <= 0 else min(cap, random.uniform(base, prev * 3))  # nosec B311
     return sleep
 
 
@@ -2067,7 +2098,9 @@ async def _afetch_httpx(
         # Parity with other paths: drop 'zstd' from Accept-Encoding for httpx
         try:
             with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
-                logger.debug(f"afetch _do_once: method={method_upper} url={target_url}")
+                logger.debug(
+                    f"afetch _do_once: method={method_upper} url={_sanitize_url_for_logs(target_url)}"
+                )
             req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
         except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             pass
@@ -2136,7 +2169,7 @@ async def _afetch_httpx(
             attributes={
                 "http.method": method.upper(),
                 "net.host.name": host_attr,
-                "url.full": url,
+                "url.full": _sanitize_url_for_logs(url),
             },
         ):
             for attempt in range(1, attempts + 1):
@@ -2288,7 +2321,8 @@ async def _afetch_httpx(
                             if delay <= 0:
                                 delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                             logger.debug(
-                                f"afetch retry attempt={attempt} reason={reason} delay={delay:.3f}s url={cur_url}"
+                                f"afetch retry attempt={attempt} reason={reason} delay={delay:.3f}s "
+                                f"url={_sanitize_url_for_logs(cur_url)}"
                             )
                             with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                 tm.add_event("http.retry", {"attempt": attempt, "reason": reason})
@@ -2315,7 +2349,8 @@ async def _afetch_httpx(
                         get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
                     delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                     logger.debug(
-                        f"afetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
+                        f"afetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s "
+                        f"url={_sanitize_url_for_logs(cur_url)}"
                     )
                     with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                         tm.add_event("http.retry", {"attempt": attempt, "reason": rsn})
@@ -2436,7 +2471,7 @@ async def _afetch_aiohttp(
         attributes={
             "http.method": method.upper(),
             "net.host.name": host_attr,
-            "url.full": url,
+            "url.full": _sanitize_url_for_logs(url),
         },
     ):
         for attempt in range(1, attempts + 1):
@@ -2557,7 +2592,8 @@ async def _afetch_aiohttp(
                 if delay <= 0:
                     delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                 logger.debug(
-                    f"afetch retry attempt={attempt} reason={reason} delay={delay:.3f}s url={cur_url}"
+                    f"afetch retry attempt={attempt} reason={reason} delay={delay:.3f}s "
+                    f"url={_sanitize_url_for_logs(cur_url)}"
                 )
                 with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                     tm.add_event("http.retry", {"attempt": attempt, "reason": reason})
@@ -2582,7 +2618,8 @@ async def _afetch_aiohttp(
                     get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
                 delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                 logger.debug(
-                    f"afetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
+                    f"afetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s "
+                    f"url={_sanitize_url_for_logs(cur_url)}"
                 )
                 with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                     tm.add_event("http.retry", {"attempt": attempt, "reason": rsn})
@@ -2784,7 +2821,7 @@ def _fetch_httpx_response(
             attributes={
                 "http.method": method.upper(),
                 "net.host.name": host_attr,
-                "url.full": url,
+                "url.full": _sanitize_url_for_logs(url),
             },
         ):
             for attempt in range(1, attempts + 1):
@@ -2852,7 +2889,8 @@ def _fetch_httpx_response(
                             get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
                         delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                         logger.debug(
-                            f"fetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
+                            f"fetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s "
+                            f"url={_sanitize_url_for_logs(cur_url)}"
                         )
                         time.sleep(delay)
                         sleep_s = delay
@@ -2924,7 +2962,8 @@ def _fetch_httpx_response(
                     if delay <= 0:
                         delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                     logger.debug(
-                        f"fetch retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
+                        f"fetch retry attempt={attempt} reason={rsn} delay={delay:.3f}s "
+                        f"url={_sanitize_url_for_logs(cur_url)}"
                     )
                     with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                         tm.add_event("http.retry", {"attempt": attempt, "reason": rsn})

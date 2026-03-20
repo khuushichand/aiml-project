@@ -9,12 +9,15 @@ vi.mock("@/services/background-proxy", () => ({
 }))
 
 import {
+  checkGovernancePackUpdates,
   dryRunGovernancePack,
   getEffectivePolicy,
+  getGovernancePackTrustPolicy,
   listGovernancePacks,
   listCapabilityAdapterMappings,
   previewCapabilityAdapterMapping,
-  setExternalServerSecret
+  setExternalServerSecret,
+  updateGovernancePackTrustPolicy
 } from "../mcp-hub"
 
 describe("mcp hub service client", () => {
@@ -105,6 +108,11 @@ describe("mcp hub service client", () => {
         owner_scope_type: "user",
         owner_scope_id: 7,
         bundle_digest: "a".repeat(64),
+        signer_fingerprint: "ABCD1234",
+        signer_identity: "Release Bot <bot@example.com>",
+        verified_object_type: "commit",
+        verification_result_code: "verified_and_trusted",
+        verification_warning_code: "signer_rotated_trusted",
         manifest: {}
       }
     ])
@@ -112,6 +120,8 @@ describe("mcp hub service client", () => {
     const out = await listGovernancePacks({ owner_scope_type: "user", owner_scope_id: 7 })
 
     expect(out).toHaveLength(1)
+    expect(out[0]?.signer_fingerprint).toBe("ABCD1234")
+    expect(out[0]?.verification_warning_code).toBe("signer_rotated_trusted")
     expect(mocks.bgRequestClient).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/api/v1/mcp/hub/governance-packs?owner_scope_type=user&owner_scope_id=7",
@@ -227,5 +237,106 @@ describe("mcp hub service client", () => {
         method: "POST"
       })
     )
+  })
+
+  it("maps governance pack trust policies with trusted signer bindings", async () => {
+    mocks.bgRequestClient
+      .mockResolvedValueOnce({
+        allow_local_path_sources: false,
+        allowed_local_roots: [],
+        allow_git_sources: true,
+        allowed_git_hosts: ["github.com"],
+        allowed_git_repositories: ["github.com/example/researcher-pack"],
+        allowed_git_ref_kinds: ["tag"],
+        require_git_signature_verification: true,
+        trusted_signers: [
+          {
+            fingerprint: "ABCD1234",
+            display_name: "Release Bot",
+            repo_bindings: ["github.com/example/researcher-pack"],
+            status: "active"
+          }
+        ],
+        policy_fingerprint: "policy-1"
+      })
+      .mockResolvedValueOnce({
+        allow_local_path_sources: false,
+        allowed_local_roots: [],
+        allow_git_sources: true,
+        allowed_git_hosts: ["github.com"],
+        allowed_git_repositories: ["github.com/example/researcher-pack"],
+        allowed_git_ref_kinds: ["tag"],
+        require_git_signature_verification: true,
+        trusted_signers: [
+          {
+            fingerprint: "ABCD1234",
+            display_name: "Release Bot",
+            repo_bindings: ["github.com/example/researcher-pack"],
+            status: "active"
+          }
+        ],
+        policy_fingerprint: "policy-2"
+      })
+
+    const current = await getGovernancePackTrustPolicy()
+    const updated = await updateGovernancePackTrustPolicy({
+      ...current,
+      policy_fingerprint: "policy-1"
+    })
+
+    expect(current.trusted_signers[0]?.fingerprint).toBe("ABCD1234")
+    expect(updated.policy_fingerprint).toBe("policy-2")
+    expect(mocks.bgRequestClient).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        path: "/api/v1/mcp/hub/governance-packs/trust-policy",
+        method: "GET"
+      })
+    )
+    expect(mocks.bgRequestClient).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: "/api/v1/mcp/hub/governance-packs/trust-policy",
+        method: "PUT",
+        body: expect.objectContaining({
+          trusted_signers: [
+            expect.objectContaining({
+              fingerprint: "ABCD1234",
+              repo_bindings: ["github.com/example/researcher-pack"]
+            })
+          ],
+          policy_fingerprint: "policy-1"
+        })
+      })
+    )
+  })
+
+  it("maps signer diagnostics on governance pack update checks", async () => {
+    mocks.bgRequestClient.mockResolvedValueOnce({
+      governance_pack_id: 81,
+      status: "newer_version_available",
+      installed_manifest: {
+        pack_id: "researcher-pack",
+        pack_version: "1.0.0",
+        title: "Researcher Pack"
+      },
+      candidate_manifest: {
+        pack_id: "researcher-pack",
+        pack_version: "1.1.0",
+        title: "Researcher Pack"
+      },
+      source_commit_resolved: "def456",
+      pack_content_digest: "d".repeat(64),
+      signer_fingerprint: "BBBB2222",
+      signer_identity: "Backup Bot <backup@example.com>",
+      verified_object_type: "commit",
+      verification_result_code: "verified_and_trusted",
+      verification_warning_code: "signer_rotated_trusted"
+    })
+
+    const out = await checkGovernancePackUpdates(81)
+
+    expect(out.signer_fingerprint).toBe("BBBB2222")
+    expect(out.verification_warning_code).toBe("signer_rotated_trusted")
   })
 })

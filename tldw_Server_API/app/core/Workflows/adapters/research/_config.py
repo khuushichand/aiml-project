@@ -4,9 +4,23 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, model_validator
 
 from tldw_Server_API.app.core.Workflows.adapters._base import BaseAdapterConfig
+
+DEEP_RESEARCH_CANONICAL_BUNDLE_FIELDS: tuple[str, ...] = (
+    "question",
+    "brief",
+    "outline",
+    "report_markdown",
+    "claims",
+    "source_inventory",
+    "unresolved_questions",
+    "verification_summary",
+    "unsupported_claims",
+    "contradictions",
+    "source_trust",
+)
 
 
 class ArxivSearchConfig(BaseAdapterConfig):
@@ -124,3 +138,153 @@ class LiteratureReviewConfig(BaseAdapterConfig):
     )
     provider: str | None = Field(None, description="LLM provider for generation")
     model: str | None = Field(None, description="Model for generation")
+
+
+class DeepResearchConfig(BaseAdapterConfig):
+    """Config for launching a deep research session from workflows."""
+
+    query: str = Field(..., description="Research query (templated)")
+    source_policy: Literal[
+        "balanced",
+        "local_first",
+        "external_first",
+        "local_only",
+        "external_only",
+    ] = Field("balanced", description="How local and external sources should be balanced")
+    autonomy_mode: Literal["checkpointed", "autonomous"] = Field(
+        "checkpointed",
+        description="Whether the session pauses at review checkpoints or runs autonomously",
+    )
+    limits_json: dict[str, Any] | None = Field(
+        None,
+        description="Optional run limits passed through to the research session",
+    )
+    provider_overrides: dict[str, Any] | None = Field(
+        None,
+        description="Optional per-run provider override configuration",
+    )
+    save_artifact: bool | None = Field(
+        True,
+        description="Whether to persist the launch payload as a workflow artifact",
+    )
+
+
+class DeepResearchWaitConfig(BaseAdapterConfig):
+    """Config for waiting on a deep research session from workflows."""
+
+    run_id: str | None = Field(
+        None,
+        description="Research run ID to wait on (templated)",
+    )
+    run: dict[str, Any] | None = Field(
+        None,
+        description="Optional launch-step output object containing run_id",
+    )
+    include_bundle: bool = Field(
+        True,
+        description="Whether to include the final research bundle when the run completes",
+    )
+    fail_on_cancelled: bool = Field(
+        True,
+        description="Whether the step should fail if the research run is cancelled",
+    )
+    fail_on_failed: bool = Field(
+        True,
+        description="Whether the step should fail if the research run fails",
+    )
+    poll_interval_seconds: float = Field(
+        2.0,
+        ge=0.1,
+        le=60.0,
+        description="Polling interval while waiting for terminal research status",
+    )
+    save_artifact: bool | None = Field(
+        True,
+        description="Whether to persist the wait result as a workflow artifact",
+    )
+
+    @model_validator(mode="after")
+    def validate_run_reference(self) -> "DeepResearchWaitConfig":
+        run_id = str(self.run_id or "").strip()
+        run_obj = self.run if isinstance(self.run, dict) else None
+        run_obj_id = str((run_obj or {}).get("run_id") or "").strip()
+        if not run_id and not run_obj_id:
+            raise ValueError("either run_id or run.run_id is required")
+        return self
+
+
+class DeepResearchLoadBundleConfig(BaseAdapterConfig):
+    """Config for loading completed deep research bundle references from workflows."""
+
+    run_id: str | None = Field(
+        None,
+        description="Completed research run ID to load (templated)",
+    )
+    run: dict[str, Any] | None = Field(
+        None,
+        description="Optional prior step output object containing run_id",
+    )
+    save_artifact: bool | None = Field(
+        True,
+        description="Whether to persist the bundle reference payload as a workflow artifact",
+    )
+
+    @model_validator(mode="after")
+    def validate_run_reference(self) -> "DeepResearchLoadBundleConfig":
+        run_id = str(self.run_id or "").strip()
+        run_obj = self.run if isinstance(self.run, dict) else None
+        run_obj_id = str((run_obj or {}).get("run_id") or "").strip()
+        if not run_id and not run_obj_id:
+            raise ValueError("either run_id or run.run_id is required")
+        return self
+
+
+class DeepResearchSelectBundleFieldsConfig(BaseAdapterConfig):
+    """Config for selecting canonical deep research bundle fields from workflows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str | None = Field(
+        None,
+        description="Completed research run ID to read selected bundle fields from (templated)",
+    )
+    run: dict[str, Any] | None = Field(
+        None,
+        description="Optional prior step output object containing run_id",
+    )
+    fields: list[str] = Field(
+        ...,
+        description="Canonical top-level bundle fields to return inline",
+    )
+    save_artifact: bool | None = Field(
+        True,
+        description="Whether to persist the selected field payload as a workflow artifact",
+    )
+
+    @model_validator(mode="after")
+    def validate_run_reference_and_fields(self) -> "DeepResearchSelectBundleFieldsConfig":
+        run_id = str(self.run_id or "").strip()
+        run_obj = self.run if isinstance(self.run, dict) else None
+        run_obj_id = str((run_obj or {}).get("run_id") or "").strip()
+        if not run_id and not run_obj_id:
+            raise ValueError("either run_id or run.run_id is required")
+
+        if not self.fields:
+            raise ValueError("fields must not be empty")
+
+        deduped_fields: list[str] = []
+        seen: set[str] = set()
+        allowed = set(DEEP_RESEARCH_CANONICAL_BUNDLE_FIELDS)
+        for value in self.fields:
+            name = str(value or "").strip()
+            if not name:
+                raise ValueError("fields must not contain empty values")
+            if name not in allowed:
+                raise ValueError(f"fields contains unsupported value '{name}'")
+            if name in seen:
+                continue
+            seen.add(name)
+            deduped_fields.append(name)
+
+        self.fields = deduped_fields
+        return self

@@ -1,6 +1,6 @@
 """Comprehensive tests for research and bibliography adapters.
 
-This module tests all 10 research adapters:
+This module tests all 11 research adapters:
 1. run_arxiv_search_adapter - Search arXiv
 2. run_arxiv_download_adapter - Download arXiv papers
 3. run_pubmed_search_adapter - Search PubMed
@@ -11,13 +11,978 @@ This module tests all 10 research adapters:
 8. run_reference_parse_adapter - Parse reference strings
 9. run_bibtex_generate_adapter - Generate BibTeX
 10. run_literature_review_adapter - Generate literature review
+11. run_deep_research_adapter - Launch a deep research session
+12. run_deep_research_wait_adapter - Wait for a deep research session
+13. run_deep_research_load_bundle_adapter - Load bundle refs from a completed deep research session
+14. run_deep_research_select_bundle_fields_adapter - Select canonical bundle fields from a completed deep research session
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 pytestmark = pytest.mark.unit
+
+
+# =============================================================================
+# Deep Research Launch Adapter Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_deep_research_adapter_launches_session_and_records_artifact(monkeypatch, tmp_path):
+    """Test deep research workflow adapter launches a session and persists a JSON launch artifact."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-1"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _FakeResearchService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_session(self, **kwargs):
+            captured["create_session_kwargs"] = kwargs
+            return _FakeSession()
+
+    added_artifacts: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    context = {
+        "user_id": "42",
+        "tenant_id": "default",
+        "step_run_id": "wf-step-1",
+        "inputs": {"topic": "federated learning"},
+        "add_artifact": lambda **kwargs: added_artifacts.append(kwargs),
+    }
+    config = {
+        "query": "{{ inputs.topic }}",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+        "save_artifact": True,
+    }
+
+    result = await run_deep_research_adapter(config, context)
+
+    assert result == {
+        "run_id": "research-session-1",
+        "status": "queued",
+        "phase": "drafting_plan",
+        "control_state": "running",
+        "console_url": "/research?run=research-session-1",
+        "bundle_url": "/api/v1/research/runs/research-session-1/bundle",
+        "query": "federated learning",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+    }
+    assert captured["create_session_kwargs"] == {
+        "owner_user_id": "42",
+        "query": "federated learning",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+        "limits_json": None,
+        "provider_overrides": None,
+    }
+    assert len(added_artifacts) == 1
+    assert added_artifacts[0]["type"] == "deep_research_launch"
+    assert added_artifacts[0]["mime_type"] == "application/json"
+    artifact_uri = str(added_artifacts[0]["uri"])
+    assert artifact_uri.startswith("file://")
+    artifact_path = Path(artifact_uri.removeprefix("file://"))
+    assert artifact_path.name == "deep_research_launch.json"
+    assert json.loads(artifact_path.read_text(encoding="utf-8")) == result
+
+
+@pytest.mark.asyncio
+async def test_deep_research_adapter_rejects_empty_rendered_query(monkeypatch):
+    """Test deep research workflow adapter rejects an empty templated query."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_adapter,
+    )
+
+    with pytest.raises(ValueError, match="query"):
+        await run_deep_research_adapter(
+            {"query": "{{ inputs.topic }}"},
+            {"user_id": "7", "inputs": {"topic": ""}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_wait_adapter_returns_bundle_and_records_artifact(monkeypatch):
+    """Test deep research wait adapter returns terminal metadata plus bundle and writes an artifact."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_wait_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-1"
+        status = "completed"
+        phase = "packaging"
+        control_state = "running"
+        completed_at = "2026-03-07T12:00:00+00:00"
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            captured["get_bundle_kwargs"] = kwargs
+            return {"concise_answer": "done"}
+
+    added_artifacts: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_wait_adapter(
+        {
+            "run_id": "{{ inputs.run_id }}",
+            "include_bundle": True,
+            "save_artifact": True,
+        },
+        {
+            "user_id": "42",
+            "step_run_id": "wf-step-2",
+            "inputs": {"run_id": "research-session-1"},
+            "add_artifact": lambda **kwargs: added_artifacts.append(kwargs),
+        },
+    )
+
+    assert result == {
+        "run_id": "research-session-1",
+        "status": "completed",
+        "phase": "packaging",
+        "control_state": "running",
+        "completed_at": "2026-03-07T12:00:00+00:00",
+        "bundle_url": "/api/v1/research/runs/research-session-1/bundle",
+        "bundle": {"concise_answer": "done"},
+    }
+    assert captured["get_session_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-1",
+    }
+    assert captured["get_bundle_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-1",
+    }
+    assert len(added_artifacts) == 1
+    assert added_artifacts[0]["type"] == "deep_research_wait"
+    assert added_artifacts[0]["mime_type"] == "application/json"
+    artifact_uri = str(added_artifacts[0]["uri"])
+    artifact_path = Path(artifact_uri.removeprefix("file://"))
+    assert artifact_path.name == "deep_research_wait.json"
+    assert json.loads(artifact_path.read_text(encoding="utf-8")) == result
+
+
+@pytest.mark.asyncio
+async def test_deep_research_wait_adapter_accepts_launch_output_object(monkeypatch):
+    """Test deep research wait adapter can resolve the run from a launch-step output object."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_wait_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-2"
+        status = "completed"
+        phase = "packaging"
+        control_state = "running"
+        completed_at = "2026-03-07T13:00:00+00:00"
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _FakeSession()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_wait_adapter(
+        {
+            "run": {
+                "run_id": "research-session-2",
+                "console_url": "/research?run=research-session-2",
+            },
+            "include_bundle": False,
+            "save_artifact": False,
+        },
+        {"user_id": "84"},
+    )
+
+    assert result == {
+        "run_id": "research-session-2",
+        "status": "completed",
+        "phase": "packaging",
+        "control_state": "running",
+        "completed_at": "2026-03-07T13:00:00+00:00",
+        "bundle_url": "/api/v1/research/runs/research-session-2/bundle",
+        "bundle": None,
+    }
+    assert captured["get_session_kwargs"] == {
+        "owner_user_id": "84",
+        "session_id": "research-session-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_deep_research_wait_adapter_returns_cancelled_status_when_workflow_is_cancelled(monkeypatch):
+    """Test deep research wait adapter exits promptly when the enclosing workflow is cancelled."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_wait_adapter,
+    )
+
+    result = await run_deep_research_wait_adapter(
+        {"run_id": "research-session-3"},
+        {"user_id": "84", "is_cancelled": lambda: True},
+    )
+
+    assert result == {"__status__": "cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_deep_research_wait_adapter_times_out_for_nonterminal_run(monkeypatch):
+    """Test deep research wait adapter times out when the run never reaches terminal state."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_wait_adapter,
+    )
+
+    class _FakeSession:
+        id = "research-session-4"
+        status = "queued"
+        phase = "collecting"
+        control_state = "running"
+        completed_at = None
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _FakeSession()
+
+    times = iter([0.0, 2.5])
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._now",
+        lambda: next(times),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._sleep",
+        _fake_sleep,
+    )
+
+    with pytest.raises(TimeoutError):
+        await run_deep_research_wait_adapter(
+            {
+                "run_id": "research-session-4",
+                "poll_interval_seconds": 0.1,
+                "timeout_seconds": 2,
+            },
+            {"user_id": "84"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_wait_adapter_returns_waiting_human_for_research_checkpoint(monkeypatch):
+    """Test deep research wait adapter yields a workflow wait payload for research checkpoints."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_wait_adapter,
+    )
+
+    class _CheckpointSession:
+        id = "research-session-6"
+        status = "waiting_human"
+        phase = "awaiting_source_review"
+        control_state = "running"
+        completed_at = None
+        latest_checkpoint_id = "checkpoint-1"
+
+    class _CheckpointSnapshot:
+        checkpoint = {
+            "checkpoint_id": "checkpoint-1",
+            "checkpoint_type": "sources_review",
+        }
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            assert kwargs["owner_user_id"] == "42"
+            assert kwargs["session_id"] == "research-session-6"
+            return _CheckpointSession()
+
+        def get_stream_snapshot(self, **kwargs):
+            assert kwargs["owner_user_id"] == "42"
+            assert kwargs["session_id"] == "research-session-6"
+            return _CheckpointSnapshot()
+
+    times = iter([0.0, 0.0, 2.5])
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._now",
+        lambda: next(times),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._sleep",
+        _fake_sleep,
+    )
+
+    result = await run_deep_research_wait_adapter(
+        {
+            "run_id": "research-session-6",
+            "poll_interval_seconds": 0.1,
+            "timeout_seconds": 2,
+            "include_bundle": False,
+            "save_artifact": False,
+        },
+        {"user_id": "42"},
+    )
+
+    assert result == {
+        "__status__": "waiting_human",
+        "reason": "research_checkpoint",
+        "run_id": "research-session-6",
+        "research_phase": "awaiting_source_review",
+        "research_control_state": "running",
+        "research_checkpoint_id": "checkpoint-1",
+        "research_checkpoint_type": "sources_review",
+        "research_console_url": "/research?run=research-session-6",
+        "active_poll_seconds": pytest.approx(0.0, rel=0.1),
+    }
+
+
+@pytest.mark.asyncio
+async def test_deep_research_wait_adapter_reuses_active_poll_seconds_after_resume(monkeypatch):
+    """Test deep research wait adapter restores active polling time from prior workflow wait output."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_wait_adapter,
+    )
+
+    class _CheckpointSession:
+        id = "research-session-7"
+        status = "waiting_human"
+        phase = "awaiting_outline_review"
+        control_state = "running"
+        completed_at = None
+        latest_checkpoint_id = "checkpoint-2"
+
+    class _CheckpointSnapshot:
+        checkpoint = {
+            "checkpoint_id": "checkpoint-2",
+            "checkpoint_type": "outline_review",
+        }
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _CheckpointSession()
+
+        def get_stream_snapshot(self, **kwargs):
+            return _CheckpointSnapshot()
+
+    times = iter([0.0, 0.0, 2.5])
+
+    async def _fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._now",
+        lambda: next(times),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._sleep",
+        _fake_sleep,
+    )
+
+    result = await run_deep_research_wait_adapter(
+        {
+            "run_id": "research-session-7",
+            "poll_interval_seconds": 0.1,
+            "timeout_seconds": 2,
+            "include_bundle": False,
+            "save_artifact": False,
+        },
+        {
+            "user_id": "42",
+            "prev": {"active_poll_seconds": 1.5},
+        },
+    )
+
+    assert result["__status__"] == "waiting_human"
+    assert result["research_checkpoint_type"] == "outline_review"
+    assert result["active_poll_seconds"] == pytest.approx(1.5, rel=0.1)
+
+
+@pytest.mark.asyncio
+async def test_deep_research_load_bundle_adapter_returns_bundle_refs_and_records_artifact(monkeypatch):
+    """Test deep research load-bundle adapter returns compact refs and persists a JSON artifact."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_load_bundle_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-5"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T14:00:00+00:00"
+
+    class _FakeSnapshot:
+        artifacts = [
+            {
+                "artifact_name": "bundle.json",
+                "artifact_version": 1,
+                "content_type": "application/json",
+                "phase": "packaging",
+                "job_id": "job-7",
+            }
+        ]
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            captured["get_bundle_kwargs"] = kwargs
+            return {
+                "question": "What changed in the evidence base?",
+                "outline": {
+                    "sections": [
+                        {"title": "Overview"},
+                        {"title": "Findings"},
+                    ]
+                },
+                "claims": [
+                    {"text": "Claim A", "citations": [{"source_id": "src_1"}]},
+                    {"text": "Claim B", "citations": [{"source_id": "src_2"}]},
+                ],
+                "source_inventory": [
+                    {"source_id": "src_1", "title": "Source 1"},
+                    {"source_id": "src_2", "title": "Source 2"},
+                    {"source_id": "src_3", "title": "Source 3"},
+                ],
+                "unresolved_questions": ["Need stronger contradictory evidence"],
+            }
+
+        def get_stream_snapshot(self, **kwargs):
+            captured["get_stream_snapshot_kwargs"] = kwargs
+            return _FakeSnapshot()
+
+    added_artifacts: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.load_bundle._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_load_bundle_adapter(
+        {
+            "run_id": "{{ inputs.run_id }}",
+            "save_artifact": True,
+        },
+        {
+            "user_id": "42",
+            "step_run_id": "wf-step-3",
+            "inputs": {"run_id": "research-session-5"},
+            "add_artifact": lambda **kwargs: added_artifacts.append(kwargs),
+        },
+    )
+
+    assert result == {
+        "run_id": "research-session-5",
+        "status": "completed",
+        "phase": "completed",
+        "control_state": "running",
+        "completed_at": "2026-03-07T14:00:00+00:00",
+        "bundle_url": "/api/v1/research/runs/research-session-5/bundle",
+        "bundle_summary": {
+            "question": "What changed in the evidence base?",
+            "outline_titles": ["Overview", "Findings"],
+            "claim_count": 2,
+            "source_count": 3,
+            "unresolved_question_count": 1,
+        },
+        "artifacts": [
+            {
+                "artifact_name": "bundle.json",
+                "artifact_version": 1,
+                "content_type": "application/json",
+                "phase": "packaging",
+                "job_id": "job-7",
+            }
+        ],
+    }
+    assert captured["get_session_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-5",
+    }
+    assert captured["get_bundle_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-5",
+    }
+    assert captured["get_stream_snapshot_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-5",
+    }
+    assert len(added_artifacts) == 1
+    assert added_artifacts[0]["type"] == "deep_research_bundle_ref"
+    assert added_artifacts[0]["mime_type"] == "application/json"
+    artifact_uri = str(added_artifacts[0]["uri"])
+    artifact_path = Path(artifact_uri.removeprefix("file://"))
+    assert artifact_path.name == "deep_research_bundle_ref.json"
+    assert json.loads(artifact_path.read_text(encoding="utf-8")) == result
+
+
+@pytest.mark.asyncio
+async def test_deep_research_load_bundle_adapter_accepts_wait_output_object(monkeypatch):
+    """Test deep research load-bundle adapter can resolve the run from a prior step output object."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_load_bundle_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-6"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T15:00:00+00:00"
+
+    class _FakeSnapshot:
+        artifacts = []
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            return {
+                "question": "What changed?",
+                "outline": {"sections": []},
+                "claims": [],
+                "source_inventory": [],
+                "unresolved_questions": [],
+            }
+
+        def get_stream_snapshot(self, **kwargs):
+            return _FakeSnapshot()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.load_bundle._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_load_bundle_adapter(
+        {
+            "run": {
+                "run_id": "research-session-6",
+                "bundle_url": "/api/v1/research/runs/research-session-6/bundle",
+            },
+            "save_artifact": False,
+        },
+        {"user_id": "84"},
+    )
+
+    assert result["run_id"] == "research-session-6"
+    assert result["bundle_summary"]["question"] == "What changed?"
+    assert captured["get_session_kwargs"] == {
+        "owner_user_id": "84",
+        "session_id": "research-session-6",
+    }
+
+
+@pytest.mark.asyncio
+async def test_deep_research_load_bundle_adapter_rejects_non_completed_runs(monkeypatch):
+    """Test deep research load-bundle adapter rejects runs that have not completed."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_load_bundle_adapter,
+    )
+
+    class _FakeSession:
+        id = "research-session-7"
+        status = "synthesizing"
+        phase = "synthesizing"
+        control_state = "running"
+        completed_at = None
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _FakeSession()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.load_bundle._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    with pytest.raises(RuntimeError, match="completed runs only"):
+        await run_deep_research_load_bundle_adapter(
+            {"run_id": "research-session-7"},
+            {"user_id": "84"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_select_bundle_fields_adapter_returns_selected_fields_and_records_artifact(
+    monkeypatch,
+):
+    """Test deep research bundle-field selector returns only requested fields and persists a JSON artifact."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_select_bundle_fields_adapter,
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-50"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-08T08:00:00+00:00"
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            captured["get_bundle_kwargs"] = kwargs
+            return {
+                "question": "What changed?",
+                "claims": [{"text": "Claim A"}],
+                "verification_summary": {"supported_claim_count": 1},
+            }
+
+    added_artifacts: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_select_bundle_fields_adapter(
+        {
+            "run_id": "{{ inputs.run_id }}",
+            "fields": ["question", "claims", "unsupported_claims"],
+            "save_artifact": True,
+        },
+        {
+            "user_id": "42",
+            "step_run_id": "wf-step-4",
+            "inputs": {"run_id": "research-session-50"},
+            "add_artifact": lambda **kwargs: added_artifacts.append(kwargs),
+        },
+    )
+
+    assert result == {
+        "run_id": "research-session-50",
+        "status": "completed",
+        "selected_fields": {
+            "question": "What changed?",
+            "claims": [{"text": "Claim A"}],
+            "unsupported_claims": None,
+        },
+    }
+    assert captured["get_session_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-50",
+    }
+    assert captured["get_bundle_kwargs"] == {
+        "owner_user_id": "42",
+        "session_id": "research-session-50",
+    }
+    assert len(added_artifacts) == 1
+    assert added_artifacts[0]["type"] == "deep_research_selected_fields"
+    assert added_artifacts[0]["mime_type"] == "application/json"
+    artifact_uri = str(added_artifacts[0]["uri"])
+    artifact_path = Path(artifact_uri.removeprefix("file://"))
+    assert artifact_path.name == "deep_research_selected_fields.json"
+    assert json.loads(artifact_path.read_text(encoding="utf-8")) == result
+
+
+@pytest.mark.asyncio
+async def test_deep_research_select_bundle_fields_adapter_accepts_wait_output_object(monkeypatch):
+    """Test deep research bundle-field selector resolves the run from a prior-step output object."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_select_bundle_fields_adapter,
+    )
+
+    class _FakeSession:
+        id = "research-session-51"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-08T08:15:00+00:00"
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            return {
+                "question": "What changed next?",
+                "verification_summary": {"supported_claim_count": 2},
+            }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_select_bundle_fields_adapter(
+        {
+            "run": {
+                "run_id": "research-session-51",
+                "bundle_url": "/api/v1/research/runs/research-session-51/bundle",
+            },
+            "fields": ["question", "verification_summary"],
+            "save_artifact": False,
+        },
+        {"user_id": "84"},
+    )
+
+    assert result == {
+        "run_id": "research-session-51",
+        "status": "completed",
+        "selected_fields": {
+            "question": "What changed next?",
+            "verification_summary": {"supported_claim_count": 2},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_deep_research_select_bundle_fields_adapter_dedupes_fields_in_requested_order(monkeypatch):
+    """Test duplicate requested fields are deduped while preserving first-seen order."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_select_bundle_fields_adapter,
+    )
+
+    class _FakeSession:
+        id = "research-session-52"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-08T08:20:00+00:00"
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            return {
+                "verification_summary": {"supported_claim_count": 1},
+                "question": "Ordered fields",
+            }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    result = await run_deep_research_select_bundle_fields_adapter(
+        {
+            "run_id": "research-session-52",
+            "fields": [
+                "verification_summary",
+                "question",
+                "verification_summary",
+                "question",
+            ],
+            "save_artifact": False,
+        },
+        {"user_id": "42"},
+    )
+
+    assert list(result["selected_fields"].keys()) == [
+        "verification_summary",
+        "question",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deep_research_select_bundle_fields_adapter_rejects_invalid_field_name(monkeypatch):
+    """Test deep research bundle-field selector rejects field names outside the fixed allowlist."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_select_bundle_fields_adapter,
+    )
+
+    with pytest.raises(Exception, match="fields"):
+        await run_deep_research_select_bundle_fields_adapter(
+            {
+                "run_id": "research-session-53",
+                "fields": ["question", "made_up_field"],
+            },
+            {"user_id": "42"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_select_bundle_fields_adapter_rejects_unknown_config_keys(monkeypatch):
+    """Test deep research bundle-field selector rejects unexpected config keys at runtime."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_select_bundle_fields_adapter,
+    )
+
+    with pytest.raises(Exception, match="extra|unknown|forbidden"):
+        await run_deep_research_select_bundle_fields_adapter(
+            {
+                "run_id": "research-session-54",
+                "fields": ["question"],
+                "unexpected": True,
+            },
+            {"user_id": "42"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_select_bundle_fields_adapter_rejects_non_completed_runs(monkeypatch):
+    """Test deep research bundle-field selector rejects runs that have not completed."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_select_bundle_fields_adapter,
+    )
+
+    class _FakeSession:
+        id = "research-session-55"
+        status = "synthesizing"
+        phase = "synthesizing"
+        control_state = "running"
+        completed_at = None
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _FakeSession()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    with pytest.raises(RuntimeError, match="completed runs only"):
+        await run_deep_research_select_bundle_fields_adapter(
+            {"run_id": "research-session-55", "fields": ["question"]},
+            {"user_id": "42"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_research_select_bundle_fields_adapter_rejects_oversized_inline_payload(
+    monkeypatch,
+):
+    """Test deep research bundle-field selector enforces the inline selected-fields size limit."""
+    monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.research import (
+        run_deep_research_select_bundle_fields_adapter,
+    )
+
+    class _FakeSession:
+        id = "research-session-56"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-08T08:25:00+00:00"
+
+    class _FakeResearchService:
+        def get_session(self, **kwargs):
+            return _FakeSession()
+
+        def get_bundle(self, **kwargs):
+            return {
+                "report_markdown": "x" * 2048,
+            }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields.MAX_SELECTED_FIELDS_BYTES",
+        64,
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="inline size limit"):
+        await run_deep_research_select_bundle_fields_adapter(
+            {
+                "run_id": "research-session-56",
+                "fields": ["report_markdown"],
+                "save_artifact": False,
+            },
+            {"user_id": "42"},
+        )
 
 
 # =============================================================================

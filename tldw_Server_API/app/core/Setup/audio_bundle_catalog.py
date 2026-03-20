@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from enum import Enum
 from typing import Any
 
@@ -46,6 +47,106 @@ class AudioResourceProfile(BaseModel):
     verification_targets: list[str] = Field(default_factory=list)
     estimated_disk_gb: float | None = None
     resource_class: str | None = None
+
+    class CuratedTTSChoice(BaseModel):
+        """Curated TTS engine choice metadata for a profile."""
+
+        choice_id: str
+        label: str
+        description: str | None = None
+        tts_plan: list[dict[str, Any]] = Field(default_factory=list)
+
+    tts_choices: list[CuratedTTSChoice] = Field(default_factory=list)
+    default_tts_choice: str | None = None
+
+    @model_validator(mode="after")
+    def populate_default_tts_choice_plan(self) -> "AudioResourceProfile":
+        """Keep legacy tts_plan aligned to the stable default curated choice."""
+
+        if not self.tts_choices:
+            return self
+
+        choice_ids = [choice.choice_id for choice in self.tts_choices]
+        if len(choice_ids) != len(set(choice_ids)):
+            raise ValueError(
+                f"Duplicate curated TTS choice IDs for profile '{self.profile_id}'"
+            )
+
+        available_choices = {choice.choice_id: choice for choice in self.tts_choices}
+        selected_choice = self.default_tts_choice or self.tts_choices[0].choice_id
+        try:
+            choice = available_choices[selected_choice]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unknown curated TTS choice '{selected_choice}' for profile '{self.profile_id}'"
+            ) from exc
+
+        self.default_tts_choice = selected_choice
+        self.tts_plan = deepcopy(choice.tts_plan)
+        return self
+
+    def tts_plan_for_choice(self, choice_id: str | None = None) -> list[dict[str, Any]]:
+        """Return a deep-copied TTS plan for the requested curated choice."""
+
+        if not self.tts_choices:
+            if choice_id is None or not str(choice_id).strip():
+                return deepcopy(self.tts_plan)
+            raise KeyError(
+                f"Unknown curated TTS choice '{str(choice_id).strip()}' for profile '{self.profile_id}'"
+            )
+
+        selected_choice = self.canonical_tts_choice(choice_id)
+        choice_key = self.default_tts_choice or self.tts_choices[0].choice_id
+        if selected_choice is not None:
+            choice_key = selected_choice
+
+        for choice in self.tts_choices:
+            if choice.choice_id == choice_key:
+                return deepcopy(choice.tts_plan)
+
+        raise KeyError(
+            f"Unknown curated TTS choice '{choice_key}' for profile '{self.profile_id}'"
+        )
+
+    def canonical_tts_choice(self, choice_id: str | None = None) -> str | None:
+        """Return a canonical choice id or ``None`` for the default curated choice."""
+
+        if not self.tts_choices:
+            if choice_id is None or not str(choice_id).strip():
+                return None
+            raise KeyError(
+                f"Unknown curated TTS choice '{str(choice_id).strip()}' for profile '{self.profile_id}'"
+            )
+
+        normalized_choice = str(choice_id).strip() if choice_id is not None else ""
+        if not normalized_choice:
+            return None
+
+        available_choices = {choice.choice_id for choice in self.tts_choices}
+        if normalized_choice not in available_choices:
+            raise KeyError(
+                f"Unknown curated TTS choice '{normalized_choice}' for profile '{self.profile_id}'"
+            )
+
+        default_choice = self.default_tts_choice or self.tts_choices[0].choice_id
+        if normalized_choice == default_choice:
+            return None
+        return normalized_choice
+
+
+def _build_curated_cpu_tts_choices() -> list[AudioResourceProfile.CuratedTTSChoice]:
+    return [
+        AudioResourceProfile.CuratedTTSChoice(
+            choice_id="kokoro",
+            label="Kokoro",
+            tts_plan=[{"engine": "kokoro", "variants": []}],
+        ),
+        AudioResourceProfile.CuratedTTSChoice(
+            choice_id="kitten_tts",
+            label="KittenTTS",
+            tts_plan=[{"engine": "kitten_tts", "variants": []}],
+        ),
+    ]
 
 
 class AudioBundle(BaseModel):
@@ -120,10 +221,16 @@ def build_audio_selection_key(
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
+    tts_choice: str | None = None,
 ) -> str:
     """Build a stable identity key for a bundle/profile selection."""
 
-    return f"{catalog_version}:{bundle_id}:{resource_profile}"
+    parts = [str(catalog_version), str(bundle_id), str(resource_profile)]
+    if tts_choice:
+        normalized_choice = str(tts_choice).strip()
+        if normalized_choice:
+            parts.append(normalized_choice)
+    return ":".join(parts)
 
 
 def _guided_prerequisites() -> list[AudioBundleStep]:
@@ -161,6 +268,8 @@ def _local_resource_profiles(
             description="Lowest-footprint local speech profile.",
             stt_plan=[{"engine": "faster_whisper", "models": [light_model]}],
             tts_plan=[{"engine": "kokoro", "variants": []}],
+            tts_choices=_build_curated_cpu_tts_choices(),
+            default_tts_choice="kokoro",
             verification_targets=["stt_default", "tts_default"],
             estimated_disk_gb=disk_estimates_gb[0],
             resource_class="low",
@@ -171,6 +280,8 @@ def _local_resource_profiles(
             description="Default local speech profile for most machines.",
             stt_plan=[{"engine": "faster_whisper", "models": [balanced_model]}],
             tts_plan=[{"engine": "kokoro", "variants": []}],
+            tts_choices=_build_curated_cpu_tts_choices(),
+            default_tts_choice="kokoro",
             verification_targets=["stt_default", "tts_default"],
             estimated_disk_gb=disk_estimates_gb[1],
             resource_class="medium",

@@ -13,6 +13,10 @@ def build_final_package(
     claims: list[dict[str, Any]],
     source_inventory: list[dict[str, Any]],
     unresolved_questions: list[str] | None = None,
+    verification_summary: dict[str, Any] | None = None,
+    unsupported_claims: list[dict[str, Any]] | None = None,
+    contradictions: list[dict[str, Any]] | None = None,
+    source_trust: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the canonical deep research package and enforce citation coverage."""
     query = str(brief.get("query") or "").strip()
@@ -34,6 +38,10 @@ def build_final_package(
         "claims": list(claims),
         "source_inventory": list(source_inventory),
         "unresolved_questions": list(unresolved_questions or []),
+        "verification_summary": dict(verification_summary or {}),
+        "unsupported_claims": list(unsupported_claims or []),
+        "contradictions": list(contradictions or []),
+        "source_trust": list(source_trust or []),
     }
 
 

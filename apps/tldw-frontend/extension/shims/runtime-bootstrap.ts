@@ -71,14 +71,34 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
   return raw.replace(/\/$/, "")
 }
 
+const DEFAULT_TLDW_SERVER_URL = "http://127.0.0.1:8000"
+
 const seedTldwConfigFromEnv = async (): Promise<void> => {
   if (typeof window === "undefined") return
 
-  const serverUrl = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL)
+  const explicitWebHost = (() => {
+    try {
+      return normalizeBaseUrl(window.localStorage.getItem("tldw-api-host"))
+    } catch {
+      return null
+    }
+  })()
+  const serverUrl =
+    explicitWebHost ||
+    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL) ||
+    DEFAULT_TLDW_SERVER_URL
   const apiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || null
   const apiBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim() || null
 
   if (!serverUrl && !apiKey && !apiBearer) return
+
+  if (!explicitWebHost && serverUrl) {
+    try {
+      window.localStorage.setItem("tldw-api-host", serverUrl)
+    } catch {
+      // Best-effort only; ignore storage failures in web contexts.
+    }
+  }
 
   try {
     const storage = createSafeStorage()
@@ -92,7 +112,7 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
 
     let changed = false
 
-    if (!next.serverUrl && serverUrl) {
+    if (serverUrl && next.serverUrl !== serverUrl) {
       next.serverUrl = serverUrl
       changed = true
     }

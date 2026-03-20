@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import pytest
@@ -175,7 +175,19 @@ def _pack_source_metadata(pack) -> dict[str, object]:
         "pack_content_digest": pack.pack_content_digest,
         "source_verified": pack.source_verified,
         "source_verification_mode": pack.source_verification_mode,
+        "signer_fingerprint": getattr(pack, "signer_fingerprint", None),
+        "signer_identity": getattr(pack, "signer_identity", None),
+        "verified_object_type": getattr(pack, "verified_object_type", None),
+        "verification_result_code": getattr(pack, "verification_result_code", None),
+        "verification_warning_code": getattr(pack, "verification_warning_code", None),
     }
+
+
+async def _update_trust_policy(service: Any, payload: dict[str, Any], *, actor_id: int) -> dict[str, Any]:
+    current_policy = await service.get_policy()
+    request_payload = dict(payload)
+    request_payload["policy_fingerprint"] = current_policy["policy_fingerprint"]
+    return await service.update_policy(request_payload, actor_id=actor_id)
 
 
 async def _seed_research_capability_mappings(
@@ -511,6 +523,11 @@ async def test_governance_pack_repo_tracks_source_provenance_and_candidate_stora
         pack_content_digest="c" * 64,
         source_verified=True,
         source_verification_mode="git-commit",
+        signer_fingerprint="ABCD1234",
+        signer_identity="Release Bot <bot@example.com>",
+        verified_object_type="commit",
+        verification_result_code="verified_and_trusted",
+        verification_warning_code=None,
         source_fetched_at=datetime.now(timezone.utc),
         fetched_by=7,
     )
@@ -523,6 +540,11 @@ async def test_governance_pack_repo_tracks_source_provenance_and_candidate_stora
     assert created["pack_content_digest"] == "c" * 64
     assert created["source_verified"] is True
     assert created["source_verification_mode"] == "git-commit"
+    assert created["signer_fingerprint"] == "ABCD1234"
+    assert created["signer_identity"] == "Release Bot <bot@example.com>"
+    assert created["verified_object_type"] == "commit"
+    assert created["verification_result_code"] == "verified_and_trusted"
+    assert created["verification_warning_code"] is None
     assert created["fetched_by"] == 7
 
     listed = await repo.list_governance_packs(owner_scope_type="user", owner_scope_id=7)
@@ -539,18 +561,27 @@ async def test_governance_pack_repo_tracks_source_provenance_and_candidate_stora
         pack_content_digest="c" * 64,
         source_verified=True,
         source_verification_mode="git-commit",
+        signer_fingerprint="ABCD1234",
+        signer_identity="Release Bot <bot@example.com>",
+        verified_object_type="commit",
+        verification_result_code="verified_and_trusted",
+        verification_warning_code=None,
         fetched_by=7,
     )
     assert candidate["source_type"] == "git"
     assert candidate["pack_content_digest"] == "c" * 64
+    assert candidate["signer_fingerprint"] == "ABCD1234"
+    assert candidate["verification_result_code"] == "verified_and_trusted"
 
     candidate_by_id = await repo.get_governance_pack_source_candidate(int(candidate["id"]))
     assert candidate_by_id is not None
     assert candidate_by_id["source_commit_resolved"] == "abc123"
     assert candidate_by_id["source_subpath"] == "packs/researcher"
+    assert candidate_by_id["signer_identity"] == "Release Bot <bot@example.com>"
 
     candidate_list = await repo.list_governance_pack_source_candidates()
     assert candidate_list[0]["source_location"] == "https://github.com/example/researcher-pack.git"
+    assert candidate_list[0]["verified_object_type"] == "commit"
 
     superseding = await repo.create_governance_pack(
         pack_id="researcher-pack",
@@ -617,7 +648,8 @@ async def test_governance_pack_source_candidate_dry_run_and_import_persists_prov
     shutil.copytree(_fixture_pack_path(), pack_root)
 
     trust_service = McpHubGovernancePackTrustService(repo=repo)
-    await trust_service.update_policy(
+    await _update_trust_policy(
+        trust_service,
         {
             "allow_local_path_sources": True,
             "allowed_local_roots": [str(pack_root.parent)],
@@ -666,6 +698,108 @@ async def test_governance_pack_source_candidate_dry_run_and_import_persists_prov
 
 
 @pytest.mark.asyncio
+async def test_git_source_candidate_and_import_persist_signer_provenance(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    class _VerifiedGitTrustService:
+        async def evaluate_git_source(self, repo_url: str, *, ref_kind: str) -> dict[str, object]:
+            return {
+                "allowed": True,
+                "reason": None,
+                "canonical_repository": repo_url,
+                "verification_required": True,
+                "trusted_git_key_fingerprints": ["ABCD1234"],
+                "ref_kind": ref_kind,
+            }
+
+        async def evaluate_signer_for_repository(self, signer_fingerprint: str, repo_url: str) -> dict[str, object]:
+            return {
+                "allowed": True,
+                "reason": None,
+                "result_code": "signer_trusted_for_repo",
+                "canonical_repository": repo_url,
+                "signer_fingerprint": signer_fingerprint,
+            }
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    governance_service = McpHubGovernancePackService(repo=repo)
+    distribution_service = McpHubGovernancePackDistributionService(
+        trust_service=_VerifiedGitTrustService(),
+        repo=repo,
+    )
+
+    repo_url, commit = _init_git_pack_repo(tmp_path)
+    branch_name = _git_head_branch(repo_url)
+
+    async def _fake_verify(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["repo_url"] == repo_url
+        return {
+            "verified": True,
+            "verification_mode": "git_signature",
+            "verified_object_type": "commit",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "verified_and_trusted",
+            "warning_code": None,
+        }
+
+    monkeypatch.setattr(distribution_service, "_verify_git_revision", _fake_verify)
+
+    prepared = await distribution_service.prepare_source_candidate(
+        source={
+            "source_type": "git",
+            "repo_url": repo_url,
+            "ref": branch_name,
+            "ref_kind": "branch",
+            "subpath": "packs/researcher",
+        },
+        actor_id=7,
+    )
+    stored_candidate = await repo.get_governance_pack_source_candidate(int(prepared["candidate"]["id"]))
+    loaded = await distribution_service.load_prepared_candidate(int(prepared["candidate"]["id"]))
+
+    imported = await governance_service.import_pack_document(
+        document=loaded["pack_document"],
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+        source_metadata=loaded["candidate"],
+    )
+
+    installed = await repo.get_governance_pack(int(imported["governance_pack_id"]))
+    assert stored_candidate is not None
+    assert stored_candidate["source_commit_resolved"] == commit
+    assert stored_candidate["source_verified"] is True
+    assert stored_candidate["source_verification_mode"] == "git_signature"
+    assert stored_candidate["signer_fingerprint"] == "ABCD1234"
+    assert stored_candidate["signer_identity"] == "Release Bot <bot@example.com>"
+    assert stored_candidate["verified_object_type"] == "commit"
+    assert stored_candidate["verification_result_code"] == "verified_and_trusted"
+    assert stored_candidate["verification_warning_code"] is None
+
+    assert installed is not None
+    assert installed["source_type"] == "git"
+    assert installed["source_location"] == repo_url
+    assert installed["source_commit_resolved"] == commit
+    assert installed["source_verified"] is True
+    assert installed["source_verification_mode"] == "git_signature"
+    assert installed["signer_fingerprint"] == "ABCD1234"
+    assert installed["signer_identity"] == "Release Bot <bot@example.com>"
+    assert installed["verified_object_type"] == "commit"
+    assert installed["verification_result_code"] == "verified_and_trusted"
+    assert installed["verification_warning_code"] is None
+
+
+@pytest.mark.asyncio
 async def test_prepared_source_candidate_revalidates_actor_and_trust_policy(
     tmp_path,
     monkeypatch,
@@ -685,7 +819,8 @@ async def test_prepared_source_candidate_revalidates_actor_and_trust_policy(
     shutil.copytree(_fixture_pack_path(), pack_root)
 
     trust_service = McpHubGovernancePackTrustService(repo=repo)
-    await trust_service.update_policy(
+    await _update_trust_policy(
+        trust_service,
         {
             "allow_local_path_sources": True,
             "allowed_local_roots": [str(pack_root.parent)],
@@ -711,7 +846,8 @@ async def test_prepared_source_candidate_revalidates_actor_and_trust_policy(
             revalidate_trust=True,
         )
 
-    await trust_service.update_policy(
+    await _update_trust_policy(
+        trust_service,
         {
             "allow_local_path_sources": False,
             "allowed_local_roots": [],
@@ -934,6 +1070,277 @@ async def test_git_governance_pack_update_checks_reject_mismatched_pack_id_and_s
 
     with pytest.raises(ValueError, match="pack_id"):
         await distribution_service.check_for_updates(imported.governance_pack_id)
+
+
+@pytest.mark.asyncio
+async def test_git_governance_pack_update_check_warns_on_trusted_signer_rotation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    class _VerifiedRotationTrustService:
+        async def evaluate_git_source(self, repo_url: str, *, ref_kind: str) -> dict[str, object]:
+            return {
+                "allowed": True,
+                "reason": None,
+                "canonical_repository": repo_url,
+                "verification_required": True,
+                "trusted_git_key_fingerprints": ["AAAA1111", "BBBB2222"],
+                "ref_kind": ref_kind,
+            }
+
+        async def evaluate_signer_for_repository(self, signer_fingerprint: str, repo_url: str) -> dict[str, object]:
+            return {
+                "allowed": True,
+                "reason": None,
+                "result_code": "signer_trusted_for_repo",
+                "canonical_repository": repo_url,
+                "signer_fingerprint": signer_fingerprint,
+            }
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    governance_service = McpHubGovernancePackService(repo=repo)
+    distribution_service = McpHubGovernancePackDistributionService(
+        trust_service=_VerifiedRotationTrustService(),
+        repo=repo,
+    )
+
+    repo_url, _initial_commit = _init_git_pack_repo(tmp_path)
+    branch_name = _git_head_branch(repo_url)
+    verify_calls = 0
+
+    async def _fake_verify(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal verify_calls
+        verify_calls += 1
+        if verify_calls == 1:
+            fingerprint = "AAAA1111"
+            identity = "Primary Bot <primary@example.com>"
+        else:
+            fingerprint = "BBBB2222"
+            identity = "Backup Bot <backup@example.com>"
+        return {
+            "verified": True,
+            "verification_mode": "git_signature",
+            "verified_object_type": "commit",
+            "signer_fingerprint": fingerprint,
+            "signer_identity": identity,
+            "result_code": "verified_and_trusted",
+            "warning_code": None,
+        }
+
+    monkeypatch.setattr(distribution_service, "_verify_git_revision", _fake_verify)
+
+    initial_pack = await distribution_service.resolve_git_source(
+        repo_url,
+        ref=branch_name,
+        ref_kind="branch",
+        subpath="packs/researcher",
+    )
+    imported = await governance_service.import_pack(
+        pack=initial_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+        source_metadata=_pack_source_metadata(initial_pack),
+    )
+
+    _update_git_pack_manifest(repo_url, pack_version="1.1.0")
+
+    check = await distribution_service.check_for_updates(imported.governance_pack_id)
+    prepared = await distribution_service.prepare_upgrade_candidate(
+        governance_pack_id=imported.governance_pack_id,
+        actor_id=7,
+    )
+
+    assert check["verification_warning_code"] == "signer_rotated_trusted"
+    assert check["signer_fingerprint"] == "BBBB2222"
+    assert prepared["candidate"]["verification_warning_code"] == "signer_rotated_trusted"
+    assert prepared["candidate"]["signer_fingerprint"] == "BBBB2222"
+
+
+@pytest.mark.asyncio
+async def test_git_governance_pack_update_check_warns_when_previous_signer_unknown(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    class _VerifiedTrustService:
+        async def evaluate_git_source(self, repo_url: str, *, ref_kind: str) -> dict[str, object]:
+            return {
+                "allowed": True,
+                "reason": None,
+                "canonical_repository": repo_url,
+                "verification_required": True,
+                "trusted_git_key_fingerprints": ["ABCD1234"],
+                "ref_kind": ref_kind,
+            }
+
+        async def evaluate_signer_for_repository(self, signer_fingerprint: str, repo_url: str) -> dict[str, object]:
+            return {
+                "allowed": True,
+                "reason": None,
+                "result_code": "signer_trusted_for_repo",
+                "canonical_repository": repo_url,
+                "signer_fingerprint": signer_fingerprint,
+            }
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    governance_service = McpHubGovernancePackService(repo=repo)
+    distribution_service = McpHubGovernancePackDistributionService(
+        trust_service=_VerifiedTrustService(),
+        repo=repo,
+    )
+
+    repo_url, _initial_commit = _init_git_pack_repo(tmp_path)
+    branch_name = _git_head_branch(repo_url)
+
+    async def _fake_verify(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "verified": True,
+            "verification_mode": "git_signature",
+            "verified_object_type": "commit",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "verified_and_trusted",
+            "warning_code": None,
+        }
+
+    monkeypatch.setattr(distribution_service, "_verify_git_revision", _fake_verify)
+
+    initial_pack = await distribution_service.resolve_git_source(
+        repo_url,
+        ref=branch_name,
+        ref_kind="branch",
+        subpath="packs/researcher",
+    )
+    source_metadata = _pack_source_metadata(initial_pack)
+    source_metadata["signer_fingerprint"] = None
+    source_metadata["signer_identity"] = None
+    source_metadata["verified_object_type"] = None
+    source_metadata["verification_result_code"] = None
+    source_metadata["verification_warning_code"] = None
+    imported = await governance_service.import_pack(
+        pack=initial_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+        source_metadata=source_metadata,
+    )
+
+    _update_git_pack_manifest(repo_url, pack_version="1.1.0")
+
+    check = await distribution_service.check_for_updates(imported.governance_pack_id)
+    assert check["verification_warning_code"] == "unknown_previous_signer"
+    assert check["signer_fingerprint"] == "ABCD1234"
+
+
+@pytest.mark.asyncio
+async def test_git_governance_pack_update_checks_block_revoked_signer_candidates(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+        McpHubGovernancePackService,
+    )
+
+    class _VerifiedTrustService:
+        async def evaluate_git_source(self, repo_url: str, *, ref_kind: str) -> dict[str, object]:
+            return {
+                "allowed": True,
+                "reason": None,
+                "canonical_repository": repo_url,
+                "verification_required": True,
+                "trusted_git_key_fingerprints": ["ABCD1234"],
+                "ref_kind": ref_kind,
+            }
+
+        async def evaluate_signer_for_repository(self, signer_fingerprint: str, repo_url: str) -> dict[str, object]:
+            return {
+                "allowed": True,
+                "reason": None,
+                "result_code": "signer_trusted_for_repo",
+                "canonical_repository": repo_url,
+                "signer_fingerprint": signer_fingerprint,
+            }
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    await _seed_research_capability_mappings(repo)
+    governance_service = McpHubGovernancePackService(repo=repo)
+    distribution_service = McpHubGovernancePackDistributionService(
+        trust_service=_VerifiedTrustService(),
+        repo=repo,
+    )
+
+    repo_url, _initial_commit = _init_git_pack_repo(tmp_path)
+    branch_name = _git_head_branch(repo_url)
+    verify_calls = 0
+
+    async def _fake_verify(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal verify_calls
+        verify_calls += 1
+        if verify_calls == 1:
+            return {
+                "verified": True,
+                "verification_mode": "git_signature",
+                "verified_object_type": "commit",
+                "signer_fingerprint": "ABCD1234",
+                "signer_identity": "Release Bot <bot@example.com>",
+                "result_code": "verified_and_trusted",
+                "warning_code": None,
+            }
+        return {
+            "verified": False,
+            "verification_mode": "git_signature",
+            "verified_object_type": "commit",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "signer_revoked",
+            "warning_code": None,
+        }
+
+    monkeypatch.setattr(distribution_service, "_verify_git_revision", _fake_verify)
+
+    initial_pack = await distribution_service.resolve_git_source(
+        repo_url,
+        ref=branch_name,
+        ref_kind="branch",
+        subpath="packs/researcher",
+    )
+    imported = await governance_service.import_pack(
+        pack=initial_pack,
+        owner_scope_type="user",
+        owner_scope_id=7,
+        actor_id=7,
+        source_metadata=_pack_source_metadata(initial_pack),
+    )
+
+    _update_git_pack_manifest(repo_url, pack_version="1.1.0")
+
+    with pytest.raises(ValueError, match="signer_revoked"):
+        await distribution_service.check_for_updates(imported.governance_pack_id)
+
+    with pytest.raises(ValueError, match="signer_revoked"):
+        await distribution_service.prepare_upgrade_candidate(
+            governance_pack_id=imported.governance_pack_id,
+            actor_id=7,
+        )
 
 
 @pytest.mark.asyncio

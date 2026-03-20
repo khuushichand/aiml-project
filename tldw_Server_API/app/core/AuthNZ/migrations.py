@@ -3963,6 +3963,16 @@ def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection
         conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_verified INTEGER")
     if "source_verification_mode" not in governance_pack_columns:
         conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_verification_mode TEXT")
+    if "signer_fingerprint" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN signer_fingerprint TEXT")
+    if "signer_identity" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN signer_identity TEXT")
+    if "verified_object_type" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN verified_object_type TEXT")
+    if "verification_result_code" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN verification_result_code TEXT")
+    if "verification_warning_code" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN verification_warning_code TEXT")
     if "source_fetched_at" not in governance_pack_columns:
         conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_fetched_at TIMESTAMP")
     if "fetched_by" not in governance_pack_columns:
@@ -3982,6 +3992,11 @@ def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection
             pack_document_json TEXT NOT NULL DEFAULT '{}',
             source_verified INTEGER,
             source_verification_mode TEXT,
+            signer_fingerprint TEXT,
+            signer_identity TEXT,
+            verified_object_type TEXT,
+            verification_result_code TEXT,
+            verification_warning_code TEXT,
             source_fetched_at TIMESTAMP,
             fetched_by INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -3997,6 +4012,16 @@ def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection
         conn.execute(
             "ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN pack_document_json TEXT NOT NULL DEFAULT '{}'"
         )
+    if "signer_fingerprint" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN signer_fingerprint TEXT")
+    if "signer_identity" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN signer_identity TEXT")
+    if "verified_object_type" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN verified_object_type TEXT")
+    if "verification_result_code" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN verification_result_code TEXT")
+    if "verification_warning_code" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN verification_warning_code TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
         "ON mcp_governance_pack_source_candidates(source_type, source_location)"

@@ -5,6 +5,14 @@ import { describe, expect, it } from "vitest"
 describe("PlaygroundForm signal surface guard", () => {
   it("keeps mention/slash affordance and state-change/degradation signals", () => {
     const formSourcePath = path.resolve(__dirname, "../PlaygroundForm.tsx")
+    const chipSourcePath = path.resolve(
+      __dirname,
+      "../AttachedResearchContextChip.tsx"
+    )
+    const researchRunsSourcePath = path.resolve(
+      __dirname,
+      "../../../../../../../tldw-frontend/lib/api/researchRuns.ts"
+    )
     const contextPanelSourcePath = path.resolve(
       __dirname,
       "../ContextFootprintPanel.tsx"
@@ -13,7 +21,9 @@ describe("PlaygroundForm signal surface guard", () => {
       __dirname,
       "../ModelRecommendationsPanel.tsx"
     )
+    const chipSource = fs.readFileSync(chipSourcePath, "utf8")
     const formSource = fs.readFileSync(formSourcePath, "utf8")
+    const researchRunsSource = fs.readFileSync(researchRunsSourcePath, "utf8")
     const contextPanelSource = fs.readFileSync(contextPanelSourcePath, "utf8")
     const recommendationsPanelSource = fs.readFileSync(
       recommendationsPanelSourcePath,
@@ -72,6 +82,34 @@ describe("PlaygroundForm signal surface guard", () => {
     expect(formSource).toContain("buildSessionInsights")
     expect(formSource).toContain("buildModelRecommendations")
     expect(formSource).toContain("buildCompareInteroperabilityNotices")
+    expect(formSource).toContain("AttachedResearchContextChip")
+    expect(formSource).toContain("attachedResearchContext")
+    expect(formSource).toContain("attachedResearchContextPinned")
+    expect(formSource).toContain("onRemoveAttachedResearchContext")
+    expect(formSource).toContain("onPinAttachedResearchContext")
+    expect(formSource).toContain("onRestorePinnedResearchContext")
+    expect(formSource).toContain('data-testid="pinned-research-fallback-card"')
+    expect(formSource).toContain('data-testid="pinned-research-history-block"')
+    expect(formSource).toContain("Use now")
+    expect(formSource).toContain(
+      "This thread keeps this research as its default context."
+    )
+    expect(formSource).toContain("researchContext:")
+    expect(formSource).toContain("Attached Research Context")
+    expect(formSource).toContain("Reset to Attached Run")
+    expect(formSource).toContain("Apply")
+    expect(formSource).toContain("Follow-up Research")
+    expect(formSource).toContain("Follow up on this research:")
+    expect(formSource).toContain("Follow up")
+    expect(formSource).toContain("Prepare follow-up?")
+    expect(formSource).toContain("Prepare follow-up")
+    expect(formSource).toContain("Use attached research as background")
+    expect(formSource).toContain("Start research")
+    expect(researchRunsSource).toContain("follow_up?:")
+    expect(chipSource).toContain("Edit attached research")
+    expect(chipSource).toContain("Pinned research")
+    expect(chipSource).toContain("Unpin")
+    expect(chipSource).toContain("Follow up")
     expect(formSource).toContain("playground:insights.modalTitle")
     expect(formSource).toContain("startup-template-preview-modal")
     expect(formSource).toContain(

@@ -6,7 +6,8 @@ import {
 } from "@/services/tldw/chat-request-debug"
 import type {
   ChatCompletionRequest,
-  ChatMessage
+  ChatMessage,
+  ChatResearchContext
 } from "@/services/tldw/TldwApiClient"
 import { parseJsonObject } from "./utils"
 import { formatPinnedResults } from "@/utils/rag-format"
@@ -72,6 +73,7 @@ export interface UsePlaygroundRawPreviewDeps {
   }
   formImage: string
   formMessage: string
+  researchContext?: ChatResearchContext
   notificationApi: {
     error: (opts: { message: string; description?: string }) => void
     success?: (opts: { message: string; description?: string }) => void
@@ -116,6 +118,7 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
     resolveSubmissionIntent,
     formImage,
     formMessage,
+    researchContext,
     notificationApi,
     t,
     setToolsPopoverOpen
@@ -271,7 +274,8 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
         grammar_override: currentChatModelSettings.llamaGrammarOverride,
         response_format: currentChatModelSettings.jsonMode
           ? { type: "json_object" }
-          : undefined
+          : undefined,
+        research_context: compareModeActive ? undefined : researchContext
       }
       return request
     },
@@ -482,6 +486,7 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
     selectedKnowledge,
     selectedModel,
     selectedDocuments,
+    researchContext,
     serverChatId,
     serverChatSource,
     serverChatState,

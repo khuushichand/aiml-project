@@ -69,4 +69,32 @@ describe('NotificationsPage', () => {
     });
     expect(screen.getByText('Unread: 1')).toBeInTheDocument();
   });
+
+  it('updates the inbox from stream events without showing a duplicate toast', async () => {
+    let onEvent: ((event: { event: string; id?: number; payload?: unknown }) => void) | null = null;
+    mocks.subscribeNotificationsStream.mockImplementation((options: { onEvent: typeof onEvent }) => {
+      onEvent = options.onEvent;
+      return () => {};
+    });
+
+    render(<NotificationsPage />);
+
+    expect(await screen.findByText('Unread: 2')).toBeInTheDocument();
+
+    onEvent?.({
+      event: 'notification',
+      id: 102,
+      payload: {
+        notification_id: 102,
+        kind: 'deep_research_completed',
+        title: 'Deep research completed',
+        message: 'Open the report in Deep Research.',
+        severity: 'info',
+        created_at: '2026-03-08T01:00:00Z',
+      },
+    });
+
+    expect(await screen.findByText('Open the report in Deep Research.')).toBeInTheDocument();
+    expect(mocks.showToast).not.toHaveBeenCalled();
+  });
 });
