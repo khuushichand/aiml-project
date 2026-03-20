@@ -5,6 +5,7 @@ import type { ChatLinkedResearchRun } from "@/services/tldw/TldwApiClient"
 import {
   type ChatLinkedResearchActionPolicy,
   getChatLinkedResearchActionPolicy,
+  getChatReturnedResearchBannerState,
   getChatLinkedResearchReviewReason,
   isCheckpointReviewRun
 } from "../research-run-status"
@@ -198,5 +199,68 @@ describe("research-run-status", () => {
         })
       )
     ).toBeNull()
+  })
+
+  it("derives a completed return-banner state for completed runs", () => {
+    expect(
+      getChatReturnedResearchBannerState({
+        run: buildRun({
+          status: "completed",
+          phase: "completed"
+        }),
+        explicitReturn: true
+      })
+    ).toMatchObject({
+      mode: "completed",
+      primaryActionLabel: "Use in Chat",
+      supportingText: null
+    })
+  })
+
+  it("derives a review-required return-banner state for checkpoint-blocked runs", () => {
+    expect(
+      getChatReturnedResearchBannerState({
+        run: buildRun({
+          status: "waiting_human",
+          phase: "awaiting_plan_review"
+        }),
+        explicitReturn: true
+      })
+    ).toMatchObject({
+      mode: "review_required",
+      primaryActionLabel: "Review in Research"
+    })
+  })
+
+  it("derives a review-cleared return-banner state for explicit returns that no longer need review", () => {
+    expect(
+      getChatReturnedResearchBannerState({
+        run: buildRun({
+          status: "running",
+          phase: "collecting"
+        }),
+        explicitReturn: true
+      })
+    ).toMatchObject({
+      mode: "review_cleared",
+      primaryActionLabel: "Continue with reviewed research",
+      supportingText: "Your review is reflected in this run."
+    })
+  })
+
+  it("falls back to a generic return-banner state when the run is not an explicit return", () => {
+    expect(
+      getChatReturnedResearchBannerState({
+        run: buildRun({
+          status: "running",
+          phase: "collecting"
+        }),
+        explicitReturn: false
+      })
+    ).toMatchObject({
+      mode: "generic",
+      primaryActionLabel: "Open in Research",
+      supportingText: null
+    })
   })
 })

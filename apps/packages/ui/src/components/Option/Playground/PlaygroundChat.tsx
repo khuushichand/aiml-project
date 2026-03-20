@@ -30,6 +30,7 @@ import { ResearchRunStatusStack } from "./ResearchRunStatusStack"
 import {
   getChatLinkedResearchActionPolicy,
   getChatLinkedResearchRefetchInterval,
+  getChatReturnedResearchBannerState,
 } from "./research-run-status"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -337,6 +338,16 @@ export const PlaygroundChat = ({
     () =>
       returnedResearchRun
         ? getChatLinkedResearchActionPolicy(returnedResearchRun)
+        : null,
+    [returnedResearchRun]
+  )
+  const returnedResearchBannerState = React.useMemo(
+    () =>
+      returnedResearchRun
+        ? getChatReturnedResearchBannerState({
+            run: returnedResearchRun,
+            explicitReturn: true
+          })
         : null,
     [returnedResearchRun]
   )
@@ -1048,7 +1059,9 @@ export const PlaygroundChat = ({
           serverChatId={serverChatId}
           className="mb-6 mt-4"
         />
-        {returnedResearchRun && returnedResearchActionPolicy ? (
+        {returnedResearchRun &&
+        returnedResearchActionPolicy &&
+        returnedResearchBannerState ? (
           <section
             className="mb-4 w-full max-w-5xl px-4"
             data-testid="returned-research-banner"
@@ -1062,14 +1075,21 @@ export const PlaygroundChat = ({
                   <div className="mt-1 truncate text-sm font-medium text-text">
                     {returnedResearchRun.query}
                   </div>
-                  {returnedResearchActionPolicy.reasonLabel ? (
+                  {returnedResearchBannerState.supportingText ? (
+                    <div className="mt-1 text-xs text-text-subtle">
+                      {returnedResearchBannerState.supportingText}
+                    </div>
+                  ) : null}
+                  {!returnedResearchBannerState.supportingText &&
+                  returnedResearchActionPolicy.reasonLabel ? (
                     <div className="mt-1 text-xs text-text-subtle">
                       {returnedResearchActionPolicy.reasonLabel}
                     </div>
                   ) : null}
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
-                  {returnedResearchActionPolicy.canUseInChat ? (
+                  {returnedResearchBannerState.mode === "completed" &&
+                  returnedResearchActionPolicy.canUseInChat ? (
                     <button
                       type="button"
                       className="text-sm font-medium text-text hover:text-primary"
@@ -1083,7 +1103,25 @@ export const PlaygroundChat = ({
                       {t("playground:research.useInChat", "Use in Chat")}
                     </button>
                   ) : null}
-                  {returnedResearchActionPolicy.canFollowUp &&
+                  {returnedResearchBannerState.mode === "review_cleared" ? (
+                    <button
+                      type="button"
+                      className="text-sm font-medium text-text hover:text-primary"
+                      onClick={() => {
+                        void handleAttachResearchRun(
+                          returnedResearchRun.run_id,
+                          returnedResearchRun.query
+                        )
+                      }}
+                    >
+                      {t(
+                        "playground:research.continueReviewed",
+                        "Continue with reviewed research"
+                      )}
+                    </button>
+                  ) : null}
+                  {returnedResearchBannerState.mode === "completed" &&
+                  returnedResearchActionPolicy.canFollowUp &&
                   onPrepareResearchFollowUp ? (
                     <button
                       type="button"
@@ -1102,7 +1140,9 @@ export const PlaygroundChat = ({
                     className="text-sm font-medium text-primary hover:underline"
                     href={returnedResearchActionPolicy.researchHref}
                   >
-                    {returnedResearchActionPolicy.primaryActionLabel}
+                    {returnedResearchBannerState.mode === "review_cleared"
+                      ? t("playground:research.openInResearch", "Open in Research")
+                      : returnedResearchActionPolicy.primaryActionLabel}
                   </a>
                   <button
                     type="button"

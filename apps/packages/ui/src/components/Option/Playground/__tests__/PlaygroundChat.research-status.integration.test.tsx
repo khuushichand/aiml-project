@@ -446,6 +446,63 @@ describe("PlaygroundChat linked research status integration", () => {
     expect(within(banner).queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
   })
 
+  it("shows a review-cleared return banner with a stronger continue CTA for explicit returns that no longer need review", async () => {
+    const attachSpy = vi.fn()
+
+    setLinkedRuns([
+      {
+        run_id: "rs_reviewed",
+        query: "Reviewed research query",
+        status: "running",
+        phase: "collecting",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-19T20:04:00+00:00"
+      }
+    ])
+
+    renderChat({
+      returnedResearchRunId: "rs_reviewed",
+      onDismissReturnedResearchRun: vi.fn(),
+      onPrepareResearchFollowUp: vi.fn(),
+      onAttachResearchContext: attachSpy
+    })
+
+    const banner = screen.getByTestId("returned-research-banner")
+    expect(within(banner).getByText("Returned from Research")).toBeInTheDocument()
+    expect(
+      within(banner).getByText("Your review is reflected in this run.")
+    ).toBeInTheDocument()
+    expect(
+      within(banner).getByRole("button", {
+        name: "Continue with reviewed research"
+      })
+    ).toBeInTheDocument()
+    expect(within(banner).getByRole("link", { name: "Open in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=rs_reviewed"
+    )
+    expect(within(banner).queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+
+    fireEvent.click(
+      within(banner).getByRole("button", {
+        name: "Continue with reviewed research"
+      })
+    )
+
+    await waitFor(() =>
+      expect(clientMocks.getResearchBundle).toHaveBeenCalledWith("rs_reviewed")
+    )
+    await waitFor(() =>
+      expect(attachSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          run_id: "rs_reviewed",
+          query: "Reviewed research query"
+        })
+      )
+    )
+  })
+
   it("does not show a returned-from-research banner when the run is missing from linked runs", () => {
     setLinkedRuns([
       {

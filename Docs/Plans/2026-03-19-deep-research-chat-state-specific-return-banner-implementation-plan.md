@@ -224,3 +224,26 @@ Add:
 git add Docs/Plans/2026-03-19-deep-research-chat-state-specific-return-banner-implementation-plan.md
 git commit -m "docs(research): finalize state-specific return banner plan"
 ```
+
+## Execution Notes
+
+- The new helper lives in [research-run-status.ts](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/research-run-status.ts) as `getChatReturnedResearchBannerState(...)`.
+- Final mode contract:
+  - `review_required` when the shared action policy says the run still needs review
+  - `completed` when `run.status === "completed"`
+  - `review_cleared` only for explicit return banners where the run is neither review-blocked nor completed
+  - `generic` otherwise
+- `review_cleared` is intentionally client-derived from explicit return context plus current run state; no backend lifecycle changes were introduced.
+- The visible banner adaptation stayed in [PlaygroundChat.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundChat.tsx). `Continue with reviewed research` reuses the same attach path as `Use in Chat`.
+- The return-banner integration tests needed one tightening change: the new continue-action assertion had to use `waitFor(...)` because the attach path fetches the research bundle asynchronously.
+
+Focused verification that passed:
+
+```bash
+./apps/packages/ui/node_modules/.bin/vitest run \
+  apps/packages/ui/src/components/Option/Playground/__tests__/research-run-status.test.ts \
+  apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx
+# 31/31 passed
+```
+
+No backend files changed in this slice, so Bandit was not applicable.

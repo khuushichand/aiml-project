@@ -24,6 +24,22 @@ export type ChatLinkedResearchActionPolicy = {
   canFollowUp: boolean
 }
 
+export type ChatReturnedResearchBannerMode =
+  | "completed"
+  | "review_required"
+  | "review_cleared"
+  | "generic"
+
+export type ChatReturnedResearchBannerState = {
+  mode: ChatReturnedResearchBannerMode
+  supportingText: string | null
+  primaryActionLabel:
+    | "Use in Chat"
+    | "Review in Research"
+    | "Continue with reviewed research"
+    | "Open in Research"
+}
+
 export const isTerminalResearchRun = (run: ChatLinkedResearchRun): boolean =>
   run.status === "completed" || run.status === "failed" || run.status === "cancelled"
 
@@ -99,6 +115,46 @@ export const getChatLinkedResearchActionPolicy = (
     researchHref: buildChatLinkedResearchPath(run.run_id),
     canUseInChat: false,
     canFollowUp: false
+  }
+}
+
+export const getChatReturnedResearchBannerState = ({
+  run,
+  explicitReturn
+}: {
+  run: ChatLinkedResearchRun
+  explicitReturn: boolean
+}): ChatReturnedResearchBannerState => {
+  const actionPolicy = getChatLinkedResearchActionPolicy(run)
+
+  if (actionPolicy.needsReview) {
+    return {
+      mode: "review_required",
+      supportingText: null,
+      primaryActionLabel: "Review in Research"
+    }
+  }
+
+  if (run.status === "completed") {
+    return {
+      mode: "completed",
+      supportingText: null,
+      primaryActionLabel: "Use in Chat"
+    }
+  }
+
+  if (explicitReturn) {
+    return {
+      mode: "review_cleared",
+      supportingText: "Your review is reflected in this run.",
+      primaryActionLabel: "Continue with reviewed research"
+    }
+  }
+
+  return {
+    mode: "generic",
+    supportingText: null,
+    primaryActionLabel: "Open in Research"
   }
 }
 
