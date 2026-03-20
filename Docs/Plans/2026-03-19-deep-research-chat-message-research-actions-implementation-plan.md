@@ -221,4 +221,16 @@ git commit -m "docs(research): finalize message research actions plan"
 
 ## Execution Notes
 
-- Not started.
+- Switched the mocked `PlaygroundMessage` seam in `PlaygroundChat.research-use-in-chat.integration.test.tsx` to consume `researchActions` instead of the old four-prop bundle. The initial red run failed because neither `Message.tsx` nor `PlaygroundChat.tsx` provided the new object yet.
+- Added `MessageResearchActions` and `researchActions?: MessageResearchActions` to `Message.tsx`, then made the deep-research handoff action row render from that object as the single source of truth instead of separately inspecting deep-research metadata for `Use in Chat` / `Follow up`.
+- Added one `buildMessageResearchActions(metadataExtra)` adapter in `PlaygroundChat.tsx` and reused it at all three `PlaygroundMessage` call sites. The adapter preserves genuine handoff detection, current-run policy mapping, and the no-current-run fallback.
+- Focused verification commands:
+  - `./node_modules/.bin/vitest run src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx`
+    - initial red run: `6` failures from missing `researchActions` wiring
+    - green after refactor: `7/7` passed
+  - `./node_modules/.bin/vitest run src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx src/components/Option/Playground/__tests__/research-run-status.test.ts src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx`
+    - final focused suite: `51/51` passed
+- Behavior preserved:
+  - completed handoff messages still show `Use in Chat` and `Follow up`
+  - checkpoint-needed handoff messages still show the reason label and `Review in Research`
+  - no-current-run handoff fallback remains intact
