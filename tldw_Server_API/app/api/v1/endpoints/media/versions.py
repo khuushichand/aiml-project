@@ -36,16 +36,14 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_full_media_details_rich2,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    check_media_exists,
+    get_document_version,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
-    check_media_exists,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
-    get_document_version,
 )
 from tldw_Server_API.app.core.Utils.metadata_utils import (
     normalize_safe_metadata,
@@ -125,7 +123,7 @@ async def list_versions(
     offset = (page - 1) * limit
 
     try:
-        media_exists = check_media_exists(db_instance=db, media_id=media_id)
+        media_exists = check_media_exists(db, media_id)
         if not media_exists:
             logger.warning(
                 "Cannot list versions: Media ID {} not found or deleted.",
@@ -245,12 +243,7 @@ async def get_version(
         include_content,
     )
     try:
-        version_dict = get_document_version(
-            db_instance=db,
-            media_id=media_id,
-            version_number=version_number,
-            include_content=include_content,
-        )
+        version_dict = get_document_version(db, media_id, version_number, include_content)
 
         if version_dict is None:
             logger.warning(
@@ -711,12 +704,7 @@ async def patch_metadata(
                 detail=str(exc),
             ) from exc
 
-        latest = get_document_version(
-            db_instance=db,
-            media_id=media_id,
-            version_number=None,
-            include_content=True,
-        )
+        latest = get_document_version(db, media_id, None, True)
         if not latest:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -824,12 +812,7 @@ async def put_version_metadata(
                 detail=str(exc),
             ) from exc
 
-        version_dict = get_document_version(
-            db_instance=db,
-            media_id=media_id,
-            version_number=version_number,
-            include_content=False,
-        )
+        version_dict = get_document_version(db, media_id, version_number, False)
         if not version_dict:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -929,12 +912,7 @@ async def create_or_update_version_advanced(
                     detail=str(exc),
                 ) from exc
 
-        latest = get_document_version(
-            db_instance=db,
-            media_id=media_id,
-            version_number=None,
-            include_content=True,
-        )
+        latest = get_document_version(db, media_id, None, True)
         if not latest:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

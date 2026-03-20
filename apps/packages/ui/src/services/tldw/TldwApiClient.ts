@@ -55,7 +55,7 @@ const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
 const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
 const RAG_QUERY_MAX_LENGTH = 20000
 
-export export const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule => ({
+export const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule => ({
   ...schedule,
   id: String(schedule?.id ?? ""),
   name: schedule?.name ?? null,
@@ -84,7 +84,7 @@ export export const normalizeReadingDigestSchedule = (schedule: any): ReadingDig
   updated_at: schedule?.updated_at ?? null
 })
 
-export export const toFiniteNumber = (value: unknown, fallback = 0): number => {
+export const toFiniteNumber = (value: unknown, fallback = 0): number => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value
   }
@@ -97,14 +97,14 @@ export export const toFiniteNumber = (value: unknown, fallback = 0): number => {
   return fallback
 }
 
-export export const toOptionalString = (value: unknown): string | null => {
+export const toOptionalString = (value: unknown): string | null => {
   if (value === null || typeof value === "undefined") {
     return null
   }
   return String(value)
 }
 
-export export const toRecord = (value: unknown): Record<string, unknown> => {
+export const toRecord = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {}
   }
@@ -133,7 +133,7 @@ const toStringArray = (value: unknown): string[] => {
     .map((entry) => entry.trim())
 }
 
-export export const normalizeIngestionSourceSyncSummary = (
+export const normalizeIngestionSourceSyncSummary = (
   summary: unknown
 ): IngestionSourceSyncSummary | null => {
   if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
@@ -153,14 +153,14 @@ export export const normalizeIngestionSourceSyncSummary = (
   }
 }
 
-export export const normalizeIngestionSourceType = (value: unknown): IngestionSourceSummary["source_type"] => {
+export const normalizeIngestionSourceType = (value: unknown): IngestionSourceSummary["source_type"] => {
   if (value === "archive_snapshot" || value === "git_repository") {
     return value
   }
   return "local_directory"
 }
 
-export export const normalizeIngestionSource = (source: any): IngestionSourceSummary => ({
+export const normalizeIngestionSource = (source: any): IngestionSourceSummary => ({
   id: String(source?.id ?? ""),
   user_id: toFiniteNumber(source?.user_id),
   source_type: normalizeIngestionSourceType(source?.source_type),
@@ -183,7 +183,7 @@ export export const normalizeIngestionSource = (source: any): IngestionSourceSum
   updated_at: toOptionalString(source?.updated_at)
 })
 
-export export const normalizeIngestionSourceListResponse = (payload: any): IngestionSourceListResponse => {
+export const normalizeIngestionSourceListResponse = (payload: any): IngestionSourceListResponse => {
   const rawSources = Array.isArray(payload)
     ? payload
     : Array.isArray(payload?.sources)
@@ -196,7 +196,7 @@ export export const normalizeIngestionSourceListResponse = (payload: any): Inges
   }
 }
 
-export export const normalizeIngestionSourceItem = (item: any): IngestionSourceItem => ({
+export const normalizeIngestionSourceItem = (item: any): IngestionSourceItem => ({
   id: String(item?.id ?? ""),
   source_id: String(item?.source_id ?? ""),
   normalized_relative_path: String(item?.normalized_relative_path ?? ""),
@@ -208,7 +208,7 @@ export export const normalizeIngestionSourceItem = (item: any): IngestionSourceI
   updated_at: toOptionalString(item?.updated_at)
 })
 
-export export const normalizeIngestionSourceItemsListResponse = (
+export const normalizeIngestionSourceItemsListResponse = (
   payload: any
 ): IngestionSourceItemsListResponse => {
   const rawItems = Array.isArray(payload)
@@ -223,7 +223,7 @@ export export const normalizeIngestionSourceItemsListResponse = (
   }
 }
 
-export export const normalizeIngestionSourceSyncTrigger = (
+export const normalizeIngestionSourceSyncTrigger = (
   payload: any
 ): IngestionSourceSyncTriggerResponse => ({
   status: String(payload?.status ?? ""),
