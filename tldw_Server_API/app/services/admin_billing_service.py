@@ -14,7 +14,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.billing_repo import AuthnzBillingRepo
-from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
+from tldw_Server_API.app.core.Billing.runtime_flags import is_billing_enabled
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
 
 

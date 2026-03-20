@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
+from tldw_Server_API.app.core.Billing.runtime_flags import is_billing_enabled
 from tldw_Server_API.app.services import admin_billing_service
 
 router = APIRouter(prefix="/billing", tags=["admin-billing"])

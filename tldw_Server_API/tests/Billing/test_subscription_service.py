@@ -178,7 +178,7 @@ class _FakeStripeClient:
         cancel_url: str,
         metadata: Optional[Dict[str, str]] = None,
     ):
-        from tldw_Server_API.app.core.Billing.stripe_client import CheckoutSession
+        from tldw_Server_API.app.core.Billing.subscription_service import CheckoutSession
 
         return CheckoutSession(id="sess_test_123", url="https://example.com/checkout")
 

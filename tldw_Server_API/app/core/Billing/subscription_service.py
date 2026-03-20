@@ -16,13 +16,21 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.billing_repo import AuthnzBillingRepo
 from tldw_Server_API.app.core.Billing.plan_limits import check_limit, get_plan_limits
-from tldw_Server_API.app.core.Billing.stripe_client import (
-    CheckoutSession,
-    PortalSession,
-    StripeClient,
-    get_stripe_client,
-    is_billing_enabled,
-)
+from tldw_Server_API.app.core.Billing.runtime_flags import is_billing_enabled
+
+
+@dataclass
+class CheckoutSession:
+    """Historical checkout session shape retained for internal compatibility."""
+    id: str
+    url: str
+
+
+@dataclass
+class PortalSession:
+    """Historical portal session shape retained for internal compatibility."""
+    id: str
+    url: str
 
 
 @dataclass
@@ -66,7 +74,7 @@ class SubscriptionService:
         self,
         db_pool: DatabasePool | None = None,
         billing_repo: AuthnzBillingRepo | None = None,
-        stripe_client: StripeClient | None = None,
+        stripe_client: Any | None = None,
     ):
         self._db_pool = db_pool
         self._billing_repo = billing_repo
@@ -83,9 +91,9 @@ class SubscriptionService:
             self._billing_repo = AuthnzBillingRepo(db_pool=pool)
         return self._billing_repo
 
-    def _get_stripe_client(self) -> StripeClient:
+    def _get_stripe_client(self) -> Any:
         if self._stripe_client is None:
-            self._stripe_client = get_stripe_client()
+            raise RuntimeError("Stripe payment runtime is not available in OSS")
         return self._stripe_client
 
     # =========================================================================
