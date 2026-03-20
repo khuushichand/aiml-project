@@ -762,39 +762,6 @@ async def _fetchrows(db, query: str, params: list[Any], *, pg: bool) -> list[Any
     return await cur.fetchall()
 
 
-async def _table_exists(db, table_name: str, *, pg: bool) -> bool:
-    if pg:
-        return bool(await _fetchval(db, "SELECT to_regclass($1)", [f"public.{table_name}"], pg=True))
-    return bool(
-        await _fetchval(
-            db,
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            [table_name],
-            pg=False,
-        )
-    )
-
-
-async def _fetch_legacy_budget_context(
-    db,
-    *,
-    org_id: int,
-    pg: bool,
-) -> dict[str, Any] | None:
-    if not await _table_exists(db, "org_subscriptions", pg=pg):
-        return None
-    return await _fetchrow(
-        db,
-        """
-        SELECT org_id, custom_limits_json, updated_at
-        FROM org_subscriptions
-        WHERE org_id = $1
-        """,
-        [org_id],
-        pg=pg,
-    )
-
-
 async def list_org_budgets(
     db,
     *,
@@ -833,7 +800,7 @@ async def list_org_budgets(
 
     list_budgets_sql_template = (
         "SELECT o.id as org_id, o.name as org_name, o.slug as org_slug, "
-        "ob.budgets_json, ob.updated_at as budgets_updated_at, "
+        "ob.budgets_json, ob.updated_at as budgets_updated_at "
         "FROM organizations o "
         "LEFT JOIN org_budgets ob ON ob.org_id = o.id "
         "{where_clause} "
@@ -845,14 +812,6 @@ async def list_org_budgets(
     items = []
     for row in rows:
         row_dict = dict(row) if not isinstance(row, dict) else row
-        legacy_row = await _fetch_legacy_budget_context(
-            db,
-            org_id=int(row_dict.get("org_id")),
-            pg=pg,
-        )
-        if legacy_row:
-            row_dict.setdefault("custom_limits_json", legacy_row.get("custom_limits_json"))
-            row_dict.setdefault("updated_at", legacy_row.get("updated_at"))
         items.append(_build_budget_item(row_dict))
     return items, total
 
@@ -876,9 +835,8 @@ async def upsert_org_budget(
         raise ValueError("org_not_found")
     org_data = dict(org_row) if not isinstance(org_row, dict) else org_row
 
-    sub_row = await _fetch_legacy_budget_context(db, org_id=org_id, pg=pg)
-    row_dict = dict(sub_row) if sub_row and not isinstance(sub_row, dict) else (sub_row or {})
-    custom_limits = _parse_json_payload(row_dict.get("custom_limits_json"))
+    custom_limits: dict[str, Any] = {}
+    row_dict: dict[str, Any] = {}
 
     budget_row = await _fetchrow(
         db,

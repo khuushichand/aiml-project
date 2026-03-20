@@ -48,3 +48,4 @@ def test_pg_billing_table_ensure_includes_runtime_tables() -> None:
     assert "create table if not exists stripe_webhook_events" not in ddl_statements
     assert "create table if not exists payment_history" not in ddl_statements
     assert "create table if not exists billing_audit_log" not in ddl_statements
+    assert not hasattr(module, "_backfill_org_budgets_pg")

@@ -63,3 +63,17 @@ async def test_postgres_billing_ensure_seeds_only_neutral_free_plan(monkeypatch:
     assert "create table if not exists stripe_webhook_events" not in ddl
     assert "create table if not exists payment_history" not in ddl
     assert "create table if not exists billing_audit_log" not in ddl
+
+
+def test_retired_billing_migrations_use_non_destructive_rollback() -> None:
+    billing_rollbacks = {
+        migration.version: migration.down
+        for migration in migrations.get_authnz_migrations()
+        if migration.version in {30, 31, 32, 33, 34}
+    }
+
+    assert billing_rollbacks
+    assert all(
+        rollback is migrations.rollback_retired_billing_schema_noop
+        for rollback in billing_rollbacks.values()
+    )

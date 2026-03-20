@@ -2565,6 +2565,12 @@ def rollback_034_drop_billing_audit_log_table(conn: sqlite3.Connection) -> None:
     logger.info("Rollback 034: Dropped billing_audit_log table")
 
 
+def rollback_retired_billing_schema_noop(conn: sqlite3.Connection) -> None:
+    """Preserve historical billing tables during OSS rollback flows."""
+    conn.commit()
+    logger.info("Rollback: skipped retired billing schema teardown")
+
+
 def migration_035_backfill_storage_mb_limits(conn: sqlite3.Connection) -> None:
     """Normalize storage limits to storage_mb in plan and custom limit JSON."""
     logger.info("Migration 035: START storage_mb limit backfill")
@@ -4083,31 +4089,31 @@ def get_authnz_migrations() -> list[Migration]:
             30,
             "Create subscription_plans table",
             migration_030_create_subscription_plans,
-            rollback_030_drop_subscription_plans_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             31,
             "Create org_subscriptions table",
             migration_031_create_org_subscriptions,
-            rollback_031_drop_org_subscriptions_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             32,
             "Create stripe_webhook_events table",
             migration_032_create_stripe_webhook_events,
-            rollback_032_drop_stripe_webhook_events_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             33,
             "Create payment_history table",
             migration_033_create_payment_history,
-            rollback_033_drop_payment_history_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             34,
             "Create billing_audit_log table",
             migration_034_create_billing_audit_log,
-            rollback_034_drop_billing_audit_log_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             35,

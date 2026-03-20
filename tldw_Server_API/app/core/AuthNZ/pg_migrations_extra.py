@@ -2635,76 +2635,6 @@ def _normalize_budget_payload_pg(raw: Any) -> dict[str, Any]:
     return payload
 
 
-async def _backfill_org_budgets_pg(db_pool: DatabasePool) -> None:
-    try:
-        org_subscriptions_exists = await db_pool.fetchval(
-            "SELECT to_regclass('public.org_subscriptions')"
-        )
-    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(f"PG budgets backfill table probe failed: {exc}")
-        return
-    if not org_subscriptions_exists:
-        return
-
-    try:
-        rows = await db_pool.fetch(
-            """
-            SELECT os.org_id, os.custom_limits_json, ob.budgets_json
-            FROM org_subscriptions os
-            LEFT JOIN org_budgets ob ON ob.org_id = os.org_id
-            WHERE os.custom_limits_json IS NOT NULL
-            """
-        )
-    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(f"PG budgets backfill fetch failed: {exc}")
-        return
-
-    for row in rows:
-        org_id = row.get("org_id") if isinstance(row, dict) else None
-        if org_id is None:
-            continue
-        custom_limits = _parse_json_payload_pg(row.get("custom_limits_json"))
-        if not isinstance(custom_limits, dict) or "budgets" not in custom_limits:
-            continue
-        legacy_budgets = custom_limits.get("budgets")
-        normalized_payload = _normalize_budget_payload_pg(legacy_budgets)
-        existing_payload = _normalize_budget_payload_pg(row.get("budgets_json"))
-
-        if normalized_payload and not existing_payload:
-            try:
-                await db_pool.execute(
-                    """
-                    INSERT INTO org_budgets (org_id, budgets_json, updated_at)
-                    VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
-                    ON CONFLICT (org_id)
-                    DO UPDATE SET budgets_json = EXCLUDED.budgets_json, updated_at = EXCLUDED.updated_at
-                    """,
-                    org_id,
-                    json.dumps(normalized_payload),
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill insert failed for org_id={org_id}: {exc}")
-                continue
-
-        should_strip = bool(normalized_payload or existing_payload)
-        if should_strip:
-            cleaned_limits = dict(custom_limits)
-            cleaned_limits.pop("budgets", None)
-            payload = json.dumps(cleaned_limits) if cleaned_limits else None
-            try:
-                await db_pool.execute(
-                    """
-                    UPDATE org_subscriptions
-                    SET custom_limits_json = $2::jsonb
-                    WHERE org_id = $1
-                    """,
-                    org_id,
-                    payload,
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill cleanup failed for org_id={org_id}: {exc}")
-
-
 async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
     try:
         rows = await db_pool.fetch(
@@ -2764,11 +2694,6 @@ async def ensure_billing_tables_pg(
                 logger.debug(f"PG ensure billing DDL failed: {exc}")
 
         if run_backfill:
-            try:
-                await _backfill_org_budgets_pg(db_pool)
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill skipped/failed: {exc}")
-
             try:
                 await _normalize_org_budgets_pg(db_pool)
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
