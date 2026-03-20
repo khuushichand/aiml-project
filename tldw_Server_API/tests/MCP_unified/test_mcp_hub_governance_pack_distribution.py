@@ -393,6 +393,62 @@ async def test_governance_pack_trust_service_filters_signers_by_repo_bindings_wh
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_trust_service_excludes_inactive_and_revoked_signers_from_git_evaluation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    await service.update_policy(
+        {
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/researcher-pack"],
+            "allowed_git_ref_kinds": ["tag"],
+            "require_git_signature_verification": True,
+            "trusted_signers": [
+                {
+                    "fingerprint": "ACTIVE123",
+                    "repo_bindings": ["github.com/example/researcher-pack"],
+                    "status": "active",
+                },
+                {
+                    "fingerprint": "INACTIVE123",
+                    "repo_bindings": ["github.com/example/researcher-pack"],
+                    "status": "inactive",
+                },
+                {
+                    "fingerprint": "REVOKED123",
+                    "repo_bindings": ["github.com/example/"],
+                    "status": "revoked",
+                },
+            ],
+            "trusted_git_key_fingerprints": ["legacy999"],
+        },
+        actor_id=4,
+    )
+
+    evaluation = await service.evaluate_git_source(
+        "https://github.com/example/researcher-pack.git",
+        ref_kind="tag",
+    )
+
+    assert [signer["fingerprint"] for signer in evaluation["trusted_signers"]] == [
+        "ACTIVE123",
+        "LEGACY999",
+    ]
+    assert evaluation["trusted_git_key_fingerprints"] == [
+        "ACTIVE123",
+        "LEGACY999",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_distribution_service_resolves_allowed_local_pack_and_digest(
     tmp_path: Path,
     monkeypatch,

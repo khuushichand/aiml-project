@@ -185,6 +185,8 @@ def _match_trusted_signers_for_repository(
     """Filter trusted signers by canonical repository while preserving global legacy-compatible entries."""
     matched: list[dict[str, Any]] = []
     for signer in trusted_signers:
+        if str(signer.get("status") or "").strip().lower() != "active":
+            continue
         repo_bindings = list(signer.get("repo_bindings") or [])
         if not repo_bindings or any(
             _repo_binding_matches(canonical_repository, binding)
