@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import get_audio_bundle_catalog
 from tldw_Server_API.app.main import app
 import tldw_Server_API.app.api.v1.endpoints.setup as setup_endpoint
 
@@ -14,11 +15,19 @@ def _make_client():
 
 class _BundleCatalogStub:
     def __init__(self) -> None:
-        self.bundles = [SimpleNamespace(bundle_id="cpu_local", model_dump=lambda: {"bundle_id": "cpu_local"})]
+        catalog = get_audio_bundle_catalog()
+        self.bundles = [
+            SimpleNamespace(
+                bundle_id="cpu_local",
+                model_dump=lambda: catalog.bundle_by_id("cpu_local").model_dump(),
+            )
+        ]
 
 
 @pytest.fixture()
 def _admin_audio_installer_setup(monkeypatch):
+    captured = {}
+
     async def fake_get_auth_principal(_request):
         return AuthPrincipal(
             kind="user",
@@ -49,7 +58,16 @@ def _admin_audio_installer_setup(monkeypatch):
     monkeypatch.setattr(
         setup_endpoint.audio_profile_service,
         "recommend_audio_bundles",
-        lambda *args, **kwargs: {"recommendations": [], "excluded": []},
+        lambda *args, **kwargs: {
+            "recommendations": [
+                {
+                    "bundle_id": "cpu_local",
+                    "resource_profile": "balanced",
+                    "selection_key": "v2:cpu_local:balanced",
+                }
+            ],
+            "excluded": [],
+        },
     )
     monkeypatch.setattr(setup_endpoint, "get_audio_bundle_catalog", lambda: _BundleCatalogStub())
     monkeypatch.setattr(
@@ -60,19 +78,21 @@ def _admin_audio_installer_setup(monkeypatch):
     monkeypatch.setattr(
         setup_endpoint.install_manager,
         "execute_audio_bundle",
-        lambda bundle_id, resource_profile, safe_rerun=False: {
+        lambda bundle_id, resource_profile, safe_rerun=False, tts_choice=None: {
             "status": "completed",
             "bundle_id": bundle_id,
             "resource_profile": resource_profile,
             "safe_rerun": safe_rerun,
+            "tts_choice": tts_choice,
         },
     )
 
-    async def _fake_verify_audio_bundle_async(bundle_id, resource_profile):
+    async def _fake_verify_audio_bundle_async(bundle_id, resource_profile, tts_choice=None):
         return {
             "status": "ready",
             "bundle_id": bundle_id,
             "resource_profile": resource_profile,
+            "tts_choice": tts_choice,
         }
 
     monkeypatch.setattr(
@@ -80,6 +100,8 @@ def _admin_audio_installer_setup(monkeypatch):
         "verify_audio_bundle_async",
         _fake_verify_audio_bundle_async,
     )
+
+    return captured
 
 
 @pytest.mark.parametrize(
@@ -154,3 +176,85 @@ def test_admin_audio_installer_routes_stay_unavailable_without_setup_or_completi
         response = getattr(client, method)(path, **request_kwargs)
 
     assert response.status_code == 404
+
+
+def test_admin_audio_recommendations_include_curated_tts_choices(
+    monkeypatch,
+    _admin_audio_installer_setup,
+):
+    monkeypatch.setattr(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        lambda: {"enabled": True, "setup_completed": False, "needs_setup": True},
+    )
+
+    with _make_client() as client:
+        response = client.get("/api/v1/setup/admin/audio/recommendations")
+
+    assert response.status_code == 200
+    payload = response.json()
+    profile = payload["recommendations"][0]["profile"]
+    assert profile["default_tts_choice"] == "kokoro"
+    assert {choice["choice_id"] for choice in profile["tts_choices"]} == {"kokoro", "kitten_tts"}
+
+
+def test_admin_audio_provision_and_verify_accept_tts_choice(
+    monkeypatch,
+    _admin_audio_installer_setup,
+):
+    captured = {}
+
+    monkeypatch.setattr(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        lambda: {"enabled": True, "setup_completed": False, "needs_setup": True},
+    )
+    monkeypatch.setattr(
+        setup_endpoint,
+        "_execute_audio_bundle_provision",
+        lambda payload, allow_completed_when_disabled=False: {
+            "status": "completed",
+            "bundle_id": payload.bundle_id,
+            "resource_profile": payload.resource_profile,
+            "tts_choice": payload.tts_choice,
+        },
+    )
+
+    async def _fake_execute_audio_bundle_verification(payload, allow_completed_when_disabled=False):
+        captured["verify_tts_choice"] = payload.tts_choice
+        return {
+            "status": "ready",
+            "bundle_id": payload.bundle_id,
+            "resource_profile": payload.resource_profile,
+            "tts_choice": payload.tts_choice,
+        }
+
+    monkeypatch.setattr(
+        setup_endpoint,
+        "_execute_audio_bundle_verification",
+        _fake_execute_audio_bundle_verification,
+    )
+
+    with _make_client() as client:
+        provision_response = client.post(
+            "/api/v1/setup/admin/audio/provision",
+            json={
+                "bundle_id": "cpu_local",
+                "resource_profile": "balanced",
+                "tts_choice": "kitten_tts",
+            },
+        )
+        verify_response = client.post(
+            "/api/v1/setup/admin/audio/verify",
+            json={
+                "bundle_id": "cpu_local",
+                "resource_profile": "balanced",
+                "tts_choice": "kitten_tts",
+            },
+        )
+
+    assert provision_response.status_code == 200
+    assert verify_response.status_code == 200
+    assert provision_response.json()["tts_choice"] == "kitten_tts"
+    assert verify_response.json()["tts_choice"] == "kitten_tts"
+    assert captured["verify_tts_choice"] == "kitten_tts"
