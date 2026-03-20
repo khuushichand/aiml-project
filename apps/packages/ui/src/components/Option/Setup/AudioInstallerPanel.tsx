@@ -43,6 +43,7 @@ export const AudioInstallerPanel: React.FC = () => {
     selectedResourceProfile,
     setSelectedResourceProfile,
     handleBundleChange,
+    handleResourceProfileChange,
     handleProvision,
     handleVerify,
     refresh,
@@ -147,7 +148,7 @@ export const AudioInstallerPanel: React.FC = () => {
           <Text strong>{t("settings:audioInstaller.profileLabel", "Recommended profile")}</Text>
           <Radio.Group
             value={selectedResourceProfile || undefined}
-            onChange={(event) => setSelectedResourceProfile(event.target.value)}
+            onChange={(event) => handleResourceProfileChange(event.target.value)}
           >
             <Space wrap>
               {profileOptions.map((option) => (
