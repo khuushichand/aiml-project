@@ -2029,7 +2029,10 @@ async def update_governance_pack_trust_policy(
 ) -> GovernancePackTrustPolicyResponse:
     """Update the deployment-wide governance-pack trust policy."""
     _require_mutation_permission(principal)
-    updated = await svc.update_policy(payload.model_dump(), actor_id=principal.user_id)
+    try:
+        updated = await svc.update_policy(payload.model_dump(), actor_id=principal.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return GovernancePackTrustPolicyResponse.model_validate(updated)
 
 

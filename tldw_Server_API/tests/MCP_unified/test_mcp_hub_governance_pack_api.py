@@ -1218,3 +1218,42 @@ def test_governance_pack_trust_policy_round_trip() -> None:
     assert payload["trusted_signers"][1]["repo_bindings"] == []
     assert payload["trusted_git_key_fingerprints"] == ["EFGH5678", "IJKL9012"]
     assert trust_service.update_calls[0]["actor_id"] == 7
+
+
+def test_governance_pack_trust_policy_rejects_invalid_repo_binding() -> None:
+    class _InvalidBindingTrustService(_FakeGovernancePackTrustService):
+        async def update_policy(self, policy: dict[str, object], *, actor_id: int | None) -> dict[str, object]:
+            from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+                _normalize_repo_binding,
+            )
+
+            for signer in policy.get("trusted_signers", []):
+                for binding in signer.get("repo_bindings", []):
+                    _normalize_repo_binding(binding)
+            return await super().update_policy(policy, actor_id=actor_id)
+
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE]),
+        trust_service=_InvalidBindingTrustService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/mcp/hub/governance-packs/trust-policy",
+            json={
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/researcher-pack"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "ABCD1234",
+                        "repo_bindings": ["not-a-valid-binding"],
+                        "status": "active",
+                    }
+                ],
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "Unsupported git repository format" in resp.json()["detail"]

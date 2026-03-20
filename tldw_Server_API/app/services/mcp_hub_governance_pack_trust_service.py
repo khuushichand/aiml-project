@@ -162,7 +162,7 @@ def _normalize_trusted_signers(
                 "status": "active",
             }
         )
-        if normalized_signer is not None:
+        if normalized_signer is not None and normalized_signer["fingerprint"] not in by_fingerprint:
             _merge_signer_entry(normalized_signer)
 
     return normalized

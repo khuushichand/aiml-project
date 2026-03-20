@@ -273,6 +273,48 @@ async def test_governance_pack_trust_service_normalizes_structured_signers_and_l
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_trust_service_keeps_structured_signer_status_authoritative_over_legacy_fingerprints(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    policy = await service.update_policy(
+        {
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/packs"],
+            "allowed_git_ref_kinds": ["tag"],
+            "trusted_signers": [
+                {
+                    "fingerprint": "abc123",
+                    "display_name": "Release Bot",
+                    "repo_bindings": ["github.com/example/packs"],
+                    "status": "revoked",
+                }
+            ],
+            "trusted_git_key_fingerprints": ["abc123"],
+        },
+        actor_id=1,
+    )
+
+    assert policy["trusted_signers"] == [
+        {
+            "fingerprint": "ABC123",
+            "display_name": "Release Bot",
+            "repo_bindings": ["github.com/example/packs"],
+            "status": "revoked",
+        }
+    ]
+    assert policy["trusted_git_key_fingerprints"] == ["ABC123"]
+
+
+@pytest.mark.asyncio
 async def test_distribution_service_resolves_allowed_local_pack_and_digest(
     tmp_path: Path,
     monkeypatch,
