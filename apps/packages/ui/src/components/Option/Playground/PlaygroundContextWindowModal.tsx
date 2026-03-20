@@ -3,7 +3,6 @@ import { Button, InputNumber, Modal } from "antd"
 import { ContextFootprintPanel } from "./ContextFootprintPanel"
 import { SessionInsightsPanel } from "./SessionInsightsPanel"
 import { CONTEXT_FOOTPRINT_THRESHOLD_PERCENT } from "./hooks"
-import type { Switch, Select, Input, Radio } from "antd"
 
 // ---------------------------------------------------------------------------
 // Types

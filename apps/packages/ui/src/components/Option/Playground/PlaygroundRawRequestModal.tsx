@@ -9,7 +9,7 @@ export type RawRequestSnapshot = {
   endpoint: string
   method: string
   mode: string
-  sentAt: number
+  sentAt: string | number
   body: unknown
 }
 
@@ -20,6 +20,8 @@ export interface PlaygroundRawRequestModalProps {
   json: string
   onRefresh: () => void
   onCopy: () => void
+  extraFooter?: React.ReactNode
+  beforeJson?: React.ReactNode
   t: (key: string, defaultValue?: string, options?: any) => any
 }
 
@@ -29,7 +31,17 @@ export interface PlaygroundRawRequestModalProps {
 
 export const PlaygroundRawRequestModal: React.FC<PlaygroundRawRequestModalProps> =
   React.memo(function PlaygroundRawRequestModal(props) {
-    const { open, onClose, snapshot, json, onRefresh, onCopy, t } = props
+    const {
+      open,
+      onClose,
+      snapshot,
+      json,
+      onRefresh,
+      onCopy,
+      extraFooter,
+      beforeJson,
+      t
+    } = props
 
     return (
       <Modal
@@ -46,6 +58,7 @@ export const PlaygroundRawRequestModal: React.FC<PlaygroundRawRequestModalProps>
             <Button onClick={onRefresh}>
               {t("common:refresh", "Refresh")}
             </Button>
+            {extraFooter}
             <Button onClick={onCopy} disabled={!json}>
               {t("common:copy", "Copy")}
             </Button>
@@ -58,6 +71,7 @@ export const PlaygroundRawRequestModal: React.FC<PlaygroundRawRequestModalProps>
         <div className="space-y-3">
           {snapshot ? (
             <>
+              {beforeJson}
               <div className="space-y-1 text-xs text-text-muted">
                 <p>
                   {t("playground:tools.rawChatRequestEndpoint", "Endpoint")}:{" "}
@@ -90,6 +104,7 @@ export const PlaygroundRawRequestModal: React.FC<PlaygroundRawRequestModalProps>
                 </p>
               </div>
               <Input.TextArea
+                data-testid="raw-chat-request-json"
                 readOnly
                 value={json}
                 autoSize={{ minRows: 14, maxRows: 30 }}

@@ -35,24 +35,28 @@ export function usePlaygroundAttachments(deps: UsePlaygroundAttachmentsDeps) {
 
   const onFileInputChange = React.useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files && e.target.files[0]) {
-        const file = e.target.files[0]
-        const isUnsupported = otherUnsupportedTypes.includes(file.type)
-        if (isUnsupported) {
-          console.error("File type not supported:", file.type)
-          return
-        }
-        const isImage = file.type.startsWith("image/")
-        if (isImage) {
-          if (chatMode === "rag") {
-            notifyImageAttachmentDisabled()
+      try {
+        if (e.target.files && e.target.files[0]) {
+          const file = e.target.files[0]
+          const isUnsupported = otherUnsupportedTypes.includes(file.type)
+          if (isUnsupported) {
+            console.error("File type not supported:", file.type)
             return
           }
-          const base64 = await toBase64(file)
-          setFieldValue("image", base64)
-        } else {
-          await handleFileUpload(file)
+          const isImage = file.type.startsWith("image/")
+          if (isImage) {
+            if (chatMode === "rag") {
+              notifyImageAttachmentDisabled()
+              return
+            }
+            const base64 = await toBase64(file)
+            setFieldValue("image", base64)
+          } else {
+            await handleFileUpload(file)
+          }
         }
+      } finally {
+        e.target.value = ""
       }
     },
     [chatMode, handleFileUpload, notifyImageAttachmentDisabled, setFieldValue]
