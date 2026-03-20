@@ -214,7 +214,8 @@ describe("PlaygroundChat linked research status integration", () => {
     expect(statusBlock).toBeInTheDocument()
     expect(emptyState.compareDocumentPosition(statusBlock)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     expect(screen.getByText("Needs review")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Open in Research" })).toHaveAttribute(
+    expect(screen.getByText("Plan review needed")).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Review in Research" })).toHaveAttribute(
       "href",
       "/research?run=rs_wait"
     )

@@ -6,7 +6,9 @@ import type { ResearchFollowUpTarget } from "./research-chat-context"
 import {
   CHAT_LINKED_RESEARCH_VISIBLE_TERMINAL_ROWS,
   buildChatLinkedResearchPath,
+  getChatLinkedResearchReviewReason,
   getChatLinkedResearchStatusLabel,
+  isCheckpointReviewRun,
   isTerminalResearchRun,
   orderChatLinkedResearchRuns
 } from "./research-run-status"
@@ -62,6 +64,8 @@ export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
         <div className="space-y-2">
           {visibleRuns.map((run) => {
             const statusLabel = getChatLinkedResearchStatusLabel(run)
+            const reviewReason = getChatLinkedResearchReviewReason(run)
+            const isCheckpointReview = isCheckpointReviewRun(run)
             return (
               <div
                 key={run.run_id}
@@ -76,11 +80,12 @@ export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
                     >
                       {statusLabel}
                     </span>
+                    {reviewReason ? <span>{reviewReason}</span> : null}
                     <span className="truncate">{run.run_id}</span>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
-                  {run.status === "completed" && (
+                  {run.status === "completed" && !isCheckpointReview && (
                     <>
                       <button
                         type="button"
@@ -107,7 +112,7 @@ export const ResearchRunStatusStack: React.FC<ResearchRunStatusStackProps> = ({
                     href={buildChatLinkedResearchPath(run.run_id)}
                     className="text-sm font-medium text-primary hover:underline"
                   >
-                    Open in Research
+                    {isCheckpointReview ? "Review in Research" : "Open in Research"}
                   </a>
                 </div>
               </div>
