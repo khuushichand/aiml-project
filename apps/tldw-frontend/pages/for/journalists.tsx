@@ -110,8 +110,8 @@ export default function JournalistsPage() {
             <div className="flex items-start gap-4 p-6 bg-bg rounded-xl border border-border">
               <Lock className="w-8 h-8 text-primary flex-shrink-0" />
               <div>
-                <h3 className="font-semibold mb-2">Cloud Option</h3>
-                <p className="text-text-muted">E2E encrypted, EU hosting available, when you need sync.</p>
+                <h3 className="font-semibold mb-2">Self-Hosted Sync</h3>
+                <p className="text-text-muted">Sync notes and files across the infrastructure you control. No hosted tier required.</p>
               </div>
             </div>
           </div>

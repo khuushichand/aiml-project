@@ -44,6 +44,7 @@ describe("public segment pages", () => {
     expect(screen.queryByText("Start Hosted Trial")).not.toBeInTheDocument()
     expect(screen.queryByText("Cloud Pro")).not.toBeInTheDocument()
     expect(screen.queryByText("Newsroom")).not.toBeInTheDocument()
+    expect(screen.queryByText("E2E encrypted, EU hosting available, when you need sync.")).not.toBeInTheDocument()
     expect(screen.getByText(/start self-hosting free/i)).toBeInTheDocument()
   })
 
