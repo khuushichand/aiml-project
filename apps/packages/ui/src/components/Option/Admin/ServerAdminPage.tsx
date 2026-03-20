@@ -34,7 +34,7 @@ import { AdminAudioInstallerCard } from "./AdminAudioInstallerCard"
 
 const { Title, Text } = Typography
 const SYSTEM_STATS_TIMEOUT_MS = 10_000
-const LEGACY_STORAGE_BYTES_FALLBACK_CUTOFF = 1024 * 1024 * 1024
+const LEGACY_STORAGE_MAX_REASONABLE_MB = 10 * 1024 * 1024
 
 const formatBytesForAdmin = (value: number | null | undefined): string => {
   if (typeof value !== "number" || !Number.isFinite(value)) return "–"
@@ -55,10 +55,10 @@ const formatMegabytesForAdmin = (value: number | null | undefined): string => {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "–"
 
   // Keep a narrow fallback for legacy backends that leaked raw bytes into *_mb fields.
-  // Values this large would represent exabyte-scale megabyte totals, which is implausible
-  // for the admin summaries shown here, so treat only that oversized range as raw bytes.
+  // Legitimate *_mb values can be large, so only treat values above a 10 TiB-equivalent
+  // megabyte total as raw bytes. This still catches sub-1 GiB legacy byte payloads.
   const bytesValue =
-    value >= LEGACY_STORAGE_BYTES_FALLBACK_CUTOFF ? value : value * 1024 * 1024
+    value > LEGACY_STORAGE_MAX_REASONABLE_MB ? value : value * 1024 * 1024
   return formatBytesForAdmin(bytesValue)
 }
 

@@ -3,11 +3,11 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 const loadSource = (...candidates: string[]) => {
-  const path = candidates.find((candidate) => existsSync(candidate))
-  if (!path) {
+  const sourcePath = candidates.find((candidate) => existsSync(candidate))
+  if (!sourcePath) {
     throw new Error(`Missing page shim: ${candidates.join(" | ")}`)
   }
-  return readFileSync(path, "utf8")
+  return readFileSync(sourcePath, "utf8")
 }
 
 describe("admin server Next.js page shim", () => {
@@ -17,6 +17,8 @@ describe("admin server Next.js page shim", () => {
         path.resolve(__dirname, "..", "..", "pages", "admin", "server.tsx"),
         path.resolve(process.cwd(), "pages", "admin", "server.tsx")
       )
-    ).toContain('dynamic(() => import("@/routes/option-admin-server"), { ssr: false })')
+    ).toMatch(
+      /dynamic\(\(\) => import\("@\/routes\/option-admin-server"\),\s*\{\s*ssr:\s*false\s*\}\)/
+    )
   })
 })
