@@ -386,6 +386,11 @@ class _FakeGovernancePackTrustService:
             **self.policy,
             **dict(policy),
         }
+        allowed_repositories = [
+            str(entry).strip()
+            for entry in self.policy.get("allowed_git_repositories", [])
+            if str(entry).strip()
+        ]
         normalized_signers: list[dict[str, object]] = []
         seen_fingerprints: set[str] = set()
         for signer in self.policy.get("trusted_signers", []):
@@ -420,7 +425,7 @@ class _FakeGovernancePackTrustService:
                 {
                     "fingerprint": cleaned,
                     "display_name": None,
-                    "repo_bindings": [],
+                    "repo_bindings": list(allowed_repositories),
                     "status": "active",
                 }
             )
@@ -1215,7 +1220,9 @@ def test_governance_pack_trust_policy_round_trip() -> None:
         "github.com/example/",
     ]
     assert payload["trusted_signers"][1]["fingerprint"] == "IJKL9012"
-    assert payload["trusted_signers"][1]["repo_bindings"] == []
+    assert payload["trusted_signers"][1]["repo_bindings"] == [
+        "github.com/example/researcher-pack"
+    ]
     assert "trusted_git_key_fingerprints" not in payload
     assert trust_service.update_calls[0]["actor_id"] == 7
 
@@ -1281,6 +1288,34 @@ def test_governance_pack_trust_policy_rejects_blank_fingerprint() -> None:
     assert resp.json()["detail"][0]["msg"] == "Value error, fingerprint entries cannot be blank"
 
 
+def test_governance_pack_trust_policy_rejects_empty_repo_bindings() -> None:
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE]),
+        trust_service=_FakeGovernancePackTrustService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/mcp/hub/governance-packs/trust-policy",
+            json={
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/researcher-pack"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "ABCD1234",
+                        "repo_bindings": [],
+                        "status": "active",
+                    }
+                ],
+            },
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["msg"] == "Value error, trusted signer repo_bindings must not be empty"
+
+
 def test_governance_pack_trust_policy_rejects_blank_repo_binding() -> None:
     app = _build_app(
         _make_principal(permissions=[SYSTEM_CONFIGURE]),
@@ -1307,3 +1342,20 @@ def test_governance_pack_trust_policy_rejects_blank_repo_binding() -> None:
 
     assert resp.status_code == 422
     assert resp.json()["detail"][0]["msg"] == "Value error, repo binding is required"
+
+
+def test_governance_pack_trust_policy_get_reports_invalid_persisted_policy() -> None:
+    class _InvalidPersistedTrustService(_FakeGovernancePackTrustService):
+        async def get_policy(self) -> dict[str, object]:
+            raise ValueError("invalid persisted governance pack trust policy: fingerprint entries cannot be blank")
+
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE]),
+        trust_service=_InvalidPersistedTrustService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "invalid persisted governance pack trust policy: fingerprint entries cannot be blank"

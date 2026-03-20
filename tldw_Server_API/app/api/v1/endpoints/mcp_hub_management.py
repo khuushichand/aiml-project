@@ -2015,7 +2015,10 @@ async def get_governance_pack_trust_policy(
 ) -> GovernancePackTrustPolicyResponse:
     """Return the deployment-wide governance-pack trust policy."""
     _require_mutation_permission(principal)
-    return GovernancePackTrustPolicyResponse.model_validate(await svc.get_policy())
+    try:
+        return GovernancePackTrustPolicyResponse.model_validate(await svc.get_policy())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.put(

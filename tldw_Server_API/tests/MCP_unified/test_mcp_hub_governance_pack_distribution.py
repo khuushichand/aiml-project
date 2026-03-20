@@ -267,7 +267,7 @@ async def test_governance_pack_trust_service_normalizes_structured_signers_and_l
     assert policy["trusted_signers"][1]["repo_bindings"] == ["github.com/example"]
     assert policy["trusted_signers"][1]["status"] == "inactive"
     assert policy["trusted_signers"][2]["fingerprint"] == "LEGACY789"
-    assert policy["trusted_signers"][2]["repo_bindings"] == []
+    assert policy["trusted_signers"][2]["repo_bindings"] == ["github.com/example/packs"]
     assert policy["trusted_signers"][2]["status"] == "active"
     assert "trusted_git_key_fingerprints" not in policy
 
@@ -416,6 +416,37 @@ async def test_governance_pack_trust_service_rejects_blank_repo_binding(
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_trust_service_rejects_empty_structured_repo_bindings(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    with pytest.raises(ValueError, match="trusted signer repo_bindings must not be empty"):
+        await service.update_policy(
+            {
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/packs"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "abc123",
+                        "repo_bindings": [],
+                        "status": "active",
+                    }
+                ],
+            },
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_governance_pack_trust_service_rejects_blank_legacy_fingerprint(
     tmp_path,
     monkeypatch,
@@ -438,6 +469,41 @@ async def test_governance_pack_trust_service_rejects_blank_legacy_fingerprint(
             },
             actor_id=1,
         )
+
+
+@pytest.mark.asyncio
+async def test_governance_pack_trust_service_denies_git_evaluation_when_persisted_policy_is_invalid(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    await repo.upsert_governance_pack_trust_policy(
+        policy_document={
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/packs"],
+            "allowed_git_ref_kinds": ["tag"],
+            "trusted_git_key_fingerprints": ["   "],
+        },
+        actor_id=7,
+    )
+
+    evaluation = await service.evaluate_git_source(
+        "https://github.com/example/packs.git",
+        ref_kind="tag",
+    )
+
+    assert evaluation["allowed"] is False
+    assert evaluation["reason"] == "invalid_trust_policy"
+    assert evaluation["canonical_repository"] == "github.com/example/packs"
+    assert evaluation["trusted_signers"] == []
+    assert evaluation["trusted_git_key_fingerprints"] == []
 
 
 @pytest.mark.asyncio

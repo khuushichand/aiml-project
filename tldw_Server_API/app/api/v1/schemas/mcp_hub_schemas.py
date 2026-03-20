@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ScopeType = Literal["global", "org", "team", "user"]
 CapabilityAdapterScopeType = Literal["global", "org", "team"]
@@ -1084,6 +1084,12 @@ class GovernancePackTrustedSignerBinding(BaseModel):
                 raise ValueError("repo binding is required")
             cleaned_values.append(cleaned)
         return cleaned_values
+
+    @model_validator(mode="after")
+    def _require_repo_bindings(self) -> GovernancePackTrustedSignerBinding:
+        if not self.repo_bindings:
+            raise ValueError("trusted signer repo_bindings must not be empty")
+        return self
 
 
 def _validate_non_blank_string_list(value: Any, *, field_name: str) -> list[str]:

@@ -118,6 +118,8 @@ def _normalize_signer_status(raw_status: Any) -> str:
 
 def _normalize_trusted_signer_entry(
     signer: dict[str, Any],
+    *,
+    default_repo_bindings: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Normalize a signer entry into the canonical trust-store representation."""
     fingerprint = str(signer.get("fingerprint") or "").strip().upper()
@@ -132,6 +134,10 @@ def _normalize_trusted_signer_entry(
             continue
         seen_bindings.add(normalized_binding)
         repo_bindings.append(normalized_binding)
+    if not repo_bindings:
+        repo_bindings = list(default_repo_bindings or [])
+    if not repo_bindings:
+        raise ValueError("trusted signer repo_bindings must not be empty")
     return {
         "fingerprint": fingerprint,
         "display_name": display_name,
@@ -143,6 +149,9 @@ def _normalize_trusted_signer_entry(
 def _normalize_trusted_signers(
     signers: Any,
     legacy_fingerprints: Any,
+    *,
+    default_repo_bindings: list[str],
+    allow_empty_structured_bindings: bool = False,
 ) -> list[dict[str, Any]]:
     """Normalize structured and legacy signer inputs into a canonical signer list."""
     normalized: list[dict[str, Any]] = []
@@ -166,7 +175,10 @@ def _normalize_trusted_signers(
     for raw_signer in signers or []:
         if not isinstance(raw_signer, dict):
             continue
-        normalized_signer = _normalize_trusted_signer_entry(raw_signer)
+        normalized_signer = _normalize_trusted_signer_entry(
+            raw_signer,
+            default_repo_bindings=default_repo_bindings if allow_empty_structured_bindings else None,
+        )
         if normalized_signer is not None:
             _merge_signer_entry(normalized_signer)
 
@@ -175,9 +187,10 @@ def _normalize_trusted_signers(
             {
                 "fingerprint": fingerprint,
                 "display_name": None,
-                "repo_bindings": [],
+                "repo_bindings": list(default_repo_bindings),
                 "status": "active",
-            }
+            },
+            default_repo_bindings=default_repo_bindings,
         )
         if normalized_signer is not None and normalized_signer["fingerprint"] not in by_fingerprint:
             _merge_signer_entry(normalized_signer)
@@ -199,13 +212,13 @@ def _match_trusted_signers_for_repository(
     trusted_signers: list[dict[str, Any]],
     canonical_repository: str,
 ) -> list[dict[str, Any]]:
-    """Filter trusted signers by canonical repository while preserving global legacy-compatible entries."""
+    """Filter active trusted signers by canonical repository bindings."""
     matched: list[dict[str, Any]] = []
     for signer in trusted_signers:
         if str(signer.get("status") or "").strip().lower() != "active":
             continue
         repo_bindings = list(signer.get("repo_bindings") or [])
-        if not repo_bindings or any(
+        if any(
             _repo_binding_matches(canonical_repository, binding)
             for binding in repo_bindings
         ):
@@ -233,7 +246,7 @@ class McpHubGovernancePackTrustService:
             "trusted_signers": [],
         }
 
-    def _normalize_policy(self, policy: dict[str, Any] | None) -> dict[str, Any]:
+    def _normalize_policy(self, policy: dict[str, Any] | None, *, for_write: bool) -> dict[str, Any]:
         """Normalize persisted or requested trust-policy content."""
         raw = dict(policy or {})
         ref_kinds = [
@@ -241,18 +254,21 @@ class McpHubGovernancePackTrustService:
             for kind in (entry.strip().lower() for entry in _normalize_string_list(raw.get("allowed_git_ref_kinds")))
             if kind in _ALLOWED_REF_KINDS
         ]
+        allowed_git_repositories = [
+            _canonicalize_git_repository(entry) for entry in _normalize_string_list(raw.get("allowed_git_repositories"))
+        ]
         trusted_signers = _normalize_trusted_signers(
             raw.get("trusted_signers"),
             raw.get("trusted_git_key_fingerprints"),
+            default_repo_bindings=allowed_git_repositories,
+            allow_empty_structured_bindings=not for_write,
         )
         return {
             "allow_local_path_sources": bool(raw.get("allow_local_path_sources", False)),
             "allowed_local_roots": [str(Path(entry).resolve()) for entry in _normalize_string_list(raw.get("allowed_local_roots"))],
             "allow_git_sources": bool(raw.get("allow_git_sources", False)),
             "allowed_git_hosts": [entry.lower() for entry in _normalize_string_list(raw.get("allowed_git_hosts"))],
-            "allowed_git_repositories": [
-                _canonicalize_git_repository(entry) for entry in _normalize_string_list(raw.get("allowed_git_repositories"))
-            ],
+            "allowed_git_repositories": allowed_git_repositories,
             "allowed_git_ref_kinds": ref_kinds,
             "require_git_signature_verification": bool(raw.get("require_git_signature_verification", False)),
             "trusted_signers": trusted_signers,
@@ -261,11 +277,14 @@ class McpHubGovernancePackTrustService:
     async def get_policy(self) -> dict[str, Any]:
         """Load and normalize the deployment-wide governance-pack trust policy."""
         row = await self.repo.get_governance_pack_trust_policy()
-        return self._normalize_policy(row.get("policy_document"))
+        try:
+            return self._normalize_policy(row.get("policy_document"), for_write=False)
+        except ValueError as exc:
+            raise ValueError(f"invalid persisted governance pack trust policy: {exc}") from exc
 
     async def update_policy(self, policy: dict[str, Any], *, actor_id: int | None) -> dict[str, Any]:
         """Persist a normalized deployment-wide trust policy."""
-        normalized = self._normalize_policy(policy)
+        normalized = self._normalize_policy(policy, for_write=True)
         await self.repo.upsert_governance_pack_trust_policy(
             policy_document=normalized,
             actor_id=actor_id,
@@ -274,8 +293,11 @@ class McpHubGovernancePackTrustService:
 
     async def evaluate_local_path(self, path: str) -> dict[str, Any]:
         """Evaluate whether a local filesystem source path is allowed."""
-        policy = await self.get_policy()
         resolved_path = str(Path(path).resolve())
+        try:
+            policy = await self.get_policy()
+        except ValueError:
+            return {"allowed": False, "reason": "invalid_trust_policy", "resolved_path": resolved_path}
         if not policy["allow_local_path_sources"]:
             return {"allowed": False, "reason": "local_path_disabled", "resolved_path": resolved_path}
         allowed_roots = [str(Path(root).resolve()) for root in policy["allowed_local_roots"]]
@@ -286,10 +308,20 @@ class McpHubGovernancePackTrustService:
 
     async def evaluate_git_source(self, repo_url: str, *, ref_kind: str) -> dict[str, Any]:
         """Evaluate whether a Git source is allowed under the current trust policy."""
-        policy = await self.get_policy()
         canonical_repository = _canonicalize_git_repository(repo_url)
         host = _canonicalize_git_host(repo_url)
         normalized_ref_kind = str(ref_kind or "").strip().lower()
+        try:
+            policy = await self.get_policy()
+        except ValueError:
+            return {
+                "allowed": False,
+                "reason": "invalid_trust_policy",
+                "canonical_repository": canonical_repository,
+                "verification_required": False,
+                "trusted_git_key_fingerprints": [],
+                "trusted_signers": [],
+            }
         matched_signers = _match_trusted_signers_for_repository(
             list(policy.get("trusted_signers") or []),
             canonical_repository,
