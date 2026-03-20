@@ -277,6 +277,12 @@ This execution identity should be claim-first and usable by:
 - MCP tool execution
 - child agents
 
+Implementation note:
+
+- Telegram-originated Jobs should carry this brokered context in a top-level `execution_identity` payload field.
+- Parent Telegram identities should include the transport permissions needed to receive and reply on Telegram, plus the linked actor's resolved permissions.
+- Workspace, workflow, and tool allowlists should default to empty until an explicit policy or binding narrows them in.
+
 ### Downscoped child agents
 
 If a Telegram request spawns a workflow or child agent, each child receives a narrower identity.
