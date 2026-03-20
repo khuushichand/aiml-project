@@ -55,6 +55,11 @@ The banner state is derived from:
 - `researchReturnRunId` from the URL
 - the already-fetched linked runs for the active chat thread
 
+Ownership rule:
+- `Playground.tsx` is the single owner of `researchReturnRunId` consumption
+- it should capture the URL marker into local coordinator state before URL cleanup
+- it should also own page-session dismissal state so the banner does not replay on child remounts
+
 Resolution rules:
 - if the URL has no `researchReturnRunId`, show no banner
 - if the thread has not loaded its linked runs yet, wait
@@ -62,7 +67,11 @@ Resolution rules:
 - if the linked runs load and the returned run is not found, silently show nothing
 - after either showing or deciding not to show, clear `researchReturnRunId` from the URL
 
-The banner should also keep a local dismissed state so the user can close it without affecting the linked-run stack.
+Suggested owning state:
+- `pendingReturnedResearchRunId: string | null`
+- `dismissedReturnedResearchRunId: string | null`
+
+The banner should not own dismiss persistence locally if that would allow remount replay.
 
 ## UI Contract
 
@@ -101,9 +110,12 @@ The chat-thread route helper should be extended to accept optional return-banner
 
 Chat should:
 - read `researchReturnRunId` from the URL
+- capture it into coordinator state before cleaning the URL
 - wait for linked runs to resolve
 - build banner state by matching that run
 - clear the query param after consumption
+
+The existing exact-thread restore and the new return-banner marker should be coordinated in one place so URL cleanup does not drift across multiple effects.
 
 ### Shared policy
 
@@ -123,6 +135,11 @@ This is a convenience surface, not a critical load path.
 Frontend coverage should prove:
 - the `Back to Chat` href includes `researchReturnRunId`
 - chat shows a banner only after explicit return navigation
+- a real `Playground.tsx` integration test covers:
+  - URL marker present
+  - exact-thread restore still works
+  - banner appears once for the returned run
+  - `researchReturnRunId` is cleared from the URL after resolution
 - banner action eligibility matches the shared research policy
 - checkpoint-needed returned runs show `Review in Research`
 - dismiss hides the banner without affecting the linked-run stack

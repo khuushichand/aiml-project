@@ -96,7 +96,7 @@ git commit -m "feat(research): carry return banner context to chat"
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx`
-- Modify if needed: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx`
 
 **Step 1: Add failing banner tests**
 
@@ -107,7 +107,9 @@ Cover:
 - dismiss hides the banner
 - the query param is cleared after resolution
 
-Use the real linked-run query/test harness already used for research status behavior where possible.
+Split the coverage intentionally:
+- `Playground.research-context.integration.test.tsx` proves the real URL -> coordinator -> banner flow
+- `PlaygroundChat.research-status.integration.test.tsx` proves banner action behavior against linked-run state and shared policy
 
 **Step 2: Run the focused red tests**
 
@@ -142,11 +144,14 @@ git commit -m "test(chat): cover returned research banner"
 
 In `Playground.tsx` or the closest owning seam:
 - read `researchReturnRunId` from the URL
+- capture it into local coordinator state before URL cleanup
 - wait for linked runs to resolve
 - match the returned run
 - clear the query param after consumption
 
 Do not replay the marker on refresh after it is consumed.
+
+The same owner seam should also track dismissal state for the current page session.
 
 **Step 2: Build the banner from shared policy**
 
@@ -166,7 +171,7 @@ Wire banner actions through the same existing chat handlers used by:
 
 **Step 4: Support dismiss**
 
-Keep dismiss local to the current page session only. Do not persist it.
+Keep dismiss in `Playground.tsx` page-session state only. Do not persist it in storage or push it down into a child-local-only flag that can replay on remount.
 
 **Step 5: Run focused frontend verification**
 
@@ -214,6 +219,7 @@ Expected:
 - return marker navigation works
 - chat shows the one-time banner only for explicit returns
 - banner action eligibility matches shared policy
+- banner dismissal does not replay on child remount during the same page session
 
 **Step 2: Record execution notes**
 
@@ -223,6 +229,7 @@ Add:
 - pass counts
 - whether the banner lived in `Playground` or a child component
 - how URL marker clearing was implemented
+- how ownership between `Playground` and `PlaygroundChat` was divided
 
 **Step 3: Commit docs**
 
