@@ -39,10 +39,25 @@ _TELEGRAM_LINK_LOCK = threading.Lock()
 _TELEGRAM_PAIRING_CODES: dict[str, dict[str, Any]] = {}
 _TELEGRAM_ACTOR_LINKS: dict[tuple[str, int, int], dict[str, Any]] = {}
 _TELEGRAM_PAIRING_CODE_TTL_SECONDS = 900
+
+
 @dataclass(frozen=True)
 class TelegramScope:
     scope_type: str
     scope_id: int
+
+
+@dataclass(frozen=True)
+class TelegramCommand:
+    action: str
+    input: str
+
+
+@dataclass(frozen=True)
+class TelegramMessagePolicy:
+    should_process: bool
+    reason: str | None = None
+    command: TelegramCommand | None = None
 
 
 def _coerce_nonempty_string(value: Any) -> str | None:
@@ -131,18 +146,53 @@ def _resolve_telegram_actor_link(scope: TelegramScope, telegram_user_id: int) ->
         return dict(link) if link else None
 
 
-def _is_privileged_telegram_action(text: Any) -> bool:
+def parse_telegram_command(text: Any) -> TelegramCommand | None:
     normalized = _coerce_nonempty_string(text)
     if not normalized:
+        return None
+    if not normalized.startswith("/"):
+        return None
+
+    parts = normalized.split(maxsplit=1)
+    command_token = parts[0][1:]
+    if not command_token:
+        return None
+    action = command_token.split("@", 1)[0].strip().lower()
+    if not action:
+        return None
+    argument = _coerce_nonempty_string(parts[1]) if len(parts) > 1 else ""
+    return TelegramCommand(action=action, input=argument or "")
+
+
+def evaluate_telegram_message_policy(
+    *,
+    chat_type: Any,
+    text: Any,
+    reply_to_bot: bool = False,
+) -> TelegramMessagePolicy:
+    command = parse_telegram_command(text)
+    if command is not None:
+        return TelegramMessagePolicy(should_process=True, command=command)
+
+    normalized_chat_type = _coerce_nonempty_string(chat_type)
+    if normalized_chat_type in {"group", "supergroup"} and not reply_to_bot:
+        return TelegramMessagePolicy(
+            should_process=False,
+            reason="group_freeform_requires_command_or_reply",
+        )
+
+    return TelegramMessagePolicy(should_process=True)
+
+
+def _is_privileged_telegram_command(command: TelegramCommand | None) -> bool:
+    if command is None:
         return False
-    tokens = normalized.lower().split()
-    if len(tokens) < 2:
+    if command.action not in {"persona", "character"}:
         return False
-    if tokens[0] not in {"/persona", "/character"}:
+    tokens = command.input.lower().split()
+    if not tokens:
         return False
-    if tokens[1] != "set":
-        return False
-    return True
+    return tokens[0] == "set"
 
 
 def _extract_message_actor_and_text(payload: dict[str, Any]) -> tuple[int | None, str | None]:
@@ -153,6 +203,29 @@ def _extract_message_actor_and_text(payload: dict[str, Any]) -> tuple[int | None
     telegram_user_id = _coerce_int(from_block.get("id")) if isinstance(from_block, dict) else None
     text = _coerce_nonempty_string(message.get("text"))
     return telegram_user_id, text
+
+
+def _extract_message_chat_type(payload: dict[str, Any]) -> str | None:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return None
+    chat = message.get("chat")
+    if not isinstance(chat, dict):
+        return None
+    return _coerce_nonempty_string(chat.get("type"))
+
+
+def _message_reply_to_bot(payload: dict[str, Any]) -> bool:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return False
+    reply_to_message = message.get("reply_to_message")
+    if not isinstance(reply_to_message, dict):
+        return False
+    reply_from = reply_to_message.get("from")
+    if not isinstance(reply_from, dict):
+        return False
+    return bool(reply_from.get("is_bot"))
 
 
 def _normalize_bot_config_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -377,12 +450,22 @@ async def telegram_webhook_impl(
         )
     update_id_int = update_id
 
+    telegram_user_id, text = _extract_message_actor_and_text(payload)
+    chat_type = _extract_message_chat_type(payload)
+    reply_to_bot = _message_reply_to_bot(payload)
+    message_policy = evaluate_telegram_message_policy(
+        chat_type=chat_type,
+        text=text,
+        reply_to_bot=reply_to_bot,
+    )
+    if not message_policy.should_process:
+        return JSONResponse(status_code=200, content={"ok": True, "status": "ignored"})
+
     dedupe_key = f"{scope.scope_type}:{scope.scope_id}:{update_id_int}"
     if dedupe_receipts.seen_or_store(dedupe_key, dedupe_ttl_seconds):
         return JSONResponse(status_code=200, content={"ok": True, "status": "duplicate"})
 
-    telegram_user_id, text = _extract_message_actor_and_text(payload)
-    if _is_privileged_telegram_action(text):
+    if _is_privileged_telegram_command(message_policy.command):
         if telegram_user_id is None or _resolve_telegram_actor_link(scope, telegram_user_id) is None:
             return _telegram_webhook_error(status.HTTP_403_FORBIDDEN, "account_link_required")
 
