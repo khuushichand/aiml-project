@@ -141,109 +141,179 @@ vi.mock("@/components/Option/Playground/PlaygroundForm", () => ({
     onPinAttachedResearchContext?: () => void
     onUnpinAttachedResearchContext?: () => void
     onRestorePinnedResearchContext?: () => void
+    onPrepareResearchFollowUp?: (target: { run_id: string; query: string }) => void
     onPinAttachedResearchContextHistory?: (
       context: ReturnType<typeof buildAttachedContext>
     ) => void
     onSelectAttachedResearchContextHistory?: (
       context: ReturnType<typeof buildAttachedContext>
     ) => void
-  }) => (
-    <div
-      data-testid="playground-form"
-      data-attached-run-id={props.attachedResearchContext?.run_id || ""}
-      data-attached-query={props.attachedResearchContext?.query || ""}
-      data-attached-question={props.attachedResearchContext?.question || ""}
-      data-baseline-run-id={props.attachedResearchContextBaseline?.run_id || ""}
-      data-baseline-question={props.attachedResearchContextBaseline?.question || ""}
-      data-pinned-run-id={props.attachedResearchContextPinned?.run_id || ""}
-      data-history-run-ids={(props.attachedResearchContextHistory || [])
-        .map((entry) => entry.run_id || "")
-        .join(",")}
-    >
-      {props.attachedResearchContext ? (
-        <>
-          <button
-            type="button"
-            onClick={() =>
-              props.onApplyAttachedResearchContext?.({
-                ...buildAttachedContext(
-                  props.attachedResearchContext?.run_id || "run_edited",
-                  props.attachedResearchContext?.query || "Edited query"
-                ),
-                question: "Edited attached question"
-              })
-            }
-          >
-            Edit attached research
-          </button>
-          <button
-            type="button"
-            onClick={() => props.onResetAttachedResearchContext?.()}
-          >
-            Reset attached research
-          </button>
-          <button
-            type="button"
-            onClick={() => props.onRemoveAttachedResearchContext?.()}
-          >
-            Remove attached research
-          </button>
-          <button
-            type="button"
-            onClick={() => props.onPinAttachedResearchContext?.()}
-          >
-            Pin attached research
-          </button>
-        </>
-      ) : null}
-      {props.attachedResearchContextPinned ? (
-        <>
-          <button
-            type="button"
-            onClick={() => props.onRestorePinnedResearchContext?.()}
-          >
-            Restore pinned research
-          </button>
-          <button
-            type="button"
-            onClick={() => props.onUnpinAttachedResearchContext?.()}
-          >
-            Unpin attached research
-          </button>
-        </>
-      ) : null}
-      {(props.attachedResearchContextHistory || []).map((entry) => (
-        <React.Fragment key={entry.run_id}>
-          <button
-            type="button"
-            onClick={() =>
-              props.onSelectAttachedResearchContextHistory?.(
-                buildAttachedContext(
-                  entry.run_id || "run_history",
-                  entry.query || "History query"
+  }) => {
+    const [pendingFollowUp, setPendingFollowUp] = React.useState<{
+      run_id: string
+      query: string
+    } | null>(null)
+
+    return (
+      <div
+        data-testid="playground-form"
+        data-attached-run-id={props.attachedResearchContext?.run_id || ""}
+        data-attached-query={props.attachedResearchContext?.query || ""}
+        data-attached-question={props.attachedResearchContext?.question || ""}
+        data-baseline-run-id={props.attachedResearchContextBaseline?.run_id || ""}
+        data-baseline-question={props.attachedResearchContextBaseline?.question || ""}
+        data-pinned-run-id={props.attachedResearchContextPinned?.run_id || ""}
+        data-history-run-ids={(props.attachedResearchContextHistory || [])
+          .map((entry) => entry.run_id || "")
+          .join(",")}
+      >
+        {props.attachedResearchContext ? (
+          <>
+            <button
+              type="button"
+              onClick={() =>
+                props.onApplyAttachedResearchContext?.({
+                  ...buildAttachedContext(
+                    props.attachedResearchContext?.run_id || "run_edited",
+                    props.attachedResearchContext?.query || "Edited query"
+                  ),
+                  question: "Edited attached question"
+                })
+              }
+            >
+              Edit attached research
+            </button>
+            <button
+              type="button"
+              onClick={() => props.onResetAttachedResearchContext?.()}
+            >
+              Reset attached research
+            </button>
+            <button
+              type="button"
+              onClick={() => props.onRemoveAttachedResearchContext?.()}
+            >
+              Remove attached research
+            </button>
+            <button
+              type="button"
+              onClick={() => props.onPinAttachedResearchContext?.()}
+            >
+              Pin attached research
+            </button>
+            {props.onPrepareResearchFollowUp ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setPendingFollowUp({
+                    run_id: props.attachedResearchContext?.run_id || "run_attached",
+                    query: props.attachedResearchContext?.query || "Attached query"
+                  })
+                }
+              >
+                Follow up attached research
+              </button>
+            ) : null}
+          </>
+        ) : null}
+        {props.attachedResearchContextPinned ? (
+          <>
+            <button
+              type="button"
+              onClick={() => props.onRestorePinnedResearchContext?.()}
+            >
+              Restore pinned research
+            </button>
+            <button
+              type="button"
+              onClick={() => props.onUnpinAttachedResearchContext?.()}
+            >
+              Unpin attached research
+            </button>
+            {props.onPrepareResearchFollowUp ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setPendingFollowUp({
+                    run_id: props.attachedResearchContextPinned?.run_id || "run_pinned",
+                    query: props.attachedResearchContextPinned?.query || "Pinned query"
+                  })
+                }
+              >
+                Follow up pinned research
+              </button>
+            ) : null}
+          </>
+        ) : null}
+        {(props.attachedResearchContextHistory || []).map((entry) => (
+          <React.Fragment key={entry.run_id}>
+            <button
+              type="button"
+              onClick={() =>
+                props.onSelectAttachedResearchContextHistory?.(
+                  buildAttachedContext(
+                    entry.run_id || "run_history",
+                    entry.query || "History query"
+                  )
                 )
-              )
-            }
-          >
-            {`Use history ${entry.run_id}`}
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              props.onPinAttachedResearchContextHistory?.(
-                buildAttachedContext(
-                  entry.run_id || "run_history",
-                  entry.query || "History query"
+              }
+            >
+              {`Use history ${entry.run_id}`}
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                props.onPinAttachedResearchContextHistory?.(
+                  buildAttachedContext(
+                    entry.run_id || "run_history",
+                    entry.query || "History query"
+                  )
                 )
-              )
-            }
-          >
-            {`Pin history ${entry.run_id}`}
-          </button>
-        </React.Fragment>
-      ))}
-    </div>
-  )
+              }
+            >
+              {`Pin history ${entry.run_id}`}
+            </button>
+            {props.onPrepareResearchFollowUp ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setPendingFollowUp({
+                    run_id: entry.run_id || "run_history",
+                    query: entry.query || "History query"
+                  })
+                }
+              >
+                {`Follow up history ${entry.run_id}`}
+              </button>
+            ) : null}
+          </React.Fragment>
+        ))}
+        {pendingFollowUp ? (
+          <div data-testid="follow-up-confirmation">
+            <div>Prepare follow-up?</div>
+            <div>
+              {`This will use "${pendingFollowUp.query}" and prefill a follow-up research prompt in the composer.`}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                props.onPrepareResearchFollowUp?.(pendingFollowUp)
+                setPendingFollowUp(null)
+              }}
+            >
+              Prepare follow-up
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingFollowUp(null)}
+            >
+              Cancel follow-up
+            </button>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
 }))
 
 vi.mock("@/components/Option/Playground/PlaygroundChat", () => ({
@@ -413,6 +483,118 @@ describe("Playground research context integration", () => {
     expect(storeOptionState.value.setSelectedQuickPrompt).toHaveBeenCalledWith(
       "Follow up on this research: Battery recycling supply chain"
     )
+  })
+
+  it("shows Follow up on the active attachment surface and opens the local confirmation before preparing follow-up research", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: buildPersistedAttachment(
+        "run_active",
+        "Active battery recycling run"
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1")
+      ]
+    })
+
+    render(<Playground />)
+
+    const followUpButton = await screen.findByRole("button", {
+      name: "Follow up"
+    })
+    fireEvent.click(followUpButton)
+
+    expect(
+      screen.getByText("Prepare follow-up?")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Prepare follow-up" })
+    ).toBeInTheDocument()
+  })
+
+  it("shows Follow up on the pinned mini-card and keeps the confirmation local", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: null,
+      deepResearchPinnedAttachment: buildPersistedAttachment(
+        "run_pinned",
+        "Pinned battery recycling run"
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1")
+      ]
+    })
+
+    render(<Playground />)
+
+    const followUpButton = await screen.findByRole("button", {
+      name: "Follow up"
+    })
+    fireEvent.click(followUpButton)
+
+    expect(
+      screen.getByText("Prepare follow-up?")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Cancel" })
+    ).toBeInTheDocument()
+  })
+
+  it("shows Follow up on recent-history entries and cancels without changing the active attachment", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: buildPersistedAttachment(
+        "run_active",
+        "Active battery recycling run"
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1"),
+        buildPersistedAttachment("run_hist_2", "History 2")
+      ]
+    })
+
+    render(<Playground />)
+
+    const followUpButton = await screen.findByRole("button", {
+      name: "Follow up"
+    })
+    fireEvent.click(followUpButton)
+
+    expect(
+      screen.getByText("Prepare follow-up?")
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    expect(screen.queryByText("Prepare follow-up?")).not.toBeInTheDocument()
+    expect(researchClientMocks.getResearchBundle).not.toHaveBeenCalled()
+    expect(storeOptionState.value.setSelectedQuickPrompt).not.toHaveBeenCalled()
+  })
+
+  it("confirming follow-up does not implicitly trigger Use", async () => {
+    chatSettingsState.syncChatSettingsForServerChat.mockResolvedValue({
+      updatedAt: "2026-03-08T20:10:00Z",
+      deepResearchAttachment: buildPersistedAttachment(
+        "run_active",
+        "Active battery recycling run"
+      ),
+      deepResearchAttachmentHistory: [
+        buildPersistedAttachment("run_hist_1", "History 1")
+      ]
+    })
+
+    render(<Playground />)
+
+    const followUpButton = await screen.findByRole("button", {
+      name: "Follow up"
+    })
+    fireEvent.click(followUpButton)
+    fireEvent.click(screen.getByRole("button", { name: "Prepare follow-up" }))
+
+    expect(researchClientMocks.getResearchBundle).toHaveBeenCalledWith(
+      "run_active"
+    )
+    expect(
+      screen.getByRole("button", { name: "Use history run_hist_1" })
+    ).toBeInTheDocument()
   })
 
   it("replaces the attached research context and lets the form remove it", async () => {
