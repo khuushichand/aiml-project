@@ -205,3 +205,17 @@ Add:
 git add Docs/Plans/2026-03-19-deep-research-chat-attachment-follow-up-implementation-plan.md
 git commit -m "docs(research): finalize attachment-surface follow-up plan"
 ```
+
+---
+
+## Execution Notes
+
+- Task 1 completed by extending the mocked `Playground` integration seam and guard coverage for attachment-surface follow-up preparation. The red test commit is `ed9640c43` (`test(chat): cover attachment-surface follow-up prep`).
+- Task 2 added local `Follow up` confirmation controls to the active attachment chip, pinned mini-card, and recent-history rows in [AttachedResearchContextChip.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/AttachedResearchContextChip.tsx) and [PlaygroundForm.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx).
+- Task 3 reused the existing shared `handlePrepareResearchFollowUp(...)` callback in [Playground.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/Playground.tsx) instead of adding a second follow-up-preparation path, and tightened the mocked integration test seam to scope follow-up assertions by surface.
+- Focused verification commands run:
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts apps/packages/ui/src/components/Option/Playground/__tests__/research-chat-context.test.ts`
+  - Result: `32/32` passed
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.signals.guard.test.ts apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/research-chat-context.test.ts`
+  - Result: `47/47` passed
+- Bandit was not run for this slice because the change set is frontend/package TypeScript and docs only.
