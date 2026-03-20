@@ -29,4 +29,16 @@ describe("frontend dev config", () => {
 
     expect(packageJson.scripts?.["dev:webpack"]).toBe("next dev --webpack")
   })
+
+  it("uses Turbopack for the production build script", () => {
+    const packageJson = JSON.parse(
+      readFileSync(path.join(appDir, "package.json"), "utf8")
+    ) as {
+      scripts?: Record<string, string>
+    }
+
+    expect(packageJson.scripts?.build).toBe(
+      "next build --turbopack && node scripts/verify-shared-token-sync.mjs --dir .next"
+    )
+  })
 })
