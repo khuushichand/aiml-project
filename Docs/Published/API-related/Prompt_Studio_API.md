@@ -159,13 +159,6 @@ curl -X GET "http://localhost:8000/api/v1/prompt-studio/optimizations/history/70
 - History: `GET /api/v1/prompt-studio/prompts/history/{prompt_id}`
 - Revert (new version): `POST /api/v1/prompt-studio/prompts/revert/{prompt_id}/{version}`
 - Execute (simple): `POST /api/v1/prompt-studio/prompts/execute`
-- Preview structured assembly: `POST /api/v1/prompt-studio/prompts/preview`
-- Convert legacy prompt text to structured definition: `POST /api/v1/prompt-studio/prompts/convert`
-
-Structured prompt notes
-- Structured prompts send `prompt_format="structured"`, `prompt_schema_version=1`, and `prompt_definition`.
-- The preview endpoint returns canonical `assembled_messages` plus legacy compatibility snapshots.
-- `few_shot_examples`, `modules_config`, and optional `signature_id` are applied through the same backend assembly path used by Prompt Studio execution, so preview and runtime stay aligned.
 
 ### Test Cases
 - Create: `POST /api/v1/prompt-studio/test-cases/create`

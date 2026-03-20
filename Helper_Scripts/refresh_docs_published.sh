@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Refresh curated docs in Docs/Published from source folders.
 # Keeps only approved sections and preserves each section's index.md.
+# Hosted/commercial docs stay out of Docs/Published and belong in the private repo.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="$ROOT_DIR/Docs"

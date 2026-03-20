@@ -549,6 +549,61 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_type TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_location TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_ref_requested TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_ref_kind TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_subpath TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_commit_resolved TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS pack_content_digest TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_verified BOOLEAN NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_verification_mode TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_fetched_at TIMESTAMPTZ NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS fetched_by INTEGER NULL",
+        (),
+    ),
+    (
         """
         DO $$
         BEGIN
@@ -636,6 +691,53 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_upgrades_scope "
         "ON mcp_governance_pack_upgrades(pack_id, owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_source_candidates (
+            id SERIAL PRIMARY KEY,
+            source_type TEXT NOT NULL,
+            source_location TEXT NOT NULL,
+            source_ref_requested TEXT NULL,
+            source_ref_kind TEXT NULL,
+            source_subpath TEXT NULL,
+            source_commit_resolved TEXT NULL,
+            pack_content_digest TEXT NOT NULL,
+            pack_document_json TEXT NOT NULL DEFAULT '{}',
+            source_verified BOOLEAN NULL,
+            source_verification_mode TEXT NULL,
+            source_fetched_at TIMESTAMPTZ NULL,
+            fetched_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
+        "ON mcp_governance_pack_source_candidates(source_type, source_location)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS source_ref_kind TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS pack_document_json TEXT NOT NULL DEFAULT '{}'",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_trust_policy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            updated_by INTEGER NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
         (),
     ),
     (
@@ -1202,59 +1304,6 @@ _CREATE_AUTHNZ_CORE_TABLES = [
 _CREATE_BILLING_TABLES = [
     (
         """
-        CREATE TABLE IF NOT EXISTS subscription_plans (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            description TEXT,
-            stripe_product_id TEXT,
-            stripe_price_id TEXT,
-            stripe_price_id_yearly TEXT,
-            price_usd_monthly DOUBLE PRECISION DEFAULT 0,
-            price_usd_yearly DOUBLE PRECISION DEFAULT 0,
-            limits_json JSONB NOT NULL,
-            is_active BOOLEAN DEFAULT TRUE,
-            is_public BOOLEAN DEFAULT TRUE,
-            sort_order INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS org_subscriptions (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
-            plan_id INTEGER NOT NULL REFERENCES subscription_plans(id) ON DELETE RESTRICT,
-            stripe_customer_id TEXT,
-            stripe_subscription_id TEXT,
-            stripe_subscription_status TEXT,
-            billing_cycle TEXT DEFAULT 'monthly',
-            current_period_start TIMESTAMP,
-            current_period_end TIMESTAMP,
-            status TEXT DEFAULT 'active',
-            trial_start TIMESTAMP,
-            trial_end TIMESTAMP,
-            canceled_at TIMESTAMP,
-            cancel_at_period_end BOOLEAN DEFAULT FALSE,
-            custom_limits_json JSONB,
-            metadata JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)", ()),
-    (
-        """
         CREATE TABLE IF NOT EXISTS org_budgets (
             org_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
             budgets_json JSONB,
@@ -1265,64 +1314,6 @@ _CREATE_BILLING_TABLES = [
         (),
     ),
     ("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
-            id SERIAL PRIMARY KEY,
-            stripe_event_id TEXT UNIQUE NOT NULL,
-            event_type TEXT NOT NULL,
-            event_data JSONB NOT NULL,
-            status TEXT DEFAULT 'pending',
-            processed_at TIMESTAMPTZ,
-            error_message TEXT,
-            retry_count INTEGER DEFAULT 0,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS payment_history (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-            stripe_invoice_id TEXT,
-            stripe_payment_intent_id TEXT,
-            amount_cents INTEGER NOT NULL,
-            currency TEXT DEFAULT 'usd',
-            status TEXT NOT NULL,
-            description TEXT,
-            invoice_pdf_url TEXT,
-            receipt_url TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS billing_audit_log (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            action TEXT NOT NULL,
-            details TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)", ()),
 ]
 
 
@@ -2644,66 +2635,6 @@ def _normalize_budget_payload_pg(raw: Any) -> dict[str, Any]:
     return payload
 
 
-async def _backfill_org_budgets_pg(db_pool: DatabasePool) -> None:
-    try:
-        rows = await db_pool.fetch(
-            """
-            SELECT os.org_id, os.custom_limits_json, ob.budgets_json
-            FROM org_subscriptions os
-            LEFT JOIN org_budgets ob ON ob.org_id = os.org_id
-            WHERE os.custom_limits_json IS NOT NULL
-            """
-        )
-    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(f"PG budgets backfill fetch failed: {exc}")
-        return
-
-    for row in rows:
-        org_id = row.get("org_id") if isinstance(row, dict) else None
-        if org_id is None:
-            continue
-        custom_limits = _parse_json_payload_pg(row.get("custom_limits_json"))
-        if not isinstance(custom_limits, dict) or "budgets" not in custom_limits:
-            continue
-        legacy_budgets = custom_limits.get("budgets")
-        normalized_payload = _normalize_budget_payload_pg(legacy_budgets)
-        existing_payload = _normalize_budget_payload_pg(row.get("budgets_json"))
-
-        if normalized_payload and not existing_payload:
-            try:
-                await db_pool.execute(
-                    """
-                    INSERT INTO org_budgets (org_id, budgets_json, updated_at)
-                    VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
-                    ON CONFLICT (org_id)
-                    DO UPDATE SET budgets_json = EXCLUDED.budgets_json, updated_at = EXCLUDED.updated_at
-                    """,
-                    org_id,
-                    json.dumps(normalized_payload),
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill insert failed for org_id={org_id}: {exc}")
-                continue
-
-        should_strip = bool(normalized_payload or existing_payload)
-        if should_strip:
-            cleaned_limits = dict(custom_limits)
-            cleaned_limits.pop("budgets", None)
-            payload = json.dumps(cleaned_limits) if cleaned_limits else None
-            try:
-                await db_pool.execute(
-                    """
-                    UPDATE org_subscriptions
-                    SET custom_limits_json = $2::jsonb
-                    WHERE org_id = $1
-                    """,
-                    org_id,
-                    payload,
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill cleanup failed for org_id={org_id}: {exc}")
-
-
 async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
     try:
         rows = await db_pool.fetch(
@@ -2746,7 +2677,7 @@ async def ensure_billing_tables_pg(
     *,
     run_backfill: bool = True,
 ) -> bool:
-    """Ensure billing-related tables exist for PostgreSQL backends."""
+    """Ensure only OSS budget compatibility tables exist for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
         if getattr(db_pool, "pool", None) is None:
@@ -2762,167 +2693,19 @@ async def ensure_billing_tables_pg(
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure billing DDL failed: {exc}")
 
-        default_plans = [
-            {
-                "name": "free",
-                "display_name": "Free",
-                "description": "Internal/default plan (not publicly listed)",
-                "price_usd_monthly": 0,
-                "price_usd_yearly": 0,
-                "sort_order": 0,
-                "is_public": False,
-                "limits_json": json.dumps({
-                    "storage_mb": 1024,
-                    "api_calls_day": 100,
-                    "api_calls_month": 3000,
-                    "llm_tokens_day": 10000,
-                    "llm_tokens_month": 300000,
-                    "transcription_minutes_month": 10,
-                    "rag_queries_day": 50,
-                    "concurrent_jobs": 1,
-                    "team_members": 1,
-                    "rate_limit_rpm": 10,
-                    "features": ["basic_search", "basic_chat"],
-                }),
-            },
-            {
-                "name": "starter",
-                "display_name": "Starter",
-                "description": "For individuals getting started",
-                "price_usd_monthly": 10,
-                "price_usd_yearly": 100,
-                "sort_order": 1,
-                "is_public": True,
-                "limits_json": json.dumps({
-                    "storage_mb": 2048,
-                    "api_calls_day": 1000,
-                    "api_calls_month": 30000,
-                    "llm_tokens_month": 4000000,
-                    "llm_tokens_premium_month": 80000,
-                    "max_context_tokens": 64000,
-                    "byok_enabled": True,
-                    "byok_keys_saved": 1,
-                    "notebooks": 100,
-                    "sources_per_notebook": 50,
-                    "ingestion_pages_month": 2000,
-                    "ingestion_pages_day": 150,
-                    "scheduled_refresh": "manual",
-                    "max_upload_mb": 50,
-                    "transcription_minutes_month": 120,
-                    "tts_minutes_month": 30,
-                    "rag_queries_day": 1000,
-                    "concurrent_jobs": 2,
-                    "team_members": 1,
-                    "rate_limit_rpm": 20,
-                    "features": ["basic_search", "basic_chat", "byok"],
-                }),
-            },
-            {
-                "name": "plus",
-                "display_name": "Plus",
-                "description": "For power users who need more capacity",
-                "price_usd_monthly": 20,
-                "price_usd_yearly": 200,
-                "sort_order": 2,
-                "is_public": True,
-                "limits_json": json.dumps({
-                    "storage_mb": 10240,
-                    "api_calls_day": 5000,
-                    "api_calls_month": 150000,
-                    "llm_tokens_month": 12000000,
-                    "llm_tokens_premium_month": 200000,
-                    "max_context_tokens": 128000,
-                    "byok_enabled": True,
-                    "byok_keys_saved": 3,
-                    "notebooks": 300,
-                    "sources_per_notebook": 100,
-                    "ingestion_pages_month": 10000,
-                    "ingestion_pages_day": 750,
-                    "scheduled_refresh": "weekly",
-                    "max_upload_mb": 200,
-                    "transcription_minutes_month": 300,
-                    "tts_minutes_month": 90,
-                    "rag_queries_day": 5000,
-                    "concurrent_jobs": 5,
-                    "team_members": 1,
-                    "rate_limit_rpm": 60,
-                    "features": ["*", "byok", "rag_advanced", "vector_search"],
-                }),
-            },
-            {
-                "name": "pro",
-                "display_name": "Pro",
-                "description": "For teams and professional usage",
-                "price_usd_monthly": 30,
-                "price_usd_yearly": 300,
-                "sort_order": 3,
-                "is_public": True,
-                "limits_json": json.dumps({
-                    "storage_mb": 30720,
-                    "api_calls_day": 15000,
-                    "api_calls_month": 450000,
-                    "llm_tokens_month": 18000000,
-                    "llm_tokens_premium_month": 300000,
-                    "max_context_tokens": 200000,
-                    "byok_enabled": True,
-                    "byok_keys_saved": 10,
-                    "notebooks": 1000,
-                    "sources_per_notebook": 300,
-                    "ingestion_pages_month": 30000,
-                    "ingestion_pages_day": 2000,
-                    "scheduled_refresh": "daily",
-                    "max_upload_mb": 500,
-                    "transcription_minutes_month": 500,
-                    "tts_minutes_month": 150,
-                    "rag_queries_day": 15000,
-                    "concurrent_jobs": 10,
-                    "team_members": 5,
-                    "rate_limit_rpm": 120,
-                    "features": ["*", "byok", "rag_advanced", "vector_search", "priority_support", "audit_logs"],
-                }),
-            },
-        ]
-
-        for plan in default_plans:
-            try:
-                await db_pool.execute(
-                    """
-                    INSERT INTO subscription_plans
-                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order, is_public)
-                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
-                    ON CONFLICT (name) DO NOTHING
-                    """,
-                    plan["name"],
-                    plan["display_name"],
-                    plan["description"],
-                    plan["price_usd_monthly"],
-                    plan["price_usd_yearly"],
-                    plan["limits_json"],
-                    plan["sort_order"],
-                    plan.get("is_public", True),
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG ensure billing seed failed: {exc}")
-
         if run_backfill:
-            try:
-                await _backfill_org_budgets_pg(db_pool)
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill skipped/failed: {exc}")
-
             try:
                 await _normalize_org_budgets_pg(db_pool)
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
         logger.info(
-            "Ensured PostgreSQL billing tables "
-            "(subscription_plans, org_subscriptions, org_budgets, "
-            "stripe_webhook_events, payment_history, billing_audit_log)"
+            "Ensured PostgreSQL OSS budget compatibility tables "
+            "(org_budgets only; retired billing tables are left untouched if present)"
         )
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.warning(f"Failed to ensure PostgreSQL billing tables: {exc}")
+        logger.warning(f"Failed to ensure PostgreSQL OSS budget compatibility tables: {exc}")
         return False
 
 

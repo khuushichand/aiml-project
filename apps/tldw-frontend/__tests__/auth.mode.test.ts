@@ -58,10 +58,10 @@ describe('getAuthMode', () => {
     expect(getAuthMode()).toBe('jwt');
   });
 
-  it('ignores localStorage JWT state in hosted mode', () => {
+  it('still returns jwt when hosted mode is set and a local JWT exists', () => {
     process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = 'hosted';
     localStorage.setItem('access_token', 'token');
-    expect(getAuthMode()).toBe('none');
+    expect(getAuthMode()).toBe('jwt');
   });
 
   it('prefers jwt when access_token and stored x_api_key are both present', () => {

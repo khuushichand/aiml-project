@@ -691,12 +691,12 @@ python Helper_Scripts/download_kokoro_assets.py \
   --model-path models/kokoro/onnx/model.onnx \
   --voices-dir models/kokoro/voices
 ```
-Manual (huggingface-cli):
+Manual (`hf` CLI):
 ```bash
-pip install huggingface-hub
+pip install -U "huggingface_hub"
 mkdir -p models/kokoro
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
 ```
 Resulting layout:
 ```
@@ -707,16 +707,16 @@ models/kokoro/
 
 #### Higgs Audio V2
 ```bash
-# Using huggingface-cli
-pip install huggingface-hub
-huggingface-cli download bosonai/higgs-audio-v2-generation-3B-base \
+# Using the hf CLI
+pip install -U "huggingface_hub"
+hf download bosonai/higgs-audio-v2-generation-3B-base \
     --local-dir models/higgs
 ```
 
 #### Chatterbox
 ```bash
 # Download from Resemble AI
-huggingface-cli download resemble-ai/chatterbox \
+hf download resemble-ai/chatterbox \
     --local-dir models/chatterbox
 ```
 
@@ -729,15 +729,15 @@ pip install -e .
 
 # Models auto-download on first use, or pre-download:
 # 1.5B model
-huggingface-cli download microsoft/VibeVoice-1.5B \
+hf download microsoft/VibeVoice-1.5B \
     --local-dir models/vibevoice-1.5b
 
 # 7B model (larger, better quality)
-huggingface-cli download vibevoice/VibeVoice-7B \
+hf download vibevoice/VibeVoice-7B \
     --local-dir models/vibevoice-7b
 
 # Optional: Community 8-bit quantized 7B variant (reduced VRAM)
-huggingface-cli download FabioSarracino/VibeVoice-Large-Q8 \
+hf download FabioSarracino/VibeVoice-Large-Q8 \
     --local-dir models/vibevoice-7b-q8
 ```
 

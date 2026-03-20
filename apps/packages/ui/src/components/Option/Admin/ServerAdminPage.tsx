@@ -30,9 +30,11 @@ import {
   deriveAdminGuardFromError,
   sanitizeAdminErrorMessage
 } from "./admin-error-utils"
+import { AdminAudioInstallerCard } from "./AdminAudioInstallerCard"
 
 const { Title, Text } = Typography
 const SYSTEM_STATS_TIMEOUT_MS = 10_000
+const LEGACY_STORAGE_BYTES_FALLBACK_CUTOFF = 1024 * 1024 * 1024
 
 const formatBytesForAdmin = (value: number | null | undefined): string => {
   if (typeof value !== "number" || !Number.isFinite(value)) return "–"
@@ -52,9 +54,11 @@ const formatBytesForAdmin = (value: number | null | undefined): string => {
 const formatMegabytesForAdmin = (value: number | null | undefined): string => {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "–"
 
-  // Some backends still report these legacy *_mb fields in raw bytes.
-  const looksLikeRawBytes = value >= 1_000_000
-  const bytesValue = looksLikeRawBytes ? value : value * 1024 * 1024
+  // Keep a narrow fallback for legacy backends that leaked raw bytes into *_mb fields.
+  // Values this large would represent exabyte-scale megabyte totals, which is implausible
+  // for the admin summaries shown here, so treat only that oversized range as raw bytes.
+  const bytesValue =
+    value >= LEGACY_STORAGE_BYTES_FALLBACK_CUTOFF ? value : value * 1024 * 1024
   return formatBytesForAdmin(bytesValue)
 }
 
@@ -506,6 +510,8 @@ export const ServerAdminPage: React.FC = () => {
             )}
           </Card>
         )}
+
+        <AdminAudioInstallerCard />
 
         {!adminGuard && (
           <>

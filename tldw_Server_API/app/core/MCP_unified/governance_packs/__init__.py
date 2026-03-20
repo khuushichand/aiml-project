@@ -1,4 +1,4 @@
-from .fixtures import load_governance_pack_fixture
+from .fixtures import load_governance_pack_directory, load_governance_pack_fixture
 from .models import (
     ApprovalTemplate,
     AssignmentTemplate,
@@ -23,6 +23,7 @@ __all__ = [
     "NormalizedGovernancePackIR",
     "PersonaTemplate",
     "build_opa_bundle",
+    "load_governance_pack_directory",
     "load_governance_pack_fixture",
     "normalize_governance_pack",
     "validate_governance_pack",

@@ -116,25 +116,6 @@ describe("Header runs link role gating", () => {
 
     expect(screen.getByRole("link", { name: "Runs" })).toBeInTheDocument()
   })
-
-  it("hides operator routes and exposes account links in hosted mode", () => {
-    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "hosted"
-    authState.user = {
-      username: "admin-user",
-      role: "admin",
-      roles: ["admin"],
-      is_admin: true
-    }
-
-    render(<Header />)
-
-    expect(screen.queryByRole("link", { name: "Runs" })).toBeNull()
-    expect(screen.queryByRole("link", { name: "Admin" })).toBeNull()
-    expect(screen.queryByRole("link", { name: "Config" })).toBeNull()
-    expect(screen.queryByRole("link", { name: "Profile" })).toBeNull()
-    expect(screen.getByRole("link", { name: "Account" })).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Billing" })).toBeInTheDocument()
-  })
 })
 
 afterEach(() => {

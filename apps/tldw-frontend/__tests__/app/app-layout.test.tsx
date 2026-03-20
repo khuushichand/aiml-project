@@ -44,16 +44,13 @@ vi.mock("@web/components/AppProviders", () => ({
   AppProviders: ({ children }: { children: React.ReactNode }) => <>{children}</>
 }))
 
-vi.mock("@/services/tldw/TldwApiClient", () => ({
-  tldwClient: {
+vi.mock("@web/lib/configured-auth-state", () => ({
+  loadTldwClient: async () => ({
     getConfig: (...args: unknown[]) => mockGetConfig(...args)
-  }
-}))
-
-vi.mock("@/services/tldw/TldwAuth", () => ({
-  tldwAuth: {
+  }),
+  loadTldwAuth: async () => ({
     getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args)
-  }
+  })
 }))
 
 const DummyPage = () => <div data-testid="page-content">Page</div>
@@ -97,14 +94,6 @@ describe("App layout routing", () => {
 
   it("skips OptionLayout for /login", () => {
     renderApp("/login")
-    expect(screen.queryByTestId("option-layout")).toBeNull()
-    expect(screen.getByTestId("page-content")).toBeInTheDocument()
-  })
-
-  it("skips OptionLayout for hosted public auth routes", () => {
-    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "hosted"
-
-    renderApp("/signup")
     expect(screen.queryByTestId("option-layout")).toBeNull()
     expect(screen.getByTestId("page-content")).toBeInTheDocument()
   })
@@ -178,23 +167,6 @@ describe("App layout routing", () => {
     })
     expect(layout).toHaveAttribute("data-hide-header", "true")
     expect(layout).toHaveAttribute("data-hide-sidebar", "true")
-  })
-
-  it("treats hosted multi-user sessions as authenticated without browser tokens", async () => {
-    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "hosted"
-    currentConfig = {
-      serverUrl: "",
-      authMode: "multi-user"
-    }
-
-    renderApp("/media")
-    const layout = await screen.findByTestId("option-layout")
-
-    await waitFor(() => {
-      expect(mockGetCurrentUser).toHaveBeenCalled()
-    })
-    expect(layout).toHaveAttribute("data-hide-header", "false")
-    expect(layout).toHaveAttribute("data-hide-sidebar", "false")
   })
 
   it("warms primary navigation routes after auth resolves", async () => {

@@ -46,7 +46,7 @@ Key variables:
 - `NEXT_PUBLIC_API_BEARER`: Optional. Bearer token for chat module when server sets `API_BEARER`.
 - `NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD`: Optional. Runs row-count threshold for preferring server-side CSV export (default: `2000`).
 
-3) Run the development server (use port 8080 to match server CORS defaults):
+3) Run the development server (use port 8080 to match the server's built-in local browser defaults):
 
 ```bash
 bun run dev -- -p 8080
