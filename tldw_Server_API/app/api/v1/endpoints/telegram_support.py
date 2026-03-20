@@ -257,6 +257,14 @@ async def telegram_webhook_impl(
     if not webhook_secret:
         return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
 
+    repo = await get_org_secret_repo()
+    scope = await _resolve_webhook_scope_from_secret(
+        repo=repo,
+        webhook_secret=webhook_secret,
+    )
+    if scope is None:
+        return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
+
     raw_body = await request.body()
     try:
         payload = json.loads(raw_body.decode("utf-8") or "{}")
@@ -274,14 +282,6 @@ async def telegram_webhook_impl(
             detail="update_id is required",
         )
     update_id_int = update_id
-
-    repo = await get_org_secret_repo()
-    scope = await _resolve_webhook_scope_from_secret(
-        repo=repo,
-        webhook_secret=webhook_secret,
-    )
-    if scope is None:
-        return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
 
     dedupe_key = f"{scope.scope_type}:{scope.scope_id}:{update_id_int}"
     if dedupe_receipts.seen_or_store(dedupe_key, dedupe_ttl_seconds):

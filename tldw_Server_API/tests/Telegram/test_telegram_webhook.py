@@ -7,6 +7,7 @@ import pytest
 from fastapi import Request
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+import tldw_Server_API.app.api.v1.endpoints.telegram_support as telegram_support
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     _reset_telegram_webhook_state_for_tests,
     telegram_webhook_impl,
@@ -211,6 +212,58 @@ def test_telegram_webhook_rejects_invalid_secret(client, principal_override):
 
     assert response.status_code == 401
     assert response.json()["error"] == "invalid_secret"
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_rejects_wrong_secret_before_body_parse(monkeypatch):
+    class _FakeRepo:
+        async def list_secrets(self, provider: str):
+            assert provider == "telegram"
+            return [{"scope_type": "team", "scope_id": 77}]
+
+        async def fetch_secret(self, scope_type: str, scope_id: int, provider: str):
+            assert provider == "telegram"
+            assert scope_type == "team"
+            assert scope_id == 77
+            return {"encrypted_blob": "ignored"}
+
+    monkeypatch.setattr(
+        telegram_support,
+        "_decrypt_telegram_payload",
+        lambda _encrypted_blob: {
+            "provider": "telegram",
+            "credential_version": 1,
+            "bot_username": "example_bot",
+            "enabled": True,
+            "bot_token": "123:abc",
+            "webhook_secret": "stored-secret-123",
+        },
+    )
+
+    async def _receive() -> dict[str, object]:
+        raise AssertionError("body should not be read before auth failure")
+
+    async def _get_repo() -> _FakeRepo:
+        return _FakeRepo()
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/telegram/webhook",
+            "query_string": b"",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"x-telegram-bot-api-secret-token", b"wrong-but-long-enough"),
+            ],
+        },
+        _receive,
+    )
+
+    response = await telegram_webhook_impl(request=request, get_org_secret_repo=_get_repo)
+
+    assert response.status_code == 401
+    assert json.loads(response.body) == {"ok": False, "error": "invalid_secret"}
 
 
 def test_telegram_webhook_rejects_malformed_payload(client, principal_override):
