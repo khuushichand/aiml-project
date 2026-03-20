@@ -126,6 +126,11 @@ class _FakeGovernancePackService:
                 "pack_content_digest": "b" * 64,
                 "source_verified": True,
                 "source_verification_mode": "git-commit",
+                "signer_fingerprint": "ABCD1234",
+                "signer_identity": "Release Bot <bot@example.com>",
+                "verified_object_type": "commit",
+                "verification_result_code": "verified_and_trusted",
+                "verification_warning_code": None,
                 "source_fetched_at": datetime.now(timezone.utc).isoformat(),
                 "fetched_by": 7,
                 "manifest": {
@@ -470,6 +475,11 @@ class _FakeGovernancePackDistributionService:
             "pack_content_digest": "c" * 64,
             "source_verified": None,
             "source_verification_mode": None,
+            "signer_fingerprint": None,
+            "signer_identity": None,
+            "verified_object_type": None,
+            "verification_result_code": None,
+            "verification_warning_code": None,
             "source_fetched_at": datetime.now(timezone.utc).isoformat(),
             "fetched_by": 7,
         }
@@ -484,6 +494,11 @@ class _FakeGovernancePackDistributionService:
             "pack_content_digest": "d" * 64,
             "source_verified": True,
             "source_verification_mode": "git_signature",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "verified_object_type": "commit",
+            "verification_result_code": "verified_and_trusted",
+            "verification_warning_code": None,
             "source_fetched_at": datetime.now(timezone.utc).isoformat(),
             "fetched_by": 7
         }
@@ -749,6 +764,7 @@ def test_governance_pack_source_prepare_dry_run_and_import_round_trip() -> None:
 
     assert prepare_resp.status_code == 201
     assert prepare_resp.json()["candidate"]["source_location"] == "/srv/packs/researcher-pack"
+    assert prepare_resp.json()["candidate"]["signer_fingerprint"] is None
 
     assert dry_run_resp.status_code == 200
     assert dry_run_resp.json()["report"]["manifest"]["pack_id"] == "researcher-pack"
@@ -798,6 +814,8 @@ def test_governance_pack_git_update_check_and_candidate_upgrade_round_trip() -> 
     assert check_resp.json()["status"] == "newer_version_available"
     assert prepare_resp.status_code == 201
     assert prepare_resp.json()["candidate"]["source_commit_resolved"] == "def456"
+    assert prepare_resp.json()["candidate"]["signer_fingerprint"] == "ABCD1234"
+    assert prepare_resp.json()["candidate"]["verification_result_code"] == "verified_and_trusted"
 
     assert dry_run_resp.status_code == 200
     assert dry_run_resp.json()["plan"]["target_manifest"]["pack_version"] == "1.1.0"
@@ -1174,6 +1192,8 @@ def test_governance_pack_list_and_detail_include_provenance() -> None:
     assert list_resp.json()[0]["source_location"] == "https://github.com/example/researcher-pack.git"
     assert list_resp.json()[0]["source_commit_resolved"] == "abc123"
     assert list_resp.json()[0]["pack_content_digest"] == "b" * 64
+    assert list_resp.json()[0]["signer_fingerprint"] == "ABCD1234"
+    assert list_resp.json()[0]["verification_result_code"] == "verified_and_trusted"
 
     assert detail_resp.status_code == 200
     detail_payload = detail_resp.json()
@@ -1183,6 +1203,8 @@ def test_governance_pack_list_and_detail_include_provenance() -> None:
     assert detail_payload["source_subpath"] == "packs/researcher"
     assert detail_payload["source_commit_resolved"] == "abc123"
     assert detail_payload["pack_content_digest"] == "b" * 64
+    assert detail_payload["signer_identity"] == "Release Bot <bot@example.com>"
+    assert detail_payload["verified_object_type"] == "commit"
     assert detail_payload["imported_objects"][0]["source_object_id"] == "researcher.profile"
     assert detail_payload["imported_objects"][1]["object_type"] == "policy_assignment"
 

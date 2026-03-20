@@ -810,6 +810,11 @@ class GovernancePackSourceCandidateResponse(BaseModel):
     pack_content_digest: str
     source_verified: bool | None = None
     source_verification_mode: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
     source_fetched_at: datetime | str | None = None
     fetched_by: int | None = None
 
@@ -1028,6 +1033,11 @@ class GovernancePackSummaryResponse(BaseModel):
     pack_content_digest: str | None = None
     source_verified: bool | None = None
     source_verification_mode: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
     source_fetched_at: datetime | str | None = None
     fetched_by: int | None = None
     manifest: dict[str, Any] = Field(default_factory=dict)

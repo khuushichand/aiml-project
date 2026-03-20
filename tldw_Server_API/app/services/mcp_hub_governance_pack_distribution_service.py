@@ -222,6 +222,11 @@ class McpHubGovernancePackDistributionService:
         commit: str,
         verified: bool | None,
         verification_required: bool,
+        signer_fingerprint: str | None = None,
+        signer_identity: str | None = None,
+        verified_object_type: str | None = None,
+        verification_result_code: str | None = None,
+        verification_warning_code: str | None = None,
     ) -> GovernancePack:
         """Load a governance pack from a checked-out Git worktree."""
         pack = load_governance_pack_directory(
@@ -237,6 +242,11 @@ class McpHubGovernancePackDistributionService:
         )
         pack.source_path = None
         pack.pack_content_digest = _pack_content_digest(pack)
+        pack.signer_fingerprint = str(signer_fingerprint or "").strip() or None
+        pack.signer_identity = str(signer_identity or "").strip() or None
+        pack.verified_object_type = str(verified_object_type or "").strip() or None
+        pack.verification_result_code = str(verification_result_code or "").strip() or None
+        pack.verification_warning_code = str(verification_warning_code or "").strip() or None
         return pack
 
     async def _persist_prepared_candidate(
@@ -257,6 +267,11 @@ class McpHubGovernancePackDistributionService:
             pack_document=self._pack_document(pack),
             source_verified=pack.source_verified,
             source_verification_mode=pack.source_verification_mode,
+            signer_fingerprint=getattr(pack, "signer_fingerprint", None),
+            signer_identity=getattr(pack, "signer_identity", None),
+            verified_object_type=getattr(pack, "verified_object_type", None),
+            verification_result_code=getattr(pack, "verification_result_code", None),
+            verification_warning_code=getattr(pack, "verification_warning_code", None),
             fetched_by=actor_id,
         )
         if not candidate:
@@ -631,6 +646,31 @@ class McpHubGovernancePackDistributionService:
                     else None
                 ),
                 verification_required=verification_required,
+                signer_fingerprint=(
+                    str(verification_result.get("signer_fingerprint") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
+                signer_identity=(
+                    str(verification_result.get("signer_identity") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
+                verified_object_type=(
+                    str(verification_result.get("verified_object_type") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
+                verification_result_code=(
+                    str(verification_result.get("result_code") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
+                verification_warning_code=(
+                    str(verification_result.get("warning_code") or "").strip()
+                    if verification_result is not None
+                    else None
+                ),
             )
 
     async def prepare_source_candidate(

@@ -595,6 +595,31 @@ _CREATE_MCP_HUB_TABLES = [
     ),
     (
         "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS signer_fingerprint TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS signer_identity TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS verified_object_type TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS verification_result_code TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS verification_warning_code TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
         "ADD COLUMN IF NOT EXISTS source_fetched_at TIMESTAMPTZ NULL",
         (),
     ),
@@ -707,6 +732,11 @@ _CREATE_MCP_HUB_TABLES = [
             pack_document_json TEXT NOT NULL DEFAULT '{}',
             source_verified BOOLEAN NULL,
             source_verification_mode TEXT NULL,
+            signer_fingerprint TEXT NULL,
+            signer_identity TEXT NULL,
+            verified_object_type TEXT NULL,
+            verification_result_code TEXT NULL,
+            verification_warning_code TEXT NULL,
             source_fetched_at TIMESTAMPTZ NULL,
             fetched_by INTEGER NULL,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -727,6 +757,31 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "ALTER TABLE mcp_governance_pack_source_candidates "
         "ADD COLUMN IF NOT EXISTS pack_document_json TEXT NOT NULL DEFAULT '{}'",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS signer_fingerprint TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS signer_identity TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS verified_object_type TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS verification_result_code TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS verification_warning_code TEXT NULL",
         (),
     ),
     (
