@@ -147,6 +147,41 @@ def test_unknown_user_is_denied_for_privileged_action(client, principal_override
     assert response.json()["error"] == "account_link_required"
 
 
+@pytest.mark.parametrize(
+    "message_text",
+    [
+        "/persona  set analyst",
+        "/character\tset analyst",
+    ],
+)
+def test_whitespace_variants_are_still_privileged_actions(client, principal_override, message_text):
+    _seed_telegram_bot(
+        client,
+        principal_override,
+        scope_type="team",
+        scope_id=22,
+        bot_token="123:abc",
+        webhook_secret="secret-123",
+    )
+
+    response = client.post(
+        "/api/v1/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-123"},
+        json={
+            "update_id": 10,
+            "message": {
+                "message_id": 7,
+                "chat": {"id": 1, "type": "private"},
+                "from": {"id": 99, "username": "unknown"},
+                "text": message_text,
+            },
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "account_link_required"
+
+
 def test_replayed_denied_privileged_action_is_deduped(client, principal_override):
     _seed_telegram_bot(
         client,

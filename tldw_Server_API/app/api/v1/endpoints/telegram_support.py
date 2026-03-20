@@ -39,12 +39,6 @@ _TELEGRAM_LINK_LOCK = threading.Lock()
 _TELEGRAM_PAIRING_CODES: dict[str, dict[str, Any]] = {}
 _TELEGRAM_ACTOR_LINKS: dict[tuple[str, int, int], dict[str, Any]] = {}
 _TELEGRAM_PAIRING_CODE_TTL_SECONDS = 900
-_PRIVILEGED_ACTION_PREFIXES = (
-    "/persona set",
-    "/character set",
-)
-
-
 @dataclass(frozen=True)
 class TelegramScope:
     scope_type: str
@@ -83,11 +77,7 @@ def _telegram_actor_link_key(scope: TelegramScope, telegram_user_id: int) -> tup
 
 def _generate_telegram_pairing_code() -> str:
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    with _TELEGRAM_LINK_LOCK:
-        while True:
-            code = "".join(secrets.choice(alphabet) for _ in range(8))
-            if code not in _TELEGRAM_PAIRING_CODES:
-                return code
+    return "".join(secrets.choice(alphabet) for _ in range(8))
 
 
 def _store_telegram_pairing_code(
@@ -96,18 +86,21 @@ def _store_telegram_pairing_code(
     auth_user_id: int | None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
-    code = _generate_telegram_pairing_code()
-    record = {
-        "pairing_code": code,
-        "scope_type": scope.scope_type,
-        "scope_id": scope.scope_id,
-        "auth_user_id": auth_user_id,
-        "created_at": now,
-        "expires_at": now + timedelta(seconds=_TELEGRAM_PAIRING_CODE_TTL_SECONDS),
-    }
     with _TELEGRAM_LINK_LOCK:
-        _TELEGRAM_PAIRING_CODES[code] = record
-    return record
+        while True:
+            code = _generate_telegram_pairing_code()
+            if code in _TELEGRAM_PAIRING_CODES:
+                continue
+            record = {
+                "pairing_code": code,
+                "scope_type": scope.scope_type,
+                "scope_id": scope.scope_id,
+                "auth_user_id": auth_user_id,
+                "created_at": now,
+                "expires_at": now + timedelta(seconds=_TELEGRAM_PAIRING_CODE_TTL_SECONDS),
+            }
+            _TELEGRAM_PAIRING_CODES[code] = record
+            return record
 
 
 def _register_telegram_actor_link_for_tests(
@@ -142,11 +135,14 @@ def _is_privileged_telegram_action(text: Any) -> bool:
     normalized = _coerce_nonempty_string(text)
     if not normalized:
         return False
-    lowered = normalized.lower()
-    for prefix in _PRIVILEGED_ACTION_PREFIXES:
-        if lowered == prefix or lowered.startswith(f"{prefix} "):
-            return True
-    return False
+    tokens = normalized.lower().split()
+    if len(tokens) < 2:
+        return False
+    if tokens[0] not in {"/persona", "/character"}:
+        return False
+    if tokens[1] != "set":
+        return False
+    return True
 
 
 def _extract_message_actor_and_text(payload: dict[str, Any]) -> tuple[int | None, str | None]:
