@@ -30,6 +30,7 @@ import {
   deriveAdminGuardFromError,
   sanitizeAdminErrorMessage
 } from "./admin-error-utils"
+import { AudioInstallerPanel } from "@/components/Option/Setup/AudioInstallerPanel"
 
 const { Title, Text } = Typography
 const SYSTEM_STATS_TIMEOUT_MS = 10_000
@@ -506,6 +507,18 @@ export const ServerAdminPage: React.FC = () => {
             )}
           </Card>
         )}
+
+        <Card title={t("settings:audioInstaller.adminCardTitle", "Audio installer")} size="small">
+          <Space orientation="vertical" size="small" className="w-full">
+            <Text type="secondary">
+              {t(
+                "settings:audioInstaller.adminCardBody",
+                "Install and verify server-side STT/TTS bundles for this connected server."
+              )}
+            </Text>
+            <AudioInstallerPanel />
+          </Space>
+        </Card>
 
         {!adminGuard && (
           <>
