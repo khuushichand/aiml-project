@@ -14,7 +14,6 @@ from typing import Any, Dict, Optional
 import pytest
 
 from tldw_Server_API.app.core.Billing.subscription_service import SubscriptionService
-from tldw_Server_API.app.core.AuthNZ.repos.billing_repo import AuthnzBillingRepo
 
 
 class _FakeBillingRepo:
