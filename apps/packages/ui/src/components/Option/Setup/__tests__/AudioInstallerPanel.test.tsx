@@ -119,6 +119,73 @@ const recommendationPayload = {
   catalog: []
 }
 
+const cpuKittenRecommendationPayload = {
+  machine_profile: {
+    platform: "linux",
+    arch: "x86_64",
+    apple_silicon: false,
+    cuda_available: false,
+    free_disk_gb: 64,
+    network_available_for_downloads: true
+  },
+  recommendations: [
+    {
+      bundle_id: "cpu_local",
+      resource_profile: "balanced",
+      selection_key: "v2:cpu_local:balanced",
+      label: "CPU Local",
+      bundle: {
+        bundle_id: "cpu_local",
+        label: "CPU Local",
+        description: "Local CPU-first speech bundle.",
+        default_resource_profile: "balanced",
+        resource_profiles: {
+          light: {
+            profile_id: "light",
+            label: "Light",
+            description: "Lowest-footprint local speech profile.",
+            estimated_disk_gb: 1,
+            resource_class: "low",
+            default_tts_choice: "kokoro",
+            tts_choices: [
+              { choice_id: "kokoro", label: "Kokoro" },
+              { choice_id: "kitten_tts", label: "KittenTTS" }
+            ]
+          },
+          balanced: {
+            profile_id: "balanced",
+            label: "Balanced",
+            description: "Balanced CPU local speech profile.",
+            estimated_disk_gb: 2,
+            resource_class: "medium",
+            default_tts_choice: "kokoro",
+            tts_choices: [
+              { choice_id: "kokoro", label: "Kokoro" },
+              { choice_id: "kitten_tts", label: "KittenTTS" }
+            ]
+          }
+        }
+      },
+      profile: {
+        profile_id: "balanced",
+        label: "Balanced",
+        description: "Balanced CPU local speech profile.",
+        stt_plan: [{ engine: "faster_whisper", models: ["small"] }],
+        tts_plan: [{ engine: "kokoro", variants: [] }],
+        estimated_disk_gb: 2,
+        resource_class: "medium",
+        default_tts_choice: "kokoro",
+        tts_choices: [
+          { choice_id: "kokoro", label: "Kokoro" },
+          { choice_id: "kitten_tts", label: "KittenTTS" }
+        ]
+      }
+    }
+  ],
+  excluded: [],
+  catalog: []
+}
+
 describe("AudioInstallerPanel", () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -322,6 +389,99 @@ describe("AudioInstallerPanel", () => {
     expect(await screen.findByText("Verification result")).toBeInTheDocument()
     expect(await screen.findByText("partial")).toBeInTheDocument()
     expect(await screen.findByText("Install eSpeak NG before relying on Kokoro.")).toBeInTheDocument()
+  })
+
+  it("renders curated tts choices and submits the selected choice", async () => {
+    mocks.bgRequest.mockImplementation((init: { path: string; method?: string; body?: string }) => {
+      const target = String(init.path)
+      if (target.includes("/audio/recommendations")) {
+        return Promise.resolve(createResponse(cpuKittenRecommendationPayload))
+      }
+      if (target.includes("/install-status")) {
+        return Promise.resolve(createResponse({ status: "idle", steps: [], errors: [] }))
+      }
+      if (target.includes("/audio/provision")) {
+        expect(init?.method).toBe("POST")
+        expect(JSON.parse(String(init?.body))).toEqual({
+          bundle_id: "cpu_local",
+          resource_profile: "balanced",
+          tts_choice: "kitten_tts",
+          safe_rerun: false
+        })
+        return Promise.resolve(
+          createResponse({
+            status: "completed",
+            bundle_id: "cpu_local",
+            resource_profile: "balanced",
+            tts_choice: "kitten_tts",
+            steps: [],
+            errors: []
+          })
+        )
+      }
+      throw new Error(`Unexpected request: ${init.path}`)
+    })
+
+    render(<AudioInstallerPanel />)
+
+    expect(await screen.findByText("Balanced CPU local speech profile.")).toBeInTheDocument()
+    expect(screen.getByText("Curated TTS")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("radio", { name: "KittenTTS" }))
+    fireEvent.click(screen.getByRole("button", { name: "Provision bundle" }))
+
+    await waitFor(() => {
+      expect(mocks.bgRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: "/api/v1/setup/admin/audio/provision",
+          method: "POST"
+        })
+      )
+    })
+  })
+
+  it("preserves a curated tts choice across retry-triggered recommendation reloads", async () => {
+    let verifyAttempts = 0
+
+    mocks.bgRequest.mockImplementation((init: { path: string; method?: string; body?: string }) => {
+      const target = String(init.path)
+      if (target.includes("/audio/recommendations")) {
+        return Promise.resolve(createResponse(cpuKittenRecommendationPayload))
+      }
+      if (target.includes("/install-status")) {
+        return Promise.resolve(createResponse({ status: "idle", steps: [], errors: [] }))
+      }
+      if (target.includes("/audio/verify")) {
+        verifyAttempts += 1
+        if (verifyAttempts === 1) {
+          return Promise.resolve(createResponse({ detail: "boom" }, 500))
+        }
+        return Promise.resolve(
+          createResponse({
+            status: "ready",
+            bundle_id: "cpu_local",
+            selected_resource_profile: "balanced",
+            tts_choice: "kitten_tts",
+            targets_checked: ["stt_default", "tts_default"],
+            remediation_items: []
+          })
+        )
+      }
+      throw new Error(`Unexpected request: ${init.path}`)
+    })
+
+    render(<AudioInstallerPanel />)
+
+    expect(await screen.findByText("Curated TTS")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("radio", { name: "KittenTTS" }))
+    fireEvent.click(screen.getByRole("button", { name: "Run verification" }))
+
+    expect(await screen.findByText("Installer request failed")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: "KittenTTS" })).toBeChecked()
+    })
   })
 
   it("shows an admin-only message when access is forbidden", async () => {
