@@ -222,7 +222,15 @@ const TTS_PROVIDERS: { value: AudioTtsProvider; label: string }[] = [
 ]
 
 const TLDW_TTS_MODELS = [
-  { value: "kokoro", label: "Kokoro" }
+  { value: "kokoro", label: "Kokoro" },
+  { value: "kitten_tts", label: "KittenTTS" },
+  { value: "KittenML/kitten-tts-nano-0.8", label: "KittenTTS (Nano)" },
+  {
+    value: "KittenML/kitten-tts-nano-0.8-int8",
+    label: "KittenTTS (Nano INT8)"
+  },
+  { value: "KittenML/kitten-tts-micro-0.8", label: "KittenTTS (Micro)" },
+  { value: "KittenML/kitten-tts-mini-0.8", label: "KittenTTS (Mini)" }
 ]
 
 const OPENAI_TTS_MODELS = [
@@ -245,6 +253,24 @@ const AUDIO_FORMATS: { value: string; label: string }[] = [
   { value: "opus", label: "Opus" },
   { value: "aac", label: "AAC" },
   { value: "flac", label: "FLAC" }
+]
+
+const KOKORO_FALLBACK_VOICES = [
+  { value: "af_heart", label: "Heart (Female)" },
+  { value: "af_bella", label: "Bella (Female)" },
+  { value: "am_adam", label: "Adam (Male)" },
+  { value: "am_michael", label: "Michael (Male)" }
+]
+
+const KITTEN_FALLBACK_VOICES = [
+  { value: "Bella", label: "Bella" },
+  { value: "Jasper", label: "Jasper" },
+  { value: "Luna", label: "Luna" },
+  { value: "Bruno", label: "Bruno" },
+  { value: "Rosie", label: "Rosie" },
+  { value: "Hugo", label: "Hugo" },
+  { value: "Kiki", label: "Kiki" },
+  { value: "Leo", label: "Leo" }
 ]
 
 // Slides export formats
@@ -1457,13 +1483,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           label: v.name || v.voice_id || v.id || "Unknown"
         }))
       }
-      // Default tldw voices
-      return [
-        { value: "af_heart", label: "Heart (Female)" },
-        { value: "af_bella", label: "Bella (Female)" },
-        { value: "am_adam", label: "Adam (Male)" },
-        { value: "am_michael", label: "Michael (Male)" }
-      ]
+      return inferredTldwProviderKey === "kitten_tts"
+        ? KITTEN_FALLBACK_VOICES
+        : KOKORO_FALLBACK_VOICES
     }
     if (audioSettings.provider === "openai") {
       return OPENAI_TTS_VOICES
@@ -1481,6 +1503,39 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     }
     return []
   }
+
+  useEffect(() => {
+    if (audioSettings.provider !== "tldw") {
+      return
+    }
+
+    const voiceOptions =
+      tldwVoices.length > 0
+        ? tldwVoices.map((voice) => ({
+            value: voice.voice_id || voice.id || voice.name || "",
+            label: voice.name || voice.voice_id || voice.id || "Unknown"
+          }))
+        : inferredTldwProviderKey === "kitten_tts"
+          ? KITTEN_FALLBACK_VOICES
+          : KOKORO_FALLBACK_VOICES
+
+    if (!voiceOptions.length) {
+      return
+    }
+
+    const currentVoice = String(audioSettings.voice || "").trim()
+    if (currentVoice && voiceOptions.some((option) => option.value === currentVoice)) {
+      return
+    }
+
+    setAudioSettings({ voice: voiceOptions[0].value })
+  }, [
+    audioSettings.provider,
+    audioSettings.voice,
+    inferredTldwProviderKey,
+    setAudioSettings,
+    tldwVoices
+  ])
 
   const handleCancelGeneration = () => {
     const activeAbort = generationAbortRef.current

@@ -112,3 +112,13 @@ def test_setup_ui_script_exposes_bundle_first_audio_actions():
     assert 'Provision recommended bundle' in source
     assert 'Run verification' in source
     assert 'Safe rerun' in source
+
+
+def test_setup_ui_script_mentions_kitten_tts():
+    with _make_client() as client:
+        response = client.get('/static/setup/js/setup.js')
+
+    assert response.status_code == 200
+    source = response.text
+    assert 'kitten_tts' in source
+    assert 'KittenTTS' in source

@@ -10,6 +10,7 @@ This guide provides comprehensive instructions for deploying and configuring the
 - **RAM**:
   - 4GB for API-only providers
   - 8GB for Kokoro (ONNX)
+  - 4GB for KittenTTS
   - 16GB for Higgs/Chatterbox/Dia
   - 32GB for VibeVoice-7B
   - 12GB+ for IndexTTS2 (emotion + codec pipelines)
@@ -23,6 +24,7 @@ This guide provides comprehensive instructions for deploying and configuring the
 - **NVIDIA GPU**: CUDA 11.8+ for PyTorch models
 - **VRAM**:
   - 4GB for Kokoro (optional)
+  - 2GB for KittenTTS (optional; CPU works)
   - 6GB for Higgs/Chatterbox
   - 8GB for Dia
   - 16GB for VibeVoice-7B
@@ -74,8 +76,8 @@ pip install \
     librosa \
     onnxruntime \
     kokoro-onnx \
-    phonemizer \
-    espeak-phonemizer \
+    phonemizer-fork \
+    espeakng_loader \
     huggingface-hub \
     "index-tts @ git+https://github.com/index-tts/index-tts.git"
 
@@ -178,6 +180,16 @@ providers:
     device: cpu  # or cuda
     phonemizer_backend: espeak
 
+  kitten_tts:
+    enabled: true
+    model: KittenML/kitten-tts-nano-0.8
+    model_revision: 8d6d5a1851ffd13c894c40227c888302c2a86ef7
+    device: cpu
+    auto_download: true
+    extra_params:
+      cache_dir: ./cache/kitten_tts
+      clean_text: false
+
   higgs:
     enabled: true
     model_path: bosonai/higgs-audio-v2-generation-3B-base
@@ -253,6 +265,12 @@ fallback:
   max_attempts: 3
   retry_delay_ms: 1000
   backoff_multiplier: 2
+
+### KittenTTS Notes
+
+- KittenTTS requires `espeak-ng` to be installed on the host because phonemization is initialized through `espeakng_loader`.
+- The provider keeps voice catalog metadata static so `/api/v1/audio/voices/catalog` does not trigger model downloads.
+- If you change `model`, also update `model_revision` to the matching immutable Hugging Face commit hash.
 
 # Circuit breaker configuration
 circuit_breaker:

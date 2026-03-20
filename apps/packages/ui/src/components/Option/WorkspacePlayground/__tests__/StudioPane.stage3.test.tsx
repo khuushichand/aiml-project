@@ -1,6 +1,8 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { fetchTldwVoiceCatalog } from "@/services/tldw/audio-voices"
+import { inferTldwProviderFromModel } from "@/services/tts-provider"
 import { StudioPane, estimateGenerationSeconds } from "../StudioPane"
 
 const {
@@ -342,6 +344,13 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     workspaceStoreState.isGeneratingOutput = false
     workspaceStoreState.generatingOutputType = null
     workspaceStoreState.noteFocusTarget = null
+    workspaceStoreState.audioSettings = {
+      provider: "tldw",
+      model: "kokoro",
+      voice: "af_heart",
+      speed: 1,
+      format: "mp3"
+    }
     messageOptionStoreState.selectedModel = "gpt-4o-mini"
     messageOptionStoreState.ragSearchMode = "hybrid"
     messageOptionStoreState.ragTopK = 8
@@ -355,6 +364,8 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     chatModelSettingsStoreState.temperature = 0.7
     chatModelSettingsStoreState.topP = 1
     chatModelSettingsStoreState.numPredict = 800
+    vi.mocked(fetchTldwVoiceCatalog).mockResolvedValue([])
+    vi.mocked(inferTldwProviderFromModel).mockReturnValue("kokoro")
 
     let artifactCounter = 0
     mockAddArtifact.mockImplementation((artifactData: any) => {
@@ -644,6 +655,25 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     expect(accordion).toContainElement(
       screen.getByText("TTS Provider")
     )
+  })
+
+  it("switches to KittenTTS voices when a Kitten model is selected", async () => {
+    workspaceStoreState.audioSettings = {
+      provider: "tldw",
+      model: "KittenML/kitten-tts-nano-0.8",
+      voice: "af_heart",
+      speed: 1,
+      format: "mp3"
+    }
+    vi.mocked(inferTldwProviderFromModel).mockReturnValue("kitten_tts")
+    vi.mocked(fetchTldwVoiceCatalog).mockResolvedValue([])
+
+    renderExpandedStudioPane()
+
+    await waitFor(() => {
+      expect(fetchTldwVoiceCatalog).toHaveBeenCalledWith("kitten_tts")
+      expect(mockSetAudioSettings).toHaveBeenCalledWith({ voice: "Bella" })
+    })
   })
 
   it("wires Studio Options controls to model and RAG stores", async () => {

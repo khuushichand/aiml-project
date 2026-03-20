@@ -264,7 +264,7 @@ def _cuda_available() -> bool:
       1. Environment overrides:
          - TLDW_SETUP_FORCE_GPU=1 -> force GPU packages
          - TLDW_SETUP_FORCE_CPU=1 -> force CPU-only packages
-      2. Automatic detection via torch.cuda.is_available()
+      2. Conservative environment/tool detection (safe default: CPU)
     """
 
     def _truthy(value: str | None) -> bool:
@@ -278,12 +278,11 @@ def _cuda_available() -> bool:
     if _truthy(os.getenv("TLDW_SETUP_FORCE_GPU")):
         return True
 
-    try:
-        import torch
-
-        return bool(torch.cuda.is_available())
-    except Exception:
-        return False
+    if shutil.which("nvidia-smi"):
+        return True
+    if os.getenv("CUDA_HOME") or os.getenv("CUDA_PATH"):
+        return True
+    return False
 
 class InstallationStatus:
     """Persist installation progress to a status file."""
@@ -902,6 +901,8 @@ def _install_tts(plan: InstallPlan, status: InstallationStatus, errors: list[str
         try:
             if entry.engine == 'kokoro':
                 _install_kokoro(entry.variants)
+            elif entry.engine == 'kitten_tts':
+                _install_kitten_tts(entry.variants)
             elif entry.engine == 'dia':
                 _install_dia()
             elif entry.engine == 'higgs':
@@ -1067,6 +1068,33 @@ def _install_kokoro(variants: list[str]) -> None:
     if 'voices' in targets:
         # Download the voices directory
         _download_hf_dir(onnx_repo, 'voices', voices_dir)
+
+
+def _install_kitten_tts(variants: list[str]) -> None:
+    _ensure_downloads_allowed('KittenTTS model assets')
+    try:
+        from tldw_Server_API.app.core.TTS.vendors.kittentts_compat import download_model_assets
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError('KittenTTS compatibility runtime is required for asset downloads.') from exc
+
+    variant_to_repo = {
+        'nano': 'KittenML/kitten-tts-nano-0.8',
+        'nano-int8': 'KittenML/kitten-tts-nano-0.8-int8',
+        'micro': 'KittenML/kitten-tts-micro-0.8',
+        'mini': 'KittenML/kitten-tts-mini-0.8',
+    }
+    selected = variants or ['nano']
+    for variant in selected:
+        repo_id = variant_to_repo.get(str(variant).strip().lower(), str(variant).strip())
+        if not repo_id:
+            continue
+        logger.info('Prefetching KittenTTS assets for {}', repo_id)
+        try:
+            download_model_assets(repo_id, auto_download=True)
+        except Exception as exc:  # noqa: BLE001
+            if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
+                raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
+            raise
 
 
 def _install_dia() -> None:
@@ -1294,6 +1322,12 @@ TTS_DEPENDENCIES: dict[str, list[PipRequirement]] = {
         PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
         PipRequirement(package='phonemizer>=3.2.1', import_name='phonemizer'),
         PipRequirement(package='espeak-phonemizer>=1.0.1', import_name='espeak_phonemizer'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
+    ],
+    'kitten_tts': [
+        PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
+        PipRequirement(package='phonemizer-fork~=3.3.2', import_name='phonemizer'),
+        PipRequirement(package='espeakng_loader', import_name='espeakng_loader'),
         PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],
     'dia': [
