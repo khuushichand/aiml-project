@@ -47,13 +47,13 @@ pip install torch transformers soundfile
 pip install -U "huggingface_hub[cli]"
 
 # Download the 1.7B model (recommended for production)
-huggingface-cli download Qwen/Qwen3-ASR-1.7B --local-dir ./models/qwen3_asr/1.7B
+hf download Qwen/Qwen3-ASR-1.7B --local-dir ./models/qwen3_asr/1.7B
 
 # Or download the 0.6B model (for resource-constrained environments)
-huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir ./models/qwen3_asr/0.6B
+hf download Qwen/Qwen3-ASR-0.6B --local-dir ./models/qwen3_asr/0.6B
 
 # Optional: Download the Forced Aligner for word-level timestamps
-huggingface-cli download Qwen/Qwen3-ForcedAligner-0.6B --local-dir ./models/qwen3_asr/aligner
+hf download Qwen/Qwen3-ForcedAligner-0.6B --local-dir ./models/qwen3_asr/aligner
 ```
 
 ### Using Python
@@ -400,7 +400,7 @@ BadRequestError: Qwen3-ASR model path does not exist: ./models/qwen3_asr/1.7B
 
 **Solution**: Download the model first:
 ```bash
-huggingface-cli download Qwen/Qwen3-ASR-1.7B --local-dir ./models/qwen3_asr/1.7B
+hf download Qwen/Qwen3-ASR-1.7B --local-dir ./models/qwen3_asr/1.7B
 ```
 
 #### Qwen3-ASR Disabled

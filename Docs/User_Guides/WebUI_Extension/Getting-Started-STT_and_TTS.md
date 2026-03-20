@@ -181,14 +181,14 @@ Examples
 # Create a local directory
 mkdir -p models/kokoro
 
-# Option A: huggingface-cli (ONNX v1.0)
-pip install huggingface-hub
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+# Option A: hf CLI (ONNX v1.0)
+pip install -U "huggingface_hub"
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
 
 # Option B: direct URLs for ONNX (if CLI unavailable)
 wget https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX-timestamped/resolve/main/onnx/model.onnx -O models/kokoro/onnx/model.onnx
-# Then download the voices/ directory assets from the same repo (or use huggingface-cli above)
+# Then download the voices/ directory assets from the same repo (or use the hf CLI above)
 ```
 
 1. Enable and point config to your files (the installer writes defaults under models/kokoro/)
