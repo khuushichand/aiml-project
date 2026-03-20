@@ -14,6 +14,16 @@ const CHECKPOINT_REVIEW_PHASE_REASONS: Record<string, string> = {
   awaiting_outline_review: "Outline review needed"
 }
 
+export type ChatLinkedResearchActionPolicy = {
+  needsReview: boolean
+  reasonLabel: string | null
+  primaryActionKind: "review" | "open"
+  primaryActionLabel: "Review in Research" | "Open in Research"
+  researchHref: string
+  canUseInChat: boolean
+  canFollowUp: boolean
+}
+
 export const isTerminalResearchRun = (run: ChatLinkedResearchRun): boolean =>
   run.status === "completed" || run.status === "failed" || run.status === "cancelled"
 
@@ -49,6 +59,47 @@ export const getChatLinkedResearchReviewReason = (
     return CHECKPOINT_REVIEW_PHASE_REASONS[run.phase]
   }
   return "Review needed"
+}
+
+export const getChatLinkedResearchActionPolicy = (
+  run: ChatLinkedResearchRun
+): ChatLinkedResearchActionPolicy => {
+  const reasonLabel = getChatLinkedResearchReviewReason(run)
+  const needsReview = reasonLabel !== null
+
+  if (needsReview) {
+    return {
+      needsReview: true,
+      reasonLabel,
+      primaryActionKind: "review",
+      primaryActionLabel: "Review in Research",
+      researchHref: buildChatLinkedResearchPath(run.run_id),
+      canUseInChat: false,
+      canFollowUp: false
+    }
+  }
+
+  if (run.status === "completed") {
+    return {
+      needsReview: false,
+      reasonLabel: null,
+      primaryActionKind: "open",
+      primaryActionLabel: "Open in Research",
+      researchHref: buildChatLinkedResearchPath(run.run_id),
+      canUseInChat: true,
+      canFollowUp: true
+    }
+  }
+
+  return {
+    needsReview: false,
+    reasonLabel: null,
+    primaryActionKind: "open",
+    primaryActionLabel: "Open in Research",
+    researchHref: buildChatLinkedResearchPath(run.run_id),
+    canUseInChat: false,
+    canFollowUp: false
+  }
 }
 
 export const getChatLinkedResearchStatusLabel = (
