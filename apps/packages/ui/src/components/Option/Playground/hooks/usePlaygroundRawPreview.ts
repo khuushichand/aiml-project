@@ -9,6 +9,7 @@ import type {
   ChatMessage
 } from "@/services/tldw/TldwApiClient"
 import { parseJsonObject } from "./utils"
+import { formatPinnedResults } from "@/utils/rag-format"
 
 // ---------------------------------------------------------------------------
 // Deps interface
@@ -55,7 +56,8 @@ export interface UsePlaygroundRawPreviewDeps {
   messageSteeringForceNarrate: boolean | undefined
   ragMediaIds: number[] | null
   selectedKnowledge: unknown
-  fileRetrievalEnabled: boolean
+  ragPinnedResults?: any[]
+  fileRetrievalEnabled?: boolean
   contextFiles: any[]
   documentContext: any[]
   selectedDocuments: any[]
@@ -105,6 +107,7 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
     messageSteeringForceNarrate,
     ragMediaIds,
     selectedKnowledge,
+    ragPinnedResults,
     fileRetrievalEnabled,
     contextFiles,
     documentContext,
@@ -287,7 +290,12 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
 
   const buildCurrentRawRequestSnapshot = React.useCallback(async () => {
     const intent = resolveSubmissionIntent(formMessage || "")
-    const draftMessage = intent.message.trim()
+    let draftMessage = intent.message.trim()
+    // Append pinned source expansion to match submitForm behavior
+    if (!intent.isImageCommand && !fileRetrievalEnabled && ragPinnedResults && ragPinnedResults.length > 0) {
+      const pinnedText = formatPinnedResults(ragPinnedResults, "markdown")
+      draftMessage = draftMessage ? `${draftMessage}\n\n${pinnedText}` : pinnedText
+    }
     const draftImage = intent.isImageCommand ? "" : String(formImage || "")
     const hasScopedRagMediaIds =
       Array.isArray(ragMediaIds) && ragMediaIds.length > 0
@@ -468,6 +476,7 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
     messageSteeringForceNarrate,
     messageSteeringMode,
     ragMediaIds,
+    ragPinnedResults,
     resolveSubmissionIntent,
     selectedCharacter?.id,
     selectedKnowledge,

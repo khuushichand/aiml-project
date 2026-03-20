@@ -43,7 +43,7 @@ export interface UsePromptTemplatesDeps {
   updateChatModelSettings: (settings: Partial<ChatModelSettings>) => void
   /** Compare mode (needed when applying template to sync model selection) */
   compareModeActive: boolean
-  setCompareSelectedModels: (models: string[]) => void
+  setCompareSelectedModels: (models: string[] | ((prev: string[]) => string[])) => void
   /** Mode announcement */
   setModeAnnouncement: (msg: string | null) => void
   /** i18n */
@@ -196,7 +196,11 @@ export function usePromptTemplates(deps: UsePromptTemplatesDeps) {
     if (startupTemplatePreview.selectedModel) {
       setSelectedModel(startupTemplatePreview.selectedModel)
       if (compareModeActive) {
-        setCompareSelectedModels([startupTemplatePreview.selectedModel])
+        setCompareSelectedModels((prev: string[]) => {
+          const updated = new Set(prev || [])
+          updated.add(startupTemplatePreview.selectedModel!)
+          return Array.from(updated)
+        })
       }
     }
 
@@ -263,8 +267,11 @@ export function usePromptTemplates(deps: UsePromptTemplatesDeps) {
     if (selectedQuickPrompt) {
       return t("playground:composer.summary.customPrompt", "Custom prompt")
     }
+    if (String(systemPrompt || "").trim().length > 0) {
+      return t("playground:composer.summary.customPrompt", "Custom prompt")
+    }
     return t("playground:composer.summary.noPrompt", "No prompt")
-  }, [selectedQuickPrompt, selectedSystemPrompt, t])
+  }, [selectedQuickPrompt, selectedSystemPrompt, systemPrompt, t])
 
   return {
     // Preset detection
