@@ -16,16 +16,11 @@ import {
   LandingFeatures,
   LandingTestimonials,
   LandingComparison,
-  LandingPricing,
   LandingCTA,
 } from "@web/components/landing"
-import { isHostedSaaSMode } from "@web/lib/deployment-mode"
 
 export default function JournalistsPage() {
-  const hostedMode = isHostedSaaSMode()
-  const description = hostedMode
-    ? "Hosted tldw focuses the launch surface on signup, ingest, chat, and search for solo investigative workflows. Self-host remains the right path for air-gapped or newsroom-controlled deployments."
-    : "Self-hosted transcription, search, and knowledge management for investigative journalism. Your interviews and research never touch third-party servers."
+  const description = "Self-hosted transcription, search, and knowledge management for investigative journalism. Your interviews and research never touch third-party servers."
   return (
     <LandingLayout
       title="tldw for Investigative Journalists"
@@ -35,16 +30,8 @@ export default function JournalistsPage() {
       <LandingHero
         headline="Your Sources Trust You With Their Safety.\nYour Research Tool Should Deserve That Trust."
         subheadline={description}
-        primaryCTA={
-          hostedMode
-            ? { text: "Start Hosted Trial", href: "/signup" }
-            : { text: "Start Self-Hosting Free", href: "/docs/self-hosting" }
-        }
-        secondaryCTA={
-          hostedMode
-            ? { text: "View Self-Host Docs", href: "/docs/self-hosting" }
-            : { text: "Try Cloud (E2E Encrypted)", href: "/signup" }
-        }
+        primaryCTA={{ text: "Start Self-Hosting Free", href: "/docs/self-hosting" }}
+        secondaryCTA={{ text: "Read the Docs", href: "/docs" }}
       />
 
       <LandingProblem
@@ -166,67 +153,11 @@ export default function JournalistsPage() {
         ]}
       />
 
-      <LandingPricing
-        headline="Pricing That Respects Your Budget"
-        tiers={[
-          {
-            name: "Self-Hosted",
-            price: "Free",
-            period: "forever",
-            description: "Full functionality on your infrastructure",
-            features: [
-              "Unlimited transcription",
-              "Full search and RAG",
-              "All file formats",
-              "Community support",
-            ],
-            cta: { text: "Download", href: "/docs/self-hosting" },
-          },
-          {
-            name: "Cloud Pro",
-            price: "$29",
-            period: "month",
-            description: "E2E encrypted cloud with sync",
-            features: [
-              "20 hours transcription/month",
-              "E2E encrypted storage",
-              "Cross-device sync",
-              "Priority support",
-              "EU hosting available",
-            ],
-            cta: { text: "Start Trial", href: "/signup" },
-            highlighted: true,
-          },
-          {
-            name: "Newsroom",
-            price: "Custom",
-            description: "For teams and organizations",
-            features: [
-              "Volume discounts",
-              "On-prem deployment support",
-              "Training and onboarding",
-              "SLA and dedicated support",
-              "SSO available",
-            ],
-            cta: { text: "Contact Us", href: "/contact" },
-          },
-        ]}
-        footnote="50% discount for journalists at nonprofit outlets. Contact us with your organization details."
-      />
-
       <LandingCTA
         headline="Your Next Investigation Deserves Better Tools"
         description="Stop trusting your most sensitive work to tools that weren't built for it. Get transcription, search, and AI analysis on infrastructure you control."
-        primaryCTA={
-          hostedMode
-            ? { text: "Start Hosted Trial", href: "/signup" }
-            : { text: "Download Self-Hosted", href: "/docs/self-hosting" }
-        }
-        secondaryCTA={
-          hostedMode
-            ? { text: "View Self-Host Docs", href: "/docs/self-hosting" }
-            : { text: "Start Cloud Trial", href: "/signup" }
-        }
+        primaryCTA={{ text: "Download Self-Hosted", href: "/docs/self-hosting" }}
+        secondaryCTA={{ text: "View Documentation", href: "/docs" }}
       />
     </LandingLayout>
   )
