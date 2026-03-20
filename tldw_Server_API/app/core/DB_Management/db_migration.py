@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Infrastructure.distributed_lock import acquire_migration_lock
+
 from tldw_Server_API.app.core.DB_Management.DB_Backups import (
     _sqlite_error_is_busy,
     restore_sqlite_database_file,
@@ -519,6 +521,23 @@ class DatabaseMigrator:
         create_backup: bool = True
     ) -> dict[str, Any]:
         """Migrate database to target version"""
+        redis_url = os.getenv("REDIS_URL")
+        lock_dir = str(Path(self.db_path).parent)
+
+        with acquire_migration_lock(
+            lock_dir=lock_dir,
+            lock_name="db_migration",
+            redis_url=redis_url,
+            timeout=60,
+        ):
+            return self._migrate_to_version_locked(target_version, create_backup)
+
+    def _migrate_to_version_locked(
+        self,
+        target_version: Optional[int] = None,
+        create_backup: bool = True,
+    ) -> dict[str, Any]:
+        """Inner migration logic, called while holding the distributed lock."""
         current_version = self.get_current_version()
         migrations = self.load_migrations()
         available_versions = [migration.version for migration in migrations]

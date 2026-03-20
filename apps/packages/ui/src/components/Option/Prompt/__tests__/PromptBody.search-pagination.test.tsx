@@ -32,15 +32,30 @@ const mocks = vi.hoisted(() => ({
   exportPrompts: vi.fn(),
   importPromptsV2: vi.fn(),
   deletePromptById: vi.fn(),
-  restorePrompt: vi.fn(async () => undefined),
+  restorePrompt: vi.fn(async (_id?: string | number) => undefined),
   permanentlyDeletePrompt: vi.fn(async () => undefined),
   emptyTrash: vi.fn(async () => 0),
-  autoSyncPrompt: vi.fn(async () => ({ success: true, syncStatus: "synced" })),
+  autoSyncPrompt: vi.fn(
+    async (_id?: string | number) =>
+      ({ success: true, syncStatus: "synced" }) as {
+        success: boolean
+        syncStatus: string
+        error?: string
+      }
+  ),
   pushToStudio: vi.fn(async () => ({ success: true })),
-  pullFromStudio: vi.fn(async () => ({ success: true, localId: "local-1", syncStatus: "synced" })),
+  pullFromStudio: vi.fn(
+    async (_id?: string | number) =>
+      ({ success: true, localId: "local-1", syncStatus: "synced" }) as {
+        success: boolean
+        localId?: string
+        syncStatus: string
+        error?: string
+      }
+  ),
   getStudioPromptById: vi.fn(),
   getLlmProviders: vi.fn(),
-  updatePrompt: vi.fn(async () => "updated-id"),
+  updatePrompt: vi.fn(async (_payload?: any) => "updated-id"),
   incrementPromptUsage: vi.fn(async () => ({
     usageCount: 1,
     lastUsedAt: Date.now()
@@ -875,11 +890,12 @@ describe("PromptBody server search and pagination", () => {
   })
 
   it("keeps failed rows selected when bulk push has partial failures", async () => {
-    mocks.autoSyncPrompt.mockImplementation(async (id: string) => {
+    mocks.autoSyncPrompt.mockImplementation(async (id?: string | number) => {
       if (id === "local-2") {
         return {
           success: false,
-          error: "project resolution failed"
+          error: "project resolution failed",
+          syncStatus: "local"
         }
       }
       return {

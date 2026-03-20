@@ -21,7 +21,6 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.TTS.utils import compute_tts_history_text_hash, parse_bool
 
@@ -112,7 +111,7 @@ def _parse_json_field(raw: Any) -> Any:
 )
 async def list_tts_history(
     request_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
     q: Optional[str] = Query(default=None),
     text_exact: Optional[str] = Query(default=None),
     favorite: Optional[bool] = Query(default=None),
@@ -285,7 +284,7 @@ async def list_tts_history(
 async def get_tts_history_entry(
     history_id: int,
     request_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ):
     detail_start = None
     try:
@@ -351,7 +350,7 @@ async def update_tts_history_entry(
     history_id: int,
     payload: TTSHistoryFavoriteUpdate,
     request_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ):
     updated = media_db.update_tts_history_favorite(
         user_id=str(request_user.id),
@@ -374,7 +373,7 @@ async def update_tts_history_entry(
 async def delete_tts_history_entry(
     history_id: int,
     request_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
 ):
     deleted = media_db.soft_delete_tts_history_entry(
         user_id=str(request_user.id),

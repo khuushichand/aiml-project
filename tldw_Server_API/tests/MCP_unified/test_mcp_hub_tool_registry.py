@@ -29,6 +29,9 @@ class _RegistryProbeModule(BaseModule):
                     "category": "search",
                     "risk_class": "low",
                     "capabilities": ["filesystem.read"],
+                    "uses_filesystem": True,
+                    "path_boundable": True,
+                    "path_argument_hints": ["path"],
                     "readOnlyHint": True,
                 },
             ),
@@ -69,12 +72,16 @@ async def test_tool_registry_normalizes_explicit_and_fallback_metadata() -> None
     assert explicit["category"] == "search"
     assert explicit["risk_class"] == "low"
     assert explicit["capabilities"] == ["filesystem.read"]
+    assert explicit["uses_filesystem"] is True
+    assert explicit["path_boundable"] is True
+    assert explicit["path_argument_hints"] == ["path"]
     assert explicit["metadata_source"] == "explicit"
     assert explicit["metadata_warnings"] == []
 
     unknown = by_name["probe.unknown"]
     assert unknown["module"] == "probe"
     assert unknown["risk_class"] == "unclassified"
+    assert unknown["path_argument_hints"] == []
     assert unknown["metadata_source"] in {"heuristic", "fallback"}
     assert unknown["metadata_warnings"]
 

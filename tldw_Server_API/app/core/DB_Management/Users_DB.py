@@ -844,7 +844,7 @@ async def get_user_media_db(user_id: int, db_name: str = "media"):
 
     # Import media DB factory (avoid circular import)
     try:
-        from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+        from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 
         # Create and return the database instance via central factory
         db_instance = create_media_database(client_id=str(user_id), db_path=str(db_path))

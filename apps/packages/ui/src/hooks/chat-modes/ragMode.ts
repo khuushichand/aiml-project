@@ -27,6 +27,7 @@ import { appendSystemPromptSuffix } from "@/utils/output-formatting-guide"
 
 const RAG_STRING_ARRAY_KEYS = new Set([
   "sources",
+  "include_note_ids",
   "expansion_strategies",
   "chunk_type_filter",
   "content_policy_types",
@@ -34,7 +35,7 @@ const RAG_STRING_ARRAY_KEYS = new Set([
   "html_allowed_attrs",
   "batch_queries"
 ])
-const RAG_NUMBER_ARRAY_KEYS = new Set(["include_media_ids", "include_note_ids"])
+const RAG_NUMBER_ARRAY_KEYS = new Set(["include_media_ids"])
 const RAG_NULLABLE_STRING_KEYS = new Set([
   "generation_model",
   "generation_provider",

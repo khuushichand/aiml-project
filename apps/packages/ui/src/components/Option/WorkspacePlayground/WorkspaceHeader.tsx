@@ -31,7 +31,8 @@ import {
   Upload,
   MoreHorizontal,
   Settings,
-  Star
+  Star,
+  Share2
 } from "lucide-react"
 import type {
   SavedWorkspace,
@@ -66,6 +67,7 @@ import {
   formatWorkspaceLastAccessed,
   groupWorkspacesByCollection
 } from "./workspace-header.utils"
+import { ShareDialog } from "./ShareDialog"
 import {
   normalizeWorkspaceBannerImage,
   WorkspaceBannerImageNormalizationError
@@ -169,7 +171,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     Record<WorkspaceRolloutControlKey, number>
   >({
     research_studio_provenance_v1: 100,
-    research_studio_status_guardrails_v1: 100
+    research_studio_status_guardrails_v1: 100,
+    watchlists_ia_reduced_nav_v1: 100
   })
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = React.useState("")
   const [workspaceCollectionDraft, setWorkspaceCollectionDraft] = React.useState("")
@@ -194,6 +197,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
       return next
     })
   }, [])
+  const [shareDialogOpen, setShareDialogOpen] = React.useState(false)
   const [bannerModalOpen, setBannerModalOpen] = React.useState(false)
   const [bannerTitleDraft, setBannerTitleDraft] = React.useState("")
   const [bannerSubtitleDraft, setBannerSubtitleDraft] = React.useState("")
@@ -716,13 +720,20 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               .research_studio_status_guardrails_v1
           ),
           100
+        ),
+        watchlists_ia_reduced_nav_v1: normalizeRolloutPercentage(
+          window.localStorage.getItem(
+            FEATURE_ROLLOUT_PERCENTAGE_STORAGE_KEYS.watchlists_ia_reduced_nav_v1
+          ),
+          100
         )
       })
     } catch {
       setRolloutSubjectId("")
       setRolloutPercentages({
         research_studio_provenance_v1: 100,
-        research_studio_status_guardrails_v1: 100
+        research_studio_status_guardrails_v1: 100,
+        watchlists_ia_reduced_nav_v1: 100
       })
     }
   }, [])
@@ -844,7 +855,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
     const resetValue = 100
     setRolloutPercentages({
       research_studio_provenance_v1: resetValue,
-      research_studio_status_guardrails_v1: resetValue
+      research_studio_status_guardrails_v1: resetValue,
+      watchlists_ia_reduced_nav_v1: resetValue
     })
     if (typeof window === "undefined") return
 
@@ -1631,6 +1643,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           </button>
         </Dropdown>
 
+        {/* Share Button */}
+        <Tooltip title={t("playground:workspace.share", "Share workspace")}>
+          <button
+            type="button"
+            data-testid="workspace-share-button"
+            className="flex items-center justify-center rounded-lg border border-border bg-surface p-1.5 text-text-muted transition hover:bg-surface2 hover:text-text"
+            aria-label={t("playground:workspace.share", "Share workspace")}
+            onClick={() => setShareDialogOpen(true)}
+          >
+            <Share2 className="h-4 w-4" />
+          </button>
+        </Tooltip>
+
         {/* Settings Kebab Menu */}
         <Dropdown
           menu={{ items: workspaceSettingsItems }}
@@ -2393,6 +2418,15 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
           )}
         </div>
       </Modal>
+
+      {/* Share Dialog */}
+      {workspaceId && (
+        <ShareDialog
+          workspaceId={workspaceId}
+          open={shareDialogOpen}
+          onClose={() => setShareDialogOpen(false)}
+        />
+      )}
     </header>
   )
 }

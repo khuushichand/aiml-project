@@ -306,3 +306,46 @@ def test_media_rls_enforces_scope_postgres():
             backend.close_all()
         except Exception:
             _ = None
+
+
+@pytest.mark.integration
+@pytest.mark.postgres
+@pytest.mark.skipif(
+    not _has_postgres_dependencies(),
+    reason="Postgres dependencies missing (install psycopg[binary])",
+)
+@pytest.mark.usefixtures("setup_test_database", "clean_database")
+def test_add_media_with_chunks_postgres_persists_unvectorized_rows():
+    dsn = (os.getenv("DATABASE_URL") or os.getenv("TEST_DATABASE_URL") or "").strip()
+    assert dsn, "Postgres test database URL not configured"
+
+    base_config = DatabaseConfig.from_env()
+    assert base_config.backend_type == BackendType.POSTGRESQL, "Expected PostgreSQL backend configuration"
+
+    backend = DatabaseBackendFactory.create_backend(base_config)
+    db = MediaDatabase(db_path=":memory:", client_id="909", backend=backend)
+
+    try:
+        media_id, _, _ = db.add_media_with_keywords(
+            title="chunked postgres doc",
+            content="chunk one chunk two",
+            media_type="text",
+            keywords=[],
+            overwrite=True,
+            chunks=[
+                {"text": "chunk one", "start_char": 0, "end_char": 9, "chunk_type": "text"},
+                {"text": "chunk two", "start_char": 10, "end_char": 19, "chunk_type": "text"},
+            ],
+        )
+
+        assert media_id is not None
+        assert db.get_unvectorized_chunk_count(media_id) == 2
+    finally:
+        try:
+            db.close_connection()
+        except Exception:
+            _ = None
+        try:
+            backend.close_all()
+        except Exception:
+            _ = None

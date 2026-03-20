@@ -210,6 +210,17 @@ describe("SourceList researcher workflows", () => {
     expect(freshnessBadge.className).toContain("text-danger")
   })
 
+  it("does not hijack Tab navigation from interactive controls inside a source card", () => {
+    render(<SourceList />)
+
+    const viewFullButton = screen.getByRole("button", { name: "View full source 1" })
+    viewFullButton.focus()
+    vi.clearAllMocks()
+    fireEvent.keyDown(viewFullButton, { key: "Tab" })
+
+    expect(state.focusSource).not.toHaveBeenCalled()
+  })
+
   it("supports keyword and date-range filtering within sources", () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-03-01T00:00:00.000Z"))
@@ -377,6 +388,52 @@ describe("SourceList researcher workflows", () => {
         })
       ).toHaveAttribute("aria-pressed", "true")
     })
+  })
+
+  it("falls back to default filters when localStorage reads are blocked", () => {
+    const getItemSpy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError")
+      })
+
+    expect(() => render(<SourceList />)).not.toThrow()
+    expect((screen.getByLabelText("Sort sources") as HTMLSelectElement).value).toBe(
+      "relevance"
+    )
+    expect(
+      (screen.getByLabelText("Filter sources by keyword") as HTMLInputElement).value
+    ).toBe("")
+
+    getItemSpy.mockRestore()
+  })
+
+  it("keeps filter controls interactive when localStorage writes are blocked", async () => {
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Blocked", "SecurityError")
+      })
+
+    render(<SourceList />)
+
+    expect(() => {
+      fireEvent.change(screen.getByLabelText("Sort sources"), {
+        target: { value: "date" },
+      })
+      fireEvent.change(screen.getByLabelText("Filter sources by keyword"), {
+        target: { value: "source 1" },
+      })
+    }).not.toThrow()
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Sort sources") as HTMLSelectElement).value).toBe("date")
+      expect(
+        (screen.getByLabelText("Filter sources by keyword") as HTMLInputElement).value
+      ).toBe("source 1")
+    })
+
+    setItemSpy.mockRestore()
   })
 
   it("supports reverse citation jump from cited source badges", () => {

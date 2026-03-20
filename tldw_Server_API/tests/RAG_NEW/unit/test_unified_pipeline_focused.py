@@ -8,10 +8,12 @@ and its actual dependencies.
 import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import asyncio
+import sqlite3
 from typing import Dict, List, Any
 from datetime import datetime
 import types
 
+import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as up
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_service.types import Document, SearchResult, DataSource
 
@@ -431,6 +433,153 @@ class TestUnifiedPipelineFeatures:
         per_claim_instance = instances[-1]
         media_retriever = per_claim_instance.retrievers[DataSource.MEDIA_DB]
         assert media_retriever.hybrid_calls or media_retriever.retrieve_calls
+
+    @pytest.mark.asyncio
+    async def test_preextracted_claims_use_managed_media_database(self):
+        """Pre-extracted claims verification must use the managed DB helper."""
+
+        class NullCache:
+            def __init__(self, *_, **__):
+                pass
+
+            def get(self, _query):
+                return None
+
+            def find_similar(self, _query):
+                return None
+
+            def set(self, _query, _value, _ttl=None):
+                return None
+
+        base_doc = Document(
+            id="claim-doc",
+            content="Stored claim evidence",
+            metadata={"media_id": 7, "source": "media_db"},
+            source=DataSource.MEDIA_DB,
+            score=0.92,
+        )
+        managed_calls: List[Dict[str, Any]] = []
+        verify_calls: List[Dict[str, Any]] = []
+
+        class StubRetriever:
+            async def retrieve(self, query, **kwargs):
+                return [base_doc]
+
+        class StubManagedDb:
+            def execute_query(self, sql, params):
+                assert "SELECT claim_text FROM Claims" in sql
+                assert params == (7, 25)
+                return types.SimpleNamespace(fetchall=lambda: [("stored claim text",)])
+
+        class StubVerification:
+            def __init__(self, claim):
+                self.claim = claim
+                self.label = "supported"
+                self.confidence = 0.91
+                self.evidence = [
+                    types.SimpleNamespace(
+                        doc_id="claim-doc",
+                        snippet="Stored claim evidence",
+                        score=0.88,
+                    )
+                ]
+                self.citations = ["claim-doc"]
+                self.rationale = "Matched stored claim."
+
+        class StubClaimsEngine:
+            def __init__(self, _analyze):
+                self.verifier = types.SimpleNamespace(verify=self._verify)
+
+            async def _verify(self, **kwargs):
+                verify_calls.append(kwargs)
+                return StubVerification(kwargs["claim"])
+
+            async def run(self, **kwargs):
+                raise AssertionError("engine.run should not execute when pre-extracted claims exist")
+
+        class StubClaim:
+            def __init__(self, id, text, span=None):
+                self.id = id
+                self.text = text
+                self.span = span
+
+        def _legacy_media_db(*args, **kwargs):
+            raise AssertionError("legacy raw MediaDatabase should not be used")
+
+        class _ManagedDbContext:
+            def __init__(self, **kwargs):
+                managed_calls.append(kwargs)
+
+            def __enter__(self):
+                return StubManagedDb()
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def _managed_media_database(*, client_id, db_path=None, initialize=True, suppress_init_exceptions=(), suppress_close_exceptions=(), **kwargs):
+            return _ManagedDbContext(
+                client_id=client_id,
+                db_path=db_path,
+                initialize=initialize,
+                suppress_init_exceptions=suppress_init_exceptions,
+                suppress_close_exceptions=suppress_close_exceptions,
+                extra=kwargs,
+            )
+
+        dummy_sgl = types.SimpleNamespace(analyze=lambda *_, **__: {})
+        dummy_config = types.SimpleNamespace(settings={"SERVER_CLIENT_ID": "SERVER-TEST"})
+        dummy_claims_engine_module = types.SimpleNamespace(Claim=StubClaim)
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib": dummy_sgl,
+                    "tldw_Server_API.app.core.config": dummy_config,
+                    "tldw_Server_API.app.core.Claims_Extraction.claims_engine": dummy_claims_engine_module,
+                },
+            ),
+            patch.object(up, "managed_media_database", _managed_media_database, create=True),
+            patch("tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase", side_effect=_legacy_media_db),
+            patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SemanticCache", return_value=NullCache()),
+            patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever") as mock_retriever,
+            patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.ClaimsEngine", StubClaimsEngine),
+            patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator") as mock_answer_gen,
+        ):
+            mock_retriever.return_value = StubRetriever()
+            answer_gen_instance = MagicMock()
+            answer_gen_instance.generate = AsyncMock(return_value={"answer": "Generated answer"})
+            mock_answer_gen.return_value = answer_gen_instance
+
+            result = await unified_rag_pipeline(
+                query="Verify stored claim",
+                enable_claims=True,
+                enable_cache=False,
+                enable_generation=True,
+                media_db_path="/tmp/media.db",
+                claims_max=25,
+            )
+
+        assert managed_calls == [
+            {
+                "client_id": "SERVER-TEST",
+                "db_path": "/tmp/media.db",
+                "initialize": False,
+                "suppress_init_exceptions": (),
+                "suppress_close_exceptions": (
+                    AttributeError,
+                    RuntimeError,
+                    TypeError,
+                    ValueError,
+                    sqlite3.Error,
+                ),
+                "extra": {},
+            }
+        ]
+        assert len(verify_calls) == 1
+        assert verify_calls[0]["claim"].text == "stored claim text"
+        assert result.metadata["claims"][0]["text"] == "stored claim text"
+        assert result.metadata["factuality"]["supported"] == 1
 
     @pytest.mark.asyncio
     async def test_reranking_feature(self):

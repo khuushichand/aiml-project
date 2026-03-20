@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 _UNSET = object()
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import configure_sqlite_connection
 
 
 def _utc_now() -> str:
@@ -128,9 +129,7 @@ class ResearchSessionsDB:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
+        configure_sqlite_connection(conn)
         return conn
 
     def _ensure_schema(self) -> None:

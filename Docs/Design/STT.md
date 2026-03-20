@@ -17,6 +17,7 @@ https://huggingface.co/livekit/turn-detector
 https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-turn-detector
 https://github.com/senstella/parakeet-mlx
 https://github.com/zai-org/GLM-ASR
+https://github.com/ibm-granite/granite-speech-models?tab=readme-ov-file
 https://github.com/altunenes/parakeet-rs?tab=readme-ov-file
 
 Latice

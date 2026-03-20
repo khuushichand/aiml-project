@@ -1,7 +1,12 @@
 # Getting Started — STT (Speech-to-Text) and TTS (Text-to-Speech)
 
-This guide helps first-time users set up and test speech features with tldw_server.
-It covers quick paths for both cloud-hosted and local backends, plus verification steps and troubleshooting.
+This guide is now the quick speech verification and reference page, not the primary first-time onboarding guide.
+For first-time setup, start with the hardware-specific guides:
+
+- [First-Time Audio Setup: CPU Systems](../../Getting_Started/First_Time_Audio_Setup_CPU.md)
+- [First-Time Audio Setup: GPU/Accelerated Systems](../../Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md)
+
+It still covers `/setup`, alternative providers, direct API verification steps, and troubleshooting.
 
 Scope:
 - Use this guide for first successful STT + TTS requests end-to-end.
@@ -12,10 +17,43 @@ See design doc: [`Docs/Design/STT_TTS_Audio_API_Design.md`](../../Design/STT_TTS
 
 ## TL;DR Choices
 
-- Fastest TTS (hosted): OpenAI TTS — requires `OPENAI_API_KEY`.
-- Local TTS (offline): Kokoro ONNX — requires model files + eSpeak library.
-- Local STT (offline): faster-whisper — requires FFmpeg; optional GPU.
-- Advanced STT (optional): NeMo Parakeet/Canary, Qwen2Audio — larger setup, GPU recommended.
+- First-time CPU setup: use the CPU guide and start with `parakeet-onnx` for STT plus `supertonic` for TTS.
+- First-time accelerated setup: use the GPU/accelerated guide and start with `faster-whisper` on NVIDIA or `parakeet-mlx` on Apple Silicon, plus `supertonic` for TTS.
+- `/setup` bundles remain optional, but use the hardware-first guides when you want explicit local-first provider selection and current verification steps.
+- Use this page when you want a shorter API smoke test, `/setup` notes, or older alternative-provider examples.
+
+## Recommended Setup Path - Use `/setup` Audio Bundles First
+
+For new installs, prefer the guided `/setup` flow over hand-picking providers.
+The setup UI now detects local hardware, recommends a curated audio bundle, provisions it, and gives you a verification + readiness report before you start making STT/TTS API calls.
+
+Recommended operator flow:
+
+1. Start the server and open `http://127.0.0.1:8000/setup`
+2. Save any required config changes
+3. In the audio stage, click `Provision recommended bundle`
+4. Complete any guided prerequisites called out in the report
+5. Click `Run verification`
+6. Use the API examples below only after the readiness report reaches `ready` or `ready_with_warnings`
+
+Current curated bundle matrix (generated from `Helper_Scripts/generate_audio_bundle_docs.py`):
+
+| Bundle ID | Label | Profiles | Offline runtime after provisioning | Offline pack compatibility | Default STT | Default TTS |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cpu_local` | CPU Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro |
+| `apple_silicon_local` | Apple Silicon Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [small] | kokoro |
+| `nvidia_local` | NVIDIA Local | Light, Balanced, Performance | Yes | v1 manifest import + model portability | faster_whisper [medium] | kokoro |
+| `hosted_plus_local_backup` | Hosted With Local Backup | Balanced | No | v1 manifest import only | faster_whisper [small] | kokoro |
+
+Resource profile guidance:
+- `Light`: lowest disk and memory footprint; best when you need a conservative local install.
+- `Balanced`: the default for most machines and the safest recommendation when hardware signals are incomplete.
+- `Performance`: larger local footprint; only pick it when disk headroom and acceleration are clearly available.
+
+Offline pack guidance:
+- `Online provisioning` is still the default. It installs Python dependencies, downloads models, and verifies the current machine.
+- `Offline pack import` is now available through the setup audio pack import endpoint for manifest + model portability.
+- `Offline pack` v1 does not install Python dependencies or OS prerequisites on the target machine. It validates compatibility and registers the imported pack in the readiness report.
 
 ## Prerequisites
 
@@ -147,14 +185,14 @@ Examples
 # Create a local directory
 mkdir -p models/kokoro
 
-# Option A: huggingface-cli (ONNX v1.0)
-pip install huggingface-hub
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+# Option A: hf CLI (ONNX v1.0)
+pip install -U "huggingface_hub"
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
 
 # Option B: direct URLs for ONNX (if CLI unavailable)
 wget https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX-timestamped/resolve/main/onnx/model.onnx -O models/kokoro/onnx/model.onnx
-# Then download the voices/ directory assets from the same repo (or use huggingface-cli above)
+# Then download the voices/ directory assets from the same repo (or use the hf CLI above)
 ```
 
 1. Enable and point config to your files (the installer writes defaults under models/kokoro/)

@@ -79,11 +79,16 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details.
+**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details. If your first goal is local speech, follow the hardware-specific audio guides after your base profile is healthy: [CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md) or [GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md).
 
 ## Start Here (Self-Hosting Profiles)
 
-Choose one base onboarding path:
+Choose one base onboarding path.
+
+Recommended default:
+- Run `make quickstart` for the Docker single-user + WebUI setup most users want.
+- Use [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) if you are deploying for a team or exposing the app publicly.
+- Keep local setup in [apps/DEVELOPMENT.md](apps/DEVELOPMENT.md) and the local profile docs.
 
 1. [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md)
 2. [Docker single-user](Docs/Getting_Started/Profile_Docker_Single_User.md)
@@ -91,24 +96,29 @@ Choose one base onboarding path:
 
 Optional add-on:
 
-- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) for accelerated speech-to-text after your base path is working.
+- [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md)
+- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md) for NVIDIA GPUs and Apple Silicon
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) now redirects to the accelerated guide
 
 
 ## Current Status
 
-Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
+Latest release:
+- 0.1.26 (2026-03-15) Beta status -  Expect rough edges;
+  * please report issues.
+- See `CHANGELOG.md` for release history.
 
 <details>
-<summary>Current focus and migration notes</summary>
+<summary>Current focus and migration notes from the old Gradio version</summary>
 
 ### Active Work-in-Progress (not in order)
+- Multi-User setup
 - Workflows
-- Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
+- [Web App frontend & Browser Extension UIs](./apps/)
 - Unified Admin Dashboard ([admin-ui](./admin-ui))
-- frontend web app ([apps/tldw-frontend](./apps/tldw-frontend))
-- Watchlists
 - Collections (read-it-later)
-- Documentation
+- Better TTS support
+- Better Documentation
 
 ### Migrating From Gradio Version (pre-0.1.0)
 - Backup:
@@ -119,7 +129,7 @@ Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report iss
 - Database migration:
     - Inspect: `python -m tldw_Server_API.app.core.DB_Management.migrate_db status`
     - Migrate: `python -m tldw_Server_API.app.core.DB_Management.migrate_db migrate`
-    - Optional: `--db-path /path/to/Media_DB_v2.db` if not using defaults
+    - Optional: `--db-path /path/to/media.db` if not using defaults
     - If migrating content to Postgres later, use the tools under `tldw_Server_API/app/core/DB_Management/` (e.g., migration_tools.py)
 - API changes:
     - Use FastAPI routes; see http://127.0.0.1:8000/docs. OpenAI-compatible endpoints are available (e.g., `/api/v1/chat/completions`).
@@ -128,7 +138,7 @@ Latest release: 0.1.21 (2026-02-21). Beta. Expect rough edges; please report iss
     - Or integrate directly against the API
 </details>
 
-## What's New (compared to Gradio)
+## What's New (in the last few releases)
 
 - FastAPI-first backend with OpenAI-compatible Chat, Audio (STT/TTS + voice catalog), Embeddings, and Evals APIs
 - Unified RAG + Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
@@ -217,14 +227,20 @@ Choose one install path:
 ```bash
 git clone https://github.com/rmusser01/tldw_server.git && cd tldw_server
 
-# API only (local Python): installs deps, initializes auth, starts API
-make quickstart-install
+# Recommended default: Docker single-user + WebUI
+make quickstart
+
+# API-only Docker path:
+# make quickstart-docker
+
+# Explicit full-stack Docker path:
+# make quickstart-docker-webui
+
+# Local development path (API only):
+# make quickstart-install
 # If `python3` is older than 3.10 on your machine:
 # make quickstart-install PYTHON=python3.13  # or python3.12 / python3.11 / python3.10
 
-# Docker paths:
-# make quickstart-docker
-# make quickstart-docker-webui
 # Force a full image rebuild when needed:
 # make quickstart-docker DOCKER_BUILD=true
 # make quickstart-docker-webui DOCKER_BUILD=true
@@ -232,7 +248,23 @@ make quickstart-install
 
 If `make` is unavailable, use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
 
-### No-Docker Path (Makefile)
+### Default Docker Path (Makefile)
+
+```bash
+# from repo root
+make quickstart
+```
+
+This target:
+- Starts the Docker single-user + WebUI setup.
+- Uses the existing `quickstart-docker-webui` flow under the hood.
+- Brings up the API at `http://localhost:8000` and WebUI at `http://localhost:8080`.
+
+Want a more advanced deployment?
+- Team/public deployment: [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
+- API-only Docker deployment: `make quickstart-docker`
+
+### No-Docker Path (Makefile, Development)
 
 ```bash
 # from repo root
@@ -245,14 +277,14 @@ This target:
 - Creates `.venv` if missing and installs dependencies.
 - Creates `tldw_Server_API/Config_Files/.env` from `.env.example` if missing.
 - Initializes AuthNZ (non-interactive).
-- Starts the API server at `http://127.0.0.1:8000`.
+- Starts the local API server at `http://127.0.0.1:8000`.
 
 Verify with:
 ```bash
 curl http://localhost:8000/health  # No auth needed!
 ```
 
-Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
+Already have dependencies installed and a Python 3.10+ interpreter selected? Use `make quickstart-local` (or set `PYTHON=python3.13` / `PYTHON=python3.12` / `PYTHON=.venv/bin/python`).
 
 ### No-Make Path (Windows-Friendly)
 
@@ -392,6 +424,7 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 | I want to... | Guide |
 |--------------|-------|
 | Choose the right onboarding path | [Getting Started Index](Docs/Getting_Started/README.md) |
+| Start the default Docker + WebUI setup | `make quickstart` |
 | Start from local single-user, then launch the WebUI | [Local Profile: Add the WebUI](#local-profile-add-the-webui) |
 | Build apps against the API locally | [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) |
 | Run on my home server with Docker | [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) |
@@ -503,7 +536,7 @@ NEXT_PUBLIC_API_VERSION=v1
 # Optional for single-user mode:
 # NEXT_PUBLIC_X_API_KEY=your_api_key
 ```
-3) Install and run the dev server (use port 8080 to match default CORS):
+3) Install and run the dev server (use port 8080 to match the server's built-in local browser defaults):
 ```bash
 bun install
 bun run dev -- -p 8080
@@ -523,6 +556,7 @@ Access from another device on your network (for example, phone/tablet):
 python -m uvicorn tldw_Server_API.app.main:app --host 0.0.0.0 --port 8000
 
 # tldw_Server_API/Config_Files/.env
+# Only needed when the browser connects from a non-localhost origin:
 # ALLOWED_ORIGINS=http://YOUR_SERVER_IP:8080
 
 # apps/tldw-frontend/.env.local
@@ -1038,7 +1072,9 @@ Run locally
 - [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) - local API development path
 - [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) - self-host with Docker
 - [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) - team deployment baseline
-- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) - optional acceleration and speech-to-text setup
+- [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md) - local-first STT and TTS for CPU boxes
+- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md) - NVIDIA and Apple Silicon speech setup
+- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) - legacy pointer to the accelerated guide
 
 **Reference:**
 - `Docs/Documentation.md` - documentation index and developer guide links

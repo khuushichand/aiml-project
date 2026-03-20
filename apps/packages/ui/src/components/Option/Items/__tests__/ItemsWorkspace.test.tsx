@@ -14,6 +14,14 @@ const undoNotificationMock = vi.hoisted(() => ({
   showUndoNotification: vi.fn()
 }))
 
+const connectionMocks = vi.hoisted(() => ({
+  useConnectionUxState: vi.fn()
+}))
+
+const routerMocks = vi.hoisted(() => ({
+  navigate: vi.fn()
+}))
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -29,12 +37,20 @@ vi.mock("react-i18next", () => ({
   })
 }))
 
+vi.mock("react-router-dom", () => ({
+  useNavigate: () => routerMocks.navigate
+}))
+
 vi.mock("@/hooks/useTldwApiClient", () => ({
   useTldwApiClient: () => apiMock
 }))
 
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
+}))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => connectionMocks.useConnectionUxState()
 }))
 
 vi.mock("@/hooks/useUndoNotification", () => ({
@@ -44,6 +60,10 @@ vi.mock("@/hooks/useUndoNotification", () => ({
 describe("ItemsWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    connectionMocks.useConnectionUxState.mockReturnValue({
+      uxState: "connected_ok",
+      hasCompletedFirstRun: true
+    })
     if (!window.matchMedia) {
       Object.defineProperty(window, "matchMedia", {
         writable: true,

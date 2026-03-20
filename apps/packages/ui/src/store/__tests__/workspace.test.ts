@@ -216,9 +216,7 @@ describe("workspace store snapshot persistence", () => {
   it("creates workspaces with empty workspaceBanner defaults", () => {
     useWorkspaceStore.getState().initializeWorkspace("Banner Test")
     const state = useWorkspaceStore.getState()
-    const snapshot = state.workspaceSnapshots[state.workspaceId] as
-      | Record<string, unknown>
-      | undefined
+    const snapshot = state.workspaceSnapshots[state.workspaceId]
 
     expect(snapshot?.workspaceBanner).toEqual({
       title: "",
@@ -1822,6 +1820,7 @@ describe("workspace store snapshot persistence", () => {
       .getWorkspaceChatSession(importedWorkspaceId as string)
     expect(importedSession?.historyId).toBe("history-export")
     expect(importedSession?.messages[0]?.message).toBe("Export this workspace")
+    expect(importedSession?.serverChatId).toBeNull()
   })
 
   it("imports workspace bundles as unassigned even when bundle metadata includes a collection id", () => {

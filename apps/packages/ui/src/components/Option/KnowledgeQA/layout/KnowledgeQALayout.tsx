@@ -37,6 +37,22 @@ function normalizeSourceSet(values: string[]): string {
   return [...values].sort((left, right) => left.localeCompare(right)).join("|")
 }
 
+function normalizeNumberSet(values: Array<number | null | undefined>): string {
+  return values
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .map((value) => Math.round(value))
+    .sort((left, right) => left - right)
+    .join("|")
+}
+
+function normalizeStringSet(values: Array<string | null | undefined>): string {
+  return values
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim())
+    .sort((left, right) => left.localeCompare(right))
+    .join("|")
+}
+
 function hasConversationId(item: { conversationId?: string }): boolean {
   return (
     typeof item.conversationId === "string" &&
@@ -46,6 +62,23 @@ function hasConversationId(item: { conversationId?: string }): boolean {
 
 function hasQueryText(item: { query?: string }): boolean {
   return typeof item.query === "string" && item.query.trim().length > 0
+}
+
+function getLatestUserTurnKey(
+  messages: Array<{ id?: string; role?: string; content?: string }>
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role !== "user") continue
+    if (typeof message.id === "string" && message.id.trim().length > 0) {
+      return `id:${message.id.trim()}`
+    }
+    if (typeof message.content === "string" && message.content.trim().length > 0) {
+      return `content:${message.content.trim()}`
+    }
+    return `index:${index}`
+  }
+  return null
 }
 
 export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
@@ -81,6 +114,10 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
   const evidenceRailTab = knowledgeQa.evidenceRailTab ?? "sources"
   const setEvidenceRailTab = knowledgeQa.setEvidenceRailTab ?? (() => undefined)
   const lastSearchScope = knowledgeQa.lastSearchScope ?? null
+  const pinnedSourceFilters = knowledgeQa.pinnedSourceFilters ?? {
+    mediaIds: [],
+    noteIds: [],
+  }
   const focusSource = knowledgeQa.focusSource ?? (() => undefined)
   const settingsPanelOpen = knowledgeQa.settingsPanelOpen ?? false
 
@@ -93,6 +130,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
 
   // Track whether user manually closed the evidence rail for this search
   const userClosedRailRef = useRef(false)
+  const latestUserTurnKeyRef = useRef<string | null>(null)
 
   const hasResults = results.length > 0 || Boolean(answer)
   const showNoResultsState =
@@ -132,27 +170,66 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
 
   const contextChangedSinceLastRun = useMemo(() => {
     if (!lastSearchScope) return false
+    const currentMediaScope = [
+      ...(Array.isArray(settings.include_media_ids) ? settings.include_media_ids : []),
+      ...pinnedSourceFilters.mediaIds,
+    ]
+    const currentNoteScope = [
+      ...(Array.isArray(settings.include_note_ids) ? settings.include_note_ids : []),
+      ...pinnedSourceFilters.noteIds,
+    ]
     return (
       lastSearchScope.preset !== preset ||
       lastSearchScope.webFallback !== settings.enable_web_fallback ||
-      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources)
+      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources) ||
+      normalizeNumberSet(lastSearchScope.includeMediaIds ?? []) !==
+        normalizeNumberSet(currentMediaScope) ||
+      normalizeStringSet(lastSearchScope.includeNoteIds ?? []) !==
+        normalizeStringSet(currentNoteScope)
     )
   }, [
     lastSearchScope,
+    pinnedSourceFilters.mediaIds,
+    pinnedSourceFilters.noteIds,
     preset,
     settings.enable_web_fallback,
+    settings.include_media_ids,
+    settings.include_note_ids,
     settings.sources,
   ])
+  const latestUserTurnKey = useMemo(() => getLatestUserTurnKey(messages), [messages])
 
   useEffect(() => {
-    if (hasResults && !evidenceRailOpen && !userClosedRailRef.current) {
-      setEvidenceRailOpen(true)
+    if (latestUserTurnKeyRef.current === latestUserTurnKey) {
+      return
     }
-    // Reset manual-close flag when results clear (new search)
-    if (!hasResults) {
+    latestUserTurnKeyRef.current = latestUserTurnKey
+    if (latestUserTurnKey) {
       userClosedRailRef.current = false
     }
-  }, [hasResults, evidenceRailOpen, setEvidenceRailOpen])
+  }, [latestUserTurnKey])
+
+  useEffect(() => {
+    if (
+      hasResults &&
+      queryStage !== "searching" &&
+      !settingsPanelOpen &&
+      !evidenceRailOpen &&
+      !userClosedRailRef.current
+    ) {
+      setEvidenceRailOpen(true)
+    }
+    if (!hasResults) {
+      userClosedRailRef.current = false
+      return
+    }
+  }, [
+    evidenceRailOpen,
+    hasResults,
+    queryStage,
+    setEvidenceRailOpen,
+    settingsPanelOpen,
+  ])
 
   useEffect(() => {
     if (settingsPanelOpen && evidenceRailOpen) {
@@ -264,18 +341,9 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   includeMediaIds={Array.isArray(settings.include_media_ids) ? settings.include_media_ids : []}
                   onIncludeMediaIdsChange={(ids) => updateSetting("include_media_ids", ids)}
                   includeNoteIds={
-                    Array.isArray(settings.include_note_ids)
-                      ? settings.include_note_ids.map((value) =>
-                          typeof value === "string" ? value : String(value)
-                        )
-                      : []
+                    Array.isArray(settings.include_note_ids) ? settings.include_note_ids : []
                   }
-                  onIncludeNoteIdsChange={(ids) =>
-                    updateSetting(
-                      "include_note_ids",
-                      ids as unknown as typeof settings.include_note_ids
-                    )
-                  }
+                  onIncludeNoteIdsChange={(ids) => updateSetting("include_note_ids", ids)}
                   webEnabled={settings.enable_web_fallback}
                   onToggleWeb={() =>
                     updateSetting("enable_web_fallback", !settings.enable_web_fallback)

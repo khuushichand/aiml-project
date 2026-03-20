@@ -40,6 +40,23 @@ const emitAuthChange = (): void => {
   window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
 };
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const waitForSessionMarker = async (timeoutMs = 2_000): Promise<boolean> => {
+  if (typeof window === 'undefined') return false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (hasSessionMarker()) {
+      return true;
+    }
+    await sleep(50);
+  }
+  return hasSessionMarker();
+};
+
 const storeUser = (user: AdminUser): void => {
   if (typeof localStorage === 'undefined') return;
   localStorage.setItem('user', JSON.stringify(user));
@@ -50,10 +67,28 @@ const clearStoredUser = (): void => {
   localStorage.removeItem('user');
 };
 
-const finalizeAuthenticatedLogin = async (): Promise<AuthenticatedLoginResult> => {
+const waitForAuthenticatedUser = async (timeoutMs = 2_000): Promise<AdminUser | null> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const user = await fetchAndStoreUser();
+    if (user) {
+      return user;
+    }
+    await sleep(50);
+  }
+  return fetchAndStoreUser();
+};
+
+const finalizeAuthenticatedLogin = async (): Promise<AuthenticatedLoginResult | null> => {
+  if (!await waitForSessionMarker()) {
+    return null;
+  }
+  const user = await waitForAuthenticatedUser();
+  if (!user) {
+    return null;
+  }
   clearApiKeyStorage();
   clearJwtStorage();
-  await fetchAndStoreUser();
   emitAuthChange();
   return {
     status: 'authenticated',
@@ -258,10 +293,18 @@ export async function loginWithApiKey(apiKey: string): Promise<boolean> {
       return false;
     }
 
+    storeUser(payload.user);
+
+    if (!await waitForSessionMarker()) {
+      clearStoredUser();
+      return false;
+    }
+
     clearJwtStorage();
     clearApiKeyStorage();
-    storeUser(payload.user);
     emitAuthChange();
+
+    void waitForAuthenticatedUser().catch(() => null);
     return true;
   } catch (error) {
     console.error('API key validation failed:', error);

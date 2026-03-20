@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -19,30 +19,102 @@ from tldw_Server_API.app.api.v1.schemas.mcp_hub_schemas import (
     ApprovalPolicyCreateRequest,
     ApprovalPolicyResponse,
     ApprovalPolicyUpdateRequest,
+    AssignmentCredentialBindingUpsertRequest,
+    CapabilityAdapterMappingCreateRequest,
+    CapabilityAdapterMappingPreviewResponse,
+    CapabilityAdapterMappingResponse,
+    CapabilityAdapterMappingUpdateRequest,
+    CredentialBindingResponse,
     EffectivePolicyResponse,
+    EffectiveExternalAccessResponse,
     ExternalSecretSetRequest,
     ExternalSecretSetResponse,
+    ExternalServerAuthTemplateResponse,
+    ExternalServerAuthTemplateUpdateRequest,
+    ExternalServerCredentialSlotCreateRequest,
+    ExternalServerCredentialSlotResponse,
+    ExternalServerCredentialSlotUpdateRequest,
+    ExternalServerSlotSecretSetResponse,
     ExternalServerCreateRequest,
     ExternalServerResponse,
     ExternalServerUpdateRequest,
+    GovernancePackDetailResponse,
+    GovernancePackDryRunRequest,
+    GovernancePackDryRunResponse,
+    GovernancePackImportRequest,
+    GovernancePackImportResponse,
+    GovernancePackSourceDryRunRequest,
+    GovernancePackSourceImportRequest,
+    GovernancePackSourcePrepareRequest,
+    GovernancePackSourcePrepareResponse,
+    GovernancePackSourceUpdateCheckResponse,
+    GovernancePackSourceUpgradeDryRunRequest,
+    GovernancePackSourceUpgradeExecuteRequest,
+    GovernancePackSourceUpgradePrepareResponse,
+    GovernancePackUpgradeDryRunRequest,
+    GovernancePackUpgradeDryRunResponse,
+    GovernancePackUpgradeExecuteRequest,
+    GovernancePackUpgradeExecutionResponse,
+    GovernancePackUpgradeHistoryEntryResponse,
+    GovernancePackSummaryResponse,
+    GovernancePackTrustPolicyRequest,
+    GovernancePackTrustPolicyResponse,
+    GovernanceAuditFindingListResponse,
     MCPHubDeleteResponse,
+    McpCredentialSlotStatusResponse,
+    PathScopeObjectCreateRequest,
+    PathScopeObjectResponse,
+    PathScopeObjectUpdateRequest,
     PermissionProfileCreateRequest,
     PermissionProfileResponse,
     PermissionProfileUpdateRequest,
     PolicyAssignmentCreateRequest,
     PolicyAssignmentResponse,
+    PolicyAssignmentWorkspaceCreateRequest,
+    PolicyAssignmentWorkspaceResponse,
     PolicyAssignmentUpdateRequest,
     PolicyOverrideResponse,
     PolicyOverrideUpsertRequest,
+    ProfileCredentialBindingUpsertRequest,
+    SharedWorkspaceCreateRequest,
+    SharedWorkspaceResponse,
+    SharedWorkspaceUpdateRequest,
     ToolRegistryEntryResponse,
     ToolRegistryModuleResponse,
     ToolRegistrySummaryResponse,
+    WorkspaceSetObjectCreateRequest,
+    WorkspaceSetObjectMemberCreateRequest,
+    WorkspaceSetObjectMemberResponse,
+    WorkspaceSetObjectResponse,
+    WorkspaceSetObjectUpdateRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+from tldw_Server_API.app.core.config import config
 from tldw_Server_API.app.core.exceptions import BadRequestError, ResourceNotFoundError
+from tldw_Server_API.app.services.mcp_hub_external_legacy_inventory import (
+    McpHubExternalLegacyInventoryService,
+)
+from tldw_Server_API.app.services.mcp_hub_capability_adapter_service import (
+    McpHubCapabilityAdapterService,
+)
+from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
+    GovernancePackAlreadyExistsError,
+    GovernancePackUpgradeConflictError,
+    GovernancePackUpgradeStaleError,
+    McpHubGovernancePackService,
+)
+from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+    McpHubGovernancePackTrustService,
+)
+from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+    McpHubGovernancePackDistributionService,
+)
+from tldw_Server_API.app.services.mcp_credential_broker_service import (
+    McpCredentialBrokerService,
+)
 from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver, get_mcp_hub_policy_resolver
 from tldw_Server_API.app.services.mcp_hub_service import McpHubConflictError, McpHubService
 from tldw_Server_API.app.services.mcp_hub_tool_registry import McpHubToolRegistryService
@@ -61,10 +133,21 @@ _CAPABILITY_GRANT_PERMISSIONS = {
     "process.execute": "grant.process.execute",
     "tool.invoke": "grant.tool.invoke",
 }
+_CREDENTIAL_GRANT_PERMISSIONS = {
+    "read": "grant.credentials.read",
+    "write": "grant.credentials.write",
+    "admin": "grant.credentials.admin",
+}
+_CREDENTIAL_PRIVILEGE_RANK = {"read": 0, "write": 1, "admin": 2}
+_DEFAULT_CREDENTIAL_SLOT_NAMES = frozenset({"bearer_token", "api_key"})
 _TOOL_GRANT_KEYS = ("allowed_tools", "tool_patterns", "tool_names")
 _UNION_POLICY_KEYS = frozenset({"allowed_tools", "denied_tools", "tool_names", "tool_patterns", "capabilities"})
+_FILESYSTEM_GRANT_CAPABILITIES = frozenset({"filesystem.read", "filesystem.write", "filesystem.delete"})
 _SUPPORTED_APPROVAL_DURATIONS = frozenset({"once", "session", "conversation"})
 _DEFAULT_SCOPED_APPROVAL_TTL_MINUTES = 480
+_PATH_SCOPE_BREADTH_RANK = {"cwd_descendants": 0, "workspace_root": 1, "none": 2}
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_PATH_SCOPE_DOCUMENT_KEYS = {"path_scope_mode", "path_scope_enforcement", "path_allowlist_prefixes"}
 
 
 async def get_mcp_hub_service() -> McpHubService:
@@ -72,7 +155,50 @@ async def get_mcp_hub_service() -> McpHubService:
     pool = await get_db_pool()
     repo = McpHubRepo(pool)
     await repo.ensure_tables()
-    return McpHubService(repo)
+    cfg = config
+    inventory_service = McpHubExternalLegacyInventoryService(
+        config_path=str(
+            getattr(cfg, "external_servers_config_path", None)
+            or "tldw_Server_API/Config_Files/mcp_external_servers.yaml"
+        )
+    )
+    return McpHubService(repo, legacy_inventory_service=inventory_service)
+
+
+async def get_mcp_hub_governance_pack_service() -> McpHubGovernancePackService:
+    """Resolve governance-pack service with MCP Hub storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpHubGovernancePackService(repo=repo)
+
+
+async def get_mcp_hub_governance_pack_trust_service() -> McpHubGovernancePackTrustService:
+    """Resolve governance-pack trust service with MCP Hub storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpHubGovernancePackTrustService(repo=repo)
+
+
+async def get_mcp_hub_governance_pack_distribution_service() -> McpHubGovernancePackDistributionService:
+    """Resolve governance-pack distribution service with MCP Hub storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    trust_service = McpHubGovernancePackTrustService(repo=repo)
+    return McpHubGovernancePackDistributionService(trust_service=trust_service, repo=repo)
+
+
+async def get_mcp_hub_capability_adapter_service() -> McpHubCapabilityAdapterService:
+    """Resolve capability-adapter service with storage bootstrap checks."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpHubCapabilityAdapterService(
+        repo=repo,
+        tool_registry=McpHubToolRegistryService(),
+    )
 
 
 async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
@@ -83,6 +209,14 @@ async def get_mcp_hub_policy_resolver_dep() -> McpHubPolicyResolver:
 async def get_mcp_hub_tool_registry_dep() -> McpHubToolRegistryService:
     """Resolve the derived MCP Hub tool registry service."""
     return McpHubToolRegistryService()
+
+
+async def get_mcp_credential_broker_service() -> McpCredentialBrokerService:
+    """Resolve the MCP credential broker service backed by the current MCP Hub repo."""
+    pool = await get_db_pool()
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+    return McpCredentialBrokerService(repo=repo)
 
 
 def _load_json_object(raw: Any) -> dict[str, Any]:
@@ -125,6 +259,15 @@ def _require_mutation_permission(principal: AuthPrincipal) -> None:
     if _is_mutation_allowed(principal):
         return
     raise HTTPException(status_code=403, detail=f"{SYSTEM_CONFIGURE} permission required")
+
+
+def _ensure_mutable_governance_object(row: dict[str, Any] | None, object_label: str) -> None:
+    """Reject direct mutation of imported governance-pack managed base objects."""
+    if row and bool(row.get("is_immutable")):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{object_label} is immutable because it is managed by an imported governance pack",
+        )
 
 
 def _require_grant_authority(principal: AuthPrincipal, policy_document: dict[str, Any]) -> None:
@@ -196,6 +339,107 @@ def _unique(items: list[str]) -> list[str]:
     return out
 
 
+def _normalize_path_scope_mode(value: Any) -> str:
+    """Normalize a path scope mode, defaulting missing values to `none`."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _PATH_SCOPE_BREADTH_RANK else "none"
+
+
+def _normalize_path_allowlist_prefixes(
+    value: Any,
+    *,
+    reject_invalid: bool,
+) -> list[str]:
+    """Normalize workspace-relative path allowlist prefixes."""
+    raw_entries = _as_str_list(value)
+    normalized_entries: list[str] = []
+    seen: set[str] = set()
+    for raw_entry in raw_entries:
+        candidate = str(raw_entry or "").strip().replace("\\", "/")
+        while candidate.startswith("./"):
+            candidate = candidate[2:]
+        candidate = re.sub(r"/+", "/", candidate)
+        if candidate.startswith("/") or _WINDOWS_ABSOLUTE_PATH_RE.match(candidate):
+            if reject_invalid:
+                raise HTTPException(status_code=400, detail="path_allowlist_prefixes must be workspace-relative")
+            continue
+        parts: list[str] = []
+        invalid = False
+        for part in candidate.split("/"):
+            cleaned = str(part or "").strip()
+            if not cleaned or cleaned == ".":
+                continue
+            if cleaned == "..":
+                invalid = True
+                break
+            parts.append(cleaned)
+        if invalid or not parts:
+            if reject_invalid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="path_allowlist_prefixes cannot contain traversal or empty entries",
+                )
+            continue
+        normalized = "/".join(parts)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_entries.append(normalized)
+    return sorted(normalized_entries)
+
+
+def _normalized_path_allowlist_for_comparison(policy_document: dict[str, Any]) -> set[str]:
+    """Return a permissively normalized allowlist set for broadened-access comparisons."""
+    return set(
+        _normalize_path_allowlist_prefixes(
+            policy_document.get("path_allowlist_prefixes"),
+            reject_invalid=False,
+        )
+    )
+
+
+def _normalize_policy_document_for_storage(
+    policy_document: dict[str, Any],
+    *,
+    allow_inherited_scope: bool,
+) -> dict[str, Any]:
+    """Normalize path policy fields before persisting MCP Hub documents."""
+    normalized = deepcopy(policy_document)
+    if "path_allowlist_prefixes" not in normalized:
+        return normalized
+
+    allowlist = _normalize_path_allowlist_prefixes(
+        normalized.get("path_allowlist_prefixes"),
+        reject_invalid=True,
+    )
+    path_scope_mode = _normalize_path_scope_mode(normalized.get("path_scope_mode"))
+    if path_scope_mode == "none" and not allow_inherited_scope:
+        raise HTTPException(
+            status_code=400,
+            detail="path_allowlist_prefixes requires path_scope_mode to be workspace_root or cwd_descendants",
+        )
+    if "path_scope_mode" in normalized and path_scope_mode == "none":
+        raise HTTPException(
+            status_code=400,
+            detail="path_allowlist_prefixes cannot be combined with path_scope_mode='none'",
+        )
+    if not allowlist:
+        normalized.pop("path_allowlist_prefixes", None)
+    else:
+        normalized["path_allowlist_prefixes"] = allowlist
+    return normalized
+
+
+def _normalize_path_scope_document_for_storage(path_scope_document: dict[str, Any]) -> dict[str, Any]:
+    """Normalize and limit a reusable path-scope object document to path-governance keys."""
+    filtered = {
+        key: deepcopy(value)
+        for key, value in dict(path_scope_document or {}).items()
+        if key in _PATH_SCOPE_DOCUMENT_KEYS
+    }
+    return _normalize_policy_document_for_storage(filtered, allow_inherited_scope=False)
+
+
 def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Merge overlay policy fields into a base document using union semantics for allowlists."""
     merged = deepcopy(base)
@@ -237,6 +481,28 @@ def _grant_authority_delta(base_policy_document: dict[str, Any], merged_policy_d
     if extra_tools:
         next_document["allowed_tools"] = extra_tools
 
+    base_scope_rank = _PATH_SCOPE_BREADTH_RANK[_normalize_path_scope_mode(base_policy_document.get("path_scope_mode"))]
+    merged_scope_rank = _PATH_SCOPE_BREADTH_RANK[_normalize_path_scope_mode(merged_policy_document.get("path_scope_mode"))]
+    base_allowlist = _normalized_path_allowlist_for_comparison(base_policy_document)
+    merged_allowlist = _normalized_path_allowlist_for_comparison(merged_policy_document)
+    broadened_path_scope = merged_scope_rank > base_scope_rank
+    broadened_allowlist = bool(base_allowlist) and (
+        (not merged_allowlist) or bool(merged_allowlist - base_allowlist)
+    )
+    if broadened_path_scope or broadened_allowlist:
+        existing_caps = {
+            entry.lower()
+            for entry in _as_str_list(next_document.get("capabilities"))
+            if str(entry).strip()
+        }
+        filesystem_caps = {
+            capability
+            for capability in merged_capabilities
+            if capability in _FILESYSTEM_GRANT_CAPABILITIES
+        }
+        existing_caps.update(filesystem_caps or {"filesystem.read"})
+        next_document["capabilities"] = sorted(existing_caps)
+
     return next_document
 
 
@@ -265,6 +531,95 @@ def _grant_authority_snapshot(principal: AuthPrincipal, delta_document: dict[str
         "required_permissions": _unique(required_permissions),
         "granted_permissions": granted_permissions,
     }
+
+
+def _normalize_credential_slot_privilege_class(value: Any) -> str:
+    """Normalize a credential slot privilege class or raise an HTTP 400."""
+    normalized = str(value or "").strip().lower()
+    if normalized not in _CREDENTIAL_GRANT_PERMISSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Credential slot privilege_class must be one of: read, write, admin",
+        )
+    return normalized
+
+
+def _credential_required_permission(privilege_class: Any) -> str:
+    """Return the required grant-authority permission for a credential privilege class."""
+    return _CREDENTIAL_GRANT_PERMISSIONS[_normalize_credential_slot_privilege_class(privilege_class)]
+
+
+def _principal_satisfies_credential_grant(principal: AuthPrincipal, privilege_class: Any) -> bool:
+    """Return True when the principal may grant the requested credential privilege class."""
+    roles = {
+        str(role).strip().lower()
+        for role in (principal.roles or [])
+        if str(role).strip()
+    }
+    if "admin" in roles:
+        return True
+
+    granted = {
+        str(permission).strip().lower()
+        for permission in (principal.permissions or [])
+        if str(permission).strip()
+    }
+    if "*" in granted:
+        return True
+
+    normalized = _normalize_credential_slot_privilege_class(privilege_class)
+    required_rank = _CREDENTIAL_PRIVILEGE_RANK[normalized]
+    for candidate, candidate_permission in _CREDENTIAL_GRANT_PERMISSIONS.items():
+        if candidate_permission in granted and _CREDENTIAL_PRIVILEGE_RANK[candidate] >= required_rank:
+            return True
+    return False
+
+
+def _require_credential_grant_authority(principal: AuthPrincipal, privilege_class: Any) -> None:
+    """Require the principal to hold the matching credential grant-authority permission."""
+    if _principal_satisfies_credential_grant(principal, privilege_class):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=f"Grant authority required: {_credential_required_permission(privilege_class)}",
+    )
+
+
+def _credential_privilege_broadens(previous_privilege_class: Any, next_privilege_class: Any) -> bool:
+    """Return True when a credential slot privilege class broadens access."""
+    previous = _normalize_credential_slot_privilege_class(previous_privilege_class)
+    next_value = _normalize_credential_slot_privilege_class(next_privilege_class)
+    return _CREDENTIAL_PRIVILEGE_RANK[next_value] > _CREDENTIAL_PRIVILEGE_RANK[previous]
+
+
+async def _resolve_binding_slot_for_grant_authority(
+    *,
+    svc: McpHubService,
+    server_id: str,
+    slot_name: str | None,
+) -> dict[str, Any] | None:
+    """Resolve the effective credential slot used for grant-authority checks."""
+    try:
+        slots = await svc.list_external_server_credential_slots(server_id=server_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if slot_name is not None:
+        normalized_slot = str(slot_name or "").strip()
+        return next(
+            (
+                dict(slot)
+                for slot in slots
+                if str(slot.get("slot_name") or "").strip() == normalized_slot
+            ),
+            None,
+        )
+    if len(slots) != 1:
+        return None
+    slot = dict(slots[0])
+    if str(slot.get("slot_name") or "").strip() not in _DEFAULT_CREDENTIAL_SLOT_NAMES:
+        return None
+    return slot
 
 
 def _collect_scope_ids(values: list[int] | None, active_id: int | None) -> list[int]:
@@ -353,6 +708,136 @@ def _resolve_visible_scope_filters(
     raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
 
 
+def _assert_principal_can_access_scope(
+    principal: AuthPrincipal,
+    *,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> None:
+    """Assert that the principal can access a concrete owner scope."""
+    _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+
+
+def _resolve_governance_pack_mutation_scope(
+    *,
+    principal: AuthPrincipal,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> tuple[str, int | None]:
+    """Resolve governance-pack mutation scope, defaulting user scope to the active principal."""
+    scope_type = str(owner_scope_type or "").strip().lower()
+    if scope_type not in _VALID_SCOPE_TYPES:
+        raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+
+    if scope_type == "global":
+        if owner_scope_id is not None:
+            raise HTTPException(status_code=422, detail="global scope cannot include owner_scope_id")
+        return ("global", None)
+
+    if scope_type == "user":
+        if owner_scope_id is not None:
+            return ("user", int(owner_scope_id))
+        if principal.user_id is None:
+            raise HTTPException(status_code=422, detail="user scope requires owner_scope_id")
+        return ("user", int(principal.user_id))
+
+    if owner_scope_id is None:
+        raise HTTPException(status_code=422, detail=f"{scope_type} scope requires owner_scope_id")
+    return (scope_type, int(owner_scope_id))
+
+
+def _resolve_capability_adapter_mutation_scope(
+    *,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> tuple[str, int | None]:
+    """Resolve capability-adapter mapping scope, rejecting unsupported user scope."""
+    scope_type = str(owner_scope_type or "").strip().lower()
+    if scope_type not in {"global", "org", "team"}:
+        raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+    if scope_type == "global":
+        if owner_scope_id is not None:
+            raise HTTPException(status_code=422, detail="global scope cannot include owner_scope_id")
+        return ("global", None)
+    if owner_scope_id is None:
+        raise HTTPException(status_code=422, detail=f"{scope_type} scope requires owner_scope_id")
+    return (scope_type, int(owner_scope_id))
+
+
+def _resolve_visible_capability_adapter_scope_filters(
+    *,
+    principal: AuthPrincipal,
+    owner_scope_type: str | None,
+    owner_scope_id: int | None,
+) -> list[tuple[str | None, int | None]]:
+    """Resolve visible filters for capability mappings, excluding unsupported user scope."""
+    if owner_scope_type is not None and str(owner_scope_type or "").strip().lower() == "user":
+        raise HTTPException(status_code=422, detail="Invalid owner_scope_type")
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    return [
+        (scope_type, scope_id)
+        for scope_type, scope_id in filters
+        if scope_type is None or scope_type in {"global", "org", "team"}
+    ]
+
+
+def _portable_grant_capability(capability: Any) -> str | None:
+    """Map a portable governance-pack capability to the runtime grant-authority root capability."""
+    normalized = str(capability or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in _CAPABILITY_GRANT_PERMISSIONS:
+        return normalized
+    if normalized.startswith("tool.invoke."):
+        return "tool.invoke"
+    if normalized.startswith("network.external."):
+        return "network.external"
+    if normalized.startswith("process.execute."):
+        return "process.execute"
+    if normalized.startswith("mcp.server.connect"):
+        return "mcp.server.connect"
+    if normalized.startswith("filesystem."):
+        return normalized if normalized in _CAPABILITY_GRANT_PERMISSIONS else None
+    return None
+
+
+def _governance_pack_grant_document(pack_document: dict[str, Any]) -> dict[str, Any]:
+    """Build a synthetic policy document for grant-authority evaluation of portable capabilities."""
+    capabilities: list[str] = []
+    raw_profiles = pack_document.get("profiles")
+    if not isinstance(raw_profiles, list):
+        return {"capabilities": capabilities}
+    for raw_profile in raw_profiles:
+        if not isinstance(raw_profile, dict):
+            continue
+        raw_capabilities = raw_profile.get("capabilities")
+        if not isinstance(raw_capabilities, dict):
+            continue
+        for capability in _as_str_list(raw_capabilities.get("allow")):
+            mapped = _portable_grant_capability(capability)
+            if mapped:
+                capabilities.append(mapped)
+    return {"capabilities": _unique(capabilities)}
+
+
+def _governance_pack_manifest_summary(pack_document: dict[str, Any]) -> tuple[str, str]:
+    """Return safe manifest identifiers for audit logging without logging the full pack payload."""
+    manifest = pack_document.get("manifest")
+    if not isinstance(manifest, dict):
+        return ("<unknown>", "<unknown>")
+    pack_id = str(manifest.get("pack_id") or "").strip() or "<unknown>"
+    pack_version = str(manifest.get("pack_version") or "").strip() or "<unknown>"
+    return (pack_id, pack_version)
+
+
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Deduplicate row dictionaries by `id` while preserving final-write wins semantics."""
     deduped: dict[str, dict[str, Any]] = {}
@@ -361,6 +846,21 @@ def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not row_id:
             continue
         deduped[row_id] = row
+    return list(deduped.values())
+
+
+def _dedupe_rows_by_id(
+    rows: list[dict[str, Any]],
+    *,
+    id_getter: Callable[[dict[str, Any]], Any],
+) -> list[dict[str, Any]]:
+    """Deduplicate row dictionaries using a caller-provided stable identity key."""
+    deduped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        row_id = id_getter(row)
+        if not row_id:
+            continue
+        deduped[tuple(row_id)] = row
     return list(deduped.values())
 
 
@@ -381,6 +881,11 @@ def _profile_row_to_response(row: dict[str, Any]) -> ACPProfileResponse:
 
 
 def _external_row_to_response(row: dict[str, Any]) -> ExternalServerResponse:
+    slots = [
+        ExternalServerCredentialSlotResponse.model_validate(slot)
+        for slot in (row.get("credential_slots") or [])
+        if isinstance(slot, dict)
+    ]
     return ExternalServerResponse(
         id=str(row.get("id") or ""),
         name=str(row.get("name") or ""),
@@ -388,9 +893,22 @@ def _external_row_to_response(row: dict[str, Any]) -> ExternalServerResponse:
         owner_scope_type=str(row.get("owner_scope_type") or "global"),
         owner_scope_id=row.get("owner_scope_id"),
         transport=str(row.get("transport") or ""),
-        config=_load_json_object(row.get("config_json")),
+        config=_load_json_object(row.get("config_json") if row.get("config_json") is not None else row.get("config")),
         secret_configured=bool(row.get("secret_configured")),
         key_hint=row.get("key_hint"),
+        server_source=str(row.get("server_source") or "managed"),
+        legacy_source_ref=row.get("legacy_source_ref"),
+        superseded_by_server_id=row.get("superseded_by_server_id"),
+        binding_count=int(row.get("binding_count") or 0),
+        runtime_executable=bool(
+            row.get("runtime_executable")
+            if row.get("runtime_executable") is not None
+            else True
+        ),
+        auth_template_present=bool(row.get("auth_template_present")),
+        auth_template_valid=bool(row.get("auth_template_valid")),
+        auth_template_blocked_reason=row.get("auth_template_blocked_reason"),
+        credential_slots=slots,
         created_by=row.get("created_by"),
         updated_by=row.get("updated_by"),
         created_at=row.get("created_at"),
@@ -406,6 +924,7 @@ def _permission_profile_row_to_response(row: dict[str, Any]) -> PermissionProfil
         owner_scope_type=str(row.get("owner_scope_type") or "global"),
         owner_scope_id=row.get("owner_scope_id"),
         mode=str(row.get("mode") or "custom"),
+        path_scope_object_id=row.get("path_scope_object_id"),
         policy_document=_load_json_object(row.get("policy_document")),
         is_active=bool(row.get("is_active")),
         created_by=row.get("created_by"),
@@ -423,6 +942,11 @@ def _policy_assignment_row_to_response(row: dict[str, Any]) -> PolicyAssignmentR
         owner_scope_type=str(row.get("owner_scope_type") or "global"),
         owner_scope_id=row.get("owner_scope_id"),
         profile_id=row.get("profile_id"),
+        path_scope_object_id=row.get("path_scope_object_id"),
+        workspace_source_mode=(
+            str(row.get("workspace_source_mode") or "").strip().lower() or None
+        ),
+        workspace_set_object_id=row.get("workspace_set_object_id"),
         inline_policy_document=_load_json_object(row.get("inline_policy_document")),
         approval_policy_id=row.get("approval_policy_id"),
         is_active=bool(row.get("is_active")),
@@ -434,6 +958,77 @@ def _policy_assignment_row_to_response(row: dict[str, Any]) -> PolicyAssignmentR
         updated_by=row.get("updated_by"),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
+    )
+
+
+def _path_scope_object_row_to_response(row: dict[str, Any]) -> PathScopeObjectResponse:
+    return PathScopeObjectResponse(
+        id=int(row.get("id")),
+        name=str(row.get("name") or ""),
+        description=row.get("description"),
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+        path_scope_document=_load_json_object(row.get("path_scope_document")),
+        is_active=bool(row.get("is_active")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _workspace_set_object_row_to_response(row: dict[str, Any]) -> WorkspaceSetObjectResponse:
+    return WorkspaceSetObjectResponse(
+        id=int(row.get("id")),
+        name=str(row.get("name") or ""),
+        description=row.get("description"),
+        owner_scope_type=str(row.get("owner_scope_type") or "user"),
+        owner_scope_id=row.get("owner_scope_id"),
+        is_active=bool(row.get("is_active")),
+        readiness_summary=row.get("readiness_summary"),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _workspace_set_member_row_to_response(
+    row: dict[str, Any],
+) -> WorkspaceSetObjectMemberResponse:
+    return WorkspaceSetObjectMemberResponse(
+        workspace_set_object_id=int(row.get("workspace_set_object_id")),
+        workspace_id=str(row.get("workspace_id") or ""),
+        created_by=row.get("created_by"),
+        created_at=row.get("created_at"),
+    )
+
+
+def _shared_workspace_row_to_response(row: dict[str, Any]) -> SharedWorkspaceResponse:
+    return SharedWorkspaceResponse(
+        id=int(row.get("id")),
+        workspace_id=str(row.get("workspace_id") or ""),
+        display_name=str(row.get("display_name") or ""),
+        absolute_root=str(row.get("absolute_root") or ""),
+        owner_scope_type=str(row.get("owner_scope_type") or "team"),
+        owner_scope_id=row.get("owner_scope_id"),
+        is_active=bool(row.get("is_active")),
+        readiness_summary=row.get("readiness_summary"),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _policy_assignment_workspace_row_to_response(
+    row: dict[str, Any],
+) -> PolicyAssignmentWorkspaceResponse:
+    return PolicyAssignmentWorkspaceResponse(
+        assignment_id=int(row.get("assignment_id")),
+        workspace_id=str(row.get("workspace_id") or ""),
+        created_by=row.get("created_by"),
+        created_at=row.get("created_at"),
     )
 
 
@@ -579,6 +1174,99 @@ async def _get_visible_policy_assignment_or_404(
     return assignment
 
 
+async def _get_visible_permission_profile_or_404(
+    *,
+    profile_id: int,
+    principal: AuthPrincipal,
+    svc: McpHubService,
+) -> dict[str, Any]:
+    """Fetch a permission profile and ensure the principal can access its owner scope."""
+    profile = await svc.get_permission_profile(profile_id)
+    if profile is None:
+        raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+    _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=str(profile.get("owner_scope_type") or "global"),
+        owner_scope_id=profile.get("owner_scope_id"),
+    )
+    return profile
+
+
+async def _get_visible_workspace_set_object_or_404(
+    *,
+    workspace_set_object_id: int,
+    principal: AuthPrincipal,
+    svc: McpHubService,
+) -> dict[str, Any]:
+    """Fetch a workspace-set object and ensure the principal can access its owner scope."""
+    row = await svc.get_workspace_set_object(workspace_set_object_id)
+    if row is None:
+        raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
+    _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=str(row.get("owner_scope_type") or "user"),
+        owner_scope_id=row.get("owner_scope_id"),
+    )
+    return row
+
+
+async def _get_visible_shared_workspace_or_404(
+    *,
+    shared_workspace_id: int,
+    principal: AuthPrincipal,
+    svc: McpHubService,
+) -> dict[str, Any]:
+    """Fetch a shared-workspace entry and ensure the principal can access its owner scope."""
+    row = await svc.get_shared_workspace_entry(shared_workspace_id)
+    if row is None:
+        raise ResourceNotFoundError("mcp_shared_workspace", identifier=str(shared_workspace_id))
+    _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=str(row.get("owner_scope_type") or "team"),
+        owner_scope_id=row.get("owner_scope_id"),
+    )
+    return row
+
+
+async def _validate_assignment_workspace_source(
+    *,
+    svc: McpHubService,
+    workspace_source_mode: str | None,
+    workspace_set_object_id: int | None,
+    owner_scope_type: str,
+    owner_scope_id: int | None,
+) -> None:
+    """Validate named-vs-inline workspace source selection for an assignment."""
+    normalized_mode = str(workspace_source_mode or "").strip().lower()
+    if not normalized_mode:
+        return
+    if normalized_mode not in {"inline", "named"}:
+        raise HTTPException(status_code=422, detail="workspace_source_mode must be one of: inline, named")
+    if normalized_mode == "named":
+        if workspace_set_object_id is None:
+            raise HTTPException(status_code=422, detail="workspace_set_object_id is required when workspace_source_mode is named")
+        try:
+            await svc.validate_workspace_set_object_reference(
+                workspace_set_object_id=workspace_set_object_id,
+                target_scope_type=owner_scope_type,
+                target_scope_id=owner_scope_id,
+            )
+        except ResourceNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except BadRequestError as exc:
+            raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
+        return
+    if workspace_set_object_id is not None:
+        raise HTTPException(status_code=422, detail="workspace_set_object_id may only be set when workspace_source_mode is named")
+
+
+def _bad_request_detail(exc: BadRequestError) -> Any:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        return detail
+    return str(exc)
+
+
 async def _assignment_base_policy_document(
     *,
     svc: McpHubService,
@@ -599,6 +1287,32 @@ async def _assignment_base_policy_document(
         _load_json_object(assignment.get("inline_policy_document")),
     )
     return (int(profile_id) if profile_id is not None else None, base_document)
+
+
+def _binding_row_to_response(row: dict[str, Any]) -> CredentialBindingResponse:
+    return CredentialBindingResponse(
+        id=int(row.get("id")),
+        binding_target_type=str(row.get("binding_target_type") or ""),
+        binding_target_id=str(row.get("binding_target_id") or ""),
+        external_server_id=str(row.get("external_server_id") or ""),
+        slot_name=(
+            str(row.get("slot_name") or "").strip()
+            if str(row.get("slot_name") or "").strip()
+            else None
+        ),
+        credential_ref=str(row.get("credential_ref") or "server"),
+        managed_secret_ref_id=(
+            int(row.get("managed_secret_ref_id"))
+            if row.get("managed_secret_ref_id") is not None
+            else None
+        ),
+        binding_mode=str(row.get("binding_mode") or "grant"),
+        usage_rules=_load_json_object(row.get("usage_rules")),
+        created_by=row.get("created_by"),
+        updated_by=row.get("updated_by"),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
 
 
 @router.get("/tool-registry", response_model=list[ToolRegistryEntryResponse])
@@ -632,6 +1346,733 @@ async def get_tool_registry_summary(
     )
 
 
+@router.post("/capability-mappings/preview", response_model=CapabilityAdapterMappingPreviewResponse)
+async def preview_capability_mapping(
+    payload: CapabilityAdapterMappingCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> CapabilityAdapterMappingPreviewResponse:
+    """Validate and preview a capability adapter mapping without persisting it."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_capability_adapter_mutation_scope(
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        preview = await svc.preview_mapping(
+            mapping_id=payload.mapping_id,
+            title=payload.title,
+            description=payload.description,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            capability_name=payload.capability_name,
+            adapter_contract_version=payload.adapter_contract_version,
+            resolved_policy_document=payload.resolved_policy_document,
+            supported_environment_requirements=payload.supported_environment_requirements,
+            is_active=payload.is_active,
+        )
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
+    return CapabilityAdapterMappingPreviewResponse.model_validate(preview)
+
+
+@router.get("/capability-mappings", response_model=list[CapabilityAdapterMappingResponse])
+async def list_capability_mappings(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> list[CapabilityAdapterMappingResponse]:
+    """List capability adapter mappings visible to the current principal."""
+    filters = _resolve_visible_capability_adapter_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_capability_adapter_mappings(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [CapabilityAdapterMappingResponse.model_validate(row) for row in rows]
+
+
+@router.post("/capability-mappings", response_model=CapabilityAdapterMappingResponse, status_code=201)
+async def create_capability_mapping(
+    payload: CapabilityAdapterMappingCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> CapabilityAdapterMappingResponse:
+    """Create a capability adapter mapping after validation and grant-authority checks."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_capability_adapter_mutation_scope(
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        preview = await svc.preview_mapping(
+            mapping_id=payload.mapping_id,
+            title=payload.title,
+            description=payload.description,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            capability_name=payload.capability_name,
+            adapter_contract_version=payload.adapter_contract_version,
+            resolved_policy_document=payload.resolved_policy_document,
+            supported_environment_requirements=payload.supported_environment_requirements,
+            is_active=payload.is_active,
+        )
+        _require_grant_authority(
+            principal,
+            dict(preview["normalized_mapping"].get("resolved_policy_document") or {}),
+        )
+        created = await svc.create_mapping(
+            mapping_id=payload.mapping_id,
+            title=payload.title,
+            description=payload.description,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            capability_name=payload.capability_name,
+            adapter_contract_version=payload.adapter_contract_version,
+            resolved_policy_document=payload.resolved_policy_document,
+            supported_environment_requirements=payload.supported_environment_requirements,
+            actor_id=principal.user_id,
+            is_active=payload.is_active,
+        )
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
+    return CapabilityAdapterMappingResponse.model_validate(created)
+
+
+@router.put("/capability-mappings/{capability_adapter_mapping_id}", response_model=CapabilityAdapterMappingResponse)
+async def update_capability_mapping(
+    capability_adapter_mapping_id: int,
+    payload: CapabilityAdapterMappingUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> CapabilityAdapterMappingResponse:
+    """Update a capability adapter mapping after validation and grant-authority checks."""
+    _require_mutation_permission(principal)
+    update_fields = payload.model_dump(exclude_unset=True)
+    try:
+        preview = await svc.preview_update(
+            capability_adapter_mapping_id,
+            **update_fields,
+        )
+        _require_grant_authority(
+            principal,
+            dict(preview["normalized_mapping"].get("resolved_policy_document") or {}),
+        )
+        updated = await svc.update_mapping(
+            capability_adapter_mapping_id,
+            **update_fields,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
+    return CapabilityAdapterMappingResponse.model_validate(updated)
+
+
+@router.delete("/capability-mappings/{capability_adapter_mapping_id}", response_model=MCPHubDeleteResponse)
+async def delete_capability_mapping(
+    capability_adapter_mapping_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubCapabilityAdapterService = Depends(get_mcp_hub_capability_adapter_service),
+) -> MCPHubDeleteResponse:
+    """Delete a capability adapter mapping."""
+    _require_mutation_permission(principal)
+    try:
+        await svc.delete_capability_adapter_mapping(capability_adapter_mapping_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.post("/governance-packs/dry-run", response_model=GovernancePackDryRunResponse)
+async def dry_run_governance_pack(
+    payload: GovernancePackDryRunRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackDryRunResponse:
+    """Validate a governance-pack document and report dry-run compatibility details."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        report = await svc.dry_run_pack_document(
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack dry-run rejected for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    report_payload = report.model_dump() if hasattr(report, "model_dump") else dict(report)
+    return GovernancePackDryRunResponse.model_validate({"report": report_payload})
+
+
+@router.post("/governance-packs/source/prepare", response_model=GovernancePackSourcePrepareResponse, status_code=201)
+async def prepare_governance_pack_source(
+    payload: GovernancePackSourcePrepareRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+) -> GovernancePackSourcePrepareResponse:
+    """Resolve a trusted governance-pack source into a pinned prepared candidate."""
+    _require_mutation_permission(principal)
+    try:
+        prepared = await svc.prepare_source_candidate(
+            source=payload.source.model_dump(),
+            actor_id=principal.user_id,
+        )
+    except ValueError as exc:
+        logger.warning("Governance pack source prepare rejected for actor {}: {}", principal.user_id, exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackSourcePrepareResponse.model_validate(prepared)
+
+
+@router.post("/governance-packs/source/dry-run", response_model=GovernancePackDryRunResponse)
+async def dry_run_governance_pack_source_candidate(
+    payload: GovernancePackSourceDryRunRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    distribution_svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+    governance_svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackDryRunResponse:
+    """Dry-run a previously prepared governance-pack source candidate in the target scope."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        prepared = await distribution_svc.load_prepared_candidate(
+            payload.candidate_id,
+            actor_id=principal.user_id,
+            revalidate_trust=True,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source dry-run rejected for candidate {} in scope {}:{}: {}",
+            payload.candidate_id,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pack_document = dict(prepared.get("pack_document") or {})
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        report = await governance_svc.dry_run_pack_document(
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source dry-run rejected for candidate {} pack {}@{} in scope {}:{}: {}",
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    report_payload = report.model_dump() if hasattr(report, "model_dump") else dict(report)
+    return GovernancePackDryRunResponse.model_validate({"report": report_payload})
+
+
+@router.post(
+    "/governance-packs/{governance_pack_id}/check-updates",
+    response_model=GovernancePackSourceUpdateCheckResponse,
+)
+async def check_governance_pack_updates(
+    governance_pack_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+) -> GovernancePackSourceUpdateCheckResponse:
+    """Check whether a Git-backed governance-pack install has a newer trusted source candidate."""
+    _require_mutation_permission(principal)
+    try:
+        result = await svc.check_for_updates(governance_pack_id)
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack update check rejected for pack {} and actor {}: {}",
+            governance_pack_id,
+            principal.user_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackSourceUpdateCheckResponse.model_validate(result)
+
+
+@router.post(
+    "/governance-packs/{governance_pack_id}/prepare-upgrade-candidate",
+    response_model=GovernancePackSourceUpgradePrepareResponse,
+    status_code=201,
+)
+async def prepare_governance_pack_upgrade_candidate(
+    governance_pack_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+) -> GovernancePackSourceUpgradePrepareResponse:
+    """Prepare a pinned source candidate for a newer Git-backed governance-pack update."""
+    _require_mutation_permission(principal)
+    try:
+        result = await svc.prepare_upgrade_candidate(
+            governance_pack_id=governance_pack_id,
+            actor_id=principal.user_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack upgrade candidate prepare rejected for pack {} and actor {}: {}",
+            governance_pack_id,
+            principal.user_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackSourceUpgradePrepareResponse.model_validate(result)
+
+
+@router.post("/governance-packs/dry-run-upgrade", response_model=GovernancePackUpgradeDryRunResponse)
+async def dry_run_governance_pack_upgrade(
+    payload: GovernancePackUpgradeDryRunRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackUpgradeDryRunResponse:
+    """Validate a governance-pack upgrade plan for an installed pack in the same scope."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        plan = await svc.dry_run_upgrade_document(
+            source_governance_pack_id=payload.source_governance_pack_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack upgrade dry-run rejected for source {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    plan_payload = plan.model_dump() if hasattr(plan, "model_dump") else dict(plan)
+    return GovernancePackUpgradeDryRunResponse.model_validate({"plan": plan_payload})
+
+
+@router.post("/governance-packs/source/dry-run-upgrade", response_model=GovernancePackUpgradeDryRunResponse)
+async def dry_run_governance_pack_source_upgrade(
+    payload: GovernancePackSourceUpgradeDryRunRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    distribution_svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+    governance_svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackUpgradeDryRunResponse:
+    """Dry-run a governance-pack upgrade using a prepared source candidate."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        prepared = await distribution_svc.load_prepared_candidate(
+            payload.candidate_id,
+            actor_id=principal.user_id,
+            revalidate_trust=True,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source upgrade dry-run rejected for source {} candidate {} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pack_document = dict(prepared.get("pack_document") or {})
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        plan = await governance_svc.dry_run_upgrade_document(
+            source_governance_pack_id=payload.source_governance_pack_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source upgrade dry-run rejected for source {} candidate {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    plan_payload = plan.model_dump() if hasattr(plan, "model_dump") else dict(plan)
+    return GovernancePackUpgradeDryRunResponse.model_validate({"plan": plan_payload})
+
+
+@router.post("/governance-packs/import", response_model=GovernancePackImportResponse, status_code=201)
+async def import_governance_pack(
+    payload: GovernancePackImportRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackImportResponse:
+    """Persist an importable governance-pack document into immutable MCP Hub base objects."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        result = await svc.import_pack_document(
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            actor_id=principal.user_id,
+        )
+    except GovernancePackAlreadyExistsError as exc:
+        logger.warning(
+            "Governance pack import conflict for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack import rejected for pack {}@{} in scope {}:{}: {}",
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackImportResponse.model_validate(result)
+
+
+@router.post("/governance-packs/source/execute-upgrade", response_model=GovernancePackUpgradeExecutionResponse)
+async def execute_governance_pack_source_upgrade(
+    payload: GovernancePackSourceUpgradeExecuteRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    distribution_svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+    governance_svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackUpgradeExecutionResponse:
+    """Execute a governance-pack upgrade using a validated prepared source candidate."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        prepared = await distribution_svc.validate_prepared_upgrade_candidate(
+            governance_pack_id=payload.source_governance_pack_id,
+            candidate_id=payload.candidate_id,
+            actor_id=principal.user_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source upgrade execute rejected for source {} candidate {} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pack_document = dict(prepared.get("pack_document") or {})
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        result = await governance_svc.execute_upgrade_document(
+            source_governance_pack_id=payload.source_governance_pack_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            actor_id=principal.user_id,
+            planner_inputs_fingerprint=payload.planner_inputs_fingerprint,
+            adapter_state_fingerprint=payload.adapter_state_fingerprint,
+        )
+    except (GovernancePackAlreadyExistsError, GovernancePackUpgradeConflictError, GovernancePackUpgradeStaleError) as exc:
+        logger.warning(
+            "Governance pack source upgrade execute conflict for source {} candidate {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source upgrade execute rejected for source {} candidate {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result_payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    return GovernancePackUpgradeExecutionResponse.model_validate(result_payload)
+
+
+@router.post("/governance-packs/source/import", response_model=GovernancePackImportResponse, status_code=201)
+async def import_governance_pack_source_candidate(
+    payload: GovernancePackSourceImportRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    distribution_svc: McpHubGovernancePackDistributionService = Depends(get_mcp_hub_governance_pack_distribution_service),
+    governance_svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackImportResponse:
+    """Import a prepared governance-pack source candidate into immutable MCP Hub base objects."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    try:
+        prepared = await distribution_svc.load_prepared_candidate(
+            payload.candidate_id,
+            actor_id=principal.user_id,
+            revalidate_trust=True,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source import rejected for candidate {} in scope {}:{}: {}",
+            payload.candidate_id,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pack_document = dict(prepared.get("pack_document") or {})
+    source_metadata = dict(prepared.get("candidate") or {})
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        result = await governance_svc.import_pack_document(
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            actor_id=principal.user_id,
+            source_metadata=source_metadata,
+        )
+    except GovernancePackAlreadyExistsError as exc:
+        logger.warning(
+            "Governance pack source import conflict for candidate {} pack {}@{} in scope {}:{}: {}",
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack source import rejected for candidate {} pack {}@{} in scope {}:{}: {}",
+            payload.candidate_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GovernancePackImportResponse.model_validate(result)
+
+
+@router.post("/governance-packs/execute-upgrade", response_model=GovernancePackUpgradeExecutionResponse)
+async def execute_governance_pack_upgrade(
+    payload: GovernancePackUpgradeExecuteRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackUpgradeExecutionResponse:
+    """Execute a previously dry-run governance-pack upgrade when the planner state is unchanged."""
+    _require_mutation_permission(principal)
+    resolved_scope_type, resolved_scope_id = _resolve_governance_pack_mutation_scope(
+        principal=principal,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+    )
+    pack_document = payload.pack.model_dump()
+    _require_grant_authority(principal, _governance_pack_grant_document(pack_document))
+    pack_id, pack_version = _governance_pack_manifest_summary(pack_document)
+    try:
+        result = await svc.execute_upgrade_document(
+            source_governance_pack_id=payload.source_governance_pack_id,
+            document=pack_document,
+            owner_scope_type=resolved_scope_type,
+            owner_scope_id=resolved_scope_id,
+            actor_id=principal.user_id,
+            planner_inputs_fingerprint=payload.planner_inputs_fingerprint,
+            adapter_state_fingerprint=payload.adapter_state_fingerprint,
+        )
+    except (GovernancePackAlreadyExistsError, GovernancePackUpgradeConflictError, GovernancePackUpgradeStaleError) as exc:
+        logger.warning(
+            "Governance pack upgrade execute conflict for source {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning(
+            "Governance pack upgrade execute rejected for source {} target {}@{} in scope {}:{}: {}",
+            payload.source_governance_pack_id,
+            pack_id,
+            pack_version,
+            resolved_scope_type,
+            resolved_scope_id,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result_payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    return GovernancePackUpgradeExecutionResponse.model_validate(result_payload)
+
+
+@router.get("/governance-packs", response_model=list[GovernancePackSummaryResponse])
+async def list_governance_packs(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> list[GovernancePackSummaryResponse]:
+    """List governance packs visible to the current principal with scope-constrained filtering."""
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_governance_packs(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [GovernancePackSummaryResponse.model_validate(row) for row in rows]
+
+
+@router.get(
+    "/governance-packs/trust-policy",
+    response_model=GovernancePackTrustPolicyResponse,
+)
+async def get_governance_pack_trust_policy(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackTrustService = Depends(get_mcp_hub_governance_pack_trust_service),
+) -> GovernancePackTrustPolicyResponse:
+    """Return the deployment-wide governance-pack trust policy."""
+    _require_mutation_permission(principal)
+    return GovernancePackTrustPolicyResponse.model_validate(await svc.get_policy())
+
+
+@router.put(
+    "/governance-packs/trust-policy",
+    response_model=GovernancePackTrustPolicyResponse,
+)
+async def update_governance_pack_trust_policy(
+    payload: GovernancePackTrustPolicyRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackTrustService = Depends(get_mcp_hub_governance_pack_trust_service),
+) -> GovernancePackTrustPolicyResponse:
+    """Update the deployment-wide governance-pack trust policy."""
+    _require_mutation_permission(principal)
+    updated = await svc.update_policy(payload.model_dump(), actor_id=principal.user_id)
+    return GovernancePackTrustPolicyResponse.model_validate(updated)
+
+
+@router.get(
+    "/governance-packs/{governance_pack_id}/upgrade-history",
+    response_model=list[GovernancePackUpgradeHistoryEntryResponse],
+)
+async def list_governance_pack_upgrade_history(
+    governance_pack_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> list[GovernancePackUpgradeHistoryEntryResponse]:
+    """List the recorded upgrade lineage for the governance-pack identity installed in this scope."""
+    row = await svc.get_governance_pack_detail(governance_pack_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"mcp_governance_pack '{governance_pack_id}' was not found")
+    _assert_principal_can_access_scope(
+        principal,
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+    )
+    history = await svc.list_governance_pack_upgrade_history(governance_pack_id)
+    return [GovernancePackUpgradeHistoryEntryResponse.model_validate(item) for item in history]
+
+
+@router.get("/governance-packs/{governance_pack_id}", response_model=GovernancePackDetailResponse)
+async def get_governance_pack_detail(
+    governance_pack_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubGovernancePackService = Depends(get_mcp_hub_governance_pack_service),
+) -> GovernancePackDetailResponse:
+    """Return the persisted governance pack manifest plus imported-object provenance links."""
+    row = await svc.get_governance_pack_detail(governance_pack_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"mcp_governance_pack '{governance_pack_id}' was not found")
+    _assert_principal_can_access_scope(
+        principal,
+        owner_scope_type=str(row.get("owner_scope_type") or "global"),
+        owner_scope_id=row.get("owner_scope_id"),
+    )
+    return GovernancePackDetailResponse.model_validate(row)
+
+
 @router.post("/permission-profiles", response_model=PermissionProfileResponse, status_code=201)
 async def create_permission_profile(
     payload: PermissionProfileCreateRequest,
@@ -640,14 +2081,29 @@ async def create_permission_profile(
 ) -> PermissionProfileResponse:
     """Create a new permission profile within the provided owner scope."""
     _require_mutation_permission(principal)
-    _require_grant_authority(principal, payload.policy_document)
+    policy_document = _normalize_policy_document_for_storage(
+        payload.policy_document,
+        allow_inherited_scope=False,
+    )
+    _require_grant_authority(principal, policy_document)
+    try:
+        await svc.validate_path_scope_object_reference(
+            path_scope_object_id=payload.path_scope_object_id,
+            target_scope_type=payload.owner_scope_type,
+            target_scope_id=payload.owner_scope_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     row = await svc.create_permission_profile(
         name=payload.name,
         description=payload.description,
         owner_scope_type=payload.owner_scope_type,
         owner_scope_id=payload.owner_scope_id,
         mode=payload.mode,
-        policy_document=payload.policy_document,
+        path_scope_object_id=payload.path_scope_object_id,
+        policy_document=policy_document,
         is_active=payload.is_active,
         actor_id=principal.user_id,
     )
@@ -690,8 +2146,31 @@ async def update_permission_profile(
     _require_mutation_permission(principal)
     update_fields = payload.model_dump(exclude_unset=True)
     if "policy_document" in update_fields:
+        update_fields["policy_document"] = _normalize_policy_document_for_storage(
+            update_fields.get("policy_document") or {},
+            allow_inherited_scope=False,
+        )
         _require_grant_authority(principal, update_fields.get("policy_document") or {})
     try:
+        existing = await svc.get_permission_profile(profile_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+        _ensure_mutable_governance_object(existing, "Permission profile")
+        if (
+            "path_scope_object_id" in update_fields
+            or "workspace_source_mode" in update_fields
+            or "workspace_set_object_id" in update_fields
+            or "owner_scope_type" in update_fields
+            or "owner_scope_id" in update_fields
+        ):
+            await svc.validate_path_scope_object_reference(
+                path_scope_object_id=update_fields.get(
+                    "path_scope_object_id",
+                    existing.get("path_scope_object_id"),
+                ),
+                target_scope_type=str(update_fields.get("owner_scope_type") or existing.get("owner_scope_type") or "global"),
+                target_scope_id=update_fields.get("owner_scope_id", existing.get("owner_scope_id")),
+            )
         row = await svc.update_permission_profile(
             profile_id,
             actor_id=principal.user_id,
@@ -701,6 +2180,8 @@ async def update_permission_profile(
             raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _permission_profile_row_to_response(row)
 
 
@@ -713,11 +2194,454 @@ async def delete_permission_profile(
     """Delete a permission profile by id."""
     _require_mutation_permission(principal)
     try:
+        existing = await svc.get_permission_profile(profile_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
+        _ensure_mutable_governance_object(existing, "Permission profile")
         deleted = await svc.delete_permission_profile(profile_id, actor_id=principal.user_id)
         if not deleted:
             raise ResourceNotFoundError("mcp_permission_profile", identifier=str(profile_id))
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.post("/path-scope-objects", response_model=PathScopeObjectResponse, status_code=201)
+async def create_path_scope_object(
+    payload: PathScopeObjectCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PathScopeObjectResponse:
+    _require_mutation_permission(principal)
+    row = await svc.create_path_scope_object(
+        name=payload.name,
+        description=payload.description,
+        owner_scope_type=payload.owner_scope_type,
+        owner_scope_id=payload.owner_scope_id,
+        path_scope_document=_normalize_path_scope_document_for_storage(payload.path_scope_document),
+        is_active=payload.is_active,
+        actor_id=principal.user_id,
+    )
+    return _path_scope_object_row_to_response(row)
+
+
+@router.get("/path-scope-objects", response_model=list[PathScopeObjectResponse])
+async def list_path_scope_objects(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[PathScopeObjectResponse]:
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_path_scope_objects(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    return [_path_scope_object_row_to_response(row) for row in rows]
+
+
+@router.put("/path-scope-objects/{path_scope_object_id}", response_model=PathScopeObjectResponse)
+async def update_path_scope_object(
+    path_scope_object_id: int,
+    payload: PathScopeObjectUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PathScopeObjectResponse:
+    _require_mutation_permission(principal)
+    update_fields = payload.model_dump(exclude_unset=True)
+    if "path_scope_document" in update_fields:
+        update_fields["path_scope_document"] = _normalize_path_scope_document_for_storage(
+            update_fields.get("path_scope_document") or {}
+        )
+    try:
+        row = await svc.update_path_scope_object(
+            path_scope_object_id,
+            actor_id=principal.user_id,
+            **update_fields,
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_path_scope_object", identifier=str(path_scope_object_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _path_scope_object_row_to_response(row)
+
+
+@router.delete("/path-scope-objects/{path_scope_object_id}", response_model=MCPHubDeleteResponse)
+async def delete_path_scope_object(
+    path_scope_object_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        deleted = await svc.delete_path_scope_object(path_scope_object_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_path_scope_object", identifier=str(path_scope_object_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.post("/workspace-set-objects", response_model=WorkspaceSetObjectResponse, status_code=201)
+async def create_workspace_set_object(
+    payload: WorkspaceSetObjectCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> WorkspaceSetObjectResponse:
+    _require_mutation_permission(principal)
+    try:
+        row = await svc.create_workspace_set_object(
+            name=payload.name,
+            description=payload.description,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id
+            if payload.owner_scope_id is not None
+            else principal.user_id,
+            is_active=payload.is_active,
+            actor_id=principal.user_id,
+        )
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    row = dict(row)
+    row["readiness_summary"] = await svc.get_workspace_set_readiness_summary(
+        workspace_set_object_id=int(row.get("id") or 0)
+    )
+    return _workspace_set_object_row_to_response(row)
+
+
+@router.get("/workspace-set-objects", response_model=list[WorkspaceSetObjectResponse])
+async def list_workspace_set_objects(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[WorkspaceSetObjectResponse]:
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        rows.extend(
+            await svc.list_workspace_set_objects(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    rows_with_readiness: list[dict[str, Any]] = []
+    for row in rows:
+        enriched = dict(row)
+        enriched["readiness_summary"] = await svc.get_workspace_set_readiness_summary(
+            workspace_set_object_id=int(row.get("id") or 0)
+        )
+        rows_with_readiness.append(enriched)
+    return [_workspace_set_object_row_to_response(row) for row in rows_with_readiness]
+
+
+@router.put("/workspace-set-objects/{workspace_set_object_id}", response_model=WorkspaceSetObjectResponse)
+async def update_workspace_set_object(
+    workspace_set_object_id: int,
+    payload: WorkspaceSetObjectUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> WorkspaceSetObjectResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_workspace_set_object_or_404(
+            workspace_set_object_id=workspace_set_object_id,
+            principal=principal,
+            svc=svc,
+        )
+        row = await svc.update_workspace_set_object(
+            workspace_set_object_id,
+            actor_id=principal.user_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _workspace_set_object_row_to_response(row)
+
+
+@router.delete("/workspace-set-objects/{workspace_set_object_id}", response_model=MCPHubDeleteResponse)
+async def delete_workspace_set_object(
+    workspace_set_object_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_workspace_set_object_or_404(
+            workspace_set_object_id=workspace_set_object_id,
+            principal=principal,
+            svc=svc,
+        )
+        deleted = await svc.delete_workspace_set_object(workspace_set_object_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_workspace_set_object", identifier=str(workspace_set_object_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get(
+    "/workspace-set-objects/{workspace_set_object_id}/members",
+    response_model=list[WorkspaceSetObjectMemberResponse],
+)
+async def list_workspace_set_members(
+    workspace_set_object_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[WorkspaceSetObjectMemberResponse]:
+    await _get_visible_workspace_set_object_or_404(
+        workspace_set_object_id=workspace_set_object_id,
+        principal=principal,
+        svc=svc,
+    )
+    rows = await svc.list_workspace_set_members(workspace_set_object_id)
+    return [_workspace_set_member_row_to_response(row) for row in rows]
+
+
+@router.post(
+    "/workspace-set-objects/{workspace_set_object_id}/members",
+    response_model=WorkspaceSetObjectMemberResponse,
+    status_code=201,
+)
+async def add_workspace_set_member(
+    workspace_set_object_id: int,
+    payload: WorkspaceSetObjectMemberCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> WorkspaceSetObjectMemberResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_workspace_set_object_or_404(
+            workspace_set_object_id=workspace_set_object_id,
+            principal=principal,
+            svc=svc,
+        )
+        row = await svc.add_workspace_set_member(
+            workspace_set_object_id,
+            workspace_id=payload.workspace_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (BadRequestError, McpHubConflictError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _workspace_set_member_row_to_response(row)
+
+
+@router.delete(
+    "/workspace-set-objects/{workspace_set_object_id}/members/{workspace_id}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_workspace_set_member(
+    workspace_set_object_id: int,
+    workspace_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_workspace_set_object_or_404(
+            workspace_set_object_id=workspace_set_object_id,
+            principal=principal,
+            svc=svc,
+        )
+        deleted = await svc.delete_workspace_set_member(
+            workspace_set_object_id,
+            workspace_id,
+            actor_id=principal.user_id,
+        )
+        if not deleted:
+            raise ResourceNotFoundError(
+                "mcp_workspace_set_object_member",
+                identifier=f"{workspace_set_object_id}:{workspace_id}",
+            )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.post("/shared-workspaces", response_model=SharedWorkspaceResponse, status_code=201)
+async def create_shared_workspace(
+    payload: SharedWorkspaceCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> SharedWorkspaceResponse:
+    _require_mutation_permission(principal)
+    if str(payload.owner_scope_type or "").strip().lower() == "user":
+        raise HTTPException(status_code=400, detail="Shared workspaces must use owner_scope_type of: global, org, team")
+    try:
+        row = await svc.create_shared_workspace_entry(
+            workspace_id=payload.workspace_id,
+            display_name=payload.display_name,
+            absolute_root=payload.absolute_root,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id,
+            actor_id=principal.user_id,
+            is_active=payload.is_active,
+        )
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    row = dict(row)
+    row["readiness_summary"] = await svc.get_shared_workspace_readiness_summary(
+        shared_workspace_id=int(row.get("id") or 0)
+    )
+    return _shared_workspace_row_to_response(row)
+
+
+@router.get("/shared-workspaces", response_model=list[SharedWorkspaceResponse])
+async def list_shared_workspaces(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[SharedWorkspaceResponse]:
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    rows: list[dict[str, Any]] = []
+    for scope_type, scope_id in filters:
+        if scope_type == "user":
+            continue
+        rows.extend(
+            await svc.list_shared_workspace_entries(
+                owner_scope_type=scope_type,
+                owner_scope_id=scope_id,
+            )
+        )
+    rows = _dedupe_rows(rows)
+    rows_with_readiness: list[dict[str, Any]] = []
+    for row in rows:
+        enriched = dict(row)
+        enriched["readiness_summary"] = await svc.get_shared_workspace_readiness_summary(
+            shared_workspace_id=int(row.get("id") or 0)
+        )
+        rows_with_readiness.append(enriched)
+    return [_shared_workspace_row_to_response(row) for row in rows_with_readiness]
+
+
+@router.get("/audit/findings", response_model=GovernanceAuditFindingListResponse)
+async def list_governance_audit_findings(
+    owner_scope_type: str | None = None,
+    owner_scope_id: int | None = None,
+    severity: str | None = None,
+    finding_type: str | None = None,
+    object_kind: str | None = None,
+    scope_type: str | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> GovernanceAuditFindingListResponse:
+    filters = _resolve_visible_scope_filters(
+        principal=principal,
+        owner_scope_type=owner_scope_type,
+        owner_scope_id=owner_scope_id,
+    )
+    all_items: list[dict[str, Any]] = []
+    for visible_scope_type, visible_scope_id in filters:
+        result = await svc.list_governance_audit_findings(
+            actor_id=principal.user_id,
+            owner_scope_type=visible_scope_type,
+            owner_scope_id=visible_scope_id,
+            severity=severity,
+            finding_type=finding_type,
+            object_kind=object_kind,
+            scope_type=scope_type,
+        )
+        all_items.extend(list(result.get("items") or []))
+    deduped_items = _dedupe_rows_by_id(
+        all_items,
+        id_getter=lambda row: (
+            str(row.get("finding_type") or ""),
+            str(row.get("object_kind") or ""),
+            str(row.get("object_id") or ""),
+            str(row.get("scope_type") or ""),
+            str(row.get("scope_id") or ""),
+            str(row.get("message") or ""),
+        ),
+    )
+    counts = {"error": 0, "warning": 0}
+    for item in deduped_items:
+        severity_key = str(item.get("severity") or "warning").strip().lower()
+        if severity_key in counts:
+            counts[severity_key] += 1
+    return GovernanceAuditFindingListResponse(
+        items=deduped_items,
+        total=len(deduped_items),
+        counts=counts,
+    )
+
+
+@router.put("/shared-workspaces/{shared_workspace_id}", response_model=SharedWorkspaceResponse)
+async def update_shared_workspace(
+    shared_workspace_id: int,
+    payload: SharedWorkspaceUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> SharedWorkspaceResponse:
+    _require_mutation_permission(principal)
+    if "owner_scope_type" in payload.model_fields_set and str(payload.owner_scope_type or "").strip().lower() == "user":
+        raise HTTPException(status_code=400, detail="Shared workspaces must use owner_scope_type of: global, org, team")
+    try:
+        await _get_visible_shared_workspace_or_404(
+            shared_workspace_id=shared_workspace_id,
+            principal=principal,
+            svc=svc,
+        )
+        row = await svc.update_shared_workspace_entry(
+            shared_workspace_id,
+            actor_id=principal.user_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+        if not row:
+            raise ResourceNotFoundError("mcp_shared_workspace", identifier=str(shared_workspace_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _shared_workspace_row_to_response(row)
+
+
+@router.delete("/shared-workspaces/{shared_workspace_id}", response_model=MCPHubDeleteResponse)
+async def delete_shared_workspace(
+    shared_workspace_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_shared_workspace_or_404(
+            shared_workspace_id=shared_workspace_id,
+            principal=principal,
+            svc=svc,
+        )
+        deleted = await svc.delete_shared_workspace_entry(shared_workspace_id, actor_id=principal.user_id)
+        if not deleted:
+            raise ResourceNotFoundError("mcp_shared_workspace", identifier=str(shared_workspace_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return MCPHubDeleteResponse(ok=True)
 
 
@@ -729,18 +2653,42 @@ async def create_policy_assignment(
 ) -> PolicyAssignmentResponse:
     """Create a new policy assignment for a default, group, or persona target."""
     _require_mutation_permission(principal)
-    _require_grant_authority(principal, payload.inline_policy_document)
-    row = await svc.create_policy_assignment(
-        target_type=payload.target_type,
-        target_id=payload.target_id,
-        owner_scope_type=payload.owner_scope_type,
-        owner_scope_id=payload.owner_scope_id,
-        profile_id=payload.profile_id,
-        inline_policy_document=payload.inline_policy_document,
-        approval_policy_id=payload.approval_policy_id,
-        is_active=payload.is_active,
-        actor_id=principal.user_id,
+    inline_policy_document = _normalize_policy_document_for_storage(
+        payload.inline_policy_document,
+        allow_inherited_scope=False,
     )
+    _require_grant_authority(principal, inline_policy_document)
+    try:
+        await svc.validate_path_scope_object_reference(
+            path_scope_object_id=payload.path_scope_object_id,
+            target_scope_type=payload.owner_scope_type,
+            target_scope_id=payload.owner_scope_id,
+        )
+        await _validate_assignment_workspace_source(
+            svc=svc,
+            workspace_source_mode=payload.workspace_source_mode,
+            workspace_set_object_id=payload.workspace_set_object_id,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id,
+        )
+        row = await svc.create_policy_assignment(
+            target_type=payload.target_type,
+            target_id=payload.target_id,
+            owner_scope_type=payload.owner_scope_type,
+            owner_scope_id=payload.owner_scope_id,
+            profile_id=payload.profile_id,
+            path_scope_object_id=payload.path_scope_object_id,
+            workspace_source_mode=payload.workspace_source_mode,
+            workspace_set_object_id=payload.workspace_set_object_id,
+            inline_policy_document=inline_policy_document,
+            approval_policy_id=payload.approval_policy_id,
+            is_active=payload.is_active,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
     return _policy_assignment_row_to_response(row)
 
 
@@ -784,8 +2732,42 @@ async def update_policy_assignment(
     _require_mutation_permission(principal)
     update_fields = payload.model_dump(exclude_unset=True)
     if "inline_policy_document" in update_fields:
+        update_fields["inline_policy_document"] = _normalize_policy_document_for_storage(
+            update_fields.get("inline_policy_document") or {},
+            allow_inherited_scope=False,
+        )
         _require_grant_authority(principal, update_fields.get("inline_policy_document") or {})
     try:
+        existing = await svc.get_policy_assignment(assignment_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+        _ensure_mutable_governance_object(existing, "Policy assignment")
+        if (
+            "path_scope_object_id" in update_fields
+            or "owner_scope_type" in update_fields
+            or "owner_scope_id" in update_fields
+        ):
+            await svc.validate_path_scope_object_reference(
+                path_scope_object_id=update_fields.get(
+                    "path_scope_object_id",
+                    existing.get("path_scope_object_id"),
+                ),
+                target_scope_type=str(update_fields.get("owner_scope_type") or existing.get("owner_scope_type") or "global"),
+                target_scope_id=update_fields.get("owner_scope_id", existing.get("owner_scope_id")),
+            )
+            await _validate_assignment_workspace_source(
+                svc=svc,
+                workspace_source_mode=update_fields.get(
+                    "workspace_source_mode",
+                    existing.get("workspace_source_mode"),
+                ),
+                workspace_set_object_id=update_fields.get(
+                    "workspace_set_object_id",
+                    existing.get("workspace_set_object_id"),
+                ),
+                owner_scope_type=str(update_fields.get("owner_scope_type") or existing.get("owner_scope_type") or "global"),
+                owner_scope_id=update_fields.get("owner_scope_id", existing.get("owner_scope_id")),
+            )
         row = await svc.update_policy_assignment(
             assignment_id,
             actor_id=principal.user_id,
@@ -795,6 +2777,8 @@ async def update_policy_assignment(
             raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
     return _policy_assignment_row_to_response(row)
 
 
@@ -807,9 +2791,83 @@ async def delete_policy_assignment(
     """Delete a policy assignment by id."""
     _require_mutation_permission(principal)
     try:
+        existing = await svc.get_policy_assignment(assignment_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+        _ensure_mutable_governance_object(existing, "Policy assignment")
         deleted = await svc.delete_policy_assignment(assignment_id, actor_id=principal.user_id)
         if not deleted:
             raise ResourceNotFoundError("mcp_policy_assignment", identifier=str(assignment_id))
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get(
+    "/policy-assignments/{assignment_id}/workspaces",
+    response_model=list[PolicyAssignmentWorkspaceResponse],
+)
+async def list_policy_assignment_workspaces(
+    assignment_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[PolicyAssignmentWorkspaceResponse]:
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    rows = await svc.list_policy_assignment_workspaces(assignment_id)
+    return [_policy_assignment_workspace_row_to_response(row) for row in rows]
+
+
+@router.post(
+    "/policy-assignments/{assignment_id}/workspaces",
+    response_model=PolicyAssignmentWorkspaceResponse,
+    status_code=201,
+)
+async def add_policy_assignment_workspace(
+    assignment_id: int,
+    payload: PolicyAssignmentWorkspaceCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> PolicyAssignmentWorkspaceResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+        row = await svc.add_policy_assignment_workspace(
+            assignment_id,
+            workspace_id=payload.workspace_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except McpHubConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=_bad_request_detail(exc)) from exc
+    return _policy_assignment_workspace_row_to_response(row)
+
+
+@router.delete(
+    "/policy-assignments/{assignment_id}/workspaces/{workspace_id}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_policy_assignment_workspace(
+    assignment_id: int,
+    workspace_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    _require_mutation_permission(principal)
+    try:
+        await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+        deleted = await svc.delete_policy_assignment_workspace(
+            assignment_id,
+            workspace_id=workspace_id,
+            actor_id=principal.user_id,
+        )
+        if not deleted:
+            raise ResourceNotFoundError(
+                "mcp_policy_assignment_workspace",
+                identifier=f"{assignment_id}:{workspace_id}",
+            )
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MCPHubDeleteResponse(ok=True)
@@ -852,6 +2910,10 @@ async def upsert_policy_assignment_override(
     """Create or replace the single override attached to a policy assignment."""
     _require_mutation_permission(principal)
     try:
+        override_policy_document = _normalize_policy_document_for_storage(
+            payload.override_policy_document,
+            allow_inherited_scope=True,
+        )
         assignment = await _get_visible_policy_assignment_or_404(
             assignment_id=assignment_id,
             principal=principal,
@@ -861,13 +2923,13 @@ async def upsert_policy_assignment_override(
             svc=svc,
             assignment=assignment,
         )
-        merged_document = _merge_policy_documents(base_document, payload.override_policy_document)
+        merged_document = _merge_policy_documents(base_document, override_policy_document)
         delta_document = _grant_authority_delta(base_document, merged_document)
         if delta_document:
             _require_grant_authority(principal, delta_document)
         row = await svc.upsert_policy_override(
             assignment_id,
-            override_policy_document=payload.override_policy_document,
+            override_policy_document=override_policy_document,
             is_active=payload.is_active,
             broadens_access=bool(delta_document),
             grant_authority_snapshot={
@@ -969,6 +3031,10 @@ async def update_approval_policy(
     if "rules" in update_fields:
         update_fields["rules"] = _normalized_approval_rules(update_fields.get("rules"))
     try:
+        existing = await svc.get_approval_policy(approval_policy_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_approval_policy", identifier=str(approval_policy_id))
+        _ensure_mutable_governance_object(existing, "Approval policy")
         row = await svc.update_approval_policy(
             approval_policy_id,
             actor_id=principal.user_id,
@@ -990,6 +3056,10 @@ async def delete_approval_policy(
     """Delete an approval policy by id."""
     _require_mutation_permission(principal)
     try:
+        existing = await svc.get_approval_policy(approval_policy_id)
+        if not existing:
+            raise ResourceNotFoundError("mcp_approval_policy", identifier=str(approval_policy_id))
+        _ensure_mutable_governance_object(existing, "Approval policy")
         deleted = await svc.delete_approval_policy(approval_policy_id, actor_id=principal.user_id)
         if not deleted:
             raise ResourceNotFoundError("mcp_approval_policy", identifier=str(approval_policy_id))
@@ -1208,6 +3278,577 @@ async def create_external_server(
     except McpHubConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _external_row_to_response(row)
+
+
+@router.post("/external-servers/{server_id}/import", response_model=ExternalServerResponse, status_code=201)
+async def import_external_server(
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerResponse:
+    """Import a legacy external server definition into MCP Hub managed storage."""
+    _require_mutation_permission(principal)
+    try:
+        row = await svc.import_legacy_external_server(
+            server_id=server_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except McpHubConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _external_row_to_response(row)
+
+
+@router.get(
+    "/external-servers/{server_id}/auth-template",
+    response_model=ExternalServerAuthTemplateResponse,
+)
+async def get_external_server_auth_template(
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerAuthTemplateResponse:
+    """Fetch the managed auth template for an external server."""
+    _ = principal
+    try:
+        row = await svc.get_external_server_auth_template(server_id=server_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerAuthTemplateResponse.model_validate(row)
+
+
+@router.put(
+    "/external-servers/{server_id}/auth-template",
+    response_model=ExternalServerAuthTemplateResponse,
+)
+async def update_external_server_auth_template(
+    server_id: str,
+    payload: ExternalServerAuthTemplateUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerAuthTemplateResponse:
+    """Create or update the managed auth template for an external server."""
+    _require_mutation_permission(principal)
+    try:
+        row = await svc.update_external_server_auth_template(
+            server_id=server_id,
+            auth_template=payload.model_dump(),
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerAuthTemplateResponse.model_validate(row)
+
+
+@router.get(
+    "/external-servers/{server_id}/credential-slots",
+    response_model=list[ExternalServerCredentialSlotResponse],
+)
+async def list_external_server_credential_slots(
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[ExternalServerCredentialSlotResponse]:
+    """List credential slots configured on a managed external server."""
+    _ = principal
+    try:
+        rows = await svc.list_external_server_credential_slots(server_id=server_id)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [ExternalServerCredentialSlotResponse.model_validate(row) for row in rows]
+
+
+@router.post(
+    "/external-servers/{server_id}/credential-slots",
+    response_model=ExternalServerCredentialSlotResponse,
+    status_code=201,
+)
+async def create_external_server_credential_slot(
+    server_id: str,
+    payload: ExternalServerCredentialSlotCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerCredentialSlotResponse:
+    """Create a credential slot on a managed external server."""
+    _require_mutation_permission(principal)
+    _require_credential_grant_authority(principal, payload.privilege_class)
+    try:
+        row = await svc.create_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=payload.slot_name,
+            display_name=payload.display_name,
+            secret_kind=payload.secret_kind,
+            privilege_class=payload.privilege_class,
+            is_required=payload.is_required,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerCredentialSlotResponse.model_validate(row)
+
+
+@router.put(
+    "/external-servers/{server_id}/credential-slots/{slot_name}",
+    response_model=ExternalServerCredentialSlotResponse,
+)
+async def update_external_server_credential_slot(
+    server_id: str,
+    slot_name: str,
+    payload: ExternalServerCredentialSlotUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerCredentialSlotResponse:
+    """Update credential slot metadata on a managed external server."""
+    _require_mutation_permission(principal)
+    if payload.privilege_class is not None:
+        slot_row = await _resolve_binding_slot_for_grant_authority(
+            svc=svc,
+            server_id=server_id,
+            slot_name=slot_name,
+        )
+        if slot_row is not None and _credential_privilege_broadens(
+            slot_row.get("privilege_class"),
+            payload.privilege_class,
+        ):
+            _require_credential_grant_authority(principal, payload.privilege_class)
+    try:
+        row = await svc.update_external_server_credential_slot(
+            server_id=server_id,
+            slot_name=slot_name,
+            display_name=payload.display_name,
+            secret_kind=payload.secret_kind,
+            privilege_class=payload.privilege_class,
+            is_required=payload.is_required,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerCredentialSlotResponse.model_validate(row)
+
+
+@router.delete(
+    "/external-servers/{server_id}/credential-slots/{slot_name}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_external_server_credential_slot(
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete a credential slot from a managed external server."""
+    _require_mutation_permission(principal)
+    deleted = await svc.delete_external_server_credential_slot(
+        server_id=server_id,
+        slot_name=slot_name,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential slot not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.post(
+    "/external-servers/{server_id}/credential-slots/{slot_name}/secret",
+    response_model=ExternalServerSlotSecretSetResponse,
+)
+async def set_external_server_slot_secret(
+    server_id: str,
+    slot_name: str,
+    payload: ExternalSecretSetRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> ExternalServerSlotSecretSetResponse:
+    """Set or rotate the secret value for an external server credential slot."""
+    _require_mutation_permission(principal)
+    try:
+        out = await svc.set_external_server_slot_secret(
+            server_id=server_id,
+            slot_name=slot_name,
+            secret_value=payload.secret,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ExternalServerSlotSecretSetResponse(**out)
+
+
+@router.delete(
+    "/external-servers/{server_id}/credential-slots/{slot_name}/secret",
+    response_model=MCPHubDeleteResponse,
+)
+async def clear_external_server_slot_secret(
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Clear the stored secret for an external server credential slot."""
+    _require_mutation_permission(principal)
+    deleted = await svc.clear_external_server_slot_secret(
+        server_id=server_id,
+        slot_name=slot_name,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential slot secret not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get("/permission-profiles/{profile_id}/credential-bindings", response_model=list[CredentialBindingResponse])
+async def list_profile_credential_bindings(
+    profile_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[CredentialBindingResponse]:
+    """List external server bindings attached to a permission profile."""
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    rows = await svc.list_profile_credential_bindings(profile_id=profile_id)
+    return [_binding_row_to_response(row) for row in rows]
+
+
+@router.put(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}",
+    response_model=CredentialBindingResponse,
+)
+async def upsert_profile_credential_binding(
+    profile_id: int,
+    server_id: str,
+    payload: ProfileCredentialBindingUpsertRequest | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> CredentialBindingResponse:
+    """Grant a managed external server to a permission profile."""
+    _require_mutation_permission(principal)
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    slot_row = await _resolve_binding_slot_for_grant_authority(
+        svc=svc,
+        server_id=server_id,
+        slot_name=None,
+    )
+    if slot_row is not None:
+        _require_credential_grant_authority(principal, slot_row.get("privilege_class"))
+    try:
+        row = await svc.upsert_profile_credential_binding(
+            profile_id=profile_id,
+            external_server_id=server_id,
+            managed_secret_ref_id=(payload.managed_secret_ref_id if payload else None),
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _binding_row_to_response(row)
+
+
+@router.put(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}/{slot_name}",
+    response_model=CredentialBindingResponse,
+)
+async def upsert_profile_slot_credential_binding(
+    profile_id: int,
+    server_id: str,
+    slot_name: str,
+    payload: ProfileCredentialBindingUpsertRequest | None = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> CredentialBindingResponse:
+    """Grant a managed external server slot to a permission profile."""
+    _require_mutation_permission(principal)
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    slot_row = await _resolve_binding_slot_for_grant_authority(
+        svc=svc,
+        server_id=server_id,
+        slot_name=slot_name,
+    )
+    if slot_row is not None:
+        _require_credential_grant_authority(principal, slot_row.get("privilege_class"))
+    try:
+        row = await svc.upsert_profile_credential_binding(
+            profile_id=profile_id,
+            external_server_id=server_id,
+            slot_name=slot_name,
+            managed_secret_ref_id=(payload.managed_secret_ref_id if payload else None),
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _binding_row_to_response(row)
+
+
+@router.delete(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_profile_credential_binding(
+    profile_id: int,
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an external server binding from a permission profile."""
+    _require_mutation_permission(principal)
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    deleted = await svc.delete_profile_credential_binding(
+        profile_id=profile_id,
+        external_server_id=server_id,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential binding not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.delete(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}/{slot_name}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_profile_slot_credential_binding(
+    profile_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an external server slot binding from a permission profile."""
+    _require_mutation_permission(principal)
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    deleted = await svc.delete_profile_credential_binding(
+        profile_id=profile_id,
+        external_server_id=server_id,
+        slot_name=slot_name,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential binding not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get("/policy-assignments/{assignment_id}/credential-bindings", response_model=list[CredentialBindingResponse])
+async def list_assignment_credential_bindings(
+    assignment_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> list[CredentialBindingResponse]:
+    """List external server bindings attached to a policy assignment."""
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    rows = await svc.list_assignment_credential_bindings(assignment_id=assignment_id)
+    return [_binding_row_to_response(row) for row in rows]
+
+
+@router.put(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}",
+    response_model=CredentialBindingResponse,
+)
+async def upsert_assignment_credential_binding(
+    assignment_id: int,
+    server_id: str,
+    payload: AssignmentCredentialBindingUpsertRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> CredentialBindingResponse:
+    """Create or update an external server binding on a policy assignment."""
+    _require_mutation_permission(principal)
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    if payload.binding_mode == "grant":
+        slot_row = await _resolve_binding_slot_for_grant_authority(
+            svc=svc,
+            server_id=server_id,
+            slot_name=None,
+        )
+        if slot_row is not None:
+            _require_credential_grant_authority(principal, slot_row.get("privilege_class"))
+    try:
+        row = await svc.upsert_assignment_credential_binding(
+            assignment_id=assignment_id,
+            external_server_id=server_id,
+            binding_mode=payload.binding_mode,
+            managed_secret_ref_id=payload.managed_secret_ref_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _binding_row_to_response(row)
+
+
+@router.put(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}/{slot_name}",
+    response_model=CredentialBindingResponse,
+)
+async def upsert_assignment_slot_credential_binding(
+    assignment_id: int,
+    server_id: str,
+    slot_name: str,
+    payload: AssignmentCredentialBindingUpsertRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> CredentialBindingResponse:
+    """Create or update an external server slot binding on a policy assignment."""
+    _require_mutation_permission(principal)
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    if payload.binding_mode == "grant":
+        slot_row = await _resolve_binding_slot_for_grant_authority(
+            svc=svc,
+            server_id=server_id,
+            slot_name=slot_name,
+        )
+        if slot_row is not None:
+            _require_credential_grant_authority(principal, slot_row.get("privilege_class"))
+    try:
+        row = await svc.upsert_assignment_credential_binding(
+            assignment_id=assignment_id,
+            external_server_id=server_id,
+            slot_name=slot_name,
+            binding_mode=payload.binding_mode,
+            managed_secret_ref_id=payload.managed_secret_ref_id,
+            actor_id=principal.user_id,
+        )
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except BadRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _binding_row_to_response(row)
+
+
+@router.delete(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_assignment_credential_binding(
+    assignment_id: int,
+    server_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an external server binding from a policy assignment."""
+    _require_mutation_permission(principal)
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    deleted = await svc.delete_assignment_credential_binding(
+        assignment_id=assignment_id,
+        external_server_id=server_id,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential binding not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.delete(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}/{slot_name}",
+    response_model=MCPHubDeleteResponse,
+)
+async def delete_assignment_slot_credential_binding(
+    assignment_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> MCPHubDeleteResponse:
+    """Delete an external server slot binding from a policy assignment."""
+    _require_mutation_permission(principal)
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    deleted = await svc.delete_assignment_credential_binding(
+        assignment_id=assignment_id,
+        external_server_id=server_id,
+        slot_name=slot_name,
+        actor_id=principal.user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Credential binding not found")
+    return MCPHubDeleteResponse(ok=True)
+
+
+@router.get(
+    "/permission-profiles/{profile_id}/credential-bindings/status/{server_id}/{slot_name}",
+    response_model=McpCredentialSlotStatusResponse,
+)
+@router.get(
+    "/permission-profiles/{profile_id}/credential-bindings/{server_id}/{slot_name}/status",
+    response_model=McpCredentialSlotStatusResponse,
+    include_in_schema=False,
+    deprecated=True,
+)
+async def get_profile_slot_credential_status(
+    profile_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+    broker: McpCredentialBrokerService = Depends(get_mcp_credential_broker_service),
+) -> McpCredentialSlotStatusResponse:
+    """Return the remediation status for a profile-scoped external credential slot."""
+    await _get_visible_permission_profile_or_404(profile_id=profile_id, principal=principal, svc=svc)
+    try:
+        status = await broker.get_slot_status(
+            server_id=server_id,
+            slot_name=slot_name,
+            profile_id=profile_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return McpCredentialSlotStatusResponse.model_validate(status)
+
+
+@router.get(
+    "/policy-assignments/{assignment_id}/credential-bindings/status/{server_id}/{slot_name}",
+    response_model=McpCredentialSlotStatusResponse,
+)
+@router.get(
+    "/policy-assignments/{assignment_id}/credential-bindings/{server_id}/{slot_name}/status",
+    response_model=McpCredentialSlotStatusResponse,
+    include_in_schema=False,
+    deprecated=True,
+)
+async def get_assignment_slot_credential_status(
+    assignment_id: int,
+    server_id: str,
+    slot_name: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+    broker: McpCredentialBrokerService = Depends(get_mcp_credential_broker_service),
+) -> McpCredentialSlotStatusResponse:
+    """Return the remediation status for an assignment-scoped external credential slot."""
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    try:
+        status = await broker.get_slot_status(
+            server_id=server_id,
+            slot_name=slot_name,
+            assignment_id=assignment_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return McpCredentialSlotStatusResponse.model_validate(status)
+
+
+@router.get("/policy-assignments/{assignment_id}/external-access", response_model=EffectiveExternalAccessResponse)
+async def get_assignment_external_access(
+    assignment_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    svc: McpHubService = Depends(get_mcp_hub_service),
+) -> EffectiveExternalAccessResponse:
+    """Preview effective external server access for a policy assignment."""
+    await _get_visible_policy_assignment_or_404(assignment_id=assignment_id, principal=principal, svc=svc)
+    summary = await svc.resolve_effective_external_access(
+        assignment_id=assignment_id,
+        actor_id=principal.user_id,
+    )
+    return EffectiveExternalAccessResponse.model_validate(summary)
 
 
 @router.put("/external-servers/{server_id}", response_model=ExternalServerResponse)

@@ -210,3 +210,60 @@ def test_search_conversations_page_deleted_filters(tmp_path) -> None:
     assert include_deleted_total == 2
     assert [row["id"] for row in deleted_only_rows] == [deleted_id]
     assert deleted_only_total == 1
+
+
+def test_search_conversations_page_respects_workspace_scope(tmp_path) -> None:
+    db = CharactersRAGDB(db_path=str(tmp_path / "conversation_search_scope.sqlite"), client_id="user-1")
+    db.upsert_workspace("ws-a", "Workspace A")
+    db.upsert_workspace("ws-b", "Workspace B")
+
+    global_id = _create_persona_conversation(db, "global-conv", title="Quota global")
+    ws_a_id = db.add_conversation(
+        {
+            "id": "workspace-a-conv",
+            "root_id": "workspace-a-conv",
+            "assistant_kind": "persona",
+            "assistant_id": "persona-workspace-a-conv",
+            "persona_memory_mode": "read_only",
+            "title": "Quota workspace A",
+            "client_id": db.client_id,
+            "scope_type": "workspace",
+            "workspace_id": "ws-a",
+        }
+    )
+    _ = db.add_conversation(
+        {
+            "id": "workspace-b-conv",
+            "root_id": "workspace-b-conv",
+            "assistant_kind": "persona",
+            "assistant_id": "persona-workspace-b-conv",
+            "persona_memory_mode": "read_only",
+            "title": "Quota workspace B",
+            "client_id": db.client_id,
+            "scope_type": "workspace",
+            "workspace_id": "ws-b",
+        }
+    )
+
+    global_rows, global_total, _ = db.search_conversations_page(
+        "Quota",
+        client_id="user-1",
+        order_by="recency",
+        scope_type="global",
+        limit=10,
+        offset=0,
+    )
+    workspace_rows, workspace_total, _ = db.search_conversations_page(
+        "Quota",
+        client_id="user-1",
+        order_by="recency",
+        scope_type="workspace",
+        workspace_id="ws-a",
+        limit=10,
+        offset=0,
+    )
+
+    assert global_total == 1
+    assert [row["id"] for row in global_rows] == [global_id]
+    assert workspace_total == 1
+    assert [row["id"] for row in workspace_rows] == [ws_a_id]

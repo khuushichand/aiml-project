@@ -15,6 +15,7 @@ from fastapi import (
 from loguru import logger
 from starlette.responses import JSONResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_ebooks_form,
@@ -25,7 +26,6 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 )
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEbooksForm
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -131,9 +131,10 @@ def _process_single_ebook(
     "/process-ebooks",
     summary="Extract, chunk, analyse EPUBs (NO DB Persistence)",
     tags=["Media Processing (No DB)"],
+    dependencies=[Depends(guard_storage_quota)],
 )
 async def process_ebooks_endpoint(
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     form_data: ProcessEbooksForm = Depends(get_process_ebooks_form),
     files: list[UploadFile] | None = File(
         None, description="EPUB file uploads (.epub)"

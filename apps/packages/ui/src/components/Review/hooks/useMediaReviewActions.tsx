@@ -938,6 +938,8 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
     getSelectedNumericIds,
     openTrashFromBatch,
     confirmBatchTrash,
+    handleCompareContent,
+    resolveDetailForCompare,
     // Expose fetchList for query binding
     _fetchList: fetchList
   }

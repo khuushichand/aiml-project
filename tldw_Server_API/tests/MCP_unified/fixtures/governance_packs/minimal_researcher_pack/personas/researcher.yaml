@@ -1,0 +1,7 @@
+persona_template_id: researcher.persona
+name: Research Companion
+description: Research-oriented persona template.
+capability_profile_id: researcher.profile
+approval_template_id: researcher.ask
+persona_traits:
+  - researcher

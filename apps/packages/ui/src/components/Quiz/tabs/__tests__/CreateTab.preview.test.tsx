@@ -119,13 +119,14 @@ describe("CreateTab preview", () => {
       return
     }
 
-    expect(within(modalContent).getByText("Plant Biology")).toBeInTheDocument()
-    expect(within(modalContent).getByText("What is chlorophyll?")).toBeInTheDocument()
-    expect(within(modalContent).getByText("A. A pigment")).toBeInTheDocument()
-    expect(within(modalContent).getByText("Plants breathe oxygen.")).toBeInTheDocument()
-    expect(within(modalContent).getByText("True/False")).toBeInTheDocument()
-    expect(within(modalContent).getByText("The process is called _____.")).toBeInTheDocument()
-    expect(within(modalContent).getByText("Fill in the Blank")).toBeInTheDocument()
-    expect(within(modalContent).getByText("Explanation: Base explanation.")).toBeInTheDocument()
+    const modalQueries = within(modalContent as HTMLElement)
+    expect(modalQueries.getByText("Plant Biology")).toBeInTheDocument()
+    expect(modalQueries.getByText("What is chlorophyll?")).toBeInTheDocument()
+    expect(modalQueries.getByText("A. A pigment")).toBeInTheDocument()
+    expect(modalQueries.getByText("Plants breathe oxygen.")).toBeInTheDocument()
+    expect(modalQueries.getByText("True/False")).toBeInTheDocument()
+    expect(modalQueries.getByText("The process is called _____.")).toBeInTheDocument()
+    expect(modalQueries.getByText("Fill in the Blank")).toBeInTheDocument()
+    expect(modalQueries.getByText("Explanation: Base explanation.")).toBeInTheDocument()
   }, 20000)
 })

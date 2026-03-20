@@ -1,0 +1,134 @@
+import React from "react"
+import { fireEvent, render, screen } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+import { FlashcardsWorkspace } from "../FlashcardsWorkspace"
+
+const mocks = vi.hoisted(() => ({
+  isOnline: true,
+  demoEnabled: false,
+  uxState: "connected_ok" as
+    | "connected_ok"
+    | "testing"
+    | "configuring_url"
+    | "configuring_auth"
+    | "error_auth"
+    | "error_unreachable"
+    | "unconfigured",
+  hasCompletedFirstRun: true,
+  capabilities: {
+    hasFlashcards: true
+  } as {
+    hasFlashcards: boolean
+  },
+  capsLoading: false,
+  navigate: vi.fn(),
+  scrollToServerCard: vi.fn(),
+  checkOnce: vi.fn()
+}))
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (
+      _key: string,
+      fallbackOrOptions?: string | { defaultValue?: string }
+    ) => {
+      if (typeof fallbackOrOptions === "string") return fallbackOrOptions
+      return fallbackOrOptions?.defaultValue ?? _key
+    }
+  })
+}))
+
+vi.mock("react-router-dom", () => ({
+  useNavigate: () => mocks.navigate
+}))
+
+vi.mock("@/hooks/useServerOnline", () => ({
+  useServerOnline: () => mocks.isOnline
+}))
+
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => ({
+    uxState: mocks.uxState,
+    hasCompletedFirstRun: mocks.hasCompletedFirstRun
+  }),
+  useConnectionActions: () => ({
+    checkOnce: mocks.checkOnce
+  })
+}))
+
+vi.mock("@/context/demo-mode", () => ({
+  useDemoMode: () => ({ demoEnabled: mocks.demoEnabled })
+}))
+
+vi.mock("@/hooks/useServerCapabilities", () => ({
+  useServerCapabilities: () => ({
+    capabilities: mocks.capabilities,
+    loading: mocks.capsLoading
+  })
+}))
+
+vi.mock("@/hooks/useScrollToServerCard", () => ({
+  useScrollToServerCard: () => mocks.scrollToServerCard
+}))
+
+describe("FlashcardsWorkspace connection states", () => {
+  beforeEach(() => {
+    mocks.isOnline = true
+    mocks.demoEnabled = false
+    mocks.uxState = "connected_ok"
+    mocks.hasCompletedFirstRun = true
+    mocks.capabilities = { hasFlashcards: true }
+    mocks.capsLoading = false
+    mocks.navigate.mockReset()
+    mocks.scrollToServerCard.mockReset()
+    mocks.checkOnce.mockReset()
+  })
+
+  it("keeps demo preview visible while surfacing auth guidance", () => {
+    mocks.isOnline = false
+    mocks.demoEnabled = true
+    mocks.uxState = "error_auth"
+
+    render(<FlashcardsWorkspace />)
+
+    expect(screen.getByText("Explore Flashcards in demo mode")).toBeInTheDocument()
+    expect(screen.getByText("Example decks (preview only)")).toBeInTheDocument()
+    expect(
+      screen.getByText("Demo stays available, but your Flashcards credentials need attention.")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Go to server card" })[0])
+    expect(mocks.scrollToServerCard).toHaveBeenCalled()
+  })
+
+  it("shows setup guidance when demo mode is disabled", () => {
+    mocks.isOnline = false
+    mocks.demoEnabled = false
+    mocks.uxState = "unconfigured"
+    mocks.hasCompletedFirstRun = false
+
+    render(<FlashcardsWorkspace />)
+
+    expect(
+      screen.getByText("Finish setup to use Flashcards")
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to server card" }))
+    expect(mocks.scrollToServerCard).toHaveBeenCalled()
+  })
+
+  it("keeps demo preview visible while surfacing unreachable guidance", () => {
+    mocks.isOnline = false
+    mocks.demoEnabled = true
+    mocks.uxState = "error_unreachable"
+
+    render(<FlashcardsWorkspace />)
+
+    expect(screen.getByText("Example decks (preview only)")).toBeInTheDocument()
+    expect(
+      screen.getByText("Demo stays available, but your tldw server is unreachable.")
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry connection" })).toBeInTheDocument()
+  })
+})

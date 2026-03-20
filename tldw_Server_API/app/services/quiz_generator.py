@@ -15,7 +15,6 @@ from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.services.quiz_source_resolver import resolve_quiz_sources
@@ -456,18 +455,43 @@ def _resolve_quiz_title_from_media(media_db: MediaDatabase, primary_media_id: in
     return str(media.get("title") or "").strip() or f"Media #{primary_media_id}"
 
 
+def _is_remediation_source_set(normalized_sources: Sequence[dict[str, str]]) -> bool:
+    if not normalized_sources:
+        return False
+    return all(
+        source.get("source_type") in {"quiz_attempt", "quiz_attempt_question"}
+        for source in normalized_sources
+    )
+
+
+def _resolve_generated_quiz_metadata(
+    *,
+    media_db: MediaDatabase,
+    normalized_sources: Sequence[dict[str, str]],
+    primary_media_id: int | None,
+) -> tuple[str, str]:
+    if _is_remediation_source_set(normalized_sources):
+        return ("Remediation", "Auto-generated remediation quiz from missed questions")
+
+    return (
+        _resolve_quiz_title_from_media(media_db, primary_media_id),
+        "Auto-generated quiz from selected sources",
+    )
+
+
 def _persist_generated_quiz(
     *,
     db: CharactersRAGDB,
     normalized_sources: list[dict[str, str]],
     questions: list[dict[str, Any]],
     quiz_title: str,
+    quiz_description: str,
     primary_media_id: int | None,
     workspace_tag: str | None,
 ) -> dict[str, Any]:
     quiz_id = db.create_quiz(
         name=f"Quiz: {quiz_title}" if quiz_title else "Quiz: Mixed Sources",
-        description="Auto-generated quiz from selected sources",
+        description=quiz_description,
         workspace_tag=workspace_tag,
         media_id=primary_media_id,
         source_bundle_json=normalized_sources,
@@ -554,13 +578,19 @@ async def generate_quiz_from_sources(
     _validate_strict_provenance(questions, normalized_sources)
 
     primary_media_id = _resolve_primary_media_id(normalized_sources)
-    quiz_title = await asyncio.to_thread(_resolve_quiz_title_from_media, media_db, primary_media_id)
+    quiz_title, quiz_description = await asyncio.to_thread(
+        _resolve_generated_quiz_metadata,
+        media_db=media_db,
+        normalized_sources=normalized_sources,
+        primary_media_id=primary_media_id,
+    )
     return await asyncio.to_thread(
         _persist_generated_quiz,
         db=db,
         normalized_sources=normalized_sources,
         questions=questions,
         quiz_title=quiz_title,
+        quiz_description=quiz_description,
         primary_media_id=primary_media_id,
         workspace_tag=workspace_tag,
     )

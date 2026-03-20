@@ -5,6 +5,7 @@ import { FollowUpInput } from "../FollowUpInput"
 const state = {
   askFollowUp: vi.fn(),
   isSearching: false,
+  startNewTopic: vi.fn(),
   createNewThread: vi.fn(),
   results: [{ id: "r1" }] as Array<{ id: string }>,
   answer: null as string | null,
@@ -15,6 +16,7 @@ vi.mock("../KnowledgeQAProvider", () => ({
   useKnowledgeQA: () => ({
     askFollowUp: state.askFollowUp,
     isSearching: state.isSearching,
+    startNewTopic: state.startNewTopic,
     createNewThread: state.createNewThread,
     results: state.results,
     answer: state.answer,
@@ -26,9 +28,20 @@ vi.mock("@/hooks/useMediaQuery", () => ({
 }))
 
 describe("FollowUpInput accessibility", () => {
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void
+    let reject!: (reason?: unknown) => void
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     state.isSearching = false
+    state.startNewTopic = vi.fn()
     state.results = [{ id: "r1" }]
     state.answer = null
     state.isMobile = false
@@ -54,6 +67,29 @@ describe("FollowUpInput accessibility", () => {
     )
   })
 
+  it("routes the New Topic action through the fresh-topic lifecycle handler", () => {
+    render(<FollowUpInput />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Start new topic" }))
+
+    expect(state.startNewTopic).toHaveBeenCalledTimes(1)
+    expect(state.createNewThread).not.toHaveBeenCalled()
+  })
+
+  it("prevents duplicate new-topic creation while the first request is still pending", () => {
+    const pendingStart = createDeferred<void>()
+    state.startNewTopic = vi.fn(() => pendingStart.promise)
+
+    render(<FollowUpInput />)
+
+    const newTopicButton = screen.getByRole("button", { name: "Start new topic" })
+    fireEvent.click(newTopicButton)
+    fireEvent.click(newTopicButton)
+
+    expect(state.startNewTopic).toHaveBeenCalledTimes(1)
+    expect(newTopicButton).toBeDisabled()
+  })
+
   it("renders queued follow-up state while an initial search is in progress", () => {
     state.isSearching = true
     state.results = []
@@ -67,6 +103,25 @@ describe("FollowUpInput accessibility", () => {
     expect(
       screen.getByText(/follow-up input unlocks when the current search completes/i)
     ).toBeInTheDocument()
+  })
+
+  it("prevents duplicate follow-up submission while the first request is still pending", () => {
+    const pendingFollowUp = createDeferred<void>()
+    state.askFollowUp = vi.fn(() => pendingFollowUp.promise)
+
+    render(<FollowUpInput />)
+
+    const input = screen.getByRole("textbox", { name: "Ask a follow-up question" })
+    fireEvent.change(input, { target: { value: "Compare the findings" } })
+
+    const submitButton = screen.getAllByRole("button")[1]
+    fireEvent.click(submitButton)
+    fireEvent.click(submitButton)
+
+    expect(state.askFollowUp).toHaveBeenCalledTimes(1)
+    expect(state.askFollowUp).toHaveBeenCalledWith("Compare the findings")
+    expect(submitButton).toBeDisabled()
+    expect(input).toBeDisabled()
   })
 
   it("uses a sticky mobile layout with safe-area padding while keeping actions visible", () => {

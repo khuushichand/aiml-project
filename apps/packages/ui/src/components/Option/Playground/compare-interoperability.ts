@@ -16,6 +16,9 @@ type Params = {
   voiceChatEnabled: boolean
 }
 
+const toText = (value: unknown): string =>
+  typeof value === "string" ? value : String(value)
+
 export const buildCompareInteroperabilityNotices = (
   params: Params
 ): CompareInteroperabilityNotice[] => {
@@ -35,9 +38,11 @@ export const buildCompareInteroperabilityNotices = (
     notices.push({
       id: "voice",
       tone: "warning",
-      text: t(
-        "playground:composer.compareInteropVoice",
-        "Voice mode is enabled. Compare playback timing may vary by model, so review text responses before choosing a winner."
+      text: toText(
+        t(
+          "playground:composer.compareInteropVoice",
+          "Voice mode is enabled. Compare playback timing may vary by model, so review text responses before choosing a winner."
+        )
       )
     })
   }
@@ -46,10 +51,12 @@ export const buildCompareInteroperabilityNotices = (
     notices.push({
       id: "character",
       tone: "neutral",
-      text: t(
-        "playground:composer.compareInteropCharacter",
-        "Character behavior applies to all selected models ({{name}}).",
-        { name: characterName.trim() } as any
+      text: toText(
+        t(
+          "playground:composer.compareInteropCharacter",
+          "Character behavior applies to all selected models ({{name}}).",
+          { name: characterName.trim() } as any
+        )
       )
     })
   }
@@ -58,10 +65,12 @@ export const buildCompareInteroperabilityNotices = (
     notices.push({
       id: "pinned",
       tone: "neutral",
-      text: t(
-        "playground:composer.compareInteropPinned",
-        "{{count}} pinned sources are shared across all compare responses.",
-        { count: pinnedSourceCount } as any
+      text: toText(
+        t(
+          "playground:composer.compareInteropPinned",
+          "{{count}} pinned sources are shared across all compare responses.",
+          { count: pinnedSourceCount } as any
+        )
       )
     })
   }
@@ -70,9 +79,11 @@ export const buildCompareInteroperabilityNotices = (
     notices.push({
       id: "web-search",
       tone: "neutral",
-      text: t(
-        "playground:composer.compareInteropWebSearch",
-        "Web search/tool calls are shared across compare models when enabled."
+      text: toText(
+        t(
+          "playground:composer.compareInteropWebSearch",
+          "Web search/tool calls are shared across compare models when enabled."
+        )
       )
     })
   }
@@ -81,9 +92,11 @@ export const buildCompareInteroperabilityNotices = (
     notices.push({
       id: "prompt",
       tone: "neutral",
-      text: t(
-        "playground:composer.compareInteropPrompt",
-        "Prompt steering is shared across every selected compare model."
+      text: toText(
+        t(
+          "playground:composer.compareInteropPrompt",
+          "Prompt steering is shared across every selected compare model."
+        )
       )
     })
   }
@@ -92,9 +105,11 @@ export const buildCompareInteroperabilityNotices = (
     notices.push({
       id: "json",
       tone: "neutral",
-      text: t(
-        "playground:composer.compareInteropJson",
-        "JSON mode constrains every compare response."
+      text: toText(
+        t(
+          "playground:composer.compareInteropJson",
+          "JSON mode constrains every compare response."
+        )
       )
     })
   }

@@ -13,8 +13,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 5
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -38,7 +41,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     persona_id TEXT,
     workspace_id TEXT,
     workspace_group_id TEXT,
-    scope_snapshot_id TEXT
+    scope_snapshot_id TEXT,
+    policy_snapshot_version TEXT,
+    policy_snapshot_fingerprint TEXT,
+    policy_snapshot_refreshed_at TEXT,
+    policy_summary TEXT,
+    policy_provenance_summary TEXT,
+    policy_refresh_error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
@@ -68,6 +77,13 @@ CREATE TABLE IF NOT EXISTS agent_registry (
     is_default INTEGER NOT NULL DEFAULT 0,
     install_instructions TEXT NOT NULL DEFAULT '[]',
     docs_url TEXT,
+    mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven',
+    mcp_entry_tool TEXT NOT NULL DEFAULT 'execute',
+    mcp_structured_response INTEGER NOT NULL DEFAULT 0,
+    mcp_llm_provider TEXT,
+    mcp_llm_model TEXT,
+    mcp_max_iterations INTEGER NOT NULL DEFAULT 20,
+    mcp_refresh_tools INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'api',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -86,14 +102,57 @@ CREATE INDEX IF NOT EXISTS idx_health_agent_time
 """
 
 # Columns that are stored as INTEGER 0/1 but should be returned as bool
-_BOOL_FIELDS = frozenset({"bootstrap_ready", "needs_bootstrap"})
+_BOOL_FIELDS = frozenset({
+    "bootstrap_ready",
+    "needs_bootstrap",
+    "mcp_structured_response",
+    "mcp_refresh_tools",
+})
 
 # Columns that are stored as JSON TEXT but should be returned as parsed objects
-_JSON_FIELDS = frozenset({"tags", "mcp_servers"})
+_JSON_LIST_FIELDS = frozenset({"tags", "mcp_servers"})
+_JSON_OBJECT_FIELDS = frozenset({"policy_summary", "policy_provenance_summary"})
+_ALLOWED_MIGRATION_COLUMNS = {
+    "sessions": {
+        "policy_snapshot_version": "policy_snapshot_version TEXT",
+        "policy_snapshot_fingerprint": "policy_snapshot_fingerprint TEXT",
+        "policy_snapshot_refreshed_at": "policy_snapshot_refreshed_at TEXT",
+        "policy_summary": "policy_summary TEXT",
+        "policy_provenance_summary": "policy_provenance_summary TEXT",
+        "policy_refresh_error": "policy_refresh_error TEXT",
+    },
+    "agent_registry": {
+        "mcp_orchestration": "mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven'",
+        "mcp_entry_tool": "mcp_entry_tool TEXT NOT NULL DEFAULT 'execute'",
+        "mcp_structured_response": "mcp_structured_response INTEGER NOT NULL DEFAULT 0",
+        "mcp_llm_provider": "mcp_llm_provider TEXT",
+        "mcp_llm_model": "mcp_llm_model TEXT",
+        "mcp_max_iterations": "mcp_max_iterations INTEGER NOT NULL DEFAULT 20",
+        "mcp_refresh_tools": "mcp_refresh_tools INTEGER NOT NULL DEFAULT 0",
+    },
+}
 
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_sql: str,
+) -> None:
+    expected_column_sql = _ALLOWED_MIGRATION_COLUMNS.get(table_name, {}).get(column_name)
+    if expected_column_sql != column_sql:
+        raise ValueError("Unsupported ACP session migration target")
+
+    existing_columns = {
+        str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+    }
+    if column_name in existing_columns:
+        return
+    conn.execute(f'ALTER TABLE "{table_name}" ADD COLUMN {column_sql}')
 
 
 class ACPSessionsDB:
@@ -121,9 +180,7 @@ class ACPSessionsDB:
             os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
             conn = sqlite3.connect(self._db_path, timeout=10)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
+            configure_sqlite_connection(conn)
             self._conn_local.conn = conn
         self._ensure_schema()
         return conn
@@ -154,6 +211,13 @@ class ACPSessionsDB:
                         is_default INTEGER NOT NULL DEFAULT 0,
                         install_instructions TEXT NOT NULL DEFAULT '[]',
                         docs_url TEXT,
+                        mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven',
+                        mcp_entry_tool TEXT NOT NULL DEFAULT 'execute',
+                        mcp_structured_response INTEGER NOT NULL DEFAULT 0,
+                        mcp_llm_provider TEXT,
+                        mcp_llm_model TEXT,
+                        mcp_max_iterations INTEGER NOT NULL DEFAULT 20,
+                        mcp_refresh_tools INTEGER NOT NULL DEFAULT 0,
                         source TEXT NOT NULL DEFAULT 'api',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -172,6 +236,86 @@ class ACPSessionsDB:
                     CREATE INDEX IF NOT EXISTS idx_health_agent_time
                         ON agent_health_history(agent_type, checked_at DESC);
                 """)
+            if current_version < 4:
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_snapshot_version",
+                    "policy_snapshot_version TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_snapshot_fingerprint",
+                    "policy_snapshot_fingerprint TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_snapshot_refreshed_at",
+                    "policy_snapshot_refreshed_at TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_summary",
+                    "policy_summary TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_provenance_summary",
+                    "policy_provenance_summary TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "policy_refresh_error",
+                    "policy_refresh_error TEXT",
+                )
+            if current_version < 5:
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_orchestration",
+                    "mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven'",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_entry_tool",
+                    "mcp_entry_tool TEXT NOT NULL DEFAULT 'execute'",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_structured_response",
+                    "mcp_structured_response INTEGER NOT NULL DEFAULT 0",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_llm_provider",
+                    "mcp_llm_provider TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_llm_model",
+                    "mcp_llm_model TEXT",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_max_iterations",
+                    "mcp_max_iterations INTEGER NOT NULL DEFAULT 20",
+                )
+                _ensure_column(
+                    conn,
+                    "agent_registry",
+                    "mcp_refresh_tools",
+                    "mcp_refresh_tools INTEGER NOT NULL DEFAULT 0",
+                )
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
             self._initialized = True
@@ -187,12 +331,18 @@ class ACPSessionsDB:
         for field in _BOOL_FIELDS:
             if field in d:
                 d[field] = bool(d[field])
-        for field in _JSON_FIELDS:
+        for field in _JSON_LIST_FIELDS:
             if field in d and isinstance(d[field], str):
                 try:
                     d[field] = json.loads(d[field])
                 except (json.JSONDecodeError, TypeError):
                     d[field] = []
+        for field in _JSON_OBJECT_FIELDS:
+            if field in d and isinstance(d[field], str):
+                try:
+                    d[field] = json.loads(d[field])
+                except (json.JSONDecodeError, TypeError):
+                    d[field] = None
         return d
 
     # ------------------------------------------------------------------
@@ -212,6 +362,12 @@ class ACPSessionsDB:
         workspace_id: str | None = None,
         workspace_group_id: str | None = None,
         scope_snapshot_id: str | None = None,
+        policy_snapshot_version: str | None = None,
+        policy_snapshot_fingerprint: str | None = None,
+        policy_snapshot_refreshed_at: str | None = None,
+        policy_summary: dict[str, Any] | None = None,
+        policy_provenance_summary: dict[str, Any] | None = None,
+        policy_refresh_error: str | None = None,
         forked_from: str | None = None,
         needs_bootstrap: bool = False,
     ) -> dict[str, Any]:
@@ -225,8 +381,10 @@ class ACPSessionsDB:
                 created_at, last_activity_at,
                 tags, mcp_servers,
                 persona_id, workspace_id, workspace_group_id, scope_snapshot_id,
+                policy_snapshot_version, policy_snapshot_fingerprint, policy_snapshot_refreshed_at,
+                policy_summary, policy_provenance_summary, policy_refresh_error,
                 forked_from, needs_bootstrap
-            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id, user_id, agent_type, name, cwd,
@@ -234,11 +392,59 @@ class ACPSessionsDB:
                 json.dumps(tags or []),
                 json.dumps(mcp_servers or []),
                 persona_id, workspace_id, workspace_group_id, scope_snapshot_id,
+                policy_snapshot_version,
+                policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at,
+                json.dumps(policy_summary) if policy_summary is not None else None,
+                json.dumps(policy_provenance_summary)
+                if policy_provenance_summary is not None
+                else None,
+                policy_refresh_error,
                 forked_from, int(needs_bootstrap),
             ),
         )
         conn.commit()
         return self.get_session(session_id)  # type: ignore[return-value]
+
+    def update_policy_snapshot_state(
+        self,
+        session_id: str,
+        *,
+        policy_snapshot_version: str | None,
+        policy_snapshot_fingerprint: str | None,
+        policy_snapshot_refreshed_at: str | None,
+        policy_summary: dict[str, Any] | None,
+        policy_provenance_summary: dict[str, Any] | None,
+        policy_refresh_error: str | None,
+    ) -> None:
+        """Update persisted ACP policy snapshot metadata for a session."""
+        conn = self._get_conn()
+        conn.execute(
+            """
+            UPDATE sessions
+            SET policy_snapshot_version = ?,
+                policy_snapshot_fingerprint = ?,
+                policy_snapshot_refreshed_at = ?,
+                policy_summary = ?,
+                policy_provenance_summary = ?,
+                policy_refresh_error = ?,
+                last_activity_at = ?
+            WHERE session_id = ?
+            """,
+            (
+                policy_snapshot_version,
+                policy_snapshot_fingerprint,
+                policy_snapshot_refreshed_at,
+                json.dumps(policy_summary) if policy_summary is not None else None,
+                json.dumps(policy_provenance_summary)
+                if policy_provenance_summary is not None
+                else None,
+                policy_refresh_error,
+                _utcnow_iso(),
+                session_id,
+            ),
+        )
+        conn.commit()
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         """Fetch a single session by ID, or None if not found."""
@@ -310,30 +516,72 @@ class ACPSessionsDB:
     ) -> tuple[list[dict[str, Any]], int]:
         """List sessions with optional filters. Returns (rows, total_count)."""
         conn = self._get_conn()
-        conditions: list[str] = []
         params: list[Any] = []
 
-        if user_id is not None:
-            conditions.append("user_id = ?")
-            params.append(user_id)
-        if status is not None:
-            conditions.append("status = ?")
-            params.append(status)
-        if agent_type is not None:
-            conditions.append("agent_type = ?")
-            params.append(agent_type)
+        query_key = (user_id is not None, status is not None, agent_type is not None)
+        match query_key:
+            case (False, False, False):
+                count_query = "SELECT COUNT(*) FROM sessions"
+                rows_query = "SELECT * FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            case (True, False, False):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE user_id = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE user_id = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.append(user_id)
+            case (False, True, False):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE status = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE status = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.append(status)
+            case (False, False, True):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE agent_type = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE agent_type = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.append(agent_type)
+            case (True, True, False):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE user_id = ? AND status = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE user_id = ? AND status = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.extend([user_id, status])
+            case (True, False, True):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE user_id = ? AND agent_type = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE user_id = ? AND agent_type = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.extend([user_id, agent_type])
+            case (False, True, True):
+                count_query = "SELECT COUNT(*) FROM sessions WHERE status = ? AND agent_type = ?"
+                rows_query = (
+                    "SELECT * FROM sessions WHERE status = ? AND agent_type = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.extend([status, agent_type])
+            case _:
+                count_query = (
+                    "SELECT COUNT(*) FROM sessions "
+                    "WHERE user_id = ? AND status = ? AND agent_type = ?"
+                )
+                rows_query = (
+                    "SELECT * FROM sessions "
+                    "WHERE user_id = ? AND status = ? AND agent_type = ? "
+                    "ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                )
+                params.extend([user_id, status, agent_type])
 
-        where = " AND ".join(conditions) if conditions else "1=1"
-
-        # Total count
-        count_row = conn.execute(
-            f"SELECT COUNT(*) FROM sessions WHERE {where}", params
-        ).fetchone()
+        count_row = conn.execute(count_query, params).fetchone()
         total = count_row[0] if count_row else 0
 
-        # Paginated results
         rows = conn.execute(
-            f"SELECT * FROM sessions WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            rows_query,
             params + [limit, offset],
         ).fetchall()
 
@@ -789,6 +1037,13 @@ class ACPSessionsDB:
         is_default = int(entry_dict.get("is_default", 0))
         install_instructions = entry_dict.get("install_instructions", "[]")
         docs_url = entry_dict.get("docs_url")
+        mcp_orchestration = entry_dict.get("mcp_orchestration", "agent_driven")
+        mcp_entry_tool = entry_dict.get("mcp_entry_tool", "execute")
+        mcp_structured_response = int(bool(entry_dict.get("mcp_structured_response", 0)))
+        mcp_llm_provider = entry_dict.get("mcp_llm_provider")
+        mcp_llm_model = entry_dict.get("mcp_llm_model")
+        mcp_max_iterations = int(entry_dict.get("mcp_max_iterations", 20))
+        mcp_refresh_tools = int(bool(entry_dict.get("mcp_refresh_tools", 0)))
         source = entry_dict.get("source", "api")
 
         conn.execute(
@@ -796,8 +1051,10 @@ class ACPSessionsDB:
             INSERT INTO agent_registry (
                 agent_type, name, description, command, args, env,
                 requires_api_key, is_default, install_instructions, docs_url,
+                mcp_orchestration, mcp_entry_tool, mcp_structured_response,
+                mcp_llm_provider, mcp_llm_model, mcp_max_iterations, mcp_refresh_tools,
                 source, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(agent_type) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
@@ -808,12 +1065,21 @@ class ACPSessionsDB:
                 is_default = excluded.is_default,
                 install_instructions = excluded.install_instructions,
                 docs_url = excluded.docs_url,
+                mcp_orchestration = excluded.mcp_orchestration,
+                mcp_entry_tool = excluded.mcp_entry_tool,
+                mcp_structured_response = excluded.mcp_structured_response,
+                mcp_llm_provider = excluded.mcp_llm_provider,
+                mcp_llm_model = excluded.mcp_llm_model,
+                mcp_max_iterations = excluded.mcp_max_iterations,
+                mcp_refresh_tools = excluded.mcp_refresh_tools,
                 source = excluded.source,
                 updated_at = excluded.updated_at
             """,
             (
                 agent_type, name, description, command, args, env,
                 requires_api_key, is_default, install_instructions, docs_url,
+                mcp_orchestration, mcp_entry_tool, mcp_structured_response,
+                mcp_llm_provider, mcp_llm_model, mcp_max_iterations, mcp_refresh_tools,
                 source, now, now,
             ),
         )

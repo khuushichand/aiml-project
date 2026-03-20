@@ -843,6 +843,145 @@ async def test_claims_extract_adapter_list_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_claims_extract_adapter_search_uses_managed_media_database(monkeypatch):
+    """Test production search path scopes Media DB reads through the managed helper."""
+    from tldw_Server_API.app.core.DB_Management import DB_Manager
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+    from tldw_Server_API.app.core.Workflows.adapters.knowledge import crud as knowledge_crud
+
+    class _FakeMediaDB:
+        def search_claims(self, query, limit, offset):
+            assert query == "climate change"
+            assert limit == 20
+            assert offset == 0
+            return [{"id": 1, "claim_text": "Climate change is real", "media_id": 9, "relevance_score": 0.9}]
+
+    expected_db_path = str(DatabasePaths.get_media_db_path(1))
+
+    managed_calls = []
+
+    class _FakeManagedContext:
+        def __init__(self, *, client_id, db_path=None, initialize=True, **kwargs):
+            managed_calls.append(
+                {
+                    "client_id": client_id,
+                    "db_path": db_path,
+                    "initialize": initialize,
+                    "kwargs": kwargs,
+                }
+            )
+
+        def __enter__(self):
+            return _FakeMediaDB()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _fake_managed_media_database(client_id, *, db_path=None, initialize=True, **kwargs):  # noqa: ARG001
+        return _FakeManagedContext(
+            client_id=client_id,
+            db_path=db_path,
+            initialize=initialize,
+            **kwargs,
+        )
+
+    def _raise_legacy_factory(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("raw media_db.api factory should not be used")
+
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.setattr(knowledge_crud, "is_test_mode", lambda: False)
+    monkeypatch.setattr(knowledge_crud, "managed_media_database", _fake_managed_media_database, raising=False)
+    monkeypatch.setattr(media_db_api, "create_media_database", _raise_legacy_factory)
+    monkeypatch.setattr(DB_Manager, "create_media_database", _raise_legacy_factory)
+
+    result = await knowledge_crud.run_claims_extract_adapter(
+        {"action": "search", "query": "climate change", "limit": 20},
+        {"user_id": "1"},
+    )
+
+    assert managed_calls == [
+        {
+            "client_id": "workflow_engine:1",
+            "db_path": expected_db_path,
+            "initialize": False,
+            "kwargs": {},
+        }
+    ]
+    assert result["count"] == 1
+    assert result["claims"][0]["text"] == "Climate change is real"
+
+
+@pytest.mark.asyncio
+async def test_claims_extract_adapter_list_uses_managed_media_database(monkeypatch):
+    """Test production list path scopes Media DB reads through the managed helper."""
+    from tldw_Server_API.app.core.DB_Management import DB_Manager
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+    from tldw_Server_API.app.core.Workflows.adapters.knowledge import crud as knowledge_crud
+
+    class _FakeMediaDB:
+        def list_claims(self, limit, offset):
+            assert limit == 10
+            assert offset == 5
+            return [{"id": 2, "claim_text": "Listed claim", "media_id": 12}]
+
+    expected_db_path = str(DatabasePaths.get_media_db_path(7))
+
+    managed_calls = []
+
+    class _FakeManagedContext:
+        def __init__(self, *, client_id, db_path=None, initialize=True, **kwargs):
+            managed_calls.append(
+                {
+                    "client_id": client_id,
+                    "db_path": db_path,
+                    "initialize": initialize,
+                    "kwargs": kwargs,
+                }
+            )
+
+        def __enter__(self):
+            return _FakeMediaDB()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _fake_managed_media_database(client_id, *, db_path=None, initialize=True, **kwargs):  # noqa: ARG001
+        return _FakeManagedContext(
+            client_id=client_id,
+            db_path=db_path,
+            initialize=initialize,
+            **kwargs,
+        )
+
+    def _raise_legacy_factory(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("raw media_db.api factory should not be used")
+
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.setattr(knowledge_crud, "is_test_mode", lambda: False)
+    monkeypatch.setattr(knowledge_crud, "managed_media_database", _fake_managed_media_database, raising=False)
+    monkeypatch.setattr(media_db_api, "create_media_database", _raise_legacy_factory)
+    monkeypatch.setattr(DB_Manager, "create_media_database", _raise_legacy_factory)
+
+    result = await knowledge_crud.run_claims_extract_adapter(
+        {"action": "list", "limit": 10, "offset": 5},
+        {"user_id": "7"},
+    )
+
+    assert managed_calls == [
+        {
+            "client_id": "workflow_engine:7",
+            "db_path": expected_db_path,
+            "initialize": False,
+            "kwargs": {},
+        }
+    ]
+    assert result["count"] == 1
+    assert result["claims"][0]["text"] == "Listed claim"
+
+
+@pytest.mark.asyncio
 async def test_claims_extract_adapter_missing_action(monkeypatch):
     """Test claims extract adapter returns error for missing action."""
     monkeypatch.delenv("TEST_MODE", raising=False)

@@ -2,6 +2,10 @@ import type {
   McpHubApprovalDuration,
   McpHubApprovalMode,
   McpHubAssignmentTargetType,
+  McpHubEffectiveExternalAccessEntry,
+  McpHubExternalServerCredentialSlot,
+  McpHubExternalServer,
+  McpHubPathScopeMode,
   McpHubPermissionPolicyDocument,
   McpHubProfileMode,
   McpHubScopeType,
@@ -44,6 +48,15 @@ export const MCP_HUB_APPROVAL_DURATION_OPTIONS: Array<{
   { label: "Conversation", value: "conversation" }
 ]
 
+export const MCP_HUB_PATH_SCOPE_OPTIONS: Array<{
+  label: string
+  value: McpHubPathScopeMode
+}> = [
+  { label: "No additional path restriction", value: "none" },
+  { label: "Workspace root", value: "workspace_root" },
+  { label: "Current folder and descendants", value: "cwd_descendants" }
+]
+
 export const parseLineList = (value: string): string[] =>
   value
     .split(/\r?\n/)
@@ -55,6 +68,35 @@ export const parseCommaList = (value: string): string[] =>
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean)
+
+export const normalizePathAllowlistPrefixes = (values: string[]): string[] => {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    let normalized = String(value || "").trim().replaceAll("\\", "/")
+    while (normalized.startsWith("./")) {
+      normalized = normalized.slice(2)
+    }
+    normalized = normalized.replace(/\/+/g, "/")
+    if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalized)) {
+      continue
+    }
+    const parts = normalized
+      .split("/")
+      .map((part) => part.trim())
+      .filter((part) => part && part !== ".")
+    if (parts.length === 0 || parts.some((part) => part === "..")) {
+      continue
+    }
+    normalized = parts.join("/")
+    if (seen.has(normalized)) {
+      continue
+    }
+    seen.add(normalized)
+    out.push(normalized)
+  }
+  return out.sort()
+}
 
 export const joinList = (values: string[] | undefined | null, separator = "\n"): string =>
   Array.isArray(values) ? values.filter(Boolean).join(separator) : ""
@@ -72,6 +114,12 @@ export const toggleStringValue = (
 }
 
 const SIMPLE_POLICY_KEYS = new Set(["allowed_tools", "denied_tools", "capabilities"])
+const GUIDED_POLICY_KEYS = new Set([
+  ...SIMPLE_POLICY_KEYS,
+  "path_scope_mode",
+  "path_scope_enforcement",
+  "path_allowlist_prefixes"
+])
 
 const unique = (values: string[]): string[] => Array.from(new Set(values.filter(Boolean)))
 
@@ -113,7 +161,7 @@ export const getPolicyAllowedToolSelection = (
 }
 
 export const getAdvancedPolicyKeys = (policy: McpHubPermissionPolicyDocument): string[] =>
-  Object.keys(policy || {}).filter((key) => !SIMPLE_POLICY_KEYS.has(key))
+  Object.keys(policy || {}).filter((key) => !GUIDED_POLICY_KEYS.has(key))
 
 export const getDerivedCapabilities = (
   selectedTools: string[],
@@ -185,4 +233,93 @@ export const createPresetSelection = (
     .sort()
 
   return { selectedTools }
+}
+
+export const getPathScopeLabel = (value: McpHubPathScopeMode | string | null | undefined): string | null => {
+  const normalized = String(value || "").trim()
+  if (!normalized || normalized === "none") {
+    return null
+  }
+  return MCP_HUB_PATH_SCOPE_OPTIONS.find((option) => option.value === normalized)?.label || normalized
+}
+
+export const getPathAllowlistSummary = (values: string[] | undefined | null): string | null => {
+  const normalized = normalizePathAllowlistPrefixes(Array.isArray(values) ? values : [])
+  if (normalized.length === 0) {
+    return null
+  }
+  return normalized.join(", ")
+}
+
+export const getManagedExternalServers = (
+  servers: McpHubExternalServer[] | undefined | null
+): McpHubExternalServer[] =>
+  (servers || []).filter(
+    (server) => server.server_source !== "legacy" && !server.superseded_by_server_id
+  )
+
+export const getManagedExternalServerSlots = (
+  server: McpHubExternalServer | null | undefined
+): McpHubExternalServerCredentialSlot[] =>
+  Array.isArray(server?.credential_slots) ? server.credential_slots : []
+
+export const getCredentialBindingKey = (
+  serverId: string,
+  slotName?: string | null
+): string => `${serverId}::${slotName || ""}`
+
+export const getExternalBlockedReasonLabel = (
+  value: McpHubEffectiveExternalAccessEntry["blocked_reason"] | string | null | undefined
+): string | null => {
+  const normalized = String(value || "").trim()
+  if (!normalized) {
+    return null
+  }
+  if (normalized === "disabled_by_assignment") {
+    return "Disabled by assignment"
+  }
+  if (normalized === "missing_secret") {
+    return "Missing secret"
+  }
+  if (normalized === "server_disabled") {
+    return "Server disabled"
+  }
+  if (normalized === "legacy_inventory_only") {
+    return "Legacy inventory only"
+  }
+  if (normalized === "external_capability_not_granted") {
+    return "External capability not granted"
+  }
+  if (normalized === "missing_required_slot_secret") {
+    return "Missing required slot secret"
+  }
+  if (normalized === "required_slot_not_granted") {
+    return "Required slot not granted"
+  }
+  if (normalized === "slot_disabled_by_assignment") {
+    return "Slot disabled by assignment"
+  }
+  return normalized.replaceAll("_", " ")
+}
+
+export const getExternalAuthTemplateBlockedReasonLabel = (
+  value: string | null | undefined
+): string | null => {
+  const normalized = String(value || "").trim()
+  if (!normalized) {
+    return null
+  }
+  if (normalized === "no_auth_template") {
+    return "No auth template"
+  }
+  if (normalized === "auth_template_invalid") {
+    return "Auth template invalid"
+  }
+  if (normalized === "required_slot_secret_missing") {
+    return "Required slot secret missing"
+  }
+  if (normalized === "unsupported_template_transport_target") {
+    return "Template target mismatches transport"
+  }
+  return normalized.replaceAll("_", " ")
 }

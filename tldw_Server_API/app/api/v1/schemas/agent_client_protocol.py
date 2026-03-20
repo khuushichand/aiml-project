@@ -45,6 +45,22 @@ class ACPAgentRegisterRequest(BaseModel):
     requires_api_key: str | None = Field(default=None, description="Required API key env var")
     install_instructions: list[str] = Field(default_factory=list, description="Installation steps")
     docs_url: str | None = Field(default=None, description="Documentation URL")
+    mcp_orchestration: Literal["agent_driven", "llm_driven"] = Field(
+        default="agent_driven",
+        description="MCP orchestration mode when protocol='mcp'",
+    )
+    mcp_entry_tool: str = Field(default="execute", description="Entry tool for agent-driven MCP agents")
+    mcp_structured_response: bool = Field(
+        default=False,
+        description="Whether the entry tool returns structured JSON steps",
+    )
+    mcp_llm_provider: str | None = Field(default=None, description="Provider for llm_driven MCP orchestration")
+    mcp_llm_model: str | None = Field(default=None, description="Model for llm_driven MCP orchestration")
+    mcp_max_iterations: int = Field(default=20, description="Maximum llm_driven MCP iterations")
+    mcp_refresh_tools: bool = Field(
+        default=False,
+        description="Refresh MCP tool inventory before each prompt",
+    )
 
 
 class ACPAgentUpdateRequest(BaseModel):
@@ -57,6 +73,13 @@ class ACPAgentUpdateRequest(BaseModel):
     requires_api_key: str | None = None
     install_instructions: list[str] | None = None
     docs_url: str | None = None
+    mcp_orchestration: Literal["agent_driven", "llm_driven"] | None = None
+    mcp_entry_tool: str | None = None
+    mcp_structured_response: bool | None = None
+    mcp_llm_provider: str | None = None
+    mcp_llm_model: str | None = None
+    mcp_max_iterations: int | None = None
+    mcp_refresh_tools: bool | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -152,6 +175,30 @@ class ACPWSPermissionRequestMessage(BaseModel):
     tool_name: str
     tool_arguments: dict[str, Any] = Field(default_factory=dict)
     tier: ACPPermissionTier = ACPPermissionTier.INDIVIDUAL
+    approval_requirement: str | None = Field(
+        default=None,
+        description="Resolved runtime approval requirement for this tool request",
+    )
+    governance_reason: str | None = Field(
+        default=None,
+        description="Human-readable reason the runtime policy required approval",
+    )
+    deny_reason: str | None = Field(
+        default=None,
+        description="Reason the runtime policy denied the request",
+    )
+    provenance_summary: dict[str, Any] | None = Field(
+        default=None,
+        description="Compact provenance summary for the runtime policy decision",
+    )
+    runtime_narrowing_reason: str | None = Field(
+        default=None,
+        description="Reason local runtime safety narrowed the effective policy",
+    )
+    policy_snapshot_fingerprint: str | None = Field(
+        default=None,
+        description="Fingerprint of the ACP runtime policy snapshot used for the decision",
+    )
     timeout_seconds: int = Field(default=300, description="Seconds until auto-cancel if no response")
 
 
@@ -278,6 +325,24 @@ class ACPSessionNewResponse(BaseModel):
     scope_snapshot_id: str | None = Field(
         default=None, description="Scope snapshot identifier bound to this ACP session"
     )
+    policy_snapshot_version: str | None = Field(
+        default=None, description="Version identifier for the current ACP policy snapshot"
+    )
+    policy_snapshot_fingerprint: str | None = Field(
+        default=None, description="Fingerprint of the current ACP policy snapshot"
+    )
+    policy_snapshot_refreshed_at: str | None = Field(
+        default=None, description="ISO 8601 timestamp when the ACP policy snapshot last refreshed"
+    )
+    policy_summary: dict[str, Any] | None = Field(
+        default=None, description="Compact summary of the ACP runtime policy snapshot"
+    )
+    policy_provenance_summary: dict[str, Any] | None = Field(
+        default=None, description="Compact provenance summary for the ACP runtime policy snapshot"
+    )
+    policy_refresh_error: str | None = Field(
+        default=None, description="Last ACP policy snapshot refresh error, if any"
+    )
 
 
 class ACPSessionPromptRequest(BaseModel):
@@ -347,6 +412,24 @@ class ACPSessionInfo(BaseModel):
     )
     scope_snapshot_id: str | None = Field(
         default=None, description="Scope snapshot identifier bound to this ACP session"
+    )
+    policy_snapshot_version: str | None = Field(
+        default=None, description="Version identifier for the current ACP policy snapshot"
+    )
+    policy_snapshot_fingerprint: str | None = Field(
+        default=None, description="Fingerprint of the current ACP policy snapshot"
+    )
+    policy_snapshot_refreshed_at: str | None = Field(
+        default=None, description="ISO 8601 timestamp when the ACP policy snapshot last refreshed"
+    )
+    policy_summary: dict[str, Any] | None = Field(
+        default=None, description="Compact summary of the ACP runtime policy snapshot"
+    )
+    policy_provenance_summary: dict[str, Any] | None = Field(
+        default=None, description="Compact provenance summary for the ACP runtime policy snapshot"
+    )
+    policy_refresh_error: str | None = Field(
+        default=None, description="Last ACP policy snapshot refresh error, if any"
     )
     forked_from: str | None = Field(default=None, description="Source session ID when this session was forked")
 

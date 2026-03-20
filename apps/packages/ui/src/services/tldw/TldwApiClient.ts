@@ -1,3 +1,5 @@
+import type { ChatScope } from "@/types/chat-scope"
+import { toChatScopeParams } from "@/types/chat-scope"
 import { Storage } from "@plasmohq/storage"
 import { createSafeStorage, safeStorageSerde } from "@/utils/safe-storage"
 import { bgRequest, bgStream, bgUpload } from "@/services/background-proxy"
@@ -8,6 +10,7 @@ import { tldwRequest } from "@/services/tldw/request-core"
 import { appendPathQuery } from "@/services/tldw/path-utils"
 import { inferUploadMediaTypeFromUrl } from "@/services/tldw/media-routing"
 import { captureChatRequestDebugSnapshot } from "@/services/tldw/chat-request-debug"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 import {
   DEFAULT_CHARACTER_PROFILE_PREFERENCE_KEY,
   normalizeDefaultCharacterPreferenceId
@@ -41,7 +44,7 @@ const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
 const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
 const RAG_QUERY_MAX_LENGTH = 20000
 
-const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule => ({
+export const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule => ({
   ...schedule,
   id: String(schedule?.id ?? ""),
   name: schedule?.name ?? null,
@@ -68,6 +71,154 @@ const normalizeReadingDigestSchedule = (schedule: any): ReadingDigestSchedule =>
   last_status: schedule?.last_status ?? null,
   created_at: schedule?.created_at ?? null,
   updated_at: schedule?.updated_at ?? null
+})
+
+export const toFiniteNumber = (value: unknown, fallback = 0): number => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return fallback
+}
+
+export const toOptionalString = (value: unknown): string | null => {
+  if (value === null || typeof value === "undefined") {
+    return null
+  }
+  return String(value)
+}
+
+export const toRecord = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {}
+  }
+  return { ...(value as Record<string, unknown>) }
+}
+
+const toOptionalNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return null
+}
+
+const toStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => entry.trim())
+}
+
+export const normalizeIngestionSourceSyncSummary = (
+  summary: unknown
+): IngestionSourceSyncSummary | null => {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return null
+  }
+  const record = summary as Record<string, unknown>
+  return {
+    changed_count: toFiniteNumber(record.changed_count),
+    degraded_count: toFiniteNumber(record.degraded_count),
+    conflict_count: toFiniteNumber(record.conflict_count),
+    sink_failure_count: toFiniteNumber(record.sink_failure_count),
+    ingestion_failure_count: toFiniteNumber(record.ingestion_failure_count),
+    created_count: toFiniteNumber(record.created_count),
+    updated_count: toFiniteNumber(record.updated_count),
+    deleted_count: toFiniteNumber(record.deleted_count),
+    unchanged_count: toFiniteNumber(record.unchanged_count)
+  }
+}
+
+export const normalizeIngestionSourceType = (value: unknown): IngestionSourceSummary["source_type"] => {
+  if (value === "archive_snapshot" || value === "git_repository") {
+    return value
+  }
+  return "local_directory"
+}
+
+export const normalizeIngestionSource = (source: any): IngestionSourceSummary => ({
+  id: String(source?.id ?? ""),
+  user_id: toFiniteNumber(source?.user_id),
+  source_type: normalizeIngestionSourceType(source?.source_type),
+  sink_type: source?.sink_type === "notes" ? "notes" : "media",
+  policy: source?.policy === "import_only" ? "import_only" : "canonical",
+  enabled: Boolean(source?.enabled),
+  schedule_enabled: Boolean(source?.schedule_enabled),
+  schedule_config: toRecord(source?.schedule_config),
+  config: toRecord(source?.config),
+  active_job_id: toOptionalString(source?.active_job_id),
+  last_successful_snapshot_id: toOptionalString(source?.last_successful_snapshot_id),
+  last_sync_started_at: toOptionalString(source?.last_sync_started_at),
+  last_sync_completed_at: toOptionalString(source?.last_sync_completed_at),
+  last_sync_status: toOptionalString(source?.last_sync_status),
+  last_error: toOptionalString(source?.last_error),
+  last_successful_sync_summary: normalizeIngestionSourceSyncSummary(
+    source?.last_successful_sync_summary
+  ),
+  created_at: toOptionalString(source?.created_at),
+  updated_at: toOptionalString(source?.updated_at)
+})
+
+export const normalizeIngestionSourceListResponse = (payload: any): IngestionSourceListResponse => {
+  const rawSources = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.sources)
+      ? payload.sources
+      : []
+  const sources = rawSources.map((source: any) => normalizeIngestionSource(source))
+  return {
+    sources,
+    total: toFiniteNumber(payload?.total, sources.length)
+  }
+}
+
+export const normalizeIngestionSourceItem = (item: any): IngestionSourceItem => ({
+  id: String(item?.id ?? ""),
+  source_id: String(item?.source_id ?? ""),
+  normalized_relative_path: String(item?.normalized_relative_path ?? ""),
+  content_hash: item?.content_hash == null ? null : String(item.content_hash),
+  sync_status: String(item?.sync_status ?? "unknown"),
+  binding: toRecord(item?.binding),
+  present_in_source: Boolean(item?.present_in_source),
+  created_at: toOptionalString(item?.created_at),
+  updated_at: toOptionalString(item?.updated_at)
+})
+
+export const normalizeIngestionSourceItemsListResponse = (
+  payload: any
+): IngestionSourceItemsListResponse => {
+  const rawItems = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.items)
+      ? payload.items
+      : []
+  const items = rawItems.map((item: any) => normalizeIngestionSourceItem(item))
+  return {
+    items,
+    total: toFiniteNumber(payload?.total, items.length)
+  }
+}
+
+export const normalizeIngestionSourceSyncTrigger = (
+  payload: any
+): IngestionSourceSyncTriggerResponse => ({
+  status: String(payload?.status ?? ""),
+  source_id: String(payload?.source_id ?? ""),
+  job_id: toOptionalString(payload?.job_id),
+  snapshot_status: toOptionalString(payload?.snapshot_status)
 })
 
 export interface TldwConfig {
@@ -120,6 +271,259 @@ export interface OpenAICredentialSourceSwitchResponse {
   provider: "openai"
   auth_source: "api_key" | "oauth"
   updated_at?: string | null
+}
+
+export type PresentationStudioSlide = {
+  order: number
+  layout: string
+  title?: string | null
+  content: string
+  speaker_notes?: string | null
+  metadata: Record<string, any>
+}
+
+export type PresentationVisualStyleSnapshot = {
+  id: string
+  scope: string
+  name: string
+  description?: string | null
+  generation_rules?: Record<string, any>
+  artifact_preferences?: string[]
+  appearance_defaults?: Record<string, any>
+  fallback_policy?: Record<string, any>
+  version?: number | null
+}
+
+export type VisualStyleRecord = {
+  id: string
+  name: string
+  scope: string
+  description?: string | null
+  generation_rules: Record<string, any>
+  artifact_preferences: string[]
+  appearance_defaults: Record<string, any>
+  fallback_policy: Record<string, any>
+  version?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type VisualStyleCreateInput = {
+  name: string
+  description?: string | null
+  generation_rules?: Record<string, any>
+  artifact_preferences?: string[]
+  appearance_defaults?: Record<string, any>
+  fallback_policy?: Record<string, any>
+}
+
+export type VisualStylePatchInput = {
+  name?: string | null
+  description?: string | null
+  generation_rules?: Record<string, any> | null
+  artifact_preferences?: string[] | null
+  appearance_defaults?: Record<string, any> | null
+  fallback_policy?: Record<string, any> | null
+}
+
+const cloneVisualStyleValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneVisualStyleValue(item))
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
+        key,
+        cloneVisualStyleValue(entryValue)
+      ])
+    )
+  }
+  return value
+}
+
+const cloneVisualStyleObject = (value: Record<string, any> | null | undefined): Record<string, any> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (cloneVisualStyleValue(value) as Record<string, any>)
+    : {}
+
+export const clonePresentationVisualStyleSnapshot = (
+  snapshot: PresentationVisualStyleSnapshot | null | undefined
+): PresentationVisualStyleSnapshot | null => {
+  if (!snapshot) {
+    return null
+  }
+  return {
+    id: snapshot.id,
+    scope: snapshot.scope,
+    name: snapshot.name,
+    description: snapshot.description ?? null,
+    generation_rules: cloneVisualStyleObject(snapshot.generation_rules),
+    artifact_preferences: [...(snapshot.artifact_preferences || [])],
+    appearance_defaults: cloneVisualStyleObject(snapshot.appearance_defaults),
+    fallback_policy: cloneVisualStyleObject(snapshot.fallback_policy),
+    version: snapshot.version ?? null
+  }
+}
+
+export const buildPresentationVisualStyleSnapshot = (
+  style: Pick<
+    VisualStyleRecord,
+    | "id"
+    | "scope"
+    | "name"
+    | "description"
+    | "generation_rules"
+    | "artifact_preferences"
+    | "appearance_defaults"
+    | "fallback_policy"
+    | "version"
+  >
+): PresentationVisualStyleSnapshot =>
+  clonePresentationVisualStyleSnapshot({
+    id: style.id,
+    scope: style.scope,
+    name: style.name,
+    description: style.description ?? null,
+    generation_rules: cloneVisualStyleObject(style.generation_rules),
+    artifact_preferences: [...(style.artifact_preferences || [])],
+    appearance_defaults: cloneVisualStyleObject(style.appearance_defaults),
+    fallback_policy: cloneVisualStyleObject(style.fallback_policy),
+    version: style.version ?? null
+  })!
+
+export type PresentationStudioRecord = {
+  id: string
+  title: string
+  description?: string | null
+  theme: string
+  marp_theme?: string | null
+  template_id?: string | null
+  visual_style_id?: string | null
+  visual_style_scope?: string | null
+  visual_style_name?: string | null
+  visual_style_version?: number | null
+  visual_style_snapshot?: PresentationVisualStyleSnapshot | null
+  settings?: Record<string, any> | null
+  studio_data?: Record<string, any> | null
+  slides: PresentationStudioSlide[]
+  custom_css?: string | null
+  source_type?: string | null
+  source_ref?: unknown
+  source_query?: string | null
+  created_at: string
+  last_modified: string
+  deleted?: boolean
+  client_id?: string
+  version: number
+}
+
+export type PresentationRenderFormat = "mp4" | "webm"
+
+export type PresentationRenderJob = {
+  job_id: number
+  status: string
+  job_type: string
+  presentation_id?: string | null
+  presentation_version?: number | null
+  format?: PresentationRenderFormat | null
+  output_id?: number | null
+  download_url?: string | null
+  error?: string | null
+}
+
+export type PresentationRenderArtifact = {
+  output_id: number
+  format: PresentationRenderFormat
+  title?: string | null
+  download_url: string
+  presentation_version?: number | null
+  created_at?: string | null
+}
+
+export type PresentationRenderArtifactList = {
+  presentation_id: string
+  artifacts: PresentationRenderArtifact[]
+}
+
+const normalizeVisualStyleSnapshot = (
+  value: unknown
+): PresentationVisualStyleSnapshot | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null
+  }
+  const snapshot = value as Record<string, unknown>
+  const id = String(snapshot.id ?? "").trim()
+  const scope = String(snapshot.scope ?? "").trim()
+  const name = String(snapshot.name ?? "").trim()
+  if (!id || !scope || !name) {
+    return null
+  }
+  return clonePresentationVisualStyleSnapshot({
+    id,
+    scope,
+    name,
+    description: toOptionalString(snapshot.description),
+    generation_rules: toRecord(snapshot.generation_rules),
+    artifact_preferences: toStringArray(snapshot.artifact_preferences),
+    appearance_defaults: toRecord(snapshot.appearance_defaults),
+    fallback_policy: toRecord(snapshot.fallback_policy),
+    version: toOptionalNumber(snapshot.version)
+  })
+}
+
+const normalizeVisualStyleRecord = (style: unknown): VisualStyleRecord => {
+  const record = style && typeof style === "object" && !Array.isArray(style)
+    ? (style as Record<string, unknown>)
+    : {}
+  return {
+    id: String(record.id ?? ""),
+    name: String(record.name ?? ""),
+    scope: String(record.scope ?? ""),
+    description: toOptionalString(record.description),
+    generation_rules: toRecord(record.generation_rules),
+    artifact_preferences: toStringArray(record.artifact_preferences),
+    appearance_defaults: toRecord(record.appearance_defaults),
+    fallback_policy: toRecord(record.fallback_policy),
+    version: toOptionalNumber(record.version),
+    created_at: toOptionalString(record.created_at),
+    updated_at: toOptionalString(record.updated_at)
+  }
+}
+
+const normalizePresentationStudioRecord = (presentation: unknown): PresentationStudioRecord => {
+  const record =
+    presentation && typeof presentation === "object" && !Array.isArray(presentation)
+      ? (presentation as Record<string, unknown>)
+      : {}
+  const slides = Array.isArray(record.slides)
+    ? (record.slides as PresentationStudioSlide[])
+    : []
+  return {
+    id: String(record.id ?? ""),
+    title: String(record.title ?? ""),
+    description: toOptionalString(record.description),
+    theme: String(record.theme ?? "black"),
+    marp_theme: toOptionalString(record.marp_theme),
+    template_id: toOptionalString(record.template_id),
+    visual_style_id: toOptionalString(record.visual_style_id),
+    visual_style_scope: toOptionalString(record.visual_style_scope),
+    visual_style_name: toOptionalString(record.visual_style_name),
+    visual_style_version: toOptionalNumber(record.visual_style_version),
+    visual_style_snapshot: normalizeVisualStyleSnapshot(record.visual_style_snapshot),
+    settings: Object.keys(toRecord(record.settings)).length > 0 ? toRecord(record.settings) : null,
+    studio_data:
+      Object.keys(toRecord(record.studio_data)).length > 0 ? toRecord(record.studio_data) : null,
+    slides,
+    custom_css: toOptionalString(record.custom_css),
+    source_type: toOptionalString(record.source_type),
+    source_ref: record.source_ref ?? null,
+    source_query: toOptionalString(record.source_query),
+    created_at: String(record.created_at ?? ""),
+    last_modified: String(record.last_modified ?? ""),
+    deleted: Boolean(record.deleted),
+    client_id: toOptionalString(record.client_id) ?? undefined,
+    version: toFiniteNumber(record.version, 0)
+  }
 }
 
 export type UserProfileUpdateEntry = {
@@ -304,6 +708,13 @@ export interface ResearchRunResponse {
 export interface ChatCompletionRequest {
   messages: ChatMessage[]
   model: string
+  routing?: {
+    strategy?: "llm_router" | "rules_router"
+    objective?: "highest_quality" | "lowest_cost" | "lowest_latency" | "balanced"
+    mode?: "per_turn" | "sticky_session"
+    cross_provider?: boolean
+    failure_mode?: "fallback_then_error" | "error"
+  }
   stream?: boolean
   temperature?: number
   logprobs?: boolean
@@ -350,6 +761,8 @@ export interface ServerChatSummary {
   root_id?: string | null
   forked_from_message_id?: string | null
   version?: number | null
+  scope_type?: "global" | "workspace" | null
+  workspace_id?: string | null
 }
 
 export interface ChatLinkedResearchRun {
@@ -489,6 +902,63 @@ export type ChatSettingsResponse = {
   last_modified: string
 }
 
+export const normalizePersonaProfile = <T extends Record<string, unknown>>(
+  input: T | null | undefined
+): PersonaProfile => {
+  const candidate = input && typeof input === "object" ? input : ({} as T)
+  return {
+    ...candidate,
+    id: String(candidate?.id ?? candidate?.persona_id ?? "")
+  }
+}
+
+export const normalizeStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0)
+}
+
+export const normalizePersonaExemplar = (
+  input: Record<string, unknown> | null | undefined
+): PersonaExemplar => {
+  const candidate = input && typeof input === "object" ? input : {}
+  const priorityValue = Number(candidate?.priority)
+  return {
+    id: String(candidate?.id ?? ""),
+    persona_id: String(candidate?.persona_id ?? candidate?.personaId ?? ""),
+    kind: String(candidate?.kind ?? "style"),
+    content: String(candidate?.content ?? ""),
+    tone:
+      candidate?.tone == null || String(candidate.tone).trim() === ""
+        ? null
+        : String(candidate.tone),
+    scenario_tags: normalizeStringArray(
+      candidate?.scenario_tags ?? candidate?.scenarioTags
+    ),
+    capability_tags: normalizeStringArray(
+      candidate?.capability_tags ?? candidate?.capabilityTags
+    ),
+    priority: Number.isFinite(priorityValue) ? priorityValue : 0,
+    enabled: candidate?.enabled !== false,
+    source_type:
+      candidate?.source_type == null || String(candidate.source_type).trim() === ""
+        ? null
+        : String(candidate.source_type),
+    source_ref:
+      candidate?.source_ref == null || String(candidate.source_ref).trim() === ""
+        ? null
+        : String(candidate.source_ref),
+    notes:
+      candidate?.notes == null || String(candidate.notes).trim() === ""
+        ? null
+        : String(candidate.notes),
+    created_at:
+      candidate?.created_at == null ? null : String(candidate.created_at),
+    last_modified:
+      candidate?.last_modified == null ? null : String(candidate.last_modified)
+  }
+}
 export type WorldBookProcessDiagnostic = {
   entry_id: number | null
   world_book_id: number | null
@@ -530,7 +1000,7 @@ export type LorebookDiagnosticExportResponse = {
   size: number
 }
 
-type PromptPayload = {
+export type PromptPayload = {
   name?: string
   title?: string
   author?: string
@@ -786,13 +1256,13 @@ export class TldwApiClient {
   private config: TldwConfig | null = null
   private baseUrl: string = ''
   private headers: HeadersInit = {}
-  private characterCache = new Map<string, { value: any; expiresAt: number }>()
-  private characterInFlight = new Map<string, Promise<any>>()
-  private chatMessagesCache = new Map<
+  characterCache = new Map<string, { value: any; expiresAt: number }>()
+  characterInFlight = new Map<string, Promise<any>>()
+  chatMessagesCache = new Map<
     string,
     { value: ServerChatMessage[]; expiresAt: number }
   >()
-  private chatMessagesInFlight = new Map<string, Promise<ServerChatMessage[]>>()
+  chatMessagesInFlight = new Map<string, Promise<ServerChatMessage[]>>()
   private openApiPathSet: Set<string> | null = null
   private openApiPathSetPromise: Promise<Set<string> | null> | null = null
   private resolvedPathCache = new Map<string, string>()
@@ -829,7 +1299,7 @@ export class TldwApiClient {
     return "tldw server API key is missing. Open Settings → tldw server and configure an API key before continuing."
   }
 
-  private normalizeRagQuery(rawQuery: string): string {
+  normalizeRagQuery(rawQuery: string): string {
     const normalized =
       typeof rawQuery === "string" ? rawQuery : String(rawQuery ?? "")
     if (normalized.length <= RAG_QUERY_MAX_LENGTH) {
@@ -845,7 +1315,7 @@ export class TldwApiClient {
     return truncated
   }
 
-  private getChatMessagesCacheKey(chatId: string, query: string): string {
+  getChatMessagesCacheKey(chatId: string, query: string): string {
     return `${chatId}${query || ""}`
   }
 
@@ -866,14 +1336,26 @@ export class TldwApiClient {
     return "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings → tldw server before continuing."
   }
 
-  private async ensureConfigForRequest(requireAuth: boolean): Promise<TldwConfig> {
+  async ensureConfigForRequest(requireAuth: boolean): Promise<TldwConfig> {
     const cfg = (await this.getConfig()) || null
-    if (!cfg || !cfg.serverUrl) {
+    const hostedMode = isHostedTldwDeployment()
+    if ((!cfg || !cfg.serverUrl) && !hostedMode) {
       const msg =
         "tldw server is not configured. Open Settings → tldw server in the extension and set the server URL and API key."
       // eslint-disable-next-line no-console
       console.warn(msg)
       throw new Error(msg)
+    }
+
+    if (hostedMode) {
+      return {
+        serverUrl: String(cfg?.serverUrl || ""),
+        apiKey: cfg?.apiKey,
+        accessToken: cfg?.accessToken,
+        refreshToken: cfg?.refreshToken,
+        orgId: cfg?.orgId,
+        authMode: cfg?.authMode || "multi-user"
+      }
     }
 
     if (!requireAuth) {
@@ -909,7 +1391,7 @@ export class TldwApiClient {
     return cfg
   }
 
-  private async request<T>(init: any, requireAuth = true): Promise<T> {
+  async request<T>(init: any, requireAuth = true): Promise<T> {
     await this.ensureConfigForRequest(requireAuth && !init?.noAuth)
     return await bgRequest<T>(init)
   }
@@ -963,12 +1445,12 @@ export class TldwApiClient {
     }
   }
 
-  private async upload<T>(init: any, requireAuth = true): Promise<T> {
+  async upload<T>(init: any, requireAuth = true): Promise<T> {
     await this.ensureConfigForRequest(requireAuth)
     return await bgUpload<T>(init)
   }
 
-  private async *stream(init: any, requireAuth = true): AsyncGenerator<string> {
+  async *stream(init: any, requireAuth = true): AsyncGenerator<string> {
     await this.ensureConfigForRequest(requireAuth)
     for await (const line of bgStream(init)) {
       yield line as string
@@ -1015,7 +1497,10 @@ export class TldwApiClient {
     }
 
     const config = this.config
-    const nextBaseUrl = (config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
+    const hostedMode = isHostedTldwDeployment()
+    const nextBaseUrl = hostedMode
+      ? String(config?.serverUrl || "").replace(/\/$/, "")
+      : (config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
     if (this.baseUrl && this.baseUrl !== nextBaseUrl) {
       this.openApiPathSet = null
       this.openApiPathSetPromise = null
@@ -1028,12 +1513,12 @@ export class TldwApiClient {
       "Content-Type": "application/json"
     }
 
-    if (config?.authMode === "single-user" && config.apiKey) {
+    if (!hostedMode && config?.authMode === "single-user" && config.apiKey) {
       const key = String(config.apiKey || "").trim()
       if (key) {
         this.headers["X-API-KEY"] = key
       }
-    } else if (config?.authMode === "multi-user" && config.accessToken) {
+    } else if (!hostedMode && config?.authMode === "multi-user" && config.accessToken) {
       this.headers["Authorization"] = `Bearer ${config.accessToken}`
     }
     if (config?.orgId) {
@@ -1192,7 +1677,7 @@ export class TldwApiClient {
     })
   }
 
-  private buildQuery(params?: Record<string, any>): string {
+  buildQuery(params?: Record<string, any>): string {
     if (!params || Object.keys(params).length === 0) {
       return ''
     }
@@ -1222,11 +1707,11 @@ export class TldwApiClient {
     }
   }
 
-  private normalizePathShape(path: string): string {
+  normalizePathShape(path: string): string {
     return path.replace(/\{[^}]+\}/g, "{}")
   }
 
-  private async getOpenApiPathSet(): Promise<Set<string> | null> {
+  async getOpenApiPathSet(): Promise<Set<string> | null> {
     if (this.openApiPathSet) return this.openApiPathSet
     if (!this.openApiPathSetPromise) {
       this.openApiPathSetPromise = (async () => {
@@ -1245,7 +1730,7 @@ export class TldwApiClient {
     return this.openApiPathSetPromise
   }
 
-  private async resolveApiPath(
+  async resolveApiPath(
     key: string,
     candidates: string[]
   ): Promise<AllowedPath> {
@@ -1275,7 +1760,7 @@ export class TldwApiClient {
     return resolved as AllowedPath
   }
 
-  private fillPathParams(
+  fillPathParams(
     template: AllowedPath,
     values: string | string[]
   ): AllowedPath {
@@ -6838,6 +7323,47 @@ export class TldwApiClient {
     return await bgRequest<any>({ path: base, method: "GET" })
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Domain Method Mixins
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { adminMethods } from "./domains/admin"
+import { mediaMethods } from "./domains/media"
+import { characterMethods } from "./domains/characters"
+import { chatRagMethods } from "./domains/chat-rag"
+import { collectionsMethods } from "./domains/collections"
+import { modelsAudioMethods } from "./domains/models-audio"
+import { presentationsMethods } from "./domains/presentations"
+import { workspaceApiMethods } from "./domains/workspace-api"
+
+// Declaration merging: extend the class type with all domain methods
+export interface TldwApiClient
+  extends
+    Omit<typeof adminMethods, never>,
+    Omit<typeof mediaMethods, never>,
+    Omit<typeof characterMethods, never>,
+    Omit<typeof chatRagMethods, never>,
+    Omit<typeof collectionsMethods, never>,
+    Omit<typeof modelsAudioMethods, never>,
+    Omit<typeof presentationsMethods, never>,
+    Omit<typeof workspaceApiMethods, never> {}
+
+// Apply domain methods to the prototype
+Object.assign(
+  TldwApiClient.prototype,
+  adminMethods,
+  mediaMethods,
+  characterMethods,
+  chatRagMethods,
+  collectionsMethods,
+  modelsAudioMethods,
+  presentationsMethods,
+  workspaceApiMethods
+)
+
+// Also expose core helpers that domain files reference via `this`
+export type TldwApiClientCore = TldwApiClient
 
 // Singleton instance
 export const tldwClient = new TldwApiClient()

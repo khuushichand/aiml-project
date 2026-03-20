@@ -74,6 +74,11 @@ router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
 security = HTTPBearer(auto_error=False)
 
 
+def _normalize_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
 # Request/Response models
 class ServerStatusResponse(BaseModel):
     """Server status response"""
@@ -561,6 +566,7 @@ async def _attach_api_key_metadata(
             )
 
     _attach_rg_ingress_metadata(metadata, http_request)
+    _attach_workspace_ingress_metadata(metadata, http_request)
     return metadata
 
 
@@ -576,6 +582,28 @@ def _attach_rg_ingress_metadata(metadata: dict[str, Any], http_request: Optional
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Failed to read rg_policy_id from request state",
+            error=str(exc),
+            exc_info=True,
+        )
+
+
+def _attach_workspace_ingress_metadata(
+    metadata: dict[str, Any],
+    http_request: Optional[Request],
+) -> None:
+    """Attach trusted direct-ingress workspace metadata for MCP path scoping."""
+    if not http_request:
+        return
+    try:
+        workspace_id = str(http_request.headers.get("x-tldw-workspace-id") or "").strip()
+        if workspace_id:
+            metadata["workspace_id"] = workspace_id
+        cwd = str(http_request.headers.get("x-tldw-cwd") or "").strip()
+        if cwd:
+            metadata["cwd"] = cwd
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(
+            "Failed to read direct MCP workspace headers",
             error=str(exc),
             exc_info=True,
         )
@@ -651,7 +679,10 @@ async def websocket_endpoint(
     websocket: WebSocket,
     client_id: Optional[str] = Query(None, description="Client identifier"),
     token: Optional[str] = Query(None, description="Authentication token"),
-    api_key: Optional[str] = Query(None, description="API key for authentication")
+    api_key: Optional[str] = Query(None, description="API key for authentication"),
+    mcp_session_id: Optional[str] = Query(None, description="Stable MCP session identifier"),
+    workspace_id: Optional[str] = Query(None, description="Trusted workspace identifier"),
+    cwd: Optional[str] = Query(None, description="Current working directory within the workspace"),
 ):
     """
     WebSocket endpoint for MCP protocol.
@@ -688,7 +719,15 @@ async def websocket_endpoint(
         await server.initialize()
 
     # Handle WebSocket connection
-    await server.handle_websocket(websocket, client_id=client_id, auth_token=token, api_key=api_key)
+    await server.handle_websocket(
+        websocket,
+        client_id=_normalize_optional_text(client_id),
+        auth_token=_normalize_optional_text(token),
+        api_key=_normalize_optional_text(api_key),
+        mcp_session_id=_normalize_optional_text(mcp_session_id),
+        workspace_id=_normalize_optional_text(workspace_id),
+        cwd=_normalize_optional_text(cwd),
+    )
 
 
 # HTTP endpoints

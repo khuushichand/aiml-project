@@ -34,10 +34,13 @@ import { FEATURE_FLAGS, useFeatureFlag } from "@/hooks/useFeatureFlags"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
 import { WorkspaceHeader } from "./WorkspaceHeader"
 import { WorkspaceBanner } from "./WorkspaceBanner"
+import { SharedWorkspaceBanner } from "./SharedWorkspaceBanner"
+import { SharedWorkspaceProvider } from "./SharedWorkspaceContext"
 import { WorkspaceStatusBar } from "./WorkspaceStatusBar"
 import { SourcesPane } from "./SourcesPane"
 import { ChatPane } from "./ChatPane"
 import { StudioPane } from "./StudioPane"
+import { useSourceListViewState } from "./use-source-list-view-state"
 import {
   PaneResizer,
   DEFAULT_LEFT_WIDTH,
@@ -760,6 +763,45 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const onboardingInitializedRef = React.useRef(false)
   const startTutorial = useTutorialStore((s) => s.startTutorial)
 
+  // Shared workspace state (from ?shared= query param)
+  const [sharedShareId, setSharedShareId] = React.useState<number | null>(null)
+  const [sharedAccessLevel, setSharedAccessLevel] = React.useState<
+    "view_chat" | "view_chat_add" | "full_edit" | null
+  >(null)
+  const [sharedOwnerUserId, setSharedOwnerUserId] = React.useState<number | null>(null)
+  const [sharedAllowClone, setSharedAllowClone] = React.useState(false)
+
+  React.useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const shareIdStr = params.get("shared")
+      if (shareIdStr) {
+        const sid = parseInt(shareIdStr, 10)
+        if (!isNaN(sid)) {
+          setSharedShareId(sid)
+          // Fetch share details
+          import("@/hooks/useSharing").then(async (mod) => {
+            try {
+              const { getTldwServerURL } = await import("@/services/tldw-server")
+              const fetcher = (await import("@/libs/fetcher")).default
+              const base = await getTldwServerURL()
+              const res = await fetcher(`${base}/api/v1/sharing/shared-with-me/${sid}/workspace`)
+              if (res.ok) {
+                const data = await res.json()
+                const share = data.share
+                if (share) {
+                  setSharedAccessLevel(share.access_level)
+                  setSharedOwnerUserId(share.owner_user_id)
+                  setSharedAllowClone(share.allow_clone)
+                }
+              }
+            } catch { /* ignore fetch failures */ }
+          })
+        }
+      }
+    } catch { /* ignore URL parsing failures */ }
+  }, [])
+
   // Workspace store
   const workspaceId = useWorkspaceStore((s) => s.workspaceId)
   const workspaceName = useWorkspaceStore((s) => s.workspaceName) || ""
@@ -799,6 +841,11 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const isStoreHydrated = storeHydrated !== false
   const sourceStatusFailureRef = React.useRef<Record<number, number>>({})
   const lastStatusViewSignatureRef = React.useRef<string | null>(null)
+  const {
+    sourceListViewState,
+    patchSourceListViewState,
+    resetAdvancedSourceFilters
+  } = useSourceListViewState()
 
   const [leftPaneWidth, setLeftPaneWidth] = React.useState(DEFAULT_LEFT_WIDTH)
   const [rightPaneWidth, setRightPaneWidth] = React.useState(DEFAULT_RIGHT_WIDTH)
@@ -1247,6 +1294,13 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const handleSearchInputKeyDown = (
     event: React.KeyboardEvent<HTMLInputElement>
   ) => {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      closeGlobalSearch()
+      return
+    }
+
     if (event.key === "ArrowDown") {
       event.preventDefault()
       if (globalSearchResults.length === 0) return
@@ -1800,7 +1854,14 @@ const WorkspacePlaygroundBody: React.FC = () => {
           )}
         </span>
       ),
-      children: <SourcesPane statusGuardrailsEnabled={statusGuardrailsEnabled} />
+      children: (
+        <SourcesPane
+          sourceListViewState={sourceListViewState}
+          onPatchSourceListViewState={patchSourceListViewState}
+          onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
+          statusGuardrailsEnabled={statusGuardrailsEnabled}
+        />
+      )
     },
     {
       key: "chat",
@@ -1853,6 +1914,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
   }
 
   return (
+    <SharedWorkspaceProvider
+      shareId={sharedShareId}
+      ownerUserId={sharedOwnerUserId}
+      accessLevel={sharedAccessLevel}
+      allowClone={sharedAllowClone}
+    >
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,var(--surface-2),var(--bg)_45%)] text-text">
       {messageContextHolder}
       <a
@@ -1987,6 +2054,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
             workspaceName={workspaceName}
             isMobile
           />
+          <SharedWorkspaceBanner />
 
           <WorkspaceStatusBar
             storageUsedBytes={workspaceStorageUsage.usedBytes}
@@ -2026,6 +2094,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
             workspaceName={workspaceName}
             isMobile={false}
           />
+          <SharedWorkspaceBanner />
 
           <div className="flex min-h-0 flex-1 gap-2 px-2 py-2">
             {leftPaneOpen && (
@@ -2039,6 +2108,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 >
                   <SourcesPane
                     onHide={() => setLeftPaneCollapsed(true)}
+                    sourceListViewState={sourceListViewState}
+                    onPatchSourceListViewState={patchSourceListViewState}
+                    onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
                     statusGuardrailsEnabled={statusGuardrailsEnabled}
                   />
                 </aside>
@@ -2065,7 +2137,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
               className="lg:hidden"
               styles={{ wrapper: { width: 320 }, body: { padding: 0 } }}
             >
-              <SourcesPane statusGuardrailsEnabled={statusGuardrailsEnabled} />
+              <SourcesPane
+                sourceListViewState={sourceListViewState}
+                onPatchSourceListViewState={patchSourceListViewState}
+                onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
+                statusGuardrailsEnabled={statusGuardrailsEnabled}
+              />
             </Drawer>
 
             <main
@@ -2285,6 +2362,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
         </div>
       )}
     </div>
+    </SharedWorkspaceProvider>
   )
 }
 

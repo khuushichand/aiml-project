@@ -5,8 +5,10 @@ from types import SimpleNamespace
 import pytest
 
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    AdminPrivilegedActionRequest,
     AdminMfaRequirementRequest,
     AdminPasswordResetRequest,
+    UserUpdateRequest,
 )
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventCategory,
@@ -133,6 +135,89 @@ async def test_reset_user_password_emits_durable_audit_event(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_delete_user_forwards_admin_reauth_token_to_guardrails(monkeypatch) -> None:
+    received: dict[str, object] = {}
+
+    async def _verify(*_args, **kwargs) -> str:
+        received.update(kwargs)
+        return "Support case 123"
+
+    async def _fake_emit(**_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        admin_users_service.admin_scope_service,
+        "enforce_admin_user_scope",
+        _allow_scope,
+    )
+    monkeypatch.setattr(admin_users_service, "verify_privileged_action", _verify)
+    monkeypatch.setattr(
+        admin_users_service,
+        "_emit_admin_account_audit_event",
+        _fake_emit,
+        raising=False,
+    )
+
+    await admin_users_service.delete_user(
+        _admin_principal(),
+        42,
+        SimpleNamespace(
+            reason="Support case 123",
+            admin_password=None,
+            admin_reauth_token="magic-token-123",
+        ),
+        _FakeUserDb(),
+        password_service=object(),
+        is_pg_fn=lambda: _false_async(),
+    )
+
+    assert received["reason"] == "Support case 123"
+    assert received["admin_password"] is None
+    assert received["admin_reauth_token"] == "magic-token-123"
+
+
+@pytest.mark.asyncio
+async def test_delete_user_unwraps_secretstr_admin_reauth_token_before_guardrails(monkeypatch) -> None:
+    received: dict[str, object] = {}
+
+    async def _verify(*_args, **kwargs) -> str:
+        received.update(kwargs)
+        return "Support case 123"
+
+    async def _fake_emit(**_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        admin_users_service.admin_scope_service,
+        "enforce_admin_user_scope",
+        _allow_scope,
+    )
+    monkeypatch.setattr(admin_users_service, "verify_privileged_action", _verify)
+    monkeypatch.setattr(
+        admin_users_service,
+        "_emit_admin_account_audit_event",
+        _fake_emit,
+        raising=False,
+    )
+
+    await admin_users_service.delete_user(
+        _admin_principal(),
+        42,
+        AdminPrivilegedActionRequest(
+            reason="Support case 123",
+            admin_reauth_token="magic-token-123",
+        ),
+        _FakeUserDb(),
+        password_service=object(),
+        is_pg_fn=lambda: _false_async(),
+    )
+
+    assert received["reason"] == "Support case 123"
+    assert received["admin_password"] is None
+    assert received["admin_reauth_token"] == "magic-token-123"
+
+
+@pytest.mark.asyncio
 async def test_delete_user_emits_durable_audit_event(monkeypatch) -> None:
     emitted: list[dict[str, object]] = []
 
@@ -210,6 +295,124 @@ async def test_revoke_user_session_emits_durable_audit_event(monkeypatch) -> Non
     assert emitted[0]["resource_id"] == "84"
     assert emitted[0]["action"] == "admin.user.session.revoke"
     assert emitted[0]["metadata"]["reason"] == "Support case 123"
+
+
+@pytest.mark.asyncio
+async def test_revoke_user_session_forwards_admin_reauth_token_to_guardrails(monkeypatch) -> None:
+    received: dict[str, object] = {}
+
+    async def _verify(*_args, **kwargs) -> str:
+        received.update(kwargs)
+        return "Support case 123"
+
+    async def _fake_emit(**_kwargs) -> None:
+        return None
+
+    session_manager = _FakeSessionManager()
+    monkeypatch.setattr(
+        admin_sessions_mfa_service.admin_scope_service,
+        "enforce_admin_user_scope",
+        _allow_scope,
+    )
+    monkeypatch.setattr(admin_sessions_mfa_service, "verify_privileged_action", _verify)
+    monkeypatch.setattr(
+        admin_sessions_mfa_service,
+        "_emit_admin_account_audit_event",
+        _fake_emit,
+        raising=False,
+    )
+
+    await admin_sessions_mfa_service.revoke_user_session(
+        _admin_principal(),
+        42,
+        84,
+        session_manager,
+        db=object(),
+        password_service=object(),
+        request=SimpleNamespace(
+            reason="Support case 123",
+            admin_password=None,
+            admin_reauth_token="magic-token-456",
+        ),
+    )
+
+    assert received["reason"] == "Support case 123"
+    assert received["admin_password"] is None
+    assert received["admin_reauth_token"] == "magic-token-456"
+
+
+@pytest.mark.asyncio
+async def test_revoke_user_session_unwraps_secretstr_admin_reauth_token_before_guardrails(monkeypatch) -> None:
+    received: dict[str, object] = {}
+
+    async def _verify(*_args, **kwargs) -> str:
+        received.update(kwargs)
+        return "Support case 123"
+
+    async def _fake_emit(**_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        admin_sessions_mfa_service.admin_scope_service,
+        "enforce_admin_user_scope",
+        _allow_scope,
+    )
+    monkeypatch.setattr(admin_sessions_mfa_service, "verify_privileged_action", _verify)
+    monkeypatch.setattr(
+        admin_sessions_mfa_service,
+        "_emit_admin_account_audit_event",
+        _fake_emit,
+        raising=False,
+    )
+
+    await admin_sessions_mfa_service.revoke_user_session(
+        _admin_principal(),
+        42,
+        99,
+        _FakeSessionManager(),
+        _FakeUserDb(),
+        password_service=object(),
+        request=AdminPrivilegedActionRequest(
+            reason="Support case 123",
+            admin_reauth_token="magic-token-456",
+        ),
+    )
+
+    assert received["reason"] == "Support case 123"
+    assert received["admin_password"] is None
+    assert received["admin_reauth_token"] == "magic-token-456"
+
+
+@pytest.mark.asyncio
+async def test_update_user_unwraps_secretstr_admin_password_before_guardrails(monkeypatch) -> None:
+    received: dict[str, object] = {}
+
+    async def _verify(*_args, **kwargs) -> str:
+        received.update(kwargs)
+        return "Support case 123"
+
+    monkeypatch.setattr(
+        admin_users_service.admin_scope_service,
+        "enforce_admin_user_scope",
+        _allow_scope,
+    )
+    monkeypatch.setattr(admin_users_service, "verify_privileged_action", _verify)
+
+    await admin_users_service.update_user(
+        _admin_principal(),
+        42,
+        UserUpdateRequest(
+            role="user",
+            reason="Support case 123",
+            admin_password="AdminPass123!",
+        ),
+        _FakeUserDb(),
+        password_service=object(),
+        is_pg_fn=lambda: _false_async(),
+    )
+
+    assert received["reason"] == "Support case 123"
+    assert received["admin_password"] == "AdminPass123!"
 
 
 @pytest.mark.asyncio

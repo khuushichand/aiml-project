@@ -35,6 +35,7 @@ import numpy as np
 from fastapi import WebSocketDisconnect
 from loguru import logger
 
+from tldw_Server_API.app.core.Audio.streaming_exceptions import QuotaExceeded
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import is_truthy
 
@@ -976,13 +977,6 @@ class StreamingDiarizer:
             persistence_backend (Optional[str]): The backend identifier (`'soundfile'`, `'scipy'`, or `'wave'`) if a persistence writer was selected, or `None` if no persistence backend is available.
         """
         return self._persist_method
-
-
-class QuotaExceeded(Exception):
-    """Raised by on_audio_seconds callback to signal quota exhaustion."""
-    def __init__(self, quota: str):
-        super().__init__(quota)
-        self.quota = quota
 
 
 _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS = _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS + (
@@ -3167,5 +3161,6 @@ __all__ = [
     'Qwen3ASRStreamingTranscriber',
     'UnifiedStreamingTranscriber',
     'SileroTurnDetector',
+    'QuotaExceeded',
     'handle_unified_websocket'
 ]

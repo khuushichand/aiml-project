@@ -8,6 +8,7 @@ import {
   isBenign,
   fetchWithApiKey
 } from "./helpers"
+import { startApiCapture, getCapturedApiCalls } from "./api-assertions"
 
 /**
  * Diagnostics data collected during page visits
@@ -78,9 +79,20 @@ export const test = base.extend<WorkflowFixtures>({
   },
 
   // Pre-seeded authenticated page
-  authedPage: async ({ page }, use) => {
+  authedPage: async ({ page }, use, testInfo) => {
     await seedAuth(page)
+    startApiCapture(page)
     await use(page)
+    // Teardown: attach API call log on test failure for debugging
+    if (testInfo.status !== "passed") {
+      const apiLog = getCapturedApiCalls(page)
+      if (apiLog.length > 0) {
+        await testInfo.attach("api-calls.json", {
+          body: JSON.stringify(apiLog, null, 2),
+          contentType: "application/json",
+        })
+      }
+    }
   },
 
   // Server availability check
@@ -127,19 +139,35 @@ export { expect }
 function extractModelIds(payload: any): string[] {
   const models: string[] = []
 
-  if (Array.isArray(payload)) {
-    for (const provider of payload) {
-      if (Array.isArray(provider?.models)) {
-        for (const model of provider.models) {
+  // Handle { providers: [{ name, models: [...] }, ...] } shape (actual API response)
+  const providers = Array.isArray(payload?.providers)
+    ? payload.providers
+    : Array.isArray(payload)
+      ? payload
+      : []
+
+  for (const provider of providers) {
+    if (Array.isArray(provider?.models)) {
+      for (const model of provider.models) {
+        if (typeof model === "string") {
+          models.push(model)
+        } else {
           const id = model?.id || model?.model || model?.name
           if (id) models.push(String(id))
         }
       }
     }
-  } else if (Array.isArray(payload?.models)) {
+  }
+
+  // Fallback: payload.models direct array
+  if (models.length === 0 && Array.isArray(payload?.models)) {
     for (const model of payload.models) {
-      const id = model?.id || model?.model || model?.name
-      if (id) models.push(String(id))
+      if (typeof model === "string") {
+        models.push(model)
+      } else {
+        const id = model?.id || model?.model || model?.name
+        if (id) models.push(String(id))
+      }
     }
   }
 

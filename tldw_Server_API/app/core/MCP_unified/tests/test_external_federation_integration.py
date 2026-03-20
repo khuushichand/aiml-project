@@ -231,7 +231,10 @@ async def test_external_federation_module_integration_exposes_and_executes_virtu
         module = ExternalFederationModule(
             ModuleConfig(
                 name="external_federation",
-                settings={"external_servers_config_path": str(external_config)},
+                settings={
+                    "external_servers_config_path": str(external_config),
+                    "external_server_loader": lambda: list(cfg.servers),
+                },
             )
         )
         try:

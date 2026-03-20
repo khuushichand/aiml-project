@@ -27,7 +27,7 @@ from sqlite3 import Error as SQLiteError
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS = (
@@ -100,8 +100,11 @@ def _collect_known_storage_paths(user_id: int) -> set[str]:
         if not Path(db_path).exists():
             return known_paths
 
-        db = MediaDatabase(db_path=db_path, client_id="cleanup_service")
-        try:
+        with managed_media_database(
+            "cleanup_service",
+            db_path=str(db_path),
+            initialize=False,
+        ) as db:
             # Query all MediaFiles records (including soft-deleted)
             conn = db.get_connection()
             cursor = conn.execute("SELECT storage_path FROM MediaFiles WHERE storage_path IS NOT NULL")
@@ -109,8 +112,6 @@ def _collect_known_storage_paths(user_id: int) -> set[str]:
                 path = row[0] if isinstance(row, (list, tuple)) else row.get("storage_path")
                 if path:
                     known_paths.add(path)
-        finally:
-            db.close_connection()
     except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"media_files_cleanup: failed to query MediaFiles for user {user_id}: {e}")
 

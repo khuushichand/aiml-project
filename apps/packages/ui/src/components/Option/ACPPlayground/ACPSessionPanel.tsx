@@ -513,6 +513,30 @@ const getAgentTypeName = (agentType?: ACPAgentType): string => {
   return info?.name ?? agentType
 }
 
+const getPolicySummaryBadges = (session: ACPSession): string[] => {
+  const summary = (session.policySummary || null) as Record<string, unknown> | null
+  if (!summary) {
+    return []
+  }
+
+  const badges: string[] = []
+  const approvalMode = typeof summary.approval_mode === "string" ? summary.approval_mode : null
+  const allowedCount = typeof summary.allowed_tool_count === "number" ? summary.allowed_tool_count : null
+  const deniedCount = typeof summary.denied_tool_count === "number" ? summary.denied_tool_count : null
+
+  if (approvalMode) {
+    badges.push(`Policy ${approvalMode}`)
+  }
+  if (allowedCount !== null) {
+    badges.push(`Allow ${allowedCount}`)
+  }
+  if (deniedCount !== null && deniedCount > 0) {
+    badges.push(`Deny ${deniedCount}`)
+  }
+
+  return badges
+}
+
 const SessionItem: React.FC<SessionItemProps> = ({
   session,
   isActive,
@@ -527,6 +551,8 @@ const SessionItem: React.FC<SessionItemProps> = ({
   formatDate,
 }) => {
   const { t } = useTranslation(["playground", "common"])
+  const policyBadges = getPolicySummaryBadges(session)
+  const hasPolicyError = typeof session.policyRefreshError === "string" && session.policyRefreshError.length > 0
 
   // Get the last part of the path for display
   const displayPath = session.cwd.split("/").filter(Boolean).slice(-2).join("/") || session.cwd || "/"
@@ -595,6 +621,26 @@ const SessionItem: React.FC<SessionItemProps> = ({
             </Tooltip>
           )}
         </div>
+
+        {(policyBadges.length > 0 || hasPolicyError) && (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+            {policyBadges.map((badge) => (
+              <span
+                key={`${session.id}-${badge}`}
+                className="rounded bg-primary/10 px-1.5 py-0.5 text-primary"
+              >
+                {badge}
+              </span>
+            ))}
+            {hasPolicyError && (
+              <Tooltip title={session.policyRefreshError}>
+                <span className="rounded bg-danger/10 px-1.5 py-0.5 text-danger">
+                  {t("playground:acp.sessionMeta.policyError", "Policy refresh error")}
+                </span>
+              </Tooltip>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">

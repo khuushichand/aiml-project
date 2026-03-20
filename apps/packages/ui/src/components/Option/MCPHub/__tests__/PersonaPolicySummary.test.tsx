@@ -3,11 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 
 const mocks = vi.hoisted(() => ({
-  getEffectivePolicy: vi.fn()
+  getEffectivePolicy: vi.fn(),
+  listPolicyAssignments: vi.fn(),
+  getAssignmentExternalAccess: vi.fn()
 }))
 
 vi.mock("@/services/tldw/mcp-hub", () => ({
-  getEffectivePolicy: (...args: unknown[]) => mocks.getEffectivePolicy(...args)
+  getEffectivePolicy: (...args: unknown[]) => mocks.getEffectivePolicy(...args),
+  listPolicyAssignments: (...args: unknown[]) => mocks.listPolicyAssignments(...args),
+  getAssignmentExternalAccess: (...args: unknown[]) => mocks.getAssignmentExternalAccess(...args)
 }))
 
 import { PersonaPolicySummary } from "../PersonaPolicySummary"
@@ -20,9 +24,50 @@ describe("PersonaPolicySummary", () => {
       allowed_tools: ["Bash(git *)"],
       denied_tools: ["Bash(rm *)"],
       capabilities: ["process.execute"],
+      authored_policy_document: {
+        capabilities: ["tool.invoke.research", "network.external.search"]
+      },
+      resolved_policy_document: {
+        capabilities: ["tool.invoke.research", "network.external.search"],
+        allowed_tools: ["Bash(git *)"],
+        path_scope_mode: "workspace_root",
+        path_scope_enforcement: "approval_required_when_unenforceable",
+        path_allowlist_prefixes: ["src", "docs/api"]
+      },
+      resolved_capabilities: ["tool.invoke.research"],
+      unresolved_capabilities: ["network.external.search"],
+      capability_mapping_summary: [
+        {
+          capability_name: "tool.invoke.research",
+          resolution_intent: "allow",
+          mapping_id: "research.global",
+          mapping_scope_type: "global",
+          mapping_scope_id: null,
+          resolved_effects: { allowed_tools: ["web.search"] },
+          supported_environment_requirements: ["workspace_bounded_read"],
+          unsupported_environment_requirements: []
+        },
+        {
+          capability_name: "tool.invoke.docs",
+          resolution_intent: "deny",
+          mapping_id: "docs.global",
+          mapping_scope_type: "global",
+          mapping_scope_id: null,
+          resolved_effects: { allowed_tools: ["docs.search"] },
+          supported_environment_requirements: [],
+          unsupported_environment_requirements: []
+        }
+      ],
+      capability_warnings: [
+        "profile:researcher: No active capability adapter mapping found for 'network.external.search'"
+      ],
       approval_policy_id: 17,
       approval_mode: "ask_outside_profile",
-      policy_document: {},
+      policy_document: {
+        path_scope_mode: "workspace_root",
+        path_scope_enforcement: "approval_required_when_unenforceable",
+        path_allowlist_prefixes: ["src", "docs/api"]
+      },
       sources: [],
       provenance: [
         {
@@ -33,6 +78,77 @@ describe("PersonaPolicySummary", () => {
           profile_id: 5,
           override_id: 31,
           effect: "merged"
+        },
+        {
+          field: "governance_pack",
+          value: {
+            pack_id: "researcher-pack",
+            pack_version: "1.0.0"
+          },
+          source_kind: "profile",
+          assignment_id: 11,
+          profile_id: 5,
+          override_id: null,
+          effect: "replaced"
+        }
+      ]
+    })
+    mocks.listPolicyAssignments.mockResolvedValue([
+      {
+        id: 11,
+        target_type: "persona",
+        target_id: "researcher",
+        owner_scope_type: "user",
+        owner_scope_id: 7,
+        profile_id: 5,
+        inline_policy_document: {},
+        approval_policy_id: 17,
+        is_active: true
+      }
+    ])
+    mocks.getAssignmentExternalAccess.mockResolvedValue({
+      servers: [
+        {
+          server_id: "docs-managed",
+          server_name: "Docs Managed",
+          granted_by: "profile",
+          disabled_by_assignment: true,
+          server_source: "managed",
+          secret_available: true,
+          runtime_executable: true,
+          blocked_reason: "disabled_by_assignment",
+          slots: [
+            {
+              slot_name: "token_readonly",
+              display_name: "Read-only token",
+              granted_by: "profile",
+              disabled_by_assignment: true,
+              secret_available: true,
+              runtime_usable: false,
+              blocked_reason: "slot_disabled_by_assignment"
+            }
+          ]
+        },
+        {
+          server_id: "search-api",
+          server_name: "Search API",
+          granted_by: "assignment",
+          disabled_by_assignment: false,
+          server_source: "managed",
+          secret_available: false,
+          runtime_executable: true,
+          blocked_reason: "missing_secret",
+          slots: [
+            {
+              slot_name: "token_write",
+              display_name: "Write token",
+              granted_by: "assignment",
+              disabled_by_assignment: false,
+              secret_available: false,
+              runtime_usable: false,
+              blocked_reason: "missing_required_slot_secret"
+            }
+          ]
         }
       ]
     })
@@ -45,6 +161,47 @@ describe("PersonaPolicySummary", () => {
     expect(screen.getByText("Bash(git *)")).toBeTruthy()
     expect(screen.getByText("Bash(rm *)")).toBeTruthy()
     expect(screen.getByText("Override active")).toBeTruthy()
+    expect(screen.getByText("Workspace root")).toBeTruthy()
+    expect(screen.getByText("Allowed paths: docs/api, src")).toBeTruthy()
+    expect(screen.getByText("Path approval fallback")).toBeTruthy()
+    expect(screen.getByText("Docs Managed")).toBeTruthy()
+    expect(screen.getByText("Search API")).toBeTruthy()
+    expect(screen.getByText("Read-only token")).toBeTruthy()
+    expect(screen.getByText("Write token")).toBeTruthy()
+    expect(screen.getAllByText(/disabled by assignment/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/missing secret/i).length).toBeGreaterThan(0)
+    expect(screen.getByText("Pack researcher-pack@1.0.0")).toBeTruthy()
+    expect(screen.getByText("Mapped tool.invoke.research via research.global")).toBeTruthy()
+    expect(screen.getByText("Denied tool.invoke.docs via docs.global")).toBeTruthy()
+    expect(screen.getByText("Unresolved capability: network.external.search")).toBeTruthy()
+    expect(
+      screen.getByText("profile:researcher: No active capability adapter mapping found for 'network.external.search'")
+    ).toBeTruthy()
     expect(screen.getByRole("link", { name: /open mcp hub/i })).toBeTruthy()
+  })
+
+  it("handles missing provenance arrays without crashing", async () => {
+    mocks.getEffectivePolicy.mockResolvedValueOnce({
+      enabled: true,
+      allowed_tools: ["Bash(git *)"],
+      denied_tools: [],
+      capabilities: ["process.execute"],
+      authored_policy_document: {},
+      resolved_policy_document: {},
+      resolved_capabilities: [],
+      unresolved_capabilities: [],
+      capability_mapping_summary: [],
+      capability_warnings: [],
+      approval_policy_id: 17,
+      approval_mode: "ask_outside_profile",
+      policy_document: {},
+      sources: [],
+      provenance: null
+    })
+
+    render(<PersonaPolicySummary personaId="researcher" />)
+
+    expect(await screen.findByText("process.execute")).toBeTruthy()
+    expect(screen.queryByText("Pack researcher-pack@1.0.0")).toBeNull()
   })
 })

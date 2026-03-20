@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    get_media_by_url,
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_media_by_url
+from tldw_Server_API.app.core.DB_Management.media_db.dedupe_urls import (
     media_dedupe_url_candidates,
     normalize_media_dedupe_url,
 )

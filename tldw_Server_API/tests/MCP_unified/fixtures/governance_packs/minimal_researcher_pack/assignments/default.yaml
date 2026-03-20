@@ -1,0 +1,5 @@
+assignment_template_id: researcher.default
+target_type: default
+capability_profile_id: researcher.profile
+persona_template_id: researcher.persona
+approval_template_id: researcher.ask

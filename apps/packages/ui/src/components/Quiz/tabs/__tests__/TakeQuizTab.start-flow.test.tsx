@@ -268,6 +268,7 @@ describe("TakeQuizTab start flow", () => {
     expect(
       screen.getByText("This quiz was opened from a shared assignment link.")
     ).toBeInTheDocument()
+    expect(screen.getAllByText("This shared assignment is past due.").length).toBeGreaterThan(0)
     expect(screen.getAllByText("Note: Complete before the lab session.").length).toBeGreaterThan(0)
     expect(screen.getAllByText("Assigned by role: lead").length).toBeGreaterThan(0)
     expect(

@@ -222,12 +222,9 @@ describe("QuickNotesSection Stage 3 authoring and conflict recovery", () => {
     })
 
     const conflictConfig = mockMessageOpen.mock.calls[0]?.[0]
-    expect(conflictConfig?.content).toContain("Reload the latest version")
-
-    const reloadButton = conflictConfig?.btn as React.ReactElement<{
-      onClick: () => void
-    }>
-    reloadButton.props.onClick()
+    const renderedConflict = render(<>{conflictConfig?.content}</>)
+    expect(renderedConflict.getByText("Reload latest")).toBeInTheDocument()
+    fireEvent.click(renderedConflict.getByRole("button", { name: "Reload latest" }))
 
     await waitFor(() => {
       expect(mockSetCurrentNote).toHaveBeenCalledWith(

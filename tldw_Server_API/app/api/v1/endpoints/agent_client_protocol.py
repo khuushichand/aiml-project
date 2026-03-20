@@ -46,6 +46,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     ACPGovernanceDeniedError,
     get_runner_client,
 )
+from tldw_Server_API.app.services.acp_runtime_policy_service import ACPRuntimePolicyService
 from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -117,6 +118,29 @@ _ACP_DIAGNOSTIC_REASON_MAP: dict[str, str] = {
     "runtime_error": "failed_runtime",
     "invariant_violation": "invariant_violation",
 }
+
+
+def get_acp_runtime_policy_service() -> ACPRuntimePolicyService:
+    """Provide the ACP runtime policy service for endpoint dependency injection."""
+    return ACPRuntimePolicyService()
+
+
+async def _build_initial_runtime_policy_snapshot(
+    *,
+    session_store: Any,
+    session_record: Any,
+    user_id: int,
+    runtime_policy_service: ACPRuntimePolicyService,
+) -> Any:
+    """Build and persist the initial ACP runtime policy snapshot for a new session."""
+    snapshot = await runtime_policy_service.build_snapshot(
+        session_record=session_record,
+        user_id=int(user_id),
+    )
+    return await runtime_policy_service.persist_snapshot(
+        session_store=session_store,
+        snapshot=snapshot,
+    )
 
 
 def _acp_env_int(name: str, default: int) -> int:
@@ -1022,6 +1046,23 @@ async def _handle_client_message(
             })
             return
 
+        pending_metadata: dict[str, Any] = {}
+        metadata_getter = getattr(client, "get_pending_permission_metadata", None)
+        if callable(metadata_getter):
+            try:
+                maybe_metadata = metadata_getter(session_id, request_id)
+                if inspect.isawaitable(maybe_metadata):
+                    maybe_metadata = await maybe_metadata
+                if isinstance(maybe_metadata, dict):
+                    pending_metadata = {str(k): v for k, v in maybe_metadata.items()}
+            except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Failed to load ACP pending permission metadata for session {} request {}: {}",
+                    session_id,
+                    request_id,
+                    exc,
+                )
+
         success = await client.respond_to_permission(
             session_id,
             request_id,
@@ -1045,6 +1086,19 @@ async def _handle_client_message(
                     if isinstance(sess_pending, dict) and request_id in sess_pending:
                         sess_pending.pop(request_id, None)
                         success = True
+        if success and user_id is not None:
+            audit_metadata = {
+                "approved": bool(approved),
+                "request_id": str(request_id),
+                "batch_approve_tier": batch_approve_tier,
+            }
+            audit_metadata.update({k: v for k, v in pending_metadata.items() if v is not None})
+            _acp_record_audit_event(
+                action="permission_response",
+                user_id=int(user_id),
+                session_id=session_id,
+                metadata=audit_metadata,
+            )
         if not success:
             await stream.send_json({
                 "type": "error",
@@ -1515,6 +1569,13 @@ async def acp_register_agent(
         requires_api_key=request.requires_api_key,
         install_instructions=request.install_instructions,
         docs_url=request.docs_url,
+        mcp_orchestration=request.mcp_orchestration,
+        mcp_entry_tool=request.mcp_entry_tool,
+        mcp_structured_response=request.mcp_structured_response,
+        mcp_llm_provider=request.mcp_llm_provider,
+        mcp_llm_model=request.mcp_llm_model,
+        mcp_max_iterations=request.mcp_max_iterations,
+        mcp_refresh_tools=request.mcp_refresh_tools,
     )
     return ACPAgentRegistrationResponse(status="registered", agent_type=entry.type, name=entry.name)
 
@@ -1651,6 +1712,7 @@ async def acp_session_new(
 
     # Generate session name if not provided
     session_name = payload.name or _generate_session_name(payload.cwd)
+    runtime_policy_service = get_acp_runtime_policy_service()
 
     # Convert MCP server configs to dicts for the runner client
     mcp_servers_dicts = None
@@ -1713,9 +1775,10 @@ async def acp_session_new(
         resolved_scope_snapshot_id = resolved_scope_snapshot_id or sandbox_meta.get("scope_snapshot_id")
 
     # Persist session metadata and emit SSE event
+    persisted_record = None
     try:
         store = await get_acp_session_store()
-        await store.register_session(
+        persisted_record = await store.register_session(
             session_id=session_id,
             user_id=int(user.id),
             agent_type=resolved_agent_type or "custom",
@@ -1728,6 +1791,29 @@ async def acp_session_new(
             workspace_group_id=resolved_workspace_group_id,
             scope_snapshot_id=resolved_scope_snapshot_id,
         )
+        if persisted_record is not None:
+            try:
+                persisted_record = await _build_initial_runtime_policy_snapshot(
+                    session_store=store,
+                    session_record=persisted_record,
+                    user_id=int(user.id),
+                    runtime_policy_service=runtime_policy_service,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to build initial ACP runtime policy snapshot for {}: {}",
+                    session_id,
+                    exc,
+                )
+                persisted_record = await store.update_policy_snapshot_state(
+                    session_id,
+                    policy_snapshot_version=None,
+                    policy_snapshot_fingerprint=None,
+                    policy_snapshot_refreshed_at=None,
+                    policy_summary=None,
+                    policy_provenance_summary=None,
+                    policy_refresh_error=str(exc),
+                )
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.warning("Failed to persist ACP session metadata for {}", session_id)
     try:
@@ -1754,6 +1840,12 @@ async def acp_session_new(
         workspace_id=resolved_workspace_id,
         workspace_group_id=resolved_workspace_group_id,
         scope_snapshot_id=resolved_scope_snapshot_id,
+        policy_snapshot_version=getattr(persisted_record, "policy_snapshot_version", None),
+        policy_snapshot_fingerprint=getattr(persisted_record, "policy_snapshot_fingerprint", None),
+        policy_snapshot_refreshed_at=getattr(persisted_record, "policy_snapshot_refreshed_at", None),
+        policy_summary=getattr(persisted_record, "policy_summary", None),
+        policy_provenance_summary=getattr(persisted_record, "policy_provenance_summary", None),
+        policy_refresh_error=getattr(persisted_record, "policy_refresh_error", None),
     )
 
 

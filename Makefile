@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Quickstart targets (first-time setup)
 # -----------------------------------------------------------------------------
-.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui model-cycle verify pypi-build pypi-check tooling-install tooling-smoke
+.PHONY: quickstart quickstart-install quickstart-prereqs quickstart-local quickstart-docker quickstart-docker-bootstrap quickstart-docker-webui model-cycle verify pypi-build pypi-check tooling-install tooling-smoke
 
 PYTHON ?= python3
 VENV_DIR ?= .venv
@@ -54,18 +54,21 @@ quickstart-install:
 	@if [ "$$(uname -s)" = "Linux" ]; then \
 		echo "[quickstart-install] Linux audio note: if PyAudio build/install fails, install PortAudio headers (e.g., sudo apt install -y portaudio19-dev python3-pyaudio)."; \
 	fi
-	@$(MAKE) quickstart PYTHON=$(VENV_PYTHON)
+	@$(MAKE) quickstart-local PYTHON=$(VENV_PYTHON)
 
-quickstart: quickstart-prereqs
-	@echo "[quickstart] Setting up tldw_server for first-time use..."
+quickstart-local: quickstart-prereqs
+	@echo "[quickstart-local] Setting up local tldw_server development..."
 	@mkdir -p $(dir $(TLDW_ENV_FILE))
-	@test -f $(TLDW_ENV_FILE) || (cp $(TLDW_ENV_TEMPLATE) $(TLDW_ENV_FILE) && echo "[quickstart] Created $(TLDW_ENV_FILE) from template - set SINGLE_USER_API_KEY before exposing beyond localhost.")
-	@echo "[quickstart] Initializing auth (non-interactive)..."
+	@test -f $(TLDW_ENV_FILE) || (cp $(TLDW_ENV_TEMPLATE) $(TLDW_ENV_FILE) && echo "[quickstart-local] Created $(TLDW_ENV_FILE) from template - set SINGLE_USER_API_KEY before exposing beyond localhost.")
+	@echo "[quickstart-local] Initializing auth (non-interactive)..."
 	$(PYTHON) -m tldw_Server_API.app.core.AuthNZ.initialize --non-interactive
-	@echo "[quickstart] Starting server on http://127.0.0.1:8000"
-	@echo "[quickstart] Verify with: curl http://localhost:8000/health"
-	@echo "[quickstart] API docs at: http://127.0.0.1:8000/docs"
+	@echo "[quickstart-local] Starting server on http://127.0.0.1:8000"
+	@echo "[quickstart-local] Verify with: curl http://localhost:8000/health"
+	@echo "[quickstart-local] API docs at: http://127.0.0.1:8000/docs"
 	$(PYTHON) -m uvicorn tldw_Server_API.app.main:app --host 127.0.0.1 --port 8000
+
+quickstart:
+	@$(MAKE) quickstart-docker-webui
 
 tooling-install:
 	@command -v $(PYTHON) >/dev/null 2>&1 || (echo "[tooling-install] $(PYTHON) not found. Install Python 3.10+ and retry." && exit 1)

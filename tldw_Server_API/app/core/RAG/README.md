@@ -52,7 +52,7 @@
   - `HybridReranker` and two-tier calibration — rag_service/advanced_reranking.py:1
   - `UnifiedRAGRequest`/`UnifiedRAGResponse` — api/v1/schemas/rag_schemas_unified.py:41,1110
 - Dependencies:
-  - Internal: `DB_Management` (Media_DB_v2, ChaChaNotes_DB), `Embeddings` (ChromaDB), `Chunking`, `Security`
+  - Internal: `DB_Management` (legacy media DB, ChaChaNotes DB), `Embeddings` (ChromaDB), `Chunking`, `Security`
   - External (optional): transformers cross-encoder, FlashRank, llama.cpp GGUF rerankers, pgvector/ChromaDB
 - Data Models & DB:
   - SQLite FTS5 for keyword search; vector stores via factory (ChromaDB default; pgvector if configured)

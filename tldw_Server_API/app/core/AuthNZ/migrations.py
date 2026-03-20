@@ -15,6 +15,7 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
+from tldw_Server_API.app.core.Infrastructure.distributed_lock import acquire_migration_lock
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 
@@ -30,6 +31,15 @@ _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
     sqlite3.Error,
     json.JSONDecodeError,
 )
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Return True when the given SQLite table already exists."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 #######################################################################################################################
 #
@@ -1627,6 +1637,579 @@ def migration_058_harden_mcp_policy_override_schema(conn: sqlite3.Connection) ->
     logger.info("Migration 058: Hardened MCP policy override schema")
 
 
+def migration_059_harden_mcp_external_binding_schema(conn: sqlite3.Connection) -> None:
+    """Add managed/legacy external server metadata and tighten credential bindings."""
+
+    external_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_external_servers)").fetchall()
+    }
+    if "server_source" not in external_columns:
+        conn.execute(
+            "ALTER TABLE mcp_external_servers ADD COLUMN server_source TEXT NOT NULL DEFAULT 'managed'"
+        )
+    if "legacy_source_ref" not in external_columns:
+        conn.execute("ALTER TABLE mcp_external_servers ADD COLUMN legacy_source_ref TEXT")
+    if "superseded_by_server_id" not in external_columns:
+        conn.execute("ALTER TABLE mcp_external_servers ADD COLUMN superseded_by_server_id TEXT")
+
+    binding_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_credential_bindings)").fetchall()
+    }
+    if "binding_mode" not in binding_columns:
+        conn.execute(
+            "ALTER TABLE mcp_credential_bindings ADD COLUMN binding_mode TEXT NOT NULL DEFAULT 'grant'"
+        )
+
+    conn.execute(
+        """
+        UPDATE mcp_credential_bindings
+        SET binding_mode = CASE
+            WHEN usage_rules_json LIKE '%"binding_mode":"disable"%'
+              OR usage_rules_json LIKE '%"binding_mode": "disable"%'
+            THEN 'disable'
+            ELSE COALESCE(NULLIF(TRIM(binding_mode), ''), 'grant')
+        END
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 059: Hardened MCP external binding schema")
+
+
+def _infer_default_external_slot(config_json: str | None) -> tuple[str, str] | None:
+    """Infer a safe default slot for obvious single-secret managed auth modes."""
+    try:
+        config = json.loads(config_json or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(config, dict):
+        return None
+    auth = config.get("auth")
+    if not isinstance(auth, dict):
+        return None
+    mode = str(auth.get("mode") or "").strip().lower()
+    if mode == "bearer_token":
+        return ("bearer_token", "bearer_token")
+    if mode == "api_key_header":
+        return ("api_key", "api_key")
+    return None
+
+
+def migration_060_add_mcp_external_credential_slots(conn: sqlite3.Connection) -> None:
+    """Add external credential slot tables and evolve bindings to be slot-aware."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_credential_slots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id TEXT NOT NULL,
+            slot_name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            secret_kind TEXT NOT NULL,
+            privilege_class TEXT NOT NULL DEFAULT 'default',
+            is_required INTEGER DEFAULT 0,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (server_id) REFERENCES mcp_external_servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_external_server_slots_server_slot "
+        "ON mcp_external_server_credential_slots(server_id, slot_name)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slots_server "
+        "ON mcp_external_server_credential_slots(server_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_slot_secrets (
+            slot_id INTEGER PRIMARY KEY,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (slot_id) REFERENCES mcp_external_server_credential_slots(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slot_secrets_updated_at "
+        "ON mcp_external_server_slot_secrets(updated_at)"
+    )
+
+    binding_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_credential_bindings)").fetchall()
+    }
+    if "slot_name" not in binding_columns:
+        conn.execute(
+            "ALTER TABLE mcp_credential_bindings ADD COLUMN slot_name TEXT NOT NULL DEFAULT ''"
+        )
+
+    conn.execute("DROP INDEX IF EXISTS uq_mcp_credential_bindings_target_server")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server_slot "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id, slot_name)"
+    )
+
+    rows = conn.execute(
+        """
+        SELECT id, config_json, created_by, updated_by, created_at, updated_at
+        FROM mcp_external_servers
+        WHERE COALESCE(server_source, 'managed') = 'managed'
+          AND superseded_by_server_id IS NULL
+        """
+    ).fetchall()
+    for row in rows:
+        server_id = str(row[0] or "")
+        inferred = _infer_default_external_slot(row[1])
+        if not server_id or inferred is None:
+            continue
+        slot_name, secret_kind = inferred
+        display_name = slot_name.replace("_", " ").title()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO mcp_external_server_credential_slots (
+                server_id, slot_name, display_name, secret_kind, privilege_class, is_required,
+                created_by, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                server_id,
+                slot_name,
+                display_name,
+                secret_kind,
+                "default",
+                1,
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE mcp_credential_bindings
+            SET slot_name = ?
+            WHERE external_server_id = ?
+              AND COALESCE(TRIM(slot_name), '') = ''
+            """,
+            (slot_name, server_id),
+        )
+        slot_row = conn.execute(
+            """
+            SELECT id
+            FROM mcp_external_server_credential_slots
+            WHERE server_id = ?
+              AND slot_name = ?
+            """,
+            (server_id, slot_name),
+        ).fetchone()
+        if slot_row is None:
+            continue
+        slot_id = int(slot_row[0])
+        secret_row = conn.execute(
+            """
+            SELECT encrypted_blob, key_hint, updated_by, updated_at
+            FROM mcp_external_server_secrets
+            WHERE server_id = ?
+            """,
+            (server_id,),
+        ).fetchone()
+        if secret_row is None:
+            continue
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO mcp_external_server_slot_secrets (
+                slot_id, encrypted_blob, key_hint, updated_by, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (slot_id, secret_row[0], secret_row[1], secret_row[2], secret_row[3]),
+        )
+
+    conn.commit()
+    logger.info("Migration 060: Added MCP external credential slot schema")
+
+
+def migration_061_add_mcp_path_scope_objects_and_assignment_workspaces(conn: sqlite3.Connection) -> None:
+    """Add reusable path-scope objects and assignment workspace membership tables."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_path_scope_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            path_scope_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(name, owner_scope_type, owner_scope_id)"
+    )
+
+    profile_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_permission_profiles)").fetchall()
+    }
+    if "path_scope_object_id" not in profile_columns:
+        conn.execute("ALTER TABLE mcp_permission_profiles ADD COLUMN path_scope_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_path_scope_object "
+        "ON mcp_permission_profiles(path_scope_object_id)"
+    )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "path_scope_object_id" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN path_scope_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_path_scope_object "
+        "ON mcp_policy_assignments(path_scope_object_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignment_workspaces (
+            assignment_id INTEGER NOT NULL,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (assignment_id, workspace_id),
+            FOREIGN KEY (assignment_id) REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignment_workspaces_assignment "
+        "ON mcp_policy_assignment_workspaces(assignment_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 061: Added MCP path scope object schema")
+
+
+def migration_062_add_mcp_workspace_set_objects(conn: sqlite3.Connection) -> None:
+    """Add reusable workspace-set objects and assignment workspace source fields."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(name, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_object_members (
+            workspace_set_object_id INTEGER NOT NULL,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (workspace_set_object_id, workspace_id),
+            FOREIGN KEY (workspace_set_object_id) REFERENCES mcp_workspace_set_objects(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_object_members_object "
+        "ON mcp_workspace_set_object_members(workspace_set_object_id)"
+    )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "workspace_source_mode" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN workspace_source_mode TEXT")
+    if "workspace_set_object_id" not in assignment_columns:
+        conn.execute("ALTER TABLE mcp_policy_assignments ADD COLUMN workspace_set_object_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_workspace_set_object "
+        "ON mcp_policy_assignments(workspace_set_object_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 062: Added MCP workspace set object schema")
+
+
+def migration_063_add_mcp_shared_workspaces(conn: sqlite3.Connection) -> None:
+    """Add shared workspace registry entries for shared-scope path governance."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_shared_workspaces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            absolute_root TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'team',
+            owner_scope_id INTEGER,
+            is_active INTEGER DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_shared_workspaces_scope "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_shared_workspaces_scope_workspace "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id, workspace_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 063: Added MCP shared workspace registry schema")
+
+
+def migration_069_add_mcp_governance_pack_schema(conn: sqlite3.Connection) -> None:
+    """Add governance-pack provenance tables and immutability flags for MCP Hub."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_packs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_id TEXT NOT NULL,
+            pack_version TEXT NOT NULL,
+            pack_schema_version INTEGER NOT NULL,
+            capability_taxonomy_version INTEGER NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            bundle_digest TEXT NOT NULL,
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            normalized_ir_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_packs_scope "
+        "ON mcp_governance_packs(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_scope_version "
+        "ON mcp_governance_packs(pack_id, pack_version, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_objects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            governance_pack_id INTEGER NOT NULL,
+            object_type TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            source_object_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_objects_pack "
+        "ON mcp_governance_pack_objects(governance_pack_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_pack_source "
+        "ON mcp_governance_pack_objects(governance_pack_id, object_type, source_object_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_object "
+        "ON mcp_governance_pack_objects(object_type, object_id)"
+    )
+
+    profile_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_permission_profiles)").fetchall()
+    }
+    if "is_immutable" not in profile_columns:
+        conn.execute(
+            "ALTER TABLE mcp_permission_profiles ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    assignment_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_policy_assignments)").fetchall()
+    }
+    if "is_immutable" not in assignment_columns:
+        conn.execute(
+            "ALTER TABLE mcp_policy_assignments ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    approval_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_approval_policies)").fetchall()
+    }
+    if "is_immutable" not in approval_columns:
+        conn.execute(
+            "ALTER TABLE mcp_approval_policies ADD COLUMN is_immutable INTEGER NOT NULL DEFAULT 0"
+        )
+
+    conn.commit()
+    logger.info("Migration 069: Added MCP governance pack schema")
+
+
+def migration_070_add_mcp_capability_adapter_mappings(conn: sqlite3.Connection) -> None:
+    """Add scope-aware MCP capability adapter mapping storage."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_capability_adapter_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mapping_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER,
+            capability_name TEXT NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            resolved_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            supported_environment_requirements_json TEXT NOT NULL DEFAULT '[]',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_capability_adapter_mappings_scope "
+        "ON mcp_capability_adapter_mappings(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_mapping_id "
+        "ON mcp_capability_adapter_mappings(mapping_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_active_scope_capability "
+        "ON mcp_capability_adapter_mappings("
+        "owner_scope_type, IFNULL(owner_scope_id, -1), capability_name"
+        ") WHERE is_active = 1"
+    )
+
+    conn.commit()
+    logger.info("Migration 070: Added MCP capability adapter mapping schema")
+
+
+def migration_071_add_governance_pack_upgrade_lineage(conn: sqlite3.Connection) -> None:
+    """Add governance-pack install-state and upgrade-lineage tracking."""
+
+    governance_pack_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_packs)").fetchall()
+    }
+    if "is_active_install" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN is_active_install INTEGER NOT NULL DEFAULT 1"
+        )
+    if "superseded_by_governance_pack_id" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN superseded_by_governance_pack_id INTEGER"
+        )
+    if "installed_from_upgrade_id" not in governance_pack_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_packs ADD COLUMN installed_from_upgrade_id INTEGER"
+        )
+
+    governance_pack_indexes = {
+        str(row[1]) for row in conn.execute("PRAGMA index_list(mcp_governance_packs)").fetchall()
+    }
+    if "uq_mcp_governance_packs_active_scope" not in governance_pack_indexes:
+        conn.execute("UPDATE mcp_governance_packs SET is_active_install = 0")
+        conn.execute(
+            """
+            UPDATE mcp_governance_packs
+            SET is_active_install = 1
+            WHERE id IN (
+                SELECT MAX(id)
+                FROM mcp_governance_packs
+                GROUP BY pack_id, owner_scope_type, IFNULL(owner_scope_id, -1)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
+            "ON mcp_governance_packs(pack_id, owner_scope_type, IFNULL(owner_scope_id, -1)) "
+            "WHERE is_active_install = 1"
+        )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_upgrades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pack_id TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER,
+            from_governance_pack_id INTEGER NOT NULL,
+            to_governance_pack_id INTEGER NOT NULL,
+            from_pack_version TEXT NOT NULL,
+            to_pack_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            planned_by INTEGER,
+            executed_by INTEGER,
+            planner_inputs_fingerprint TEXT,
+            adapter_state_fingerprint TEXT,
+            plan_summary_json TEXT NOT NULL DEFAULT '{}',
+            accepted_resolutions_json TEXT NOT NULL DEFAULT '{}',
+            failure_summary TEXT,
+            planned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            executed_at TIMESTAMP,
+            FOREIGN KEY (from_governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            FOREIGN KEY (to_governance_pack_id) REFERENCES mcp_governance_packs(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_upgrades_scope "
+        "ON mcp_governance_pack_upgrades(pack_id, owner_scope_type, owner_scope_id)"
+    )
+
+    conn.commit()
+    logger.info("Migration 071: Added governance-pack upgrade lineage schema")
+
+
 def rollback_053_drop_byok_oauth_state(conn: sqlite3.Connection) -> None:
     """Rollback migration 053 by dropping the byok_oauth_state table."""
     conn.execute("DROP TABLE IF EXISTS byok_oauth_state")
@@ -1918,167 +2501,9 @@ def rollback_029_drop_org_invite_redemptions_table(conn: sqlite3.Connection) -> 
 
 
 def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
-    """Create subscription_plans table for plan tier definitions."""
-    logger.info("Migration 030: START subscription_plans table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscription_plans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            description TEXT,
-            stripe_product_id TEXT,
-            stripe_price_id TEXT,
-            stripe_price_id_yearly TEXT,
-            price_usd_monthly REAL DEFAULT 0,
-            price_usd_yearly REAL DEFAULT 0,
-            limits_json TEXT NOT NULL,
-            is_active INTEGER DEFAULT 1,
-            is_public INTEGER DEFAULT 1,
-            sort_order INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)")
-
-    # Seed default plans
-    default_plans = [
-        {
-            "name": "free",
-            "display_name": "Free",
-            "description": "Internal/default plan (not publicly listed)",
-            "price_usd_monthly": 0,
-            "price_usd_yearly": 0,
-            "sort_order": 0,
-            "is_public": 0,
-            "limits_json": json.dumps({
-                "storage_mb": 1024,
-                "api_calls_day": 100,
-                "api_calls_month": 3000,
-                "llm_tokens_day": 10000,
-                "llm_tokens_month": 300000,
-                "transcription_minutes_month": 10,
-                "rag_queries_day": 50,
-                "concurrent_jobs": 1,
-                "team_members": 1,
-                "rate_limit_rpm": 10,
-                "features": ["basic_search", "basic_chat"]
-            })
-        },
-        {
-            "name": "starter",
-            "display_name": "Starter",
-            "description": "For individuals getting started",
-            "price_usd_monthly": 10,
-            "price_usd_yearly": 100,
-            "sort_order": 1,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 2048,
-                "api_calls_day": 1000,
-                "api_calls_month": 30000,
-                "llm_tokens_month": 4000000,
-                "llm_tokens_premium_month": 80000,
-                "max_context_tokens": 64000,
-                "byok_enabled": True,
-                "byok_keys_saved": 1,
-                "notebooks": 100,
-                "sources_per_notebook": 50,
-                "ingestion_pages_month": 2000,
-                "ingestion_pages_day": 150,
-                "scheduled_refresh": "manual",
-                "max_upload_mb": 50,
-                "transcription_minutes_month": 120,
-                "tts_minutes_month": 30,
-                "rag_queries_day": 1000,
-                "concurrent_jobs": 2,
-                "team_members": 1,
-                "rate_limit_rpm": 20,
-                "features": ["basic_search", "basic_chat", "byok"]
-            })
-        },
-        {
-            "name": "plus",
-            "display_name": "Plus",
-            "description": "For power users who need more capacity",
-            "price_usd_monthly": 20,
-            "price_usd_yearly": 200,
-            "sort_order": 2,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 10240,
-                "api_calls_day": 5000,
-                "api_calls_month": 150000,
-                "llm_tokens_month": 12000000,
-                "llm_tokens_premium_month": 200000,
-                "max_context_tokens": 128000,
-                "byok_enabled": True,
-                "byok_keys_saved": 3,
-                "notebooks": 300,
-                "sources_per_notebook": 100,
-                "ingestion_pages_month": 10000,
-                "ingestion_pages_day": 750,
-                "scheduled_refresh": "weekly",
-                "max_upload_mb": 200,
-                "transcription_minutes_month": 300,
-                "tts_minutes_month": 90,
-                "rag_queries_day": 5000,
-                "concurrent_jobs": 5,
-                "team_members": 1,
-                "rate_limit_rpm": 60,
-                "features": ["*", "byok", "rag_advanced", "vector_search"]
-            })
-        },
-        {
-            "name": "pro",
-            "display_name": "Pro",
-            "description": "For teams and professional usage",
-            "price_usd_monthly": 30,
-            "price_usd_yearly": 300,
-            "sort_order": 3,
-            "is_public": 1,
-            "limits_json": json.dumps({
-                "storage_mb": 30720,
-                "api_calls_day": 15000,
-                "api_calls_month": 450000,
-                "llm_tokens_month": 18000000,
-                "llm_tokens_premium_month": 300000,
-                "max_context_tokens": 200000,
-                "byok_enabled": True,
-                "byok_keys_saved": 10,
-                "notebooks": 1000,
-                "sources_per_notebook": 300,
-                "ingestion_pages_month": 30000,
-                "ingestion_pages_day": 2000,
-                "scheduled_refresh": "daily",
-                "max_upload_mb": 500,
-                "transcription_minutes_month": 500,
-                "tts_minutes_month": 150,
-                "rag_queries_day": 15000,
-                "concurrent_jobs": 10,
-                "team_members": 5,
-                "rate_limit_rpm": 120,
-                "features": ["*", "byok", "rag_advanced", "vector_search", "priority_support", "audit_logs"]
-            })
-        }
-    ]
-
-    for plan in default_plans:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO subscription_plans
-            (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order, is_public)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (plan["name"], plan["display_name"], plan["description"],
-             plan["price_usd_monthly"], plan["price_usd_yearly"], plan["limits_json"], plan["sort_order"], plan.get("is_public", 1))
-        )
-
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 030: Created subscription_plans table with default plans")
+    logger.info("Migration 030: Retired public billing plan schema bootstrap")
 
 
 def rollback_030_drop_subscription_plans_table(conn: sqlite3.Connection) -> None:
@@ -2089,40 +2514,9 @@ def rollback_030_drop_subscription_plans_table(conn: sqlite3.Connection) -> None
 
 
 def migration_031_create_org_subscriptions(conn: sqlite3.Connection) -> None:
-    """Create org_subscriptions table for organization subscription state."""
-    logger.info("Migration 031: START org_subscriptions table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS org_subscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL UNIQUE,
-            plan_id INTEGER NOT NULL,
-            stripe_customer_id TEXT,
-            stripe_subscription_id TEXT,
-            stripe_subscription_status TEXT,
-            billing_cycle TEXT DEFAULT 'monthly',
-            current_period_start TIMESTAMP,
-            current_period_end TIMESTAMP,
-            status TEXT DEFAULT 'active',
-            trial_start TIMESTAMP,
-            trial_end TIMESTAMP,
-            canceled_at TIMESTAMP,
-            cancel_at_period_end INTEGER DEFAULT 0,
-            custom_limits_json TEXT,
-            metadata TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-            FOREIGN KEY (plan_id) REFERENCES subscription_plans(id) ON DELETE RESTRICT
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 031: Created org_subscriptions table")
+    logger.info("Migration 031: Retired public org_subscriptions schema bootstrap")
 
 
 def rollback_031_drop_org_subscriptions_table(conn: sqlite3.Connection) -> None:
@@ -2133,28 +2527,9 @@ def rollback_031_drop_org_subscriptions_table(conn: sqlite3.Connection) -> None:
 
 
 def migration_032_create_stripe_webhook_events(conn: sqlite3.Connection) -> None:
-    """Create stripe_webhook_events table for idempotency and audit."""
-    logger.info("Migration 032: START stripe_webhook_events table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            stripe_event_id TEXT UNIQUE NOT NULL,
-            event_type TEXT NOT NULL,
-            event_data TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
-            processed_at TIMESTAMP,
-            error_message TEXT,
-            retry_count INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 032: Created stripe_webhook_events table")
+    logger.info("Migration 032: Retired public Stripe webhook schema bootstrap")
 
 
 def rollback_032_drop_stripe_webhook_events_table(conn: sqlite3.Connection) -> None:
@@ -2165,31 +2540,9 @@ def rollback_032_drop_stripe_webhook_events_table(conn: sqlite3.Connection) -> N
 
 
 def migration_033_create_payment_history(conn: sqlite3.Connection) -> None:
-    """Create payment_history table for invoice display."""
-    logger.info("Migration 033: START payment_history table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS payment_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL,
-            stripe_invoice_id TEXT,
-            stripe_payment_intent_id TEXT,
-            amount_cents INTEGER NOT NULL,
-            currency TEXT DEFAULT 'usd',
-            status TEXT NOT NULL,
-            description TEXT,
-            invoice_pdf_url TEXT,
-            receipt_url TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 033: Created payment_history table")
+    logger.info("Migration 033: Retired public payment history schema bootstrap")
 
 
 def rollback_033_drop_payment_history_table(conn: sqlite3.Connection) -> None:
@@ -2200,29 +2553,9 @@ def rollback_033_drop_payment_history_table(conn: sqlite3.Connection) -> None:
 
 
 def migration_034_create_billing_audit_log(conn: sqlite3.Connection) -> None:
-    """Create billing_audit_log table for billing operation audit trail."""
-    logger.info("Migration 034: START billing_audit_log table")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS billing_audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_id INTEGER NOT NULL,
-            user_id INTEGER,
-            action TEXT NOT NULL,
-            details TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)")
+    """Retired OSS billing migration retained as a compatibility no-op."""
     conn.commit()
-    logger.info("Migration 034: Created billing_audit_log table")
+    logger.info("Migration 034: Retired public billing audit schema bootstrap")
 
 
 def rollback_034_drop_billing_audit_log_table(conn: sqlite3.Connection) -> None:
@@ -2230,6 +2563,12 @@ def rollback_034_drop_billing_audit_log_table(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS billing_audit_log")
     conn.commit()
     logger.info("Rollback 034: Dropped billing_audit_log table")
+
+
+def rollback_retired_billing_schema_noop(conn: sqlite3.Connection) -> None:
+    """Preserve historical billing tables during OSS rollback flows."""
+    conn.commit()
+    logger.info("Rollback: skipped retired billing schema teardown")
 
 
 def migration_035_backfill_storage_mb_limits(conn: sqlite3.Connection) -> None:
@@ -2259,29 +2598,29 @@ def migration_035_backfill_storage_mb_limits(conn: sqlite3.Connection) -> None:
             changed = True
         return json.dumps(data) if changed else None
 
-    # Update subscription plans.
-    cur = conn.execute("SELECT id, limits_json FROM subscription_plans")
-    rows = cur.fetchall()
-    for plan_id, limits_json in rows:
-        updated = _normalize_limits_json(limits_json)
-        if updated is not None:
-            conn.execute(
-                "UPDATE subscription_plans SET limits_json = ? WHERE id = ?",
-                (updated, plan_id),
-            )
+    if _sqlite_table_exists(conn, "subscription_plans"):
+        cur = conn.execute("SELECT id, limits_json FROM subscription_plans")
+        rows = cur.fetchall()
+        for plan_id, limits_json in rows:
+            updated = _normalize_limits_json(limits_json)
+            if updated is not None:
+                conn.execute(
+                    "UPDATE subscription_plans SET limits_json = ? WHERE id = ?",
+                    (updated, plan_id),
+                )
 
-    # Update org custom limits.
-    cur = conn.execute(
-        "SELECT id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
-    )
-    rows = cur.fetchall()
-    for sub_id, limits_json in rows:
-        updated = _normalize_limits_json(limits_json)
-        if updated is not None:
-            conn.execute(
-                "UPDATE org_subscriptions SET custom_limits_json = ? WHERE id = ?",
-                (updated, sub_id),
-            )
+    if _sqlite_table_exists(conn, "org_subscriptions"):
+        cur = conn.execute(
+            "SELECT id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
+        )
+        rows = cur.fetchall()
+        for sub_id, limits_json in rows:
+            updated = _normalize_limits_json(limits_json)
+            if updated is not None:
+                conn.execute(
+                    "UPDATE org_subscriptions SET custom_limits_json = ? WHERE id = ?",
+                    (updated, sub_id),
+                )
 
     conn.commit()
     logger.info("Migration 035: Completed storage_mb limit backfill")
@@ -2897,6 +3236,109 @@ def rollback_061_drop_backup_schedule_tables(conn: sqlite3.Connection) -> None:
     logger.info("Rollback 061: Dropped backup schedule tables")
 
 
+def migration_067_create_maintenance_rotation_runs_table(conn: sqlite3.Connection) -> None:
+    """Create maintenance rotation run persistence table (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS maintenance_rotation_runs (
+            id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            domain TEXT,
+            queue TEXT,
+            job_type TEXT,
+            fields_json TEXT NOT NULL,
+            "limit" INTEGER,
+            affected_count INTEGER,
+            requested_by_user_id INTEGER,
+            requested_by_label TEXT,
+            confirmation_recorded INTEGER NOT NULL DEFAULT 0,
+            job_id TEXT,
+            scope_summary TEXT NOT NULL,
+            key_source TEXT NOT NULL,
+            error_message TEXT,
+            created_at TIMESTAMP NOT NULL,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_active_execute
+        ON maintenance_rotation_runs(mode)
+        WHERE mode = 'execute' AND status IN ('queued', 'running')
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_created_at "
+        "ON maintenance_rotation_runs(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_status "
+        "ON maintenance_rotation_runs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 067: Created maintenance rotation runs table")
+
+
+def rollback_067_drop_maintenance_rotation_runs_table(conn: sqlite3.Connection) -> None:
+    """Drop maintenance rotation run persistence table (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS maintenance_rotation_runs")
+    conn.commit()
+    logger.info("Rollback 067: Dropped maintenance rotation runs table")
+
+
+def migration_068_create_byok_validation_runs_table(conn: sqlite3.Connection) -> None:
+    """Create BYOK validation run persistence table (SQLite)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS byok_validation_runs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            org_id INTEGER,
+            provider TEXT,
+            keys_checked INTEGER,
+            valid_count INTEGER,
+            invalid_count INTEGER,
+            error_count INTEGER,
+            requested_by_user_id INTEGER,
+            requested_by_label TEXT,
+            job_id TEXT,
+            scope_summary TEXT NOT NULL,
+            error_message TEXT,
+            created_at TIMESTAMP NOT NULL,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_byok_validation_runs_active
+        ON byok_validation_runs((1))
+        WHERE status IN ('queued', 'running')
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_created_at "
+        "ON byok_validation_runs(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_status "
+        "ON byok_validation_runs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 068: Created BYOK validation runs table")
+
+
+def rollback_068_drop_byok_validation_runs_table(conn: sqlite3.Connection) -> None:
+    """Drop BYOK validation run persistence table (SQLite rollback)."""
+    conn.execute("DROP TABLE IF EXISTS byok_validation_runs")
+    conn.commit()
+    logger.info("Rollback 068: Dropped BYOK validation runs table")
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -2985,36 +3427,37 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
             payload["enforcement_mode"] = enforcement
         return payload
 
-    cur = conn.execute(
-        "SELECT org_id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
-    )
-    rows = cur.fetchall()
-    for org_id, custom_limits_json in rows:
-        if not custom_limits_json:
-            continue
-        try:
-            data = json.loads(custom_limits_json)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        legacy_budgets = data.get("budgets")
-        if not isinstance(legacy_budgets, dict):
-            continue
-        payload = _inflate_legacy_budgets(legacy_budgets)
-        if payload:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO org_budgets (org_id, budgets_json, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                """,
-                (org_id, json.dumps(payload)),
-            )
-        data.pop("budgets", None)
-        conn.execute(
-            "UPDATE org_subscriptions SET custom_limits_json = ? WHERE org_id = ?",
-            (json.dumps(data) if data else None, org_id),
+    if _sqlite_table_exists(conn, "org_subscriptions"):
+        cur = conn.execute(
+            "SELECT org_id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
         )
+        rows = cur.fetchall()
+        for org_id, custom_limits_json in rows:
+            if not custom_limits_json:
+                continue
+            try:
+                data = json.loads(custom_limits_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            legacy_budgets = data.get("budgets")
+            if not isinstance(legacy_budgets, dict):
+                continue
+            payload = _inflate_legacy_budgets(legacy_budgets)
+            if payload:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO org_budgets (org_id, budgets_json, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (org_id, json.dumps(payload)),
+                )
+            data.pop("budgets", None)
+            conn.execute(
+                "UPDATE org_subscriptions SET custom_limits_json = ? WHERE org_id = ?",
+                (json.dumps(data) if data else None, org_id),
+            )
 
     conn.commit()
     logger.info("Migration 042: Created org_budgets table and migrated legacy budgets")
@@ -3084,6 +3527,513 @@ def migration_045_add_users_created_by(conn: sqlite3.Connection) -> None:
         logger.warning(f"Migration 045 skipped or failed: {error}")
 
 
+def migration_072_create_identity_providers_table(conn: sqlite3.Connection) -> None:
+    """Create the identity_providers table for enterprise federation config."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS identity_providers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug TEXT NOT NULL,
+            provider_type TEXT NOT NULL DEFAULT 'oidc',
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            display_name TEXT,
+            issuer TEXT NOT NULL,
+            discovery_url TEXT,
+            authorization_url TEXT,
+            token_url TEXT,
+            jwks_url TEXT,
+            client_id TEXT,
+            client_secret_ref TEXT,
+            claim_mapping_json TEXT NOT NULL DEFAULT '{}',
+            provisioning_policy_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER,
+            updated_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(identity_providers)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE identity_providers ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("provider_type", "provider_type TEXT NOT NULL DEFAULT 'oidc'")
+        add_col("owner_scope_type", "owner_scope_type TEXT NOT NULL DEFAULT 'global'")
+        add_col("owner_scope_id", "owner_scope_id INTEGER")
+        add_col("enabled", "enabled INTEGER NOT NULL DEFAULT 0")
+        add_col("display_name", "display_name TEXT")
+        add_col("issuer", "issuer TEXT")
+        add_col("discovery_url", "discovery_url TEXT")
+        add_col("authorization_url", "authorization_url TEXT")
+        add_col("token_url", "token_url TEXT")
+        add_col("jwks_url", "jwks_url TEXT")
+        add_col("client_id", "client_id TEXT")
+        add_col("client_secret_ref", "client_secret_ref TEXT")
+        add_col("claim_mapping_json", "claim_mapping_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("provisioning_policy_json", "provisioning_policy_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_scope "
+        "ON identity_providers(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_enabled "
+        "ON identity_providers(enabled)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_providers_scope_slug "
+        "ON identity_providers(slug, owner_scope_type, COALESCE(owner_scope_id, 0))"
+    )
+    conn.commit()
+    logger.info("Migration 072: Created identity_providers table")
+
+
+def rollback_072_drop_identity_providers_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 072 by dropping the identity_providers table."""
+    conn.execute("DROP TABLE IF EXISTS identity_providers")
+    conn.commit()
+    logger.info("Rollback 072: Dropped identity_providers table")
+
+
+def migration_073_create_federated_identities_table(conn: sqlite3.Connection) -> None:
+    """Create the federated_identities table for local user links."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS federated_identities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity_provider_id INTEGER NOT NULL,
+            external_subject TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            external_username TEXT,
+            external_email TEXT,
+            last_claims_hash TEXT,
+            last_seen_at TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (identity_provider_id) REFERENCES identity_providers(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(federated_identities)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE federated_identities ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("external_username", "external_username TEXT")
+        add_col("external_email", "external_email TEXT")
+        add_col("last_claims_hash", "last_claims_hash TEXT")
+        add_col("last_seen_at", "last_seen_at TIMESTAMP")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'active'")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_identities_provider_subject "
+        "ON federated_identities(identity_provider_id, external_subject)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_identities_user_id "
+        "ON federated_identities(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_identities_provider_id "
+        "ON federated_identities(identity_provider_id)"
+    )
+    conn.commit()
+    logger.info("Migration 073: Created federated_identities table")
+
+
+def rollback_073_drop_federated_identities_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 073 by dropping the federated_identities table."""
+    conn.execute("DROP TABLE IF EXISTS federated_identities")
+    conn.commit()
+    logger.info("Rollback 073: Dropped federated_identities table")
+
+
+def migration_074_create_federated_managed_grants_table(conn: sqlite3.Connection) -> None:
+    """Create the federated_managed_grants table for safe grant/revoke provenance."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS federated_managed_grants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identity_provider_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            grant_kind TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (identity_provider_id) REFERENCES identity_providers(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(federated_managed_grants)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE federated_managed_grants ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("grant_kind", "grant_kind TEXT NOT NULL DEFAULT 'org'")
+        add_col("target_ref", "target_ref TEXT NOT NULL DEFAULT ''")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_managed_grants_target "
+        "ON federated_managed_grants(identity_provider_id, user_id, grant_kind, target_ref)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_user_id "
+        "ON federated_managed_grants(user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_provider_id "
+        "ON federated_managed_grants(identity_provider_id)"
+    )
+    conn.commit()
+    logger.info("Migration 074: Created federated_managed_grants table")
+
+
+def rollback_074_drop_federated_managed_grants_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 074 by dropping the federated_managed_grants table."""
+    conn.execute("DROP TABLE IF EXISTS federated_managed_grants")
+    conn.commit()
+    logger.info("Rollback 074: Dropped federated_managed_grants table")
+
+
+def migration_075_create_secret_backends_table(conn: sqlite3.Connection) -> None:
+    """Create the secret_backends table for backend metadata and capabilities."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS secret_backends (
+            name TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'enabled',
+            capabilities_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(secret_backends)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE secret_backends ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("display_name", "display_name TEXT")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'enabled'")
+        add_col("capabilities_json", "capabilities_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_secret_backends_status "
+        "ON secret_backends(status)"
+    )
+    conn.commit()
+    logger.info("Migration 075: Created secret_backends table")
+
+
+def rollback_075_drop_secret_backends_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 075 by dropping the secret_backends table."""
+    conn.execute("DROP TABLE IF EXISTS secret_backends")
+    conn.commit()
+    logger.info("Rollback 075: Dropped secret_backends table")
+
+
+def migration_076_create_managed_secret_refs_table(conn: sqlite3.Connection) -> None:
+    """Create the managed_secret_refs table for logical secret references."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS managed_secret_refs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            backend_name TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL,
+            owner_scope_id INTEGER NOT NULL,
+            provider_key TEXT NOT NULL,
+            backend_ref TEXT NULL,
+            display_name TEXT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            last_resolved_at TIMESTAMP NULL,
+            expires_at TIMESTAMP NULL,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            revoked_by INTEGER NULL,
+            revoked_at TIMESTAMP NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (backend_name) REFERENCES secret_backends(name) ON DELETE RESTRICT
+        )
+        """
+    )
+
+    try:
+        cur = conn.execute("PRAGMA table_info(managed_secret_refs)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str) -> None:
+            if name not in cols:
+                conn.execute(f"ALTER TABLE managed_secret_refs ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("backend_ref", "backend_ref TEXT")
+        add_col("display_name", "display_name TEXT")
+        add_col("status", "status TEXT NOT NULL DEFAULT 'active'")
+        add_col("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'")
+        add_col("last_resolved_at", "last_resolved_at TIMESTAMP")
+        add_col("expires_at", "expires_at TIMESTAMP")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_managed_secret_refs_scope_provider "
+        "ON managed_secret_refs(backend_name, owner_scope_type, owner_scope_id, provider_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_scope "
+        "ON managed_secret_refs(owner_scope_type, owner_scope_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_status "
+        "ON managed_secret_refs(status)"
+    )
+    conn.commit()
+    logger.info("Migration 076: Created managed_secret_refs table")
+
+
+def rollback_076_drop_managed_secret_refs_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 076 by dropping the managed_secret_refs table."""
+    conn.execute("DROP TABLE IF EXISTS managed_secret_refs")
+    conn.commit()
+    logger.info("Rollback 076: Dropped managed_secret_refs table")
+
+
+def migration_077_create_sharing_tables(conn: sqlite3.Connection) -> None:
+    """Create tables for shared workspaces and share tokens."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS shared_workspaces (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id     TEXT NOT NULL,
+            owner_user_id    INTEGER NOT NULL,
+            share_scope_type TEXT NOT NULL DEFAULT 'team'
+                CHECK (share_scope_type IN ('team', 'org')),
+            share_scope_id   INTEGER NOT NULL,
+            access_level     TEXT NOT NULL DEFAULT 'view_chat'
+                CHECK (access_level IN ('view_chat', 'view_chat_add', 'full_edit')),
+            allow_clone      INTEGER NOT NULL DEFAULT 1,
+            created_by       INTEGER NOT NULL,
+            created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked_at       TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id),
+            FOREIGN KEY (created_by) REFERENCES users(id),
+            UNIQUE(workspace_id, owner_user_id, share_scope_type, share_scope_id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shared_ws_owner ON shared_workspaces(owner_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shared_ws_scope ON shared_workspaces(share_scope_type, share_scope_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS share_tokens (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_hash      TEXT UNIQUE NOT NULL,
+            token_prefix    TEXT NOT NULL,
+            resource_type   TEXT NOT NULL
+                CHECK (resource_type IN ('chatbook', 'workspace')),
+            resource_id     TEXT NOT NULL,
+            owner_user_id   INTEGER NOT NULL,
+            access_level    TEXT NOT NULL DEFAULT 'view_chat',
+            allow_clone     INTEGER NOT NULL DEFAULT 1,
+            password_hash   TEXT,
+            max_uses        INTEGER,
+            use_count       INTEGER NOT NULL DEFAULT 0,
+            expires_at      TIMESTAMP,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            revoked_at      TIMESTAMP,
+            FOREIGN KEY (owner_user_id) REFERENCES users(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_prefix ON share_tokens(token_prefix)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_owner ON share_tokens(owner_user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_tokens_resource ON share_tokens(resource_type, resource_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS share_audit_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type      TEXT NOT NULL,
+            actor_user_id   INTEGER,
+            resource_type   TEXT NOT NULL,
+            resource_id     TEXT NOT NULL,
+            owner_user_id   INTEGER NOT NULL,
+            share_id        INTEGER,
+            token_id        INTEGER,
+            metadata_json   TEXT DEFAULT '{}',
+            ip_address      TEXT,
+            user_agent      TEXT,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_audit_created ON share_audit_log(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_share_audit_owner ON share_audit_log(owner_user_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sharing_config (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_type      TEXT NOT NULL DEFAULT 'global'
+                CHECK (scope_type IN ('global', 'org', 'team')),
+            scope_id        INTEGER,
+            config_key      TEXT NOT NULL,
+            config_value    TEXT NOT NULL,
+            updated_by      INTEGER,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(scope_type, scope_id, config_key)
+        )
+    """)
+
+    conn.commit()
+    logger.info("Migration 077: Created sharing tables (shared_workspaces, share_tokens, share_audit_log, sharing_config)")
+
+
+def migration_078_add_governance_pack_source_provenance(conn: sqlite3.Connection) -> None:
+    """Add governance-pack source provenance fields and prepared candidate storage."""
+
+    governance_pack_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_packs)").fetchall()
+    }
+    if "source_type" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_type TEXT")
+    if "source_location" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_location TEXT")
+    if "source_ref_requested" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_ref_requested TEXT")
+    if "source_ref_kind" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_ref_kind TEXT")
+    if "source_subpath" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_subpath TEXT")
+    if "source_commit_resolved" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_commit_resolved TEXT")
+    if "pack_content_digest" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN pack_content_digest TEXT")
+    if "source_verified" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_verified INTEGER")
+    if "source_verification_mode" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_verification_mode TEXT")
+    if "source_fetched_at" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN source_fetched_at TIMESTAMP")
+    if "fetched_by" not in governance_pack_columns:
+        conn.execute("ALTER TABLE mcp_governance_packs ADD COLUMN fetched_by INTEGER")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_source_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            source_location TEXT NOT NULL,
+            source_ref_requested TEXT,
+            source_ref_kind TEXT,
+            source_subpath TEXT,
+            source_commit_resolved TEXT,
+            pack_content_digest TEXT NOT NULL,
+            pack_document_json TEXT NOT NULL DEFAULT '{}',
+            source_verified INTEGER,
+            source_verification_mode TEXT,
+            source_fetched_at TIMESTAMP,
+            fetched_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    source_candidate_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(mcp_governance_pack_source_candidates)").fetchall()
+    }
+    if "source_ref_kind" not in source_candidate_columns:
+        conn.execute("ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN source_ref_kind TEXT")
+    if "pack_document_json" not in source_candidate_columns:
+        conn.execute(
+            "ALTER TABLE mcp_governance_pack_source_candidates ADD COLUMN pack_document_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
+        "ON mcp_governance_pack_source_candidates(source_type, source_location)"
+    )
+
+    conn.commit()
+    logger.info("Migration 078: Added governance-pack source provenance schema")
+
+
+def migration_079_add_governance_pack_trust_policy(conn: sqlite3.Connection) -> None:
+    """Add deployment-wide governance-pack trust-policy storage."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_trust_policy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.commit()
+    logger.info("Migration 079: Added governance-pack trust policy schema")
+
+
+def rollback_077_drop_sharing_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 077 by dropping sharing tables."""
+    conn.execute("DROP TABLE IF EXISTS sharing_config")
+    conn.execute("DROP TABLE IF EXISTS share_audit_log")
+    conn.execute("DROP TABLE IF EXISTS share_tokens")
+    conn.execute("DROP TABLE IF EXISTS shared_workspaces")
+    conn.commit()
+    logger.info("Rollback 077: Dropped sharing tables")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -3139,31 +4089,31 @@ def get_authnz_migrations() -> list[Migration]:
             30,
             "Create subscription_plans table",
             migration_030_create_subscription_plans,
-            rollback_030_drop_subscription_plans_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             31,
             "Create org_subscriptions table",
             migration_031_create_org_subscriptions,
-            rollback_031_drop_org_subscriptions_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             32,
             "Create stripe_webhook_events table",
             migration_032_create_stripe_webhook_events,
-            rollback_032_drop_stripe_webhook_events_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             33,
             "Create payment_history table",
             migration_033_create_payment_history,
-            rollback_033_drop_payment_history_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             34,
             "Create billing_audit_log table",
             migration_034_create_billing_audit_log,
-            rollback_034_drop_billing_audit_log_table,
+            rollback_retired_billing_schema_noop,
         ),
         Migration(
             35,
@@ -3315,6 +4265,104 @@ def get_authnz_migrations() -> list[Migration]:
             migration_061_create_backup_schedule_tables,
             rollback_061_drop_backup_schedule_tables,
         ),
+        Migration(
+            62,
+            "Harden MCP external binding schema",
+            migration_059_harden_mcp_external_binding_schema,
+        ),
+        Migration(
+            63,
+            "Add MCP external credential slots",
+            migration_060_add_mcp_external_credential_slots,
+        ),
+        Migration(
+            64,
+            "Add MCP path scope objects and assignment workspaces",
+            migration_061_add_mcp_path_scope_objects_and_assignment_workspaces,
+        ),
+        Migration(
+            65,
+            "Add MCP workspace set objects",
+            migration_062_add_mcp_workspace_set_objects,
+        ),
+        Migration(
+            66,
+            "Add MCP shared workspace registry",
+            migration_063_add_mcp_shared_workspaces,
+        ),
+        Migration(
+            67,
+            "Create maintenance rotation runs table",
+            migration_067_create_maintenance_rotation_runs_table,
+            rollback_067_drop_maintenance_rotation_runs_table,
+        ),
+        Migration(
+            68,
+            "Create BYOK validation runs table",
+            migration_068_create_byok_validation_runs_table,
+            rollback_068_drop_byok_validation_runs_table,
+        ),
+        Migration(
+            69,
+            "Add MCP governance pack schema",
+            migration_069_add_mcp_governance_pack_schema,
+        ),
+        Migration(
+            70,
+            "Add MCP capability adapter mapping schema",
+            migration_070_add_mcp_capability_adapter_mappings,
+        ),
+        Migration(
+            71,
+            "Add governance pack upgrade lineage schema",
+            migration_071_add_governance_pack_upgrade_lineage,
+        ),
+        Migration(
+            72,
+            "Create identity_providers table",
+            migration_072_create_identity_providers_table,
+            rollback_072_drop_identity_providers_table,
+        ),
+        Migration(
+            73,
+            "Create federated_identities table",
+            migration_073_create_federated_identities_table,
+            rollback_073_drop_federated_identities_table,
+        ),
+        Migration(
+            74,
+            "Create federated_managed_grants table",
+            migration_074_create_federated_managed_grants_table,
+            rollback_074_drop_federated_managed_grants_table,
+        ),
+        Migration(
+            75,
+            "Create secret_backends table",
+            migration_075_create_secret_backends_table,
+            rollback_075_drop_secret_backends_table,
+        ),
+        Migration(
+            76,
+            "Create managed_secret_refs table",
+            migration_076_create_managed_secret_refs_table,
+            rollback_076_drop_managed_secret_refs_table,
+        ),
+        Migration(
+            77,
+            "Create sharing tables",
+            migration_077_create_sharing_tables,
+            rollback_077_drop_sharing_tables,
+        ),
+        Migration(
+            78,
+            "Add governance-pack source provenance",
+            migration_078_add_governance_pack_source_provenance,
+        ),
+        Migration(
+            79,
+            "Add governance-pack trust policy",
+            migration_079_add_governance_pack_trust_policy,
+        ),
     ]
 
 
@@ -3326,6 +4374,22 @@ def apply_authnz_migrations(db_path: Path, target_version: int = None) -> None:
         db_path: Path to the database file
         target_version: Target migration version (None = latest)
     """
+    import os as _os
+
+    redis_url = _os.getenv("REDIS_URL")
+    lock_dir = str(Path(db_path).parent) if db_path else None
+
+    with acquire_migration_lock(
+        lock_dir=lock_dir,
+        lock_name="authnz_migration",
+        redis_url=redis_url,
+        timeout=60,
+    ):
+        _apply_authnz_migrations_locked(db_path, target_version)
+
+
+def _apply_authnz_migrations_locked(db_path: Path, target_version: int = None) -> None:
+    """Inner migration logic, called while holding the distributed lock."""
     manager = MigrationManager(db_path)
     try:
         from loguru import logger as _logger

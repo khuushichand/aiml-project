@@ -20,19 +20,28 @@ import {
 import {
   WORKSPACE_EXPORT_BUNDLE_FORMAT,
   WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION,
+  sanitizeImportedChatSession,
   type WorkspaceBundleChatSession,
   type WorkspaceBundleSnapshot,
   type WorkspaceExportBundle
 } from "@/store/workspace-bundle"
+import {
+  buildWorkspaceChatSessionKey,
+  extractWorkspaceIdFromChatSessionKey,
+  isWorkspaceChatSessionKeyForWorkspace
+} from "@/store/workspace-chat-session-key"
 import type {
   AddSourceModalState,
   AddSourceTab,
   ArtifactStatus,
   ArtifactType,
   AudioGenerationSettings,
+  AudioTtsProvider,
   GeneratedArtifact,
   SavedWorkspace,
   WorkspaceBanner,
+  WorkspaceBannerImage,
+  WorkspaceBannerImageMimeType,
   WorkspaceCollection,
   WorkspaceConfig,
   WorkspaceNote,
@@ -53,12 +62,16 @@ import {
   deriveEffectiveSelectedSourceIds
 } from "@/store/workspace-organization"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
+import { createSourcesSlice } from "./workspace-slices/sources-slice"
+import { createStudioSlice } from "./workspace-slices/studio-slice"
+import { createUISlice } from "./workspace-slices/ui-slice"
+import { createWorkspaceListSlice } from "./workspace-slices/workspace-list-slice"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-const generateWorkspaceId = (): string => {
+export const generateWorkspaceId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID()
   }
@@ -138,6 +151,22 @@ type WorkspaceStorageRecoveryAttempt = {
 
 const WORKSPACE_STORAGE_RECOVERY_MIN_RECLAIM_BYTES = 64 * 1024
 const WORKSPACE_STORAGE_OVERSIZED_ARTIFACT_MIN_BYTES = 12 * 1024
+const AUDIO_TTS_PROVIDERS = new Set<AudioTtsProvider>([
+  "browser",
+  "elevenlabs",
+  "openai",
+  "tldw"
+])
+const AUDIO_OUTPUT_FORMATS = new Set<AudioGenerationSettings["format"]>([
+  "mp3",
+  "wav",
+  "opus",
+  "aac",
+  "flac"
+])
+const WORKSPACE_BANNER_IMAGE_MIME_TYPES = new Set<WorkspaceBannerImageMimeType>(
+  ["image/jpeg", "image/png", "image/webp"]
+)
 const WORKSPACE_SPLIT_INDEX_SCHEMA = "workspace_split_v1"
 const WORKSPACE_SPLIT_INDEX_VERSION = 1
 export const WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY =
@@ -228,6 +257,7 @@ type WorkspaceSplitIndexState = {
   workspaceId: string
   savedWorkspaces: SavedWorkspace[]
   archivedWorkspaces: SavedWorkspace[]
+  workspaceCollections: WorkspaceCollection[]
   workspaceIds: string[]
   workspaceSnapshots: Record<string, WorkspaceSnapshot>
   workspaceChatSessions: Record<string, PersistedWorkspaceChatSessionReference>
@@ -553,8 +583,24 @@ const readWorkspaceSnapshotFromStorage = (
 ): WorkspaceSnapshot | null => {
   const raw = localStorage.getItem(buildWorkspaceSnapshotStorageKey(workspaceId))
   const parsed = safeParseJson(raw)
-  return isRecord(parsed) ? (parsed as WorkspaceSnapshot) : null
+  return isRecord(parsed) ? (parsed as unknown as WorkspaceSnapshot) : null
 }
+
+const isAudioTtsProvider = (value: unknown): value is AudioTtsProvider =>
+  typeof value === "string" &&
+  AUDIO_TTS_PROVIDERS.has(value as AudioTtsProvider)
+
+const isAudioOutputFormat = (
+  value: unknown
+): value is AudioGenerationSettings["format"] =>
+  typeof value === "string" &&
+  AUDIO_OUTPUT_FORMATS.has(value as AudioGenerationSettings["format"])
+
+const isWorkspaceBannerImageMimeType = (
+  value: unknown
+): value is WorkspaceBannerImageMimeType =>
+  typeof value === "string" &&
+  WORKSPACE_BANNER_IMAGE_MIME_TYPES.has(value as WorkspaceBannerImageMimeType)
 
 const parseWorkspaceTimestamp = (value: unknown): number => {
   if (value instanceof Date) return value.getTime()
@@ -1166,6 +1212,7 @@ const buildWorkspaceSplitIndexEnvelope = (
       workspaceId: persistedState.workspaceId,
       savedWorkspaces: persistedState.savedWorkspaces,
       archivedWorkspaces: persistedState.archivedWorkspaces,
+      workspaceCollections: persistedState.workspaceCollections,
       workspaceIds,
       workspaceSnapshots: activeSnapshot,
       workspaceChatSessions: activeChatSession
@@ -1188,6 +1235,9 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
   const archivedWorkspaces = Array.isArray(stateCandidate.archivedWorkspaces)
     ? stateCandidate.archivedWorkspaces
     : []
+  const workspaceCollections = Array.isArray(stateCandidate.workspaceCollections)
+    ? (stateCandidate.workspaceCollections as WorkspaceCollection[])
+    : []
   const workspaceIds = Array.isArray(stateCandidate.workspaceIds)
     ? stateCandidate.workspaceIds.filter(
         (workspaceStorageId): workspaceStorageId is string =>
@@ -1208,7 +1258,8 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     )
     const parsedSnapshot = safeParseJson(snapshotRaw)
     if (isRecord(parsedSnapshot)) {
-      snapshots[workspaceStorageId] = parsedSnapshot as WorkspaceSnapshot
+      snapshots[workspaceStorageId] =
+        parsedSnapshot as unknown as WorkspaceSnapshot
       if (hasWorkspaceArtifactPayloadPointers(parsedSnapshot)) {
         requiresIndexedDbHydration = true
       }
@@ -1234,7 +1285,7 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
     isRecord(stateCandidate.workspaceSnapshots[workspaceId])
   ) {
     snapshots[workspaceId] =
-      stateCandidate.workspaceSnapshots[workspaceId] as WorkspaceSnapshot
+      stateCandidate.workspaceSnapshots[workspaceId] as unknown as WorkspaceSnapshot
     if (hasWorkspaceArtifactPayloadPointers(snapshots[workspaceId])) {
       requiresIndexedDbHydration = true
     }
@@ -1261,7 +1312,8 @@ const reconstructPersistedWorkspaceStateFromSplitIndex = (
   const baseState = {
     workspaceId,
     savedWorkspaces: savedWorkspaces as SavedWorkspace[],
-    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[]
+    archivedWorkspaces: archivedWorkspaces as SavedWorkspace[],
+    workspaceCollections
   }
 
   if (!requiresIndexedDbHydration) {
@@ -2044,13 +2096,15 @@ interface WorkspaceListActions {
   getArchivedWorkspaces: () => SavedWorkspace[]
   /** Save chat session state for a workspace */
   saveWorkspaceChatSession: (
-    workspaceId: string,
+    workspaceSessionKey: string,
     session: WorkspaceChatSession
   ) => void
   /** Retrieve chat session state for a workspace */
-  getWorkspaceChatSession: (workspaceId: string) => WorkspaceChatSession | null
+  getWorkspaceChatSession: (
+    workspaceSessionKey: string
+  ) => WorkspaceChatSession | null
   /** Clear chat session state for a workspace */
-  clearWorkspaceChatSession: (workspaceId: string) => void
+  clearWorkspaceChatSession: (workspaceSessionKey: string) => void
 }
 
 interface UndoActions {
@@ -2089,7 +2143,7 @@ export type WorkspaceState = WorkspaceIdentityState &
 // Initial State
 // ─────────────────────────────────────────────────────────────────────────────
 
-const createSlug = (name: string): string => {
+export const createSlug = (name: string): string => {
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -2105,7 +2159,7 @@ const initialIdentityState: WorkspaceIdentityState = {
   workspaceChatReferenceId: ""
 }
 
-const initialSourcesState: SourcesState = {
+export const initialSourcesState: SourcesState = {
   sources: [],
   selectedSourceIds: [],
   sourceFolders: [],
@@ -2118,7 +2172,7 @@ const initialSourcesState: SourcesState = {
   sourcesError: null
 }
 
-const initialStudioState: StudioState = {
+export const initialStudioState: StudioState = {
   generatedArtifacts: [],
   notes: "",
   currentNote: { ...DEFAULT_WORKSPACE_NOTE },
@@ -2157,7 +2211,7 @@ const initialWorkspaceChatSessionsState: WorkspaceChatSessionsState = {
   workspaceChatSessions: {}
 }
 
-const initialState = {
+export const initialState = {
   ...initialIdentityState,
   ...initialSourcesState,
   ...initialStudioState,
@@ -2258,7 +2312,7 @@ const WORKSPACE_BANNER_SUBTITLE_MAX_CHARS = 180
 let workspacePersistenceWriteCount = 0
 let workspacePersistenceMaxBytes = 0
 
-const cloneWorkspaceValue = <T>(value: T): T => {
+export const cloneWorkspaceValue = <T>(value: T): T => {
   if (typeof structuredClone === "function") {
     return structuredClone(value)
   }
@@ -2305,8 +2359,8 @@ export const estimateWorkspacePersistenceMetrics = (
   const rawWorkspaceSnapshotsBytes = estimateSerializedByteLength(
     payload.workspaceSnapshots
   )
-  const workspaceBannerBytes = isRecord(payload.workspaceSnapshots)
-    ? Object.values(payload.workspaceSnapshots as Record<string, unknown>).reduce(
+  const workspaceBannerBytes: number = isRecord(payload.workspaceSnapshots)
+    ? Object.values(payload.workspaceSnapshots as Record<string, unknown>).reduce<number>(
         (accumulator, snapshot) => {
           if (!isRecord(snapshot)) return accumulator
           return (
@@ -2457,7 +2511,7 @@ const sanitizeArtifactsForPersistence = (
   artifacts: GeneratedArtifact[]
 ): GeneratedArtifact[] => artifacts.map((artifact) => sanitizeArtifactForPersistence(artifact))
 
-const reviveDateOrNull = (value: Date | string | null | undefined): Date | null => {
+export const reviveDateOrNull = (value: Date | string | null | undefined): Date | null => {
   if (!value) return null
   if (value instanceof Date) return value
   if (typeof value === "string") {
@@ -2467,14 +2521,14 @@ const reviveDateOrNull = (value: Date | string | null | undefined): Date | null 
   return null
 }
 
-const reviveDateOrUndefined = (
+export const reviveDateOrUndefined = (
   value: Date | string | null | undefined
 ): Date | undefined => {
   const revived = reviveDateOrNull(value)
   return revived ?? undefined
 }
 
-const reviveSources = (sources: WorkspaceSource[]): WorkspaceSource[] =>
+export const reviveSources = (sources: WorkspaceSource[]): WorkspaceSource[] =>
   sources.map((source) => ({
     ...source,
     status: source.status || "ready",
@@ -2483,7 +2537,7 @@ const reviveSources = (sources: WorkspaceSource[]): WorkspaceSource[] =>
     sourceCreatedAt: reviveDateOrUndefined(source.sourceCreatedAt)
   }))
 
-const reviveSourceFolders = (
+export const reviveSourceFolders = (
   folders: WorkspaceSourceFolder[],
   workspaceId: string
 ): WorkspaceSourceFolder[] =>
@@ -2495,7 +2549,7 @@ const reviveSourceFolders = (
     updatedAt: reviveDateOrNull(folder.updatedAt) || new Date()
   }))
 
-const reviveSourceFolderMemberships = (
+export const reviveSourceFolderMemberships = (
   memberships: WorkspaceSourceFolderMembership[],
   sourceIds: Set<string>,
   folderIds: Set<string>
@@ -2505,7 +2559,7 @@ const reviveSourceFolderMemberships = (
       sourceIds.has(membership.sourceId) && folderIds.has(membership.folderId)
   )
 
-const reviveWorkspaceCollections = (
+export const reviveWorkspaceCollections = (
   collections: WorkspaceCollection[]
 ): WorkspaceCollection[] =>
   collections.map((collection) => ({
@@ -2515,7 +2569,7 @@ const reviveWorkspaceCollections = (
     updatedAt: reviveDateOrNull(collection.updatedAt) || new Date()
   }))
 
-const getWorkspaceSourceStatus = (
+export const getWorkspaceSourceStatus = (
   source: WorkspaceSource
 ): WorkspaceSourceStatus => source.status || "ready"
 
@@ -2524,7 +2578,7 @@ const normalizeSourceFolderName = (name: string): string => {
   return trimmedName || "Untitled Folder"
 }
 
-const getUniqueSourceFolderName = (
+export const getUniqueSourceFolderName = (
   folders: WorkspaceSourceFolder[],
   name: string,
   parentFolderId: string | null,
@@ -2553,7 +2607,7 @@ const getUniqueSourceFolderName = (
   return candidate
 }
 
-const createWorkspaceOrganizationStateIndex = (
+export const createWorkspaceOrganizationStateIndex = (
   state: Pick<
     WorkspaceState,
     "sources" | "sourceFolders" | "sourceFolderMemberships"
@@ -2570,7 +2624,7 @@ const normalizeWorkspaceCollectionName = (name: string): string => {
   return trimmedName || "Untitled Collection"
 }
 
-const getUniqueWorkspaceCollectionName = (
+export const getUniqueWorkspaceCollectionName = (
   collections: WorkspaceCollection[],
   name: string,
   excludeCollectionId?: string
@@ -2594,7 +2648,7 @@ const getUniqueWorkspaceCollectionName = (
   return candidate
 }
 
-const reviveArtifacts = (artifacts: GeneratedArtifact[]): GeneratedArtifact[] =>
+export const reviveArtifacts = (artifacts: GeneratedArtifact[]): GeneratedArtifact[] =>
   artifacts.map((artifact) => {
     const revivedArtifact: GeneratedArtifact = {
       ...artifact,
@@ -2615,14 +2669,14 @@ const reviveArtifacts = (artifacts: GeneratedArtifact[]): GeneratedArtifact[] =>
     }
   })
 
-const reviveSavedWorkspace = (workspace: SavedWorkspace): SavedWorkspace => ({
+export const reviveSavedWorkspace = (workspace: SavedWorkspace): SavedWorkspace => ({
   ...workspace,
   collectionId: workspace.collectionId || null,
   createdAt: reviveDateOrNull(workspace.createdAt) || new Date(),
   lastAccessedAt: reviveDateOrNull(workspace.lastAccessedAt) || new Date()
 })
 
-const reviveWorkspaceSnapshot = (
+export const reviveWorkspaceSnapshot = (
   workspaceId: string,
   snapshot: WorkspaceSnapshot
 ): WorkspaceSnapshot => {
@@ -2807,7 +2861,7 @@ const normalizeWorkspaceSnapshotsForRehydrate = (
       if (!workspaceId) continue
       normalized[workspaceId] = reviveWorkspaceSnapshot(
         workspaceId,
-        entry as WorkspaceSnapshot
+        entry as unknown as WorkspaceSnapshot
       )
     }
     return normalized
@@ -2819,7 +2873,7 @@ const normalizeWorkspaceSnapshotsForRehydrate = (
     if (!isRecord(snapshot)) continue
     normalized[workspaceId] = reviveWorkspaceSnapshot(
       workspaceId,
-      snapshot as WorkspaceSnapshot
+      snapshot as unknown as WorkspaceSnapshot
     )
   }
 
@@ -2854,7 +2908,7 @@ const coerceAudioSettingsForRehydrate = (
 
   return {
     provider:
-      typeof candidate.provider === "string"
+      isAudioTtsProvider(candidate.provider)
         ? candidate.provider
         : DEFAULT_AUDIO_SETTINGS.provider,
     model:
@@ -2870,13 +2924,13 @@ const coerceAudioSettingsForRehydrate = (
         ? candidate.speed
         : DEFAULT_AUDIO_SETTINGS.speed,
     format:
-      typeof candidate.format === "string"
+      isAudioOutputFormat(candidate.format)
         ? candidate.format
         : DEFAULT_AUDIO_SETTINGS.format
   }
 }
 
-const coerceWorkspaceBannerForRehydrate = (
+export const coerceWorkspaceBannerForRehydrate = (
   candidate: unknown
 ): WorkspaceBanner => {
   if (!isRecord(candidate)) {
@@ -2884,16 +2938,14 @@ const coerceWorkspaceBannerForRehydrate = (
   }
 
   const imageCandidate = isRecord(candidate.image) ? candidate.image : null
-  const imageMimeType = imageCandidate?.mimeType
-  const isSupportedImageMimeType =
-    imageMimeType === "image/jpeg" ||
-    imageMimeType === "image/png" ||
-    imageMimeType === "image/webp"
+  const imageMimeType = isWorkspaceBannerImageMimeType(imageCandidate?.mimeType)
+    ? imageCandidate.mimeType
+    : null
 
-  const image =
+  const image: WorkspaceBannerImage | null =
     imageCandidate &&
     typeof imageCandidate.dataUrl === "string" &&
-    isSupportedImageMimeType &&
+    imageMimeType &&
     typeof imageCandidate.width === "number" &&
     Number.isFinite(imageCandidate.width) &&
     imageCandidate.width > 0 &&
@@ -2934,7 +2986,7 @@ const sanitizeWorkspaceBannerText = (
   maxChars: number
 ): string => value.trim().slice(0, maxChars)
 
-const sanitizeWorkspaceBanner = (
+export const sanitizeWorkspaceBanner = (
   candidate: WorkspaceBanner
 ): WorkspaceBanner => {
   const normalized = coerceWorkspaceBannerForRehydrate(candidate)
@@ -3061,7 +3113,7 @@ const migratePersistedWorkspaceState = (
   }
 }
 
-const createEmptyWorkspaceSnapshot = ({
+export const createEmptyWorkspaceSnapshot = ({
   id,
   name,
   tag,
@@ -3092,7 +3144,7 @@ const createEmptyWorkspaceSnapshot = ({
   audioSettings: { ...DEFAULT_AUDIO_SETTINGS }
 })
 
-const applyWorkspaceSnapshot = (
+export const applyWorkspaceSnapshot = (
   snapshot: WorkspaceSnapshot
 ): Pick<
   WorkspaceState,
@@ -3139,7 +3191,7 @@ const applyWorkspaceSnapshot = (
   audioSettings: { ...snapshot.audioSettings }
 })
 
-const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot => ({
+export const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot => ({
   workspaceId: state.workspaceId,
   workspaceName: state.workspaceName || "Untitled Workspace",
   workspaceTag: state.workspaceTag,
@@ -3164,7 +3216,7 @@ const buildWorkspaceSnapshot = (state: WorkspaceState): WorkspaceSnapshot => ({
   audioSettings: { ...state.audioSettings }
 })
 
-const buildWorkspaceBundleSnapshot = (
+export const buildWorkspaceBundleSnapshot = (
   snapshot: WorkspaceSnapshot
 ): WorkspaceBundleSnapshot => ({
   workspaceName: snapshot.workspaceName,
@@ -3189,7 +3241,7 @@ const buildWorkspaceBundleSnapshot = (
   audioSettings: { ...snapshot.audioSettings }
 })
 
-const cloneWorkspaceBundleChatSession = (
+export const cloneWorkspaceBundleChatSession = (
   session: WorkspaceBundleChatSession
 ): WorkspaceBundleChatSession => ({
   messages: Array.isArray(session.messages)
@@ -3203,7 +3255,7 @@ const cloneWorkspaceBundleChatSession = (
     typeof session.serverChatId === "string" ? session.serverChatId : null
 })
 
-const hydrateWorkspaceBundleSnapshot = (
+export const hydrateWorkspaceBundleSnapshot = (
   snapshot: WorkspaceBundleSnapshot,
   workspaceId: string,
   workspaceName: string,
@@ -3257,7 +3309,7 @@ const hydrateWorkspaceBundleSnapshot = (
   }
 }
 
-const buildWorkspaceUndoSnapshot = (
+export const buildWorkspaceUndoSnapshot = (
   state: WorkspaceState
 ): WorkspaceUndoSnapshot => {
   const nextSnapshots = { ...state.workspaceSnapshots }
@@ -3295,7 +3347,7 @@ const buildWorkspaceUndoSnapshot = (
   return cloneWorkspaceValue(snapshot)
 }
 
-const createSavedWorkspaceEntry = (
+export const createSavedWorkspaceEntry = (
   snapshot: WorkspaceSnapshot,
   lastAccessedAt: Date = new Date(),
   collectionId: string | null = null
@@ -3318,7 +3370,7 @@ const findSavedWorkspaceById = (
   archivedWorkspaces.find((workspace) => workspace.id === workspaceId) ||
   null
 
-const getSavedWorkspaceCollectionId = (
+export const getSavedWorkspaceCollectionId = (
   savedWorkspaces: SavedWorkspace[],
   archivedWorkspaces: SavedWorkspace[],
   workspaceId: string
@@ -3326,12 +3378,12 @@ const getSavedWorkspaceCollectionId = (
   findSavedWorkspaceById(savedWorkspaces, archivedWorkspaces, workspaceId)
     ?.collectionId || null
 
-const upsertSavedWorkspace = (
+export const upsertSavedWorkspace = (
   workspaces: SavedWorkspace[],
   workspace: SavedWorkspace
 ): SavedWorkspace[] => [workspace, ...workspaces.filter((w) => w.id !== workspace.id)]
 
-const upsertArchivedWorkspace = (
+export const upsertArchivedWorkspace = (
   workspaces: SavedWorkspace[],
   workspace: SavedWorkspace
 ): SavedWorkspace[] =>
@@ -3340,13 +3392,13 @@ const upsertArchivedWorkspace = (
     MAX_ARCHIVED_WORKSPACES
   )
 
-const sortByLastAccessedDesc = (workspaces: SavedWorkspace[]): SavedWorkspace[] =>
+export const sortByLastAccessedDesc = (workspaces: SavedWorkspace[]): SavedWorkspace[] =>
   [...workspaces].sort(
     (a, b) =>
       new Date(b.lastAccessedAt).getTime() - new Date(a.lastAccessedAt).getTime()
   )
 
-const cloneWorkspaceChatSession = (
+export const cloneWorkspaceChatSession = (
   session: WorkspaceChatSession
 ): WorkspaceChatSession => ({
   messages: session.messages.map((message) => ({ ...message })),
@@ -3380,7 +3432,7 @@ const buildPersistedWorkspaceChatSessions = (
   return persisted
 }
 
-const createFallbackWorkspaceSnapshot = (): WorkspaceSnapshot => {
+export const createFallbackWorkspaceSnapshot = (): WorkspaceSnapshot => {
   const replacementId = generateWorkspaceId()
   const replacementName = "New Research"
   const replacementTag = `workspace:${createSlug(replacementName) || replacementId.slice(0, 8)}`
@@ -3392,7 +3444,7 @@ const createFallbackWorkspaceSnapshot = (): WorkspaceSnapshot => {
   })
 }
 
-const duplicateWorkspaceSnapshot = (
+export const duplicateWorkspaceSnapshot = (
   snapshot: WorkspaceSnapshot
 ): WorkspaceSnapshot => {
   const duplicateId = generateWorkspaceId()
@@ -3496,1607 +3548,18 @@ export const useWorkspaceStore = createWithEqualityFn<WorkspaceState>()(
   persist<WorkspaceState, [], [], PersistedWorkspaceState>(
     (set, get) => ({
       ...initialState,
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Workspace Identity Actions
-    // ─────────────────────────────────────────────────────────────────────────
-
-    initializeWorkspace: (name = "New Research") => {
-      const id = generateWorkspaceId()
-      const slug = createSlug(name) || id.slice(0, 8)
-      const createdAt = new Date()
-      const tag = `workspace:${slug}`
-      const snapshot = createEmptyWorkspaceSnapshot({
-        id,
-        name,
-        tag,
-        createdAt
-      })
-
-      set((state) => ({
-        ...applyWorkspaceSnapshot(snapshot),
-        savedWorkspaces: upsertSavedWorkspace(
-          state.savedWorkspaces,
-          createSavedWorkspaceEntry(snapshot, createdAt)
-        ),
-        archivedWorkspaces: state.archivedWorkspaces.filter(
-          (workspace) => workspace.id !== id
-        ),
-        workspaceSnapshots: {
-          ...state.workspaceSnapshots,
-          [id]: snapshot
-        }
-      }))
-    },
-
-    setWorkspaceName: (name) => {
-      set((state) => {
-        const fallbackId = state.workspaceId || ""
-        const slug = createSlug(name) || fallbackId.slice(0, 8)
-        const nextTag = `workspace:${slug}`
-
-        if (!state.workspaceId) {
-          return {
-            workspaceName: name,
-            workspaceTag: nextTag
-          }
-        }
-
-        const updatedSnapshot: WorkspaceSnapshot = {
-          ...buildWorkspaceSnapshot(state),
-          workspaceName: name,
-          workspaceTag: nextTag
-        }
-
-        return {
-          workspaceName: name,
-          workspaceTag: nextTag,
-          savedWorkspaces: state.savedWorkspaces.map((workspace) =>
-            workspace.id === state.workspaceId
-              ? { ...workspace, name, tag: nextTag }
-              : workspace
-          ),
-          workspaceSnapshots: {
-            ...state.workspaceSnapshots,
-            [state.workspaceId]: updatedSnapshot
-          }
-        }
-      })
-    },
-
-    loadWorkspace: (config) => {
-      set((state) => {
-        const existing = state.workspaceSnapshots[config.id]
-        const snapshot =
-          existing ??
-          createEmptyWorkspaceSnapshot({
-            id: config.id,
-            name: config.name,
-            tag: config.tag,
-            createdAt: config.createdAt
-          })
-
-        const hydratedSnapshot: WorkspaceSnapshot = {
-          ...snapshot,
-          workspaceId: config.id,
-          workspaceName: config.name,
-          workspaceTag: config.tag,
-          workspaceCreatedAt: config.createdAt,
-          workspaceChatReferenceId:
-            snapshot.workspaceChatReferenceId || config.id
-        }
-
-        return {
-          ...applyWorkspaceSnapshot(hydratedSnapshot),
-          savedWorkspaces: upsertSavedWorkspace(
-            state.savedWorkspaces,
-            createSavedWorkspaceEntry(
-              hydratedSnapshot,
-              new Date(),
-              getSavedWorkspaceCollectionId(
-                state.savedWorkspaces,
-                state.archivedWorkspaces,
-                hydratedSnapshot.workspaceId
-              )
-            )
-          ),
-          archivedWorkspaces: state.archivedWorkspaces.filter(
-            (workspace) => workspace.id !== config.id
-          ),
-          workspaceSnapshots: {
-            ...state.workspaceSnapshots,
-            [config.id]: hydratedSnapshot
-          }
-        }
-      })
-    },
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Sources Actions
-    // ─────────────────────────────────────────────────────────────────────────
-
-    createSourceFolder: (name, parentFolderId = null) => {
-      const state = get()
-      if (parentFolderId && !state.sourceFolders.some((folder) => folder.id === parentFolderId)) {
-        throw new Error(`Cannot create folder under missing parent "${parentFolderId}"`)
-      }
-
-      const folder: WorkspaceSourceFolder = {
-        id: generateWorkspaceId(),
-        workspaceId: state.workspaceId,
-        name: getUniqueSourceFolderName(
-          state.sourceFolders,
-          name,
-          parentFolderId
-        ),
-        parentFolderId,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }
-
-      set((current) => ({
-        sourceFolders: [...current.sourceFolders, folder]
-      }))
-      return folder
-    },
-
-    renameSourceFolder: (folderId, name) =>
-      set((state) => {
-        const folder = state.sourceFolders.find((entry) => entry.id === folderId)
-        if (!folder) {
-          return state
-        }
-
-        return {
-          sourceFolders: state.sourceFolders.map((entry) =>
-            entry.id === folderId
-              ? {
-                  ...entry,
-                  name: getUniqueSourceFolderName(
-                    state.sourceFolders,
-                    name,
-                    entry.parentFolderId,
-                    entry.id
-                  ),
-                  updatedAt: new Date()
-                }
-              : entry
-          )
-        }
-      }),
-
-    moveSourceFolder: (folderId, parentFolderId) =>
-      set((state) => {
-        const folder = state.sourceFolders.find((entry) => entry.id === folderId)
-        if (!folder) {
-          return state
-        }
-
-        if (parentFolderId === folderId) {
-          throw new Error("A folder cannot be moved under itself.")
-        }
-
-        if (
-          parentFolderId &&
-          !state.sourceFolders.some((entry) => entry.id === parentFolderId)
-        ) {
-          throw new Error(`Cannot move folder under missing parent "${parentFolderId}".`)
-        }
-
-        const organizationIndex = createWorkspaceOrganizationStateIndex(state)
-        const descendantFolderIds = new Set(
-          collectDescendantFolderIds(organizationIndex, folderId)
-        )
-        if (parentFolderId && descendantFolderIds.has(parentFolderId)) {
-          throw new Error("A folder cannot be moved under one of its descendants.")
-        }
-
-        return {
-          sourceFolders: state.sourceFolders.map((entry) =>
-            entry.id === folderId
-              ? {
-                  ...entry,
-                  parentFolderId,
-                  name: getUniqueSourceFolderName(
-                    state.sourceFolders,
-                    entry.name,
-                    parentFolderId,
-                    entry.id
-                  ),
-                  updatedAt: new Date()
-                }
-              : entry
-          )
-        }
-      }),
-
-    deleteSourceFolder: (folderId) =>
-      set((state) => {
-        const folderToDelete = state.sourceFolders.find(
-          (folder) => folder.id === folderId
-        )
-        if (!folderToDelete) {
-          return state
-        }
-
-        const reparentedSourceFolders = state.sourceFolders
-          .filter((folder) => folder.id !== folderId)
-          .reduce<WorkspaceSourceFolder[]>((accumulator, folder) => {
-            if (folder.parentFolderId !== folderId) {
-              accumulator.push(folder)
-              return accumulator
-            }
-
-            accumulator.push({
-              ...folder,
-              parentFolderId: folderToDelete.parentFolderId,
-              name: getUniqueSourceFolderName(
-                accumulator,
-                folder.name,
-                folderToDelete.parentFolderId,
-                folder.id
-              ),
-              updatedAt: new Date()
-            })
-            return accumulator
-          }, [])
-
-        return {
-          sourceFolders: reparentedSourceFolders,
-          sourceFolderMemberships: state.sourceFolderMemberships.filter(
-            (membership) => membership.folderId !== folderId
-          ),
-          selectedSourceFolderIds: state.selectedSourceFolderIds.filter(
-            (selectedFolderId) => selectedFolderId !== folderId
-          ),
-          activeFolderId:
-            state.activeFolderId === folderId
-              ? folderToDelete.parentFolderId
-              : state.activeFolderId
-        }
-      }),
-
-    assignSourceToFolders: (sourceId, folderIds) =>
-      set((state) => {
-        if (!state.sources.some((source) => source.id === sourceId)) {
-          return state
-        }
-
-        const validFolderIds = [...new Set(folderIds)].filter((folderId) =>
-          state.sourceFolders.some((folder) => folder.id === folderId)
-        )
-
-        return {
-          sourceFolderMemberships: [
-            ...state.sourceFolderMemberships.filter(
-              (membership) => membership.sourceId !== sourceId
-            ),
-            ...validFolderIds.map((folderId) => ({
-              folderId,
-              sourceId
-            }))
-          ]
-        }
-      }),
-
-    removeSourceFromFolder: (sourceId, folderId) =>
-      set((state) => ({
-        sourceFolderMemberships: state.sourceFolderMemberships.filter(
-          (membership) =>
-            !(
-              membership.sourceId === sourceId &&
-              membership.folderId === folderId
-            )
-        )
-      })),
-
-    toggleSourceFolderSelection: (folderId) =>
-      set((state) => {
-        if (!state.sourceFolders.some((folder) => folder.id === folderId)) {
-          return state
-        }
-
-        const isSelected = state.selectedSourceFolderIds.includes(folderId)
-        return {
-          selectedSourceFolderIds: isSelected
-            ? state.selectedSourceFolderIds.filter(
-                (selectedFolderId) => selectedFolderId !== folderId
-              )
-            : [...state.selectedSourceFolderIds, folderId]
-        }
-      }),
-
-    setActiveFolder: (folderId) =>
-      set((state) => ({
-        activeFolderId:
-          folderId === null ||
-          state.sourceFolders.some((folder) => folder.id === folderId)
-            ? folderId
-            : null
-      })),
-
-    addSource: (sourceData) => {
-      const source: WorkspaceSource = {
-        ...sourceData,
-        status: sourceData.status || "ready",
-        statusMessage: sourceData.statusMessage || undefined,
-        id: generateWorkspaceId(),
-        addedAt: new Date()
-      }
-      set((state) => {
-        // Prevent duplicates by mediaId
-        if (state.sources.some((s) => s.mediaId === source.mediaId)) {
-          return state
-        }
-        return { sources: [...state.sources, source] }
-      })
-      return source
-    },
-
-    addSources: (sourcesData) => {
-      const newSources: WorkspaceSource[] = sourcesData.map((s) => ({
-        ...s,
-        status: s.status || "ready",
-        statusMessage: s.statusMessage || undefined,
-        id: generateWorkspaceId(),
-        addedAt: new Date()
-      }))
-      set((state) => {
-        // Filter out duplicates by mediaId
-        const existingMediaIds = new Set(state.sources.map((s) => s.mediaId))
-        const uniqueNewSources = newSources.filter(
-          (s) => !existingMediaIds.has(s.mediaId)
-        )
-        return { sources: [...state.sources, ...uniqueNewSources] }
-      })
-      return newSources
-    },
-
-    removeSource: (id) =>
-      set((state) => ({
-        sources: state.sources.filter((s) => s.id !== id),
-        selectedSourceIds: state.selectedSourceIds.filter((sid) => sid !== id),
-        sourceFolderMemberships: state.sourceFolderMemberships.filter(
-          (membership) => membership.sourceId !== id
-        )
-      })),
-
-    removeSources: (ids) =>
-      set((state) => {
-        const idsSet = new Set(ids)
-        return {
-          sources: state.sources.filter((s) => !idsSet.has(s.id)),
-          selectedSourceIds: state.selectedSourceIds.filter(
-            (sid) => !idsSet.has(sid)
-          ),
-          sourceFolderMemberships: state.sourceFolderMemberships.filter(
-            (membership) => !idsSet.has(membership.sourceId)
-          )
-        }
-      }),
-
-    reorderSource: (sourceId, targetIndex) =>
-      set((state) => {
-        const currentIndex = state.sources.findIndex(
-          (source) => source.id === sourceId
-        )
-        if (currentIndex < 0) return state
-
-        const boundedTargetIndex = Math.max(
-          0,
-          Math.min(targetIndex, state.sources.length - 1)
-        )
-        if (boundedTargetIndex === currentIndex) return state
-
-        const reorderedSources = [...state.sources]
-        const [movedSource] = reorderedSources.splice(currentIndex, 1)
-        reorderedSources.splice(boundedTargetIndex, 0, movedSource)
-
-        return {
-          sources: reorderedSources
-        }
-      }),
-
-    toggleSourceSelection: (id) =>
-      set((state) => {
-        const source = state.sources.find((entry) => entry.id === id)
-        if (!source || getWorkspaceSourceStatus(source) !== "ready") {
-          return state
-        }
-        const isSelected = state.selectedSourceIds.includes(id)
-        return {
-          selectedSourceIds: isSelected
-            ? state.selectedSourceIds.filter((sid) => sid !== id)
-            : [...state.selectedSourceIds, id]
-        }
-      }),
-
-    selectAllSources: () =>
-      set((state) => ({
-        selectedSourceIds: state.sources
-          .filter((source) => getWorkspaceSourceStatus(source) === "ready")
-          .map((source) => source.id)
-      })),
-
-    deselectAllSources: () => set({ selectedSourceIds: [] }),
-
-    setSelectedSourceIds: (ids) =>
-      set((state) => {
-        const readySourceIds = new Set(
-          state.sources
-            .filter((source) => getWorkspaceSourceStatus(source) === "ready")
-            .map((source) => source.id)
-        )
-        return {
-          selectedSourceIds: ids.filter((id) => readySourceIds.has(id))
-        }
-      }),
-
-    setSourceSearchQuery: (query) => set({ sourceSearchQuery: query }),
-
-    setSourceStatusById: (sourceId, status, statusMessage) =>
-      set((state) => {
-        const nextSources = state.sources.map((source) =>
-          source.id === sourceId
-            ? {
-                ...source,
-                status,
-                statusMessage: statusMessage || undefined
-              }
-            : source
-        )
-        return {
-          sources: nextSources,
-          selectedSourceIds:
-            status === "ready"
-              ? state.selectedSourceIds
-              : state.selectedSourceIds.filter((id) => id !== sourceId)
-        }
-      }),
-
-    setSourceStatusByMediaId: (mediaId, status, statusMessage) =>
-      set((state) => {
-        const targetSource = state.sources.find(
-          (source) => source.mediaId === mediaId
-        )
-        if (!targetSource) return state
-
-        const nextSources = state.sources.map((source) =>
-          source.mediaId === mediaId
-            ? {
-                ...source,
-                status,
-                statusMessage: statusMessage || undefined
-              }
-            : source
-        )
-        return {
-          sources: nextSources,
-          selectedSourceIds:
-            status === "ready"
-              ? state.selectedSourceIds
-              : state.selectedSourceIds.filter((id) => id !== targetSource.id)
-        }
-      }),
-
-    focusSourceById: (id) => {
-      const state = get()
-      const sourceExists = state.sources.some((source) => source.id === id)
-      if (!sourceExists) return false
-
-      set((current) => ({
-        sourceFocusTarget: {
-          sourceId: id,
-          token: (current.sourceFocusTarget?.token ?? 0) + 1
-        }
-      }))
-      return true
-    },
-
-    focusSourceByMediaId: (mediaId) => {
-      const state = get()
-      const source = state.sources.find((entry) => entry.mediaId === mediaId)
-      if (!source) return false
-
-      set((current) => ({
-        sourceFocusTarget: {
-          sourceId: source.id,
-          token: (current.sourceFocusTarget?.token ?? 0) + 1
-        }
-      }))
-      return true
-    },
-
-    clearSourceFocusTarget: () => set({ sourceFocusTarget: null }),
-
-    setSourcesLoading: (loading) => set({ sourcesLoading: loading }),
-
-    setSourcesError: (error) => set({ sourcesError: error }),
-
-    restoreSource: (source, options) =>
-      set((state) => {
-        const sourceExists = state.sources.some(
-          (entry) => entry.id === source.id || entry.mediaId === source.mediaId
-        )
-        if (sourceExists) {
-          return state
-        }
-
-        const nextSources = [...state.sources]
-        const insertionIndex = Math.min(
-          Math.max(options?.index ?? nextSources.length, 0),
-          nextSources.length
-        )
-        nextSources.splice(insertionIndex, 0, {
-          ...source,
-          addedAt: reviveDateOrNull(source.addedAt) || new Date()
-        })
-
-        const shouldSelect =
-          options?.select === true &&
-          getWorkspaceSourceStatus(source) === "ready"
-
-        return {
-          sources: nextSources,
-          selectedSourceIds: shouldSelect
-            ? [...new Set([...state.selectedSourceIds, source.id])]
-            : state.selectedSourceIds
-        }
-      }),
-
-    getSelectedSources: () => {
-      const state = get()
-      const selectedSet = new Set(state.selectedSourceIds)
-      return state.sources.filter(
-        (source) =>
-          selectedSet.has(source.id) && getWorkspaceSourceStatus(source) === "ready"
-      )
-    },
-
-    getSelectedMediaIds: () => {
-      const state = get()
-      const selectedSet = new Set(state.selectedSourceIds)
-      return state.sources
-        .filter(
-          (source) =>
-            selectedSet.has(source.id) &&
-            getWorkspaceSourceStatus(source) === "ready"
-        )
-        .map((s) => s.mediaId)
-    },
-
-    getEffectiveSelectedSources: () => {
-      const state = get()
-      const organizationIndex = createWorkspaceOrganizationStateIndex(state)
-      const effectiveSelectedIds = new Set(
-        deriveEffectiveSelectedSourceIds(
-          organizationIndex,
-          state.selectedSourceIds,
-          state.selectedSourceFolderIds
-        )
-      )
-
-      return state.sources.filter((source) => effectiveSelectedIds.has(source.id))
-    },
-
-    getEffectiveSelectedMediaIds: () =>
-      get()
-        .getEffectiveSelectedSources()
-        .map((source) => source.mediaId),
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Studio Actions
-    // ─────────────────────────────────────────────────────────────────────────
-
-    addArtifact: (artifactData) => {
-      const artifact: GeneratedArtifact = {
-        ...artifactData,
-        id: generateWorkspaceId(),
-        createdAt: new Date()
-      }
-      set((state) => ({
-        generatedArtifacts: [artifact, ...state.generatedArtifacts]
-      }))
-      return artifact
-    },
-
-    updateArtifactStatus: (id, status, updates = {}) =>
-      set((state) => ({
-        generatedArtifacts: state.generatedArtifacts.map((a) =>
-          a.id === id
-            ? {
-                ...a,
-                status,
-                ...updates,
-                ...(status === "completed" ? { completedAt: new Date() } : {})
-              }
-            : a
-        )
-      })),
-
-    removeArtifact: (id) =>
-      set((state) => ({
-        generatedArtifacts: state.generatedArtifacts.filter((a) => a.id !== id)
-      })),
-
-    restoreArtifact: (artifact, options) =>
-      set((state) => {
-        if (state.generatedArtifacts.some((entry) => entry.id === artifact.id)) {
-          return state
-        }
-
-        const nextArtifacts = [...state.generatedArtifacts]
-        const insertionIndex = Math.min(
-          Math.max(options?.index ?? nextArtifacts.length, 0),
-          nextArtifacts.length
-        )
-        nextArtifacts.splice(insertionIndex, 0, {
-          ...artifact,
-          createdAt: reviveDateOrNull(artifact.createdAt) || new Date(),
-          completedAt: reviveDateOrUndefined(artifact.completedAt)
-        })
-
-        return { generatedArtifacts: nextArtifacts }
-      }),
-
-    clearArtifacts: () => set({ generatedArtifacts: [] }),
-
-    setNotes: (notes) => set({ notes }),
-
-    setWorkspaceBanner: (bannerUpdate) =>
-      set((state) => {
-        const nextCandidate: WorkspaceBanner = {
-          title:
-            bannerUpdate.title !== undefined
-              ? bannerUpdate.title
-              : state.workspaceBanner.title,
-          subtitle:
-            bannerUpdate.subtitle !== undefined
-              ? bannerUpdate.subtitle
-              : state.workspaceBanner.subtitle,
-          image:
-            bannerUpdate.image !== undefined
-              ? bannerUpdate.image
-              : state.workspaceBanner.image
-        }
-
-        return {
-          workspaceBanner: sanitizeWorkspaceBanner(nextCandidate)
-        }
-      }),
-
-    clearWorkspaceBannerImage: () =>
-      set((state) => ({
-        workspaceBanner: {
-          ...state.workspaceBanner,
-          image: null
-        }
-      })),
-
-    resetWorkspaceBanner: () =>
-      set({
-        workspaceBanner: { ...DEFAULT_WORKSPACE_BANNER }
-      }),
-
-    setIsGeneratingOutput: (isGenerating, outputType = null) =>
-      set({
-        isGeneratingOutput: isGenerating,
-        generatingOutputType: isGenerating ? outputType : null
-      }),
-
-    // Note management actions
-    setCurrentNote: (note) =>
-      set({ currentNote: note || { ...DEFAULT_WORKSPACE_NOTE } }),
-
-    updateNoteContent: (content) =>
-      set((state) => ({
-        currentNote: { ...state.currentNote, content, isDirty: true }
-      })),
-
-    updateNoteTitle: (title) =>
-      set((state) => ({
-        currentNote: { ...state.currentNote, title, isDirty: true }
-      })),
-
-    updateNoteKeywords: (keywords) =>
-      set((state) => ({
-        currentNote: { ...state.currentNote, keywords, isDirty: true }
-      })),
-
-    clearCurrentNote: () =>
-      set({ currentNote: { ...DEFAULT_WORKSPACE_NOTE } }),
-
-    captureToCurrentNote: ({ title, content, mode = "append" }) =>
-      set((state) => {
-        const trimmedContent = content.trim()
-        if (!trimmedContent) return state
-
-        const cleanedTitle = (title || "").trim().slice(0, 120)
-        const heading = cleanedTitle ? `## ${cleanedTitle}\n\n` : ""
-        const captureBlock = `${heading}${trimmedContent}`
-        const existingContent = state.currentNote.content.trim()
-        const resolvedMode: CaptureNoteMode =
-          mode === "replace" ? "replace" : "append"
-
-        const nextContent =
-          resolvedMode === "replace" || existingContent.length === 0
-            ? captureBlock
-            : `${existingContent}\n\n---\n\n${captureBlock}`
-        const nextTitle =
-          state.currentNote.title.trim() || cleanedTitle || state.currentNote.title
-
-        return {
-          currentNote: {
-            ...state.currentNote,
-            title: nextTitle,
-            content: nextContent,
-            isDirty: true
-          }
-        }
-      }),
-
-    loadNote: (note) =>
-      set({
-        currentNote: {
-          id: note.id,
-          title: note.title,
-          content: note.content,
-          keywords: note.keywords || [],
-          version: note.version,
-          isDirty: false
-        }
-      }),
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // UI Actions
-    // ─────────────────────────────────────────────────────────────────────────
-
-    toggleLeftPane: () =>
-      set((state) => ({ leftPaneCollapsed: !state.leftPaneCollapsed })),
-
-    toggleRightPane: () =>
-      set((state) => ({ rightPaneCollapsed: !state.rightPaneCollapsed })),
-
-    setLeftPaneCollapsed: (collapsed) => set({ leftPaneCollapsed: collapsed }),
-
-    setRightPaneCollapsed: (collapsed) =>
-      set({ rightPaneCollapsed: collapsed }),
-
-    openAddSourceModal: (tab = "upload") =>
-      set({
-        addSourceModalOpen: true,
-        addSourceModalTab: tab,
-        addSourceError: null
-      }),
-
-    closeAddSourceModal: () =>
-      set({
-        addSourceModalOpen: false,
-        addSourceProcessing: false,
-        addSourceError: null
-      }),
-
-    setAddSourceModalTab: (tab) => set({ addSourceModalTab: tab }),
-
-    setAddSourceProcessing: (processing) =>
-      set({ addSourceProcessing: processing }),
-
-    setAddSourceError: (error) => set({ addSourceError: error }),
-
-    focusChatMessageById: (messageId) => {
-      const normalizedMessageId = messageId.trim()
-      if (!normalizedMessageId) return false
-      set((state) => ({
-        chatFocusTarget: {
-          messageId: normalizedMessageId,
-          token: (state.chatFocusTarget?.token ?? 0) + 1
-        }
-      }))
-      return true
-    },
-
-    clearChatFocusTarget: () => set({ chatFocusTarget: null }),
-
-    focusWorkspaceNote: (field = "content") =>
-      set((state) => ({
-        noteFocusTarget: {
-          field,
-          token: (state.noteFocusTarget?.token ?? 0) + 1
-        }
-      })),
-
-    clearNoteFocusTarget: () => set({ noteFocusTarget: null }),
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Audio Settings Actions
-    // ─────────────────────────────────────────────────────────────────────────
-
-    setAudioSettings: (settings) =>
-      set((state) => ({
-        audioSettings: { ...state.audioSettings, ...settings }
-      })),
-
-    resetAudioSettings: () =>
-      set({ audioSettings: { ...DEFAULT_AUDIO_SETTINGS } }),
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Workspace List Actions
-    // ─────────────────────────────────────────────────────────────────────────
-
-    createWorkspaceCollection: (name, description = null) => {
-      const collection: WorkspaceCollection = {
-        id: generateWorkspaceId(),
-        name: "",
-        description: description || null,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }
-
-      set((state) => {
-        collection.name = getUniqueWorkspaceCollectionName(
-          state.workspaceCollections,
-          name
-        )
-
-        return {
-          workspaceCollections: [...state.workspaceCollections, collection]
-        }
-      })
-
-      return collection
-    },
-
-    renameWorkspaceCollection: (collectionId, name, description = null) =>
-      set((state) => ({
-        workspaceCollections: state.workspaceCollections.map((collection) =>
-          collection.id === collectionId
-            ? {
-                ...collection,
-                name: getUniqueWorkspaceCollectionName(
-                  state.workspaceCollections,
-                  name,
-                  collection.id
-                ),
-                description: description || null,
-                updatedAt: new Date()
-              }
-            : collection
-        )
-      })),
-
-    deleteWorkspaceCollection: (collectionId) =>
-      set((state) => ({
-        workspaceCollections: state.workspaceCollections.filter(
-          (collection) => collection.id !== collectionId
-        ),
-        savedWorkspaces: state.savedWorkspaces.map((workspace) =>
-          workspace.collectionId === collectionId
-            ? { ...workspace, collectionId: null }
-            : workspace
-        ),
-        archivedWorkspaces: state.archivedWorkspaces.map((workspace) =>
-          workspace.collectionId === collectionId
-            ? { ...workspace, collectionId: null }
-            : workspace
-        )
-      })),
-
-    assignWorkspaceToCollection: (workspaceId, collectionId) =>
-      set((state) => {
-        if (
-          collectionId !== null &&
-          !state.workspaceCollections.some(
-            (collection) => collection.id === collectionId
-          )
-        ) {
-          throw new Error(`Cannot assign workspace to missing collection "${collectionId}".`)
-        }
-
-        return {
-          savedWorkspaces: state.savedWorkspaces.map((workspace) =>
-            workspace.id === workspaceId
-              ? { ...workspace, collectionId }
-              : workspace
-          ),
-          archivedWorkspaces: state.archivedWorkspaces.map((workspace) =>
-            workspace.id === workspaceId
-              ? { ...workspace, collectionId }
-              : workspace
-          )
-        }
-      }),
-
-    saveCurrentWorkspace: () => {
-      const state = get()
-      // Don't save if workspace has no ID (uninitialized)
-      if (!state.workspaceId) return
-
-      const snapshot = buildWorkspaceSnapshot(state)
-      const savedWorkspace = createSavedWorkspaceEntry(
-        snapshot,
-        new Date(),
-        getSavedWorkspaceCollectionId(
-          state.savedWorkspaces,
-          state.archivedWorkspaces,
-          snapshot.workspaceId
-        )
-      )
-
-      set((s) => {
-        return {
-          savedWorkspaces: upsertSavedWorkspace(
-            s.savedWorkspaces,
-            savedWorkspace
-          ),
-          archivedWorkspaces: s.archivedWorkspaces.filter(
-            (workspace) => workspace.id !== savedWorkspace.id
-          ),
-          workspaceSnapshots: {
-            ...s.workspaceSnapshots,
-            [snapshot.workspaceId]: snapshot
-          }
-        }
-      })
-    },
-
-    exportWorkspaceBundle: (id) => {
-      const state = get()
-      const targetWorkspaceId = id || state.workspaceId
-      if (!targetWorkspaceId) return null
-
-      const snapshot =
-        targetWorkspaceId === state.workspaceId
-          ? buildWorkspaceSnapshot(state)
-          : state.workspaceSnapshots[targetWorkspaceId]
-      if (!snapshot) return null
-
-      const savedWorkspace =
-        state.savedWorkspaces.find((workspace) => workspace.id === targetWorkspaceId) ||
-        state.archivedWorkspaces.find(
-          (workspace) => workspace.id === targetWorkspaceId
-        ) ||
-        null
-
-      const chatSession = state.workspaceChatSessions[targetWorkspaceId]
-
-      return {
-        format: WORKSPACE_EXPORT_BUNDLE_FORMAT,
-        schemaVersion: WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION,
-        exportedAt: new Date().toISOString(),
-        workspace: {
-          name: snapshot.workspaceName || savedWorkspace?.name || "Untitled Workspace",
-          tag: snapshot.workspaceTag || savedWorkspace?.tag || "",
-          createdAt:
-            snapshot.workspaceCreatedAt ||
-            savedWorkspace?.createdAt ||
-            null,
-          snapshot: buildWorkspaceBundleSnapshot(snapshot),
-          ...(chatSession
-            ? {
-                chatSession: cloneWorkspaceBundleChatSession({
-                  messages: chatSession.messages,
-                  history: chatSession.history,
-                  historyId: chatSession.historyId,
-                  serverChatId: chatSession.serverChatId
-                })
-              }
-            : {})
-        }
-      }
-    },
-
-    importWorkspaceBundle: (bundle) => {
-      if (
-        bundle.format !== WORKSPACE_EXPORT_BUNDLE_FORMAT ||
-        bundle.schemaVersion !== WORKSPACE_EXPORT_BUNDLE_SCHEMA_VERSION
-      ) {
-        return null
-      }
-
-      const snapshotPayload = bundle.workspace?.snapshot
-      if (!snapshotPayload) return null
-
-      const state = get()
-      const now = new Date()
-      const currentSnapshot = state.workspaceId
-        ? buildWorkspaceSnapshot(state)
-        : null
-
-      const baseName =
-        (typeof snapshotPayload.workspaceName === "string" &&
-        snapshotPayload.workspaceName.trim()
-          ? snapshotPayload.workspaceName.trim()
-          : typeof bundle.workspace?.name === "string"
-            ? bundle.workspace.name.trim()
-            : "") || "Imported Workspace"
-      const importedName = `${baseName} (Imported)`
-      const importedId = generateWorkspaceId()
-      const importedSlug = createSlug(importedName) || importedId.slice(0, 8)
-      const importedTag = `workspace:${importedSlug}`
-
-      const importedSnapshot = hydrateWorkspaceBundleSnapshot(
-        snapshotPayload,
-        importedId,
-        importedName,
-        importedTag
-      )
-
-      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
-        ...state.workspaceSnapshots,
-        [importedSnapshot.workspaceId]: importedSnapshot
-      }
-      let nextSavedWorkspaces = state.savedWorkspaces
-
-      if (currentSnapshot?.workspaceId) {
-        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
-        nextSavedWorkspaces = upsertSavedWorkspace(
-          nextSavedWorkspaces,
-          createSavedWorkspaceEntry(
-            currentSnapshot,
-            now,
-            getSavedWorkspaceCollectionId(
-              state.savedWorkspaces,
-              state.archivedWorkspaces,
-              currentSnapshot.workspaceId
-            )
-          )
-        )
-      }
-
-      nextSavedWorkspaces = upsertSavedWorkspace(
-        nextSavedWorkspaces,
-        createSavedWorkspaceEntry(importedSnapshot, now, null)
-      )
-
-      const importedChatSession =
-        bundle.workspace?.chatSession &&
-        cloneWorkspaceBundleChatSession(bundle.workspace.chatSession)
-      const nextWorkspaceChatSessions = importedChatSession
-        ? {
-            ...state.workspaceChatSessions,
-            [importedSnapshot.workspaceId]: {
-              messages: importedChatSession.messages,
-              history: importedChatSession.history,
-              historyId: importedChatSession.historyId,
-              serverChatId: importedChatSession.serverChatId
-            }
-          }
-        : state.workspaceChatSessions
-
-      set({
-        ...applyWorkspaceSnapshot(importedSnapshot),
-        savedWorkspaces: nextSavedWorkspaces,
-        archivedWorkspaces: state.archivedWorkspaces.filter(
-          (workspace) => workspace.id !== importedSnapshot.workspaceId
-        ),
-        workspaceSnapshots: nextSnapshots,
-        workspaceChatSessions: nextWorkspaceChatSessions
-      })
-
-      return importedSnapshot.workspaceId
-    },
-
-    switchWorkspace: (id) => {
-      const state = get()
-      const targetWorkspace =
-        state.savedWorkspaces.find((workspace) => workspace.id === id) || null
-      const targetSnapshotFromState = state.workspaceSnapshots[id]
-      if (!targetWorkspace && !targetSnapshotFromState) return
-
-      const now = new Date()
-      const currentSnapshot = state.workspaceId
-        ? buildWorkspaceSnapshot(state)
-        : null
-      const targetSnapshot =
-        targetSnapshotFromState ||
-        createEmptyWorkspaceSnapshot({
-          id,
-          name: targetWorkspace?.name || "Untitled Workspace",
-          tag: targetWorkspace?.tag || `workspace:${id.slice(0, 8)}`,
-          createdAt: targetWorkspace?.createdAt || now
-        })
-
-      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
-        ...state.workspaceSnapshots,
-        [targetSnapshot.workspaceId]: targetSnapshot
-      }
-
-      let nextSavedWorkspaces = state.savedWorkspaces
-      if (currentSnapshot?.workspaceId) {
-        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
-        nextSavedWorkspaces = upsertSavedWorkspace(
-          nextSavedWorkspaces,
-          createSavedWorkspaceEntry(
-            currentSnapshot,
-            now,
-            getSavedWorkspaceCollectionId(
-              state.savedWorkspaces,
-              state.archivedWorkspaces,
-              currentSnapshot.workspaceId
-            )
-          )
-        )
-      }
-
-      nextSavedWorkspaces = upsertSavedWorkspace(
-        nextSavedWorkspaces,
-        createSavedWorkspaceEntry(
-          targetSnapshot,
-          now,
-          getSavedWorkspaceCollectionId(
-            state.savedWorkspaces,
-            state.archivedWorkspaces,
-            targetSnapshot.workspaceId
-          )
-        )
-      )
-
-      set({
-        ...applyWorkspaceSnapshot(targetSnapshot),
-        savedWorkspaces: nextSavedWorkspaces,
-        archivedWorkspaces: state.archivedWorkspaces.filter(
-          (workspace) => workspace.id !== targetSnapshot.workspaceId
-        ),
-        workspaceSnapshots: nextSnapshots
-      })
-    },
-
-    createNewWorkspace: (name = "New Research") => {
-      const state = get()
-      const newId = generateWorkspaceId()
-      const slug = createSlug(name) || newId.slice(0, 8)
-      const createdAt = new Date()
-      const tag = `workspace:${slug}`
-
-      const newWorkspaceSnapshot = createEmptyWorkspaceSnapshot({
-        id: newId,
-        name,
-        tag,
-        createdAt
-      })
-      const currentSnapshot = state.workspaceId
-        ? buildWorkspaceSnapshot(state)
-        : null
-
-      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
-        ...state.workspaceSnapshots,
-        [newId]: newWorkspaceSnapshot
-      }
-      let nextSavedWorkspaces = state.savedWorkspaces
-
-      if (currentSnapshot?.workspaceId) {
-        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
-        nextSavedWorkspaces = upsertSavedWorkspace(
-          nextSavedWorkspaces,
-          createSavedWorkspaceEntry(
-            currentSnapshot,
-            createdAt,
-            getSavedWorkspaceCollectionId(
-              state.savedWorkspaces,
-              state.archivedWorkspaces,
-              currentSnapshot.workspaceId
-            )
-          )
-        )
-      }
-
-      nextSavedWorkspaces = upsertSavedWorkspace(
-        nextSavedWorkspaces,
-        createSavedWorkspaceEntry(newWorkspaceSnapshot, createdAt)
-      )
-
-      set({
-        ...applyWorkspaceSnapshot(newWorkspaceSnapshot),
-        ...initialSourcesState,
-        ...initialStudioState,
-        savedWorkspaces: nextSavedWorkspaces,
-        archivedWorkspaces: state.archivedWorkspaces.filter(
-          (workspace) => workspace.id !== newWorkspaceSnapshot.workspaceId
-        ),
-        workspaceSnapshots: nextSnapshots
-      })
-    },
-
-    duplicateWorkspace: (id) => {
-      const state = get()
-      const sourceWorkspaceId = id || state.workspaceId
-      if (!sourceWorkspaceId) return null
-
-      const currentSnapshot = state.workspaceId
-        ? buildWorkspaceSnapshot(state)
-        : null
-      const sourceSnapshot =
-        sourceWorkspaceId === state.workspaceId
-          ? currentSnapshot
-          : state.workspaceSnapshots[sourceWorkspaceId]
-      if (!sourceSnapshot) return null
-
-      const duplicatedSnapshot = duplicateWorkspaceSnapshot(sourceSnapshot)
-      const now = new Date()
-      const nextSnapshots: Record<string, WorkspaceSnapshot> = {
-        ...state.workspaceSnapshots,
-        [duplicatedSnapshot.workspaceId]: duplicatedSnapshot
-      }
-      let nextSavedWorkspaces = state.savedWorkspaces
-
-      if (currentSnapshot?.workspaceId) {
-        nextSnapshots[currentSnapshot.workspaceId] = currentSnapshot
-        nextSavedWorkspaces = upsertSavedWorkspace(
-          nextSavedWorkspaces,
-          createSavedWorkspaceEntry(
-            currentSnapshot,
-            now,
-            getSavedWorkspaceCollectionId(
-              state.savedWorkspaces,
-              state.archivedWorkspaces,
-              currentSnapshot.workspaceId
-            )
-          )
-        )
-      }
-
-      nextSavedWorkspaces = upsertSavedWorkspace(
-        nextSavedWorkspaces,
-        createSavedWorkspaceEntry(
-          duplicatedSnapshot,
-          now,
-          getSavedWorkspaceCollectionId(
-            state.savedWorkspaces,
-            state.archivedWorkspaces,
-            sourceWorkspaceId
-          )
-        )
-      )
-
-      set({
-        ...applyWorkspaceSnapshot(duplicatedSnapshot),
-        savedWorkspaces: nextSavedWorkspaces,
-        archivedWorkspaces: state.archivedWorkspaces.filter(
-          (workspace) => workspace.id !== duplicatedSnapshot.workspaceId
-        ),
-        workspaceSnapshots: nextSnapshots
-      })
-
-      return duplicatedSnapshot.workspaceId
-    },
-
-    archiveWorkspace: (id) => {
-      set((state) => {
-        const now = new Date()
-        const currentSnapshot = state.workspaceId
-          ? buildWorkspaceSnapshot(state)
-          : null
-        const snapshotToArchive =
-          id === state.workspaceId
-            ? currentSnapshot
-            : state.workspaceSnapshots[id]
-        const savedEntry =
-          state.savedWorkspaces.find((workspace) => workspace.id === id) ||
-          state.archivedWorkspaces.find((workspace) => workspace.id === id) ||
-          (snapshotToArchive
-            ? createSavedWorkspaceEntry(
-                snapshotToArchive,
-                now,
-                getSavedWorkspaceCollectionId(
-                  state.savedWorkspaces,
-                  state.archivedWorkspaces,
-                  id
-                )
-              )
-            : null)
-
-        if (!savedEntry) {
-          return state
-        }
-
-        const nextSnapshots = { ...state.workspaceSnapshots }
-        if (snapshotToArchive) {
-          nextSnapshots[id] = snapshotToArchive
-        }
-
-        const nextSavedWorkspaces = state.savedWorkspaces.filter(
-          (workspace) => workspace.id !== id
-        )
-        const nextArchivedWorkspaces = upsertArchivedWorkspace(
-          state.archivedWorkspaces,
-          {
-            ...savedEntry,
-            lastAccessedAt: now,
-            sourceCount: snapshotToArchive
-              ? snapshotToArchive.sources.length
-              : savedEntry.sourceCount
-          }
-        )
-
-        if (state.workspaceId !== id) {
-          return {
-            savedWorkspaces: nextSavedWorkspaces,
-            archivedWorkspaces: nextArchivedWorkspaces,
-            workspaceSnapshots: nextSnapshots
-          }
-        }
-
-        if (nextSavedWorkspaces.length > 0) {
-          const fallbackWorkspace = nextSavedWorkspaces[0]
-          const fallbackSnapshot =
-            nextSnapshots[fallbackWorkspace.id] ||
-            createEmptyWorkspaceSnapshot({
-              id: fallbackWorkspace.id,
-              name: fallbackWorkspace.name,
-              tag: fallbackWorkspace.tag,
-              createdAt: fallbackWorkspace.createdAt
-            })
-
-          return {
-            ...applyWorkspaceSnapshot(fallbackSnapshot),
-            savedWorkspaces: upsertSavedWorkspace(
-              nextSavedWorkspaces,
-              createSavedWorkspaceEntry(
-                fallbackSnapshot,
-                now,
-                fallbackWorkspace.collectionId
-              )
-            ),
-            archivedWorkspaces: nextArchivedWorkspaces,
-            workspaceSnapshots: {
-              ...nextSnapshots,
-              [fallbackSnapshot.workspaceId]: fallbackSnapshot
-            }
-          }
-        }
-
-        const replacementSnapshot = createFallbackWorkspaceSnapshot()
-        return {
-          ...applyWorkspaceSnapshot(replacementSnapshot),
-          savedWorkspaces: [
-            createSavedWorkspaceEntry(replacementSnapshot, now, null)
-          ],
-          archivedWorkspaces: nextArchivedWorkspaces,
-          workspaceSnapshots: {
-            ...nextSnapshots,
-            [replacementSnapshot.workspaceId]: replacementSnapshot
-          }
-        }
-      })
-    },
-
-    restoreArchivedWorkspace: (id) => {
-      set((state) => {
-        const archivedWorkspace = state.archivedWorkspaces.find(
-          (workspace) => workspace.id === id
-        )
-        if (!archivedWorkspace) {
-          return state
-        }
-
-        const snapshot =
-          state.workspaceSnapshots[id] ||
-          createEmptyWorkspaceSnapshot({
-            id: archivedWorkspace.id,
-            name: archivedWorkspace.name,
-            tag: archivedWorkspace.tag,
-            createdAt: archivedWorkspace.createdAt
-          })
-        const now = new Date()
-
-        return {
-          savedWorkspaces: upsertSavedWorkspace(
-            state.savedWorkspaces,
-            createSavedWorkspaceEntry(
-              snapshot,
-              now,
-              archivedWorkspace.collectionId
-            )
-          ),
-          archivedWorkspaces: state.archivedWorkspaces.filter(
-            (workspace) => workspace.id !== id
-          ),
-          workspaceSnapshots: {
-            ...state.workspaceSnapshots,
-            [snapshot.workspaceId]: snapshot
-          }
-        }
-      })
-    },
-
-    deleteWorkspace: (id) => {
-      set((state) => {
-        const nextSavedWorkspaces = state.savedWorkspaces.filter(
-          (workspace) => workspace.id !== id
-        )
-        const nextArchivedWorkspaces = state.archivedWorkspaces.filter(
-          (workspace) => workspace.id !== id
-        )
-        const { [id]: _removedWorkspace, ...remainingSnapshots } =
-          state.workspaceSnapshots
-        const { [id]: _removedChatSession, ...remainingChatSessions } =
-          state.workspaceChatSessions
-
-        if (state.workspaceId !== id) {
-          return {
-            savedWorkspaces: nextSavedWorkspaces,
-            archivedWorkspaces: nextArchivedWorkspaces,
-            workspaceSnapshots: remainingSnapshots,
-            workspaceChatSessions: remainingChatSessions
-          }
-        }
-
-        if (nextSavedWorkspaces.length > 0) {
-          const fallbackWorkspace = nextSavedWorkspaces[0]
-          const fallbackSnapshot =
-            remainingSnapshots[fallbackWorkspace.id] ||
-            createEmptyWorkspaceSnapshot({
-              id: fallbackWorkspace.id,
-              name: fallbackWorkspace.name,
-              tag: fallbackWorkspace.tag,
-              createdAt: fallbackWorkspace.createdAt
-            })
-
-          return {
-            ...applyWorkspaceSnapshot(fallbackSnapshot),
-            savedWorkspaces: upsertSavedWorkspace(
-              nextSavedWorkspaces,
-              createSavedWorkspaceEntry(
-                fallbackSnapshot,
-                new Date(),
-                fallbackWorkspace.collectionId
-              )
-            ),
-            archivedWorkspaces: nextArchivedWorkspaces,
-            workspaceSnapshots: {
-              ...remainingSnapshots,
-              [fallbackSnapshot.workspaceId]: fallbackSnapshot
-            },
-            workspaceChatSessions: remainingChatSessions
-          }
-        }
-
-        const replacementSnapshot = createFallbackWorkspaceSnapshot()
-
-        return {
-          ...applyWorkspaceSnapshot(replacementSnapshot),
-          savedWorkspaces: [createSavedWorkspaceEntry(replacementSnapshot, new Date(), null)],
-          archivedWorkspaces: nextArchivedWorkspaces,
-          workspaceSnapshots: {
-            ...remainingSnapshots,
-            [replacementSnapshot.workspaceId]: replacementSnapshot
-          },
-          workspaceChatSessions: remainingChatSessions
-        }
-      })
-    },
-
-    getSavedWorkspaces: () => {
-      const state = get()
-      return sortByLastAccessedDesc(state.savedWorkspaces)
-    },
-
-    getArchivedWorkspaces: () => {
-      const state = get()
-      return sortByLastAccessedDesc(state.archivedWorkspaces)
-    },
-
-    saveWorkspaceChatSession: (workspaceId, session) => {
-      if (!workspaceId) return
-      set((state) => ({
-        workspaceChatSessions: {
-          ...state.workspaceChatSessions,
-          [workspaceId]: cloneWorkspaceChatSession(session)
-        }
-      }))
-    },
-
-    getWorkspaceChatSession: (workspaceId) => {
-      const state = get()
-      const session = state.workspaceChatSessions[workspaceId]
-      return session ? cloneWorkspaceChatSession(session) : null
-    },
-
-    clearWorkspaceChatSession: (workspaceId) => {
-      if (!workspaceId) return
-      set((state) => {
-        const { [workspaceId]: _removedSession, ...remainingSessions } =
-          state.workspaceChatSessions
-        return {
-          workspaceChatSessions: remainingSessions
-        }
-      })
-    },
-
-    captureUndoSnapshot: () => {
-      const state = get()
-      return buildWorkspaceUndoSnapshot(state)
-    },
-
-    restoreUndoSnapshot: (snapshot) => {
-      const clonedSnapshot = cloneWorkspaceValue(snapshot)
-      const restoredSources = reviveSources(clonedSnapshot.sources || [])
-      const restoredSourceIdSet = new Set(
-        restoredSources.map((source) => source.id)
-      )
-      const restoredSourceFolders = reviveSourceFolders(
-        clonedSnapshot.sourceFolders || [],
-        clonedSnapshot.workspaceId
-      )
-      const restoredFolderIdSet = new Set(
-        restoredSourceFolders.map((folder) => folder.id)
-      )
-      set({
-        workspaceId: clonedSnapshot.workspaceId,
-        workspaceName: clonedSnapshot.workspaceName,
-        workspaceTag: clonedSnapshot.workspaceTag,
-        workspaceCreatedAt: reviveDateOrNull(clonedSnapshot.workspaceCreatedAt),
-        workspaceChatReferenceId:
-          clonedSnapshot.workspaceChatReferenceId ||
-          clonedSnapshot.workspaceId,
-        sources: restoredSources,
-        selectedSourceIds: clonedSnapshot.selectedSourceIds || [],
-        sourceFolders: restoredSourceFolders,
-        sourceFolderMemberships: reviveSourceFolderMemberships(
-          clonedSnapshot.sourceFolderMemberships || [],
-          restoredSourceIdSet,
-          restoredFolderIdSet
-        ),
-        selectedSourceFolderIds: (
-          clonedSnapshot.selectedSourceFolderIds || []
-        ).filter((id) => restoredFolderIdSet.has(id)),
-        activeFolderId:
-          clonedSnapshot.activeFolderId &&
-          restoredFolderIdSet.has(clonedSnapshot.activeFolderId)
-            ? clonedSnapshot.activeFolderId
-            : null,
-        generatedArtifacts: reviveArtifacts(clonedSnapshot.generatedArtifacts || []),
-        notes: clonedSnapshot.notes || "",
-        currentNote: clonedSnapshot.currentNote || { ...DEFAULT_WORKSPACE_NOTE },
-        workspaceBanner: coerceWorkspaceBannerForRehydrate(
-          clonedSnapshot.workspaceBanner
-        ),
-        leftPaneCollapsed: Boolean(clonedSnapshot.leftPaneCollapsed),
-        rightPaneCollapsed: Boolean(clonedSnapshot.rightPaneCollapsed),
-        audioSettings:
-          clonedSnapshot.audioSettings || { ...DEFAULT_AUDIO_SETTINGS },
-        savedWorkspaces: (clonedSnapshot.savedWorkspaces || []).map(
-          reviveSavedWorkspace
-        ),
-        archivedWorkspaces: (clonedSnapshot.archivedWorkspaces || []).map(
-          reviveSavedWorkspace
-        ),
-        workspaceCollections: reviveWorkspaceCollections(
-          clonedSnapshot.workspaceCollections || []
-        ),
-        workspaceSnapshots: Object.fromEntries(
-          Object.entries(clonedSnapshot.workspaceSnapshots || {}).map(
-            ([workspaceId, workspaceSnapshot]) => [
-              workspaceId,
-              reviveWorkspaceSnapshot(workspaceId, workspaceSnapshot)
-            ]
-          )
-        ),
-        workspaceChatSessions: clonedSnapshot.workspaceChatSessions || {}
-      })
-    },
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Reset Actions
-    // ─────────────────────────────────────────────────────────────────────────
-
-    reset: () => set(initialState),
-
-    resetSources: () =>
-      set({
-        ...initialSourcesState
-      }),
-
-    resetStudio: () =>
-      set({
-        ...initialStudioState
-      })
+      ...createSourcesSlice(set, get),
+      ...createStudioSlice(set, get),
+      ...createUISlice(set, get),
+      ...createWorkspaceListSlice(set, get),
     }),
     {
       name: WORKSPACE_STORAGE_KEY,
       storage: createJSONStorage(() => createWorkspaceStorage()),
       version: 1,
       migrate: (persistedState) => migratePersistedWorkspaceState(persistedState),
+      // NOTE: The rest of persist config follows below (was already here)
+
       // Only persist essential state, not transient UI state
       partialize: (state): PersistedWorkspaceState => {
         const nextSnapshots = { ...state.workspaceSnapshots }

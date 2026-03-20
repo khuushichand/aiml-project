@@ -36,6 +36,14 @@ export default function LoginPage() {
   } | null>(null);
   const [mfaCode, setMfaCode] = useState('');
 
+  const navigateAfterLogin = () => {
+    if (typeof window !== 'undefined') {
+      window.location.assign(redirectTarget);
+      return;
+    }
+    router.push(redirectTarget);
+  };
+
   // Password login form
   const passwordForm = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
@@ -60,7 +68,7 @@ export default function LoginPage() {
     try {
       const result = await loginWithPassword(data.username, data.password);
       if (result?.status === 'authenticated') {
-        router.push(redirectTarget);
+        navigateAfterLogin();
       } else if (result?.status === 'mfa_required') {
         setMfaChallenge({
           sessionToken: result.sessionToken,
@@ -86,7 +94,7 @@ export default function LoginPage() {
     try {
       const result = await loginWithApiKey(data.apiKey);
       if (result) {
-        router.push(redirectTarget);
+        navigateAfterLogin();
       } else {
         setServerError('Invalid API key.');
       }
@@ -117,7 +125,7 @@ export default function LoginPage() {
     try {
       const result = await completeMfaLogin(mfaChallenge.sessionToken, mfaCode.trim());
       if (result?.status === 'authenticated') {
-        router.push(redirectTarget);
+        navigateAfterLogin();
       } else {
         setServerError('Invalid verification code.');
       }

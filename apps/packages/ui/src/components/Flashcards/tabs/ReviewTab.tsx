@@ -28,6 +28,8 @@ import {
   useCramQueueQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
+  useFlashcardAssistantQuery,
+  useFlashcardAssistantRespondMutation,
   useUpdateFlashcardMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
@@ -38,9 +40,16 @@ import {
   useHasCardsQuery,
   useNextDueQuery
 } from "../hooks"
-import { MarkdownWithBoundary, ReviewProgress, ReviewAnalyticsSummary, FlashcardEditDrawer } from "../components"
+import {
+  MarkdownWithBoundary,
+  ReviewProgress,
+  ReviewAnalyticsSummary,
+  FlashcardEditDrawer,
+  FlashcardStudyAssistantPanel
+} from "../components"
 import { calculateIntervals } from "../utils/calculateIntervals"
 import { formatCardType } from "../utils/model-type-labels"
+import { FlashcardQueueStateBadge } from "../utils/queue-state-badges"
 import { buildReviewUndoState } from "../utils/review-undo"
 import { getFlashcardSourceMeta } from "../utils/source-reference"
 import {
@@ -48,6 +57,7 @@ import {
   mapFlashcardsUiError,
   type FlashcardsUiErrorCode
 } from "../utils/error-taxonomy"
+import type { StudyAssistantRespondRequest } from "@/services/flashcards"
 import { trackFlashcardsErrorRecoveryTelemetry } from "@/utils/flashcards-error-recovery-telemetry"
 import { useFlashcardsShortcutHintDensity } from "../hooks/useFlashcardsShortcutHintDensity"
 
@@ -172,6 +182,10 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     localOverrideCard ??
     reviewOverrideCard ??
     (reviewMode === "cram" ? cramQueueCard : reviewQuery.data)
+  const assistantQuery = useFlashcardAssistantQuery(activeCard?.uuid, {
+    enabled: isActive && !!activeCard
+  })
+  const assistantRespondMutation = useFlashcardAssistantRespondMutation()
   const reviewProgressTotal =
     reviewMode === "cram" ? cramQueue.length : dueCountsQuery.data?.total ?? 0
   const isCramMode = reviewMode === "cram"
@@ -246,10 +260,15 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     return decksQuery.data.find((d) => d.id === reviewDeckId)?.name
   }, [reviewDeckId, decksQuery.data])
 
+  const activeSchedulerLabel = React.useMemo(() => {
+    if (!activeCard?.scheduler_type) return null
+    return activeCard.scheduler_type === "fsrs" ? "FSRS" : "SM-2+"
+  }, [activeCard?.scheduler_type])
+
   // Calculate intervals for current card
   const intervals = React.useMemo(() => {
     if (!activeCard) return null
-    return calculateIntervals(activeCard)
+    return activeCard.next_intervals ?? calculateIntervals(activeCard)
   }, [activeCard])
 
   // Rating options for Anki-style review with colors, shortcuts, icons, and interval previews
@@ -719,6 +738,17 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
     }
   }, [activeCard, resetSchedulingMutation, message, reportUiError, t])
 
+  const handleAssistantRespond = React.useCallback(
+    async (request: StudyAssistantRespondRequest) => {
+      if (!activeCard) return
+      await assistantRespondMutation.mutateAsync({
+        cardUuid: activeCard.uuid,
+        request
+      })
+    },
+    [activeCard, assistantRespondMutation]
+  )
+
   React.useEffect(() => {
     if (reviewMode !== "cram") return
     setCramQueueIndex((idx) => Math.min(idx, cramQueue.length))
@@ -865,6 +895,15 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <Tag>{formatCardType(activeCard, t)}</Tag>
+                <FlashcardQueueStateBadge
+                  card={activeCard}
+                  testId="flashcards-review-queue-state"
+                />
+                {activeSchedulerLabel && (
+                  <Tag data-testid="flashcards-review-scheduler-type">
+                    {activeSchedulerLabel}
+                  </Tag>
+                )}
                 {activeCard.tags?.map((tag) => (
                   <Tag key={tag}>{tag}</Tag>
                 ))}
@@ -944,6 +983,18 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
                 )}
               </div>
             )}
+
+            <FlashcardStudyAssistantPanel
+              cardUuid={activeCard.uuid}
+              threadVersion={assistantQuery.data?.thread.version ?? null}
+              messages={assistantQuery.data?.messages ?? []}
+              availableActions={assistantQuery.data?.available_actions ?? null}
+              isLoading={assistantQuery.isLoading}
+              isError={assistantQuery.isError}
+              isResponding={assistantRespondMutation.isPending}
+              onReloadContext={() => assistantQuery.refetch()}
+              onRespond={handleAssistantRespond}
+            />
 
             <div className="mt-2 flex flex-col gap-3">
               {!showAnswer ? (

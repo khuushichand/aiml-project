@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import React from "react"
-import useDynamicTextareaSize from "~/hooks/useDynamicTextareaSize"
-import { toBase64 } from "~/libs/to-base64"
-import { useMessageOption } from "~/hooks/useMessageOption"
+import useDynamicTextareaSize from "@/hooks/useDynamicTextareaSize"
+import { toBase64 } from "@/libs/to-base64"
+import { useMessageOption } from "@/hooks/useMessageOption"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import {
   Checkbox,
@@ -18,8 +18,8 @@ import {
   Button,
   Space
 } from "antd"
-import { useWebUI } from "~/store/webui"
-import { defaultEmbeddingModelForRag } from "~/services/tldw-server"
+import { useWebUI } from "@/store/webui"
+import { defaultEmbeddingModelForRag } from "@/services/tldw-server"
 import {
   ChevronDown,
   ChevronRight,
@@ -61,8 +61,8 @@ import { getIsSimpleInternetSearch } from "@/services/search"
 import { getProviderDisplayName } from "@/utils/provider-registry"
 import { formatPinnedResults } from "@/utils/rag-format"
 import { useStorage } from "@plasmohq/storage/hook"
-import { useTabMentions } from "~/hooks/useTabMentions"
-import { useFocusShortcuts } from "~/hooks/keyboard"
+import { useTabMentions } from "@/hooks/useTabMentions"
+import { useFocusShortcuts } from "@/hooks/keyboard"
 import { isMac } from "@/hooks/useKeyboardShortcuts"
 import { useDraftPersistence } from "@/hooks/useDraftPersistence"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"

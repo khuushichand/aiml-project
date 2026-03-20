@@ -22,6 +22,7 @@
 #
 #########################################
 # Imports
+import asyncio
 import json
 import os
 import string
@@ -138,6 +139,34 @@ _AUDIO_FILES_NONCRITICAL_EXCEPTIONS = (
 #######################################################################################################################
 # Function Definitions
 #
+
+
+def _enforce_download_quota(user_id: int | None, file_path: Path) -> None:
+    """Raise ValueError when a downloaded URL payload would exceed storage quota."""
+    if user_id is None:
+        return
+
+    from tldw_Server_API.app.services.storage_quota_service import get_storage_quota_service
+
+    async def _check_quota() -> None:
+        quota_service = get_storage_quota_service()
+        size_bytes = file_path.stat().st_size
+        has_quota, info = await quota_service.check_quota(
+            user_id,
+            size_bytes,
+            raise_on_exceed=False,
+        )
+        if has_quota:
+            return
+        raise ValueError(
+            "Storage quota exceeded. Current: "
+            f"{info['current_usage_mb']}MB, "
+            f"New: {info['new_size_mb']}MB, "
+            f"Quota: {info['quota_mb']}MB, "
+            f"Available: {info['available_mb']}MB"
+        )
+
+    asyncio.run(_check_quota())
 
 def check_transcription_model_status(model_name: str) -> dict[str, Any]:
     """
@@ -287,8 +316,8 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
             "on_demand": False,
         }
 
-    # Whisper model readiness is local-cache based because the faster-whisper
-    # transcription route explicitly preflights and rejects unavailable models.
+    # Whisper model readiness is local-cache based, but uncached models remain
+    # usable because faster-whisper can download them lazily on first use.
     whisper_model_name = (parsed_model or requested_model or "").strip()
     try:
         whisper_model_name = validate_whisper_model_identifier(whisper_model_name)
@@ -314,7 +343,7 @@ def check_transcription_model_status(model_name: str) -> dict[str, Any]:
     else:
         return {
             'available': False,
-            'usable': False,
+            'usable': True,
             'message': (
                 f'Model {whisper_model_name} is not available locally and will be downloaded on first use. '
                 'This may take several minutes depending on model size and internet connection.'
@@ -685,6 +714,7 @@ def process_audio_files(
     custom_title: Optional[str] = None,
     author: Optional[str] = None,
     temp_dir: Optional[str] = None,
+    user_id: Optional[int] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> dict[str, Any]:
     """
@@ -1030,7 +1060,9 @@ def process_audio_files(
                      raise RuntimeError("Audio file path is missing or invalid after download/copy check.")
 
                 if is_url:
-                    _validate_downloaded_url_audio_file(Path(current_audio_path))
+                    downloaded_audio_path = Path(current_audio_path)
+                    _validate_downloaded_url_audio_file(downloaded_audio_path)
+                    _enforce_download_quota(user_id, downloaded_audio_path)
 
                 # 2. Convert to WAV using the library function (skip if already WAV)
                 if Path(current_audio_path).suffix.lower() == '.wav':

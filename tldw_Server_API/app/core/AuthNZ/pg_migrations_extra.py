@@ -123,6 +123,21 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS server_source TEXT NOT NULL DEFAULT 'managed'",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS legacy_source_ref TEXT",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_external_servers "
+        "ADD COLUMN IF NOT EXISTS superseded_by_server_id TEXT",
+        (),
+    ),
+    (
         """
         CREATE TABLE IF NOT EXISTS mcp_external_server_secrets (
             server_id TEXT PRIMARY KEY REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
@@ -137,6 +152,51 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_secrets_updated_at "
         "ON mcp_external_server_secrets(updated_at)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_credential_slots (
+            id SERIAL PRIMARY KEY,
+            server_id TEXT NOT NULL REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
+            slot_name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            secret_kind TEXT NOT NULL,
+            privilege_class TEXT NOT NULL DEFAULT 'default',
+            is_required BOOLEAN DEFAULT FALSE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_external_server_slots_server_slot "
+        "ON mcp_external_server_credential_slots(server_id, slot_name)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slots_server "
+        "ON mcp_external_server_credential_slots(server_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_external_server_slot_secrets (
+            slot_id INTEGER PRIMARY KEY REFERENCES mcp_external_server_credential_slots(id) ON DELETE CASCADE,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT NULL,
+            updated_by INTEGER NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_external_server_slot_secrets_updated_at "
+        "ON mcp_external_server_slot_secrets(updated_at)",
         (),
     ),
     (
@@ -162,6 +222,45 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_scope "
         "ON mcp_permission_profiles(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_permission_profiles "
+        "ADD COLUMN IF NOT EXISTS path_scope_object_id INTEGER",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_permission_profiles "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_permission_profiles_path_scope_object "
+        "ON mcp_permission_profiles(path_scope_object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_path_scope_objects (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            path_scope_document_json TEXT NOT NULL DEFAULT '{}',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_path_scope_objects_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_path_scope_objects_scope "
+        "ON mcp_path_scope_objects(owner_scope_type, owner_scope_id)",
         (),
     ),
     (
@@ -192,6 +291,117 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_target "
         "ON mcp_policy_assignments(target_type, target_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS path_scope_object_id INTEGER",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_path_scope_object "
+        "ON mcp_policy_assignments(path_scope_object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_policy_assignment_workspaces (
+            assignment_id INTEGER NOT NULL REFERENCES mcp_policy_assignments(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_policy_assignment_workspaces UNIQUE (assignment_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignment_workspaces_assignment "
+        "ON mcp_policy_assignment_workspaces(assignment_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_objects (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_workspace_set_objects_scope UNIQUE (name, owner_scope_type, owner_scope_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_objects_scope "
+        "ON mcp_workspace_set_objects(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_shared_workspaces (
+            id SERIAL PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            absolute_root TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'team',
+            owner_scope_id INTEGER NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_shared_workspaces_scope_workspace UNIQUE (owner_scope_type, owner_scope_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_shared_workspaces_scope "
+        "ON mcp_shared_workspaces(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_workspace_set_object_members (
+            workspace_set_object_id INTEGER NOT NULL REFERENCES mcp_workspace_set_objects(id) ON DELETE CASCADE,
+            workspace_id TEXT NOT NULL,
+            created_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_mcp_workspace_set_object_members UNIQUE (workspace_set_object_id, workspace_id)
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_workspace_set_object_members_object "
+        "ON mcp_workspace_set_object_members(workspace_set_object_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS workspace_source_mode TEXT",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS workspace_set_object_id INTEGER",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_policy_assignments "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_policy_assignments_workspace_set_object "
+        "ON mcp_policy_assignments(workspace_set_object_id)",
         (),
     ),
     (
@@ -246,6 +456,291 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_approval_policies "
+        "ADD COLUMN IF NOT EXISTS is_immutable BOOLEAN NOT NULL DEFAULT FALSE",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_capability_adapter_mappings (
+            id SERIAL PRIMARY KEY,
+            mapping_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER NULL,
+            capability_name TEXT NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            resolved_policy_document_json TEXT NOT NULL DEFAULT '{}',
+            supported_environment_requirements_json TEXT NOT NULL DEFAULT '[]',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_capability_adapter_mappings_scope "
+        "ON mcp_capability_adapter_mappings(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_mapping_id "
+        "ON mcp_capability_adapter_mappings(mapping_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_capability_adapter_mappings_active_scope_capability "
+        "ON mcp_capability_adapter_mappings("
+        "owner_scope_type, COALESCE(owner_scope_id, -1), capability_name"
+        ") WHERE is_active",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_packs (
+            id SERIAL PRIMARY KEY,
+            pack_id TEXT NOT NULL,
+            pack_version TEXT NOT NULL,
+            pack_schema_version INTEGER NOT NULL,
+            capability_taxonomy_version INTEGER NOT NULL,
+            adapter_contract_version INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            bundle_digest TEXT NOT NULL,
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            normalized_ir_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_packs_scope "
+        "ON mcp_governance_packs(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_scope_version "
+        "ON mcp_governance_packs(pack_id, pack_version, owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS is_active_install BOOLEAN NOT NULL DEFAULT TRUE",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS superseded_by_governance_pack_id INTEGER NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS installed_from_upgrade_id INTEGER NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_type TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_location TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_ref_requested TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_ref_kind TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_subpath TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_commit_resolved TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS pack_content_digest TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_verified BOOLEAN NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_verification_mode TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_fetched_at TIMESTAMPTZ NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS fetched_by INTEGER NULL",
+        (),
+    ),
+    (
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE indexname = 'uq_mcp_governance_packs_active_scope'
+                  AND schemaname = ANY (current_schemas(false))
+            ) THEN
+                UPDATE mcp_governance_packs
+                SET is_active_install = FALSE;
+
+                WITH latest AS (
+                    SELECT MAX(id) AS id
+                    FROM mcp_governance_packs
+                    GROUP BY pack_id, owner_scope_type, COALESCE(owner_scope_id, -1)
+                )
+                UPDATE mcp_governance_packs
+                SET is_active_install = TRUE
+                WHERE id IN (SELECT id FROM latest);
+            END IF;
+        END $$;
+        """,
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_packs_active_scope "
+        "ON mcp_governance_packs(pack_id, owner_scope_type, COALESCE(owner_scope_id, -1)) "
+        "WHERE is_active_install",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_objects (
+            id SERIAL PRIMARY KEY,
+            governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            object_type TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            source_object_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_objects_pack "
+        "ON mcp_governance_pack_objects(governance_pack_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_pack_source "
+        "ON mcp_governance_pack_objects(governance_pack_id, object_type, source_object_id)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_governance_pack_objects_object "
+        "ON mcp_governance_pack_objects(object_type, object_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_upgrades (
+            id SERIAL PRIMARY KEY,
+            pack_id TEXT NOT NULL,
+            owner_scope_type TEXT NOT NULL DEFAULT 'user',
+            owner_scope_id INTEGER NULL,
+            from_governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            to_governance_pack_id INTEGER NOT NULL REFERENCES mcp_governance_packs(id) ON DELETE CASCADE,
+            from_pack_version TEXT NOT NULL,
+            to_pack_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            planned_by INTEGER NULL,
+            executed_by INTEGER NULL,
+            planner_inputs_fingerprint TEXT NULL,
+            adapter_state_fingerprint TEXT NULL,
+            plan_summary_json TEXT NOT NULL DEFAULT '{}',
+            accepted_resolutions_json TEXT NOT NULL DEFAULT '{}',
+            failure_summary TEXT NULL,
+            planned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            executed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_upgrades_scope "
+        "ON mcp_governance_pack_upgrades(pack_id, owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_source_candidates (
+            id SERIAL PRIMARY KEY,
+            source_type TEXT NOT NULL,
+            source_location TEXT NOT NULL,
+            source_ref_requested TEXT NULL,
+            source_ref_kind TEXT NULL,
+            source_subpath TEXT NULL,
+            source_commit_resolved TEXT NULL,
+            pack_content_digest TEXT NOT NULL,
+            pack_document_json TEXT NOT NULL DEFAULT '{}',
+            source_verified BOOLEAN NULL,
+            source_verification_mode TEXT NULL,
+            source_fetched_at TIMESTAMPTZ NULL,
+            fetched_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
+        "ON mcp_governance_pack_source_candidates(source_type, source_location)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS source_ref_kind TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS pack_document_json TEXT NOT NULL DEFAULT '{}'",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_trust_policy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            updated_by INTEGER NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
         """
         CREATE TABLE IF NOT EXISTS mcp_approval_decisions (
             id SERIAL PRIMARY KEY,
@@ -284,6 +779,7 @@ _CREATE_MCP_HUB_TABLES = [
             binding_target_id TEXT NULL,
             external_server_id TEXT NOT NULL REFERENCES mcp_external_servers(id) ON DELETE CASCADE,
             credential_ref TEXT NOT NULL,
+            binding_mode TEXT NOT NULL DEFAULT 'grant',
             usage_rules_json TEXT NOT NULL DEFAULT '{}',
             created_by INTEGER NULL,
             updated_by INTEGER NULL,
@@ -296,6 +792,97 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_credential_bindings_target "
         "ON mcp_credential_bindings(binding_target_type, binding_target_id)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_credential_bindings "
+        "ADD COLUMN IF NOT EXISTS binding_mode TEXT NOT NULL DEFAULT 'grant'",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_credential_bindings "
+        "ADD COLUMN IF NOT EXISTS slot_name TEXT NOT NULL DEFAULT ''",
+        (),
+    ),
+    (
+        """
+        UPDATE mcp_credential_bindings
+        SET binding_mode = CASE
+            WHEN usage_rules_json LIKE '%"binding_mode":"disable"%'
+              OR usage_rules_json LIKE '%"binding_mode": "disable"%'
+            THEN 'disable'
+            ELSE COALESCE(NULLIF(TRIM(binding_mode), ''), 'grant')
+        END
+        """,
+        (),
+    ),
+    ("DROP INDEX IF EXISTS uq_mcp_credential_bindings_target_server", ()),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_credential_bindings_target_server_slot "
+        "ON mcp_credential_bindings(binding_target_type, binding_target_id, external_server_id, slot_name)",
+        (),
+    ),
+    (
+        """
+        INSERT INTO mcp_external_server_credential_slots (
+            server_id, slot_name, display_name, secret_kind, privilege_class, is_required,
+            created_by, updated_by, created_at, updated_at
+        )
+        SELECT
+            s.id,
+            CASE
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'bearer_token' THEN 'bearer_token'
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'api_key_header' THEN 'api_key'
+                ELSE NULL
+            END,
+            CASE
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'bearer_token' THEN 'Bearer Token'
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'api_key_header' THEN 'Api Key'
+                ELSE NULL
+            END,
+            CASE
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'bearer_token' THEN 'bearer_token'
+                WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'api_key_header' THEN 'api_key'
+                ELSE NULL
+            END,
+            'default',
+            TRUE,
+            s.created_by,
+            s.updated_by,
+            s.created_at,
+            s.updated_at
+        FROM mcp_external_servers s
+        WHERE COALESCE(s.server_source, 'managed') = 'managed'
+          AND s.superseded_by_server_id IS NULL
+          AND LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) IN ('bearer_token', 'api_key_header')
+        ON CONFLICT (server_id, slot_name) DO NOTHING
+        """,
+        (),
+    ),
+    (
+        """
+        UPDATE mcp_credential_bindings b
+        SET slot_name = CASE
+            WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'bearer_token' THEN 'bearer_token'
+            WHEN LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) = 'api_key_header' THEN 'api_key'
+            ELSE b.slot_name
+        END
+        FROM mcp_external_servers s
+        WHERE b.external_server_id = s.id
+          AND COALESCE(BTRIM(b.slot_name), '') = ''
+          AND LOWER(COALESCE(s.config_json::jsonb -> 'auth' ->> 'mode', '')) IN ('bearer_token', 'api_key_header')
+        """,
+        (),
+    ),
+    (
+        """
+        INSERT INTO mcp_external_server_slot_secrets (slot_id, encrypted_blob, key_hint, updated_by, updated_at)
+        SELECT slot.id, sec.encrypted_blob, sec.key_hint, sec.updated_by, sec.updated_at
+        FROM mcp_external_server_credential_slots slot
+        JOIN mcp_external_server_secrets sec ON sec.server_id = slot.server_id
+        WHERE slot.slot_name IN ('bearer_token', 'api_key')
+        ON CONFLICT (slot_id) DO NOTHING
+        """,
         (),
     ),
     (
@@ -717,59 +1304,6 @@ _CREATE_AUTHNZ_CORE_TABLES = [
 _CREATE_BILLING_TABLES = [
     (
         """
-        CREATE TABLE IF NOT EXISTS subscription_plans (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            description TEXT,
-            stripe_product_id TEXT,
-            stripe_price_id TEXT,
-            stripe_price_id_yearly TEXT,
-            price_usd_monthly DOUBLE PRECISION DEFAULT 0,
-            price_usd_yearly DOUBLE PRECISION DEFAULT 0,
-            limits_json JSONB NOT NULL,
-            is_active BOOLEAN DEFAULT TRUE,
-            is_public BOOLEAN DEFAULT TRUE,
-            sort_order INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS org_subscriptions (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
-            plan_id INTEGER NOT NULL REFERENCES subscription_plans(id) ON DELETE RESTRICT,
-            stripe_customer_id TEXT,
-            stripe_subscription_id TEXT,
-            stripe_subscription_status TEXT,
-            billing_cycle TEXT DEFAULT 'monthly',
-            current_period_start TIMESTAMP,
-            current_period_end TIMESTAMP,
-            status TEXT DEFAULT 'active',
-            trial_start TIMESTAMP,
-            trial_end TIMESTAMP,
-            canceled_at TIMESTAMP,
-            cancel_at_period_end BOOLEAN DEFAULT FALSE,
-            custom_limits_json JSONB,
-            metadata JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)", ()),
-    (
-        """
         CREATE TABLE IF NOT EXISTS org_budgets (
             org_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
             budgets_json JSONB,
@@ -780,64 +1314,6 @@ _CREATE_BILLING_TABLES = [
         (),
     ),
     ("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
-            id SERIAL PRIMARY KEY,
-            stripe_event_id TEXT UNIQUE NOT NULL,
-            event_type TEXT NOT NULL,
-            event_data JSONB NOT NULL,
-            status TEXT DEFAULT 'pending',
-            processed_at TIMESTAMPTZ,
-            error_message TEXT,
-            retry_count INTEGER DEFAULT 0,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS payment_history (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-            stripe_invoice_id TEXT,
-            stripe_payment_intent_id TEXT,
-            amount_cents INTEGER NOT NULL,
-            currency TEXT DEFAULT 'usd',
-            status TEXT NOT NULL,
-            description TEXT,
-            invoice_pdf_url TEXT,
-            receipt_url TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)", ()),
-    (
-        """
-        CREATE TABLE IF NOT EXISTS billing_audit_log (
-            id SERIAL PRIMARY KEY,
-            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            action TEXT NOT NULL,
-            details TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        (),
-    ),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)", ()),
-    ("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)", ()),
 ]
 
 
@@ -993,6 +1469,222 @@ _CREATE_ORG_PROVIDER_SECRETS = [
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE", ()),
     ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_scope ON org_provider_secrets(scope_type, scope_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider)", ()),
+]
+
+_CREATE_IDENTITY_PROVIDERS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS identity_providers (
+            id SERIAL PRIMARY KEY,
+            slug TEXT NOT NULL,
+            provider_type TEXT NOT NULL DEFAULT 'oidc',
+            owner_scope_type TEXT NOT NULL DEFAULT 'global',
+            owner_scope_id INTEGER NULL,
+            enabled BOOLEAN NOT NULL DEFAULT FALSE,
+            display_name TEXT NULL,
+            issuer TEXT NOT NULL,
+            discovery_url TEXT NULL,
+            authorization_url TEXT NULL,
+            token_url TEXT NULL,
+            jwks_url TEXT NULL,
+            client_id TEXT NULL,
+            client_secret_ref TEXT NULL,
+            claim_mapping_json TEXT NOT NULL DEFAULT '{}',
+            provisioning_policy_json TEXT NOT NULL DEFAULT '{}',
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS provider_type TEXT NOT NULL DEFAULT 'oidc'", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS owner_scope_type TEXT NOT NULL DEFAULT 'global'", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS owner_scope_id INTEGER", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT FALSE", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS display_name TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS issuer TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS discovery_url TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS authorization_url TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS token_url TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS jwks_url TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS client_id TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS client_secret_ref TEXT", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS claim_mapping_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS provisioning_policy_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS created_by INTEGER", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS updated_by INTEGER", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE identity_providers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_scope "
+        "ON identity_providers(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_identity_providers_enabled "
+        "ON identity_providers(enabled)",
+        (),
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_providers_scope_slug "
+        "ON identity_providers(slug, owner_scope_type, COALESCE(owner_scope_id, 0))",
+        (),
+    ),
+]
+
+_CREATE_FEDERATED_IDENTITIES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS federated_identities (
+            id SERIAL PRIMARY KEY,
+            identity_provider_id INTEGER NOT NULL REFERENCES identity_providers(id) ON DELETE CASCADE,
+            external_subject TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            external_username TEXT NULL,
+            external_email TEXT NULL,
+            last_claims_hash TEXT NULL,
+            last_seen_at TIMESTAMPTZ NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS external_username TEXT", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS external_email TEXT", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS last_claims_hash TEXT", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE federated_identities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_identities_provider_subject "
+        "ON federated_identities(identity_provider_id, external_subject)",
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_federated_identities_user_id ON federated_identities(user_id)", ()),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_federated_identities_provider_id "
+        "ON federated_identities(identity_provider_id)",
+        (),
+    ),
+]
+
+_CREATE_SECRET_BACKENDS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS secret_backends (
+            name TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'enabled',
+            capabilities_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS display_name TEXT", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'enabled'", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS capabilities_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE secret_backends ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_secret_backends_status ON secret_backends(status)", ()),
+]
+
+_CREATE_MANAGED_SECRET_REFS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS managed_secret_refs (
+            id SERIAL PRIMARY KEY,
+            backend_name TEXT NOT NULL REFERENCES secret_backends(name) ON DELETE RESTRICT,
+            owner_scope_type TEXT NOT NULL,
+            owner_scope_id INTEGER NOT NULL,
+            provider_key TEXT NOT NULL,
+            backend_ref TEXT NULL,
+            display_name TEXT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            last_resolved_at TIMESTAMPTZ NULL,
+            expires_at TIMESTAMPTZ NULL,
+            created_by INTEGER NULL,
+            updated_by INTEGER NULL,
+            revoked_by INTEGER NULL,
+            revoked_at TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS backend_ref TEXT", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS display_name TEXT", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS metadata_json TEXT NOT NULL DEFAULT '{}'", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS last_resolved_at TIMESTAMPTZ", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS created_by INTEGER", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS updated_by INTEGER", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS revoked_by INTEGER", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE managed_secret_refs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_managed_secret_refs_scope_provider "
+        "ON managed_secret_refs(backend_name, owner_scope_type, owner_scope_id, provider_key)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_scope "
+        "ON managed_secret_refs(owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_managed_secret_refs_status "
+        "ON managed_secret_refs(status)",
+        (),
+    ),
+]
+
+_CREATE_FEDERATED_MANAGED_GRANTS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS federated_managed_grants (
+            id SERIAL PRIMARY KEY,
+            identity_provider_id INTEGER NOT NULL REFERENCES identity_providers(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            grant_kind TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE federated_managed_grants ADD COLUMN IF NOT EXISTS grant_kind TEXT NOT NULL DEFAULT 'org'", ()),
+    ("ALTER TABLE federated_managed_grants ADD COLUMN IF NOT EXISTS target_ref TEXT NOT NULL DEFAULT ''", ()),
+    ("ALTER TABLE federated_managed_grants ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE federated_managed_grants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP", ()),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_federated_managed_grants_target "
+        "ON federated_managed_grants(identity_provider_id, user_id, grant_kind, target_ref)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_user_id "
+        "ON federated_managed_grants(user_id)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_federated_managed_grants_provider_id "
+        "ON federated_managed_grants(identity_provider_id)",
+        (),
+    ),
 ]
 
 _CREATE_BYOK_OAUTH_STATE = [
@@ -1556,6 +2248,97 @@ _CREATE_BACKUP_SCHEDULES_TABLES = [
     ("CREATE INDEX IF NOT EXISTS idx_backup_schedule_runs_scheduled_for ON backup_schedule_runs(scheduled_for)", ()),
 ]
 
+_CREATE_MAINTENANCE_ROTATION_RUNS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS maintenance_rotation_runs (
+            id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            domain TEXT NULL,
+            queue TEXT NULL,
+            job_type TEXT NULL,
+            fields_json TEXT NOT NULL,
+            "limit" INTEGER NULL,
+            affected_count INTEGER NULL,
+            requested_by_user_id INTEGER NULL,
+            requested_by_label TEXT NULL,
+            confirmation_recorded BOOLEAN NOT NULL DEFAULT FALSE,
+            job_id TEXT NULL,
+            scope_summary TEXT NOT NULL,
+            key_source TEXT NOT NULL,
+            error_message TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_active_execute
+        ON maintenance_rotation_runs(mode)
+        WHERE mode = 'execute' AND status IN ('queued', 'running')
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_created_at "
+        "ON maintenance_rotation_runs(created_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_maintenance_rotation_runs_status "
+        "ON maintenance_rotation_runs(status)",
+        (),
+    ),
+]
+
+_CREATE_BYOK_VALIDATION_RUNS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS byok_validation_runs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            org_id INTEGER NULL,
+            provider TEXT NULL,
+            keys_checked INTEGER NULL,
+            valid_count INTEGER NULL,
+            invalid_count INTEGER NULL,
+            error_count INTEGER NULL,
+            requested_by_user_id INTEGER NULL,
+            requested_by_label TEXT NULL,
+            job_id TEXT NULL,
+            scope_summary TEXT NOT NULL,
+            error_message TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL,
+            started_at TIMESTAMPTZ NULL,
+            completed_at TIMESTAMPTZ NULL
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_byok_validation_runs_active
+        ON byok_validation_runs((1))
+        WHERE status IN ('queued', 'running')
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_created_at "
+        "ON byok_validation_runs(created_at)",
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_byok_validation_runs_status "
+        "ON byok_validation_runs(status)",
+        (),
+    ),
+]
+
 
 async def ensure_tool_catalogs_tables_pg(pool: DatabasePool | None = None) -> bool:
     """Ensure tool catalogs tables exist on PostgreSQL backends.
@@ -1602,6 +2385,54 @@ async def ensure_backup_schedules_tables_pg(pool: DatabasePool | None = None) ->
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL backup schedule tables: {exc}")
+        return False
+
+
+async def ensure_maintenance_rotation_runs_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure maintenance rotation run tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                f"PG ensure authnz core tables before maintenance rotation runs failed: {exc}"
+            )
+        for sql, params in _CREATE_MAINTENANCE_ROTATION_RUNS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure maintenance rotation run DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL maintenance rotation runs table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL maintenance rotation runs table: {exc}")
+        return False
+
+
+async def ensure_byok_validation_runs_table_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure BYOK validation run tables exist on PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(
+                f"PG ensure authnz core tables before BYOK validation runs failed: {exc}"
+            )
+        for sql, params in _CREATE_BYOK_VALIDATION_RUNS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"PG ensure BYOK validation run DDL failed: {exc}")
+        logger.info("Ensured PostgreSQL BYOK validation runs table (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL BYOK validation runs table: {exc}")
         return False
 
 
@@ -1804,66 +2635,6 @@ def _normalize_budget_payload_pg(raw: Any) -> dict[str, Any]:
     return payload
 
 
-async def _backfill_org_budgets_pg(db_pool: DatabasePool) -> None:
-    try:
-        rows = await db_pool.fetch(
-            """
-            SELECT os.org_id, os.custom_limits_json, ob.budgets_json
-            FROM org_subscriptions os
-            LEFT JOIN org_budgets ob ON ob.org_id = os.org_id
-            WHERE os.custom_limits_json IS NOT NULL
-            """
-        )
-    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug(f"PG budgets backfill fetch failed: {exc}")
-        return
-
-    for row in rows:
-        org_id = row.get("org_id") if isinstance(row, dict) else None
-        if org_id is None:
-            continue
-        custom_limits = _parse_json_payload_pg(row.get("custom_limits_json"))
-        if not isinstance(custom_limits, dict) or "budgets" not in custom_limits:
-            continue
-        legacy_budgets = custom_limits.get("budgets")
-        normalized_payload = _normalize_budget_payload_pg(legacy_budgets)
-        existing_payload = _normalize_budget_payload_pg(row.get("budgets_json"))
-
-        if normalized_payload and not existing_payload:
-            try:
-                await db_pool.execute(
-                    """
-                    INSERT INTO org_budgets (org_id, budgets_json, updated_at)
-                    VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
-                    ON CONFLICT (org_id)
-                    DO UPDATE SET budgets_json = EXCLUDED.budgets_json, updated_at = EXCLUDED.updated_at
-                    """,
-                    org_id,
-                    json.dumps(normalized_payload),
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill insert failed for org_id={org_id}: {exc}")
-                continue
-
-        should_strip = bool(normalized_payload or existing_payload)
-        if should_strip:
-            cleaned_limits = dict(custom_limits)
-            cleaned_limits.pop("budgets", None)
-            payload = json.dumps(cleaned_limits) if cleaned_limits else None
-            try:
-                await db_pool.execute(
-                    """
-                    UPDATE org_subscriptions
-                    SET custom_limits_json = $2::jsonb
-                    WHERE org_id = $1
-                    """,
-                    org_id,
-                    payload,
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill cleanup failed for org_id={org_id}: {exc}")
-
-
 async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
     try:
         rows = await db_pool.fetch(
@@ -1906,7 +2677,7 @@ async def ensure_billing_tables_pg(
     *,
     run_backfill: bool = True,
 ) -> bool:
-    """Ensure billing-related tables exist for PostgreSQL backends."""
+    """Ensure only OSS budget compatibility tables exist for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
         if getattr(db_pool, "pool", None) is None:
@@ -1922,167 +2693,19 @@ async def ensure_billing_tables_pg(
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG ensure billing DDL failed: {exc}")
 
-        default_plans = [
-            {
-                "name": "free",
-                "display_name": "Free",
-                "description": "Internal/default plan (not publicly listed)",
-                "price_usd_monthly": 0,
-                "price_usd_yearly": 0,
-                "sort_order": 0,
-                "is_public": False,
-                "limits_json": json.dumps({
-                    "storage_mb": 1024,
-                    "api_calls_day": 100,
-                    "api_calls_month": 3000,
-                    "llm_tokens_day": 10000,
-                    "llm_tokens_month": 300000,
-                    "transcription_minutes_month": 10,
-                    "rag_queries_day": 50,
-                    "concurrent_jobs": 1,
-                    "team_members": 1,
-                    "rate_limit_rpm": 10,
-                    "features": ["basic_search", "basic_chat"],
-                }),
-            },
-            {
-                "name": "starter",
-                "display_name": "Starter",
-                "description": "For individuals getting started",
-                "price_usd_monthly": 10,
-                "price_usd_yearly": 100,
-                "sort_order": 1,
-                "is_public": True,
-                "limits_json": json.dumps({
-                    "storage_mb": 2048,
-                    "api_calls_day": 1000,
-                    "api_calls_month": 30000,
-                    "llm_tokens_month": 4000000,
-                    "llm_tokens_premium_month": 80000,
-                    "max_context_tokens": 64000,
-                    "byok_enabled": True,
-                    "byok_keys_saved": 1,
-                    "notebooks": 100,
-                    "sources_per_notebook": 50,
-                    "ingestion_pages_month": 2000,
-                    "ingestion_pages_day": 150,
-                    "scheduled_refresh": "manual",
-                    "max_upload_mb": 50,
-                    "transcription_minutes_month": 120,
-                    "tts_minutes_month": 30,
-                    "rag_queries_day": 1000,
-                    "concurrent_jobs": 2,
-                    "team_members": 1,
-                    "rate_limit_rpm": 20,
-                    "features": ["basic_search", "basic_chat", "byok"],
-                }),
-            },
-            {
-                "name": "plus",
-                "display_name": "Plus",
-                "description": "For power users who need more capacity",
-                "price_usd_monthly": 20,
-                "price_usd_yearly": 200,
-                "sort_order": 2,
-                "is_public": True,
-                "limits_json": json.dumps({
-                    "storage_mb": 10240,
-                    "api_calls_day": 5000,
-                    "api_calls_month": 150000,
-                    "llm_tokens_month": 12000000,
-                    "llm_tokens_premium_month": 200000,
-                    "max_context_tokens": 128000,
-                    "byok_enabled": True,
-                    "byok_keys_saved": 3,
-                    "notebooks": 300,
-                    "sources_per_notebook": 100,
-                    "ingestion_pages_month": 10000,
-                    "ingestion_pages_day": 750,
-                    "scheduled_refresh": "weekly",
-                    "max_upload_mb": 200,
-                    "transcription_minutes_month": 300,
-                    "tts_minutes_month": 90,
-                    "rag_queries_day": 5000,
-                    "concurrent_jobs": 5,
-                    "team_members": 1,
-                    "rate_limit_rpm": 60,
-                    "features": ["*", "byok", "rag_advanced", "vector_search"],
-                }),
-            },
-            {
-                "name": "pro",
-                "display_name": "Pro",
-                "description": "For teams and professional usage",
-                "price_usd_monthly": 30,
-                "price_usd_yearly": 300,
-                "sort_order": 3,
-                "is_public": True,
-                "limits_json": json.dumps({
-                    "storage_mb": 30720,
-                    "api_calls_day": 15000,
-                    "api_calls_month": 450000,
-                    "llm_tokens_month": 18000000,
-                    "llm_tokens_premium_month": 300000,
-                    "max_context_tokens": 200000,
-                    "byok_enabled": True,
-                    "byok_keys_saved": 10,
-                    "notebooks": 1000,
-                    "sources_per_notebook": 300,
-                    "ingestion_pages_month": 30000,
-                    "ingestion_pages_day": 2000,
-                    "scheduled_refresh": "daily",
-                    "max_upload_mb": 500,
-                    "transcription_minutes_month": 500,
-                    "tts_minutes_month": 150,
-                    "rag_queries_day": 15000,
-                    "concurrent_jobs": 10,
-                    "team_members": 5,
-                    "rate_limit_rpm": 120,
-                    "features": ["*", "byok", "rag_advanced", "vector_search", "priority_support", "audit_logs"],
-                }),
-            },
-        ]
-
-        for plan in default_plans:
-            try:
-                await db_pool.execute(
-                    """
-                    INSERT INTO subscription_plans
-                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order, is_public)
-                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
-                    ON CONFLICT (name) DO NOTHING
-                    """,
-                    plan["name"],
-                    plan["display_name"],
-                    plan["description"],
-                    plan["price_usd_monthly"],
-                    plan["price_usd_yearly"],
-                    plan["limits_json"],
-                    plan["sort_order"],
-                    plan.get("is_public", True),
-                )
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG ensure billing seed failed: {exc}")
-
         if run_backfill:
-            try:
-                await _backfill_org_budgets_pg(db_pool)
-            except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(f"PG budgets backfill skipped/failed: {exc}")
-
             try:
                 await _normalize_org_budgets_pg(db_pool)
             except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
         logger.info(
-            "Ensured PostgreSQL billing tables "
-            "(subscription_plans, org_subscriptions, org_budgets, "
-            "stripe_webhook_events, payment_history, billing_audit_log)"
+            "Ensured PostgreSQL OSS budget compatibility tables "
+            "(org_budgets only; retired billing tables are left untouched if present)"
         )
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
-        logger.warning(f"Failed to ensure PostgreSQL billing tables: {exc}")
+        logger.warning(f"Failed to ensure PostgreSQL OSS budget compatibility tables: {exc}")
         return False
 
 
@@ -2202,6 +2825,65 @@ async def ensure_org_provider_secrets_pg(pool: DatabasePool | None = None) -> bo
         return True
     except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to ensure PostgreSQL org_provider_secrets table: {exc}")
+        return False
+
+
+async def ensure_identity_federation_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure identity federation tables exist for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"ensure_identity_federation_tables_pg: core table ensure skipped/failed: {exc}")
+
+        for ddl_group in (
+            _CREATE_IDENTITY_PROVIDERS,
+            _CREATE_FEDERATED_IDENTITIES,
+            _CREATE_FEDERATED_MANAGED_GRANTS,
+        ):
+            for sql, params in ddl_group:
+                try:
+                    await db_pool.execute(sql, *params)
+                except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                    logger.debug(f"PG ensure identity federation DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL identity federation tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL identity federation tables: {exc}")
+        return False
+
+
+async def ensure_secret_backend_tables_pg(pool: DatabasePool | None = None) -> bool:
+    """Ensure secret backend registry/reference tables exist for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug(f"ensure_secret_backend_tables_pg: core table ensure skipped/failed: {exc}")
+
+        for ddl_group in (
+            _CREATE_SECRET_BACKENDS,
+            _CREATE_MANAGED_SECRET_REFS,
+        ):
+            for sql, params in ddl_group:
+                try:
+                    await db_pool.execute(sql, *params)
+                except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+                    logger.debug(f"PG ensure secret backend DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL secret backend tables (idempotent)")
+        return True
+    except _PG_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to ensure PostgreSQL secret backend tables: {exc}")
         return False
 
 

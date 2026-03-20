@@ -36,6 +36,7 @@ The library requires a `client_id` upon initialization, which is used to attribu
 changes in the `sync_log` and in individual records.
 """
 # Imports
+import hashlib  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 import sqlite3  # noqa: E402
@@ -84,11 +85,103 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (  # noq
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths  # noqa: E402
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import begin_immediate_if_needed  # noqa: E402
+from tldw_Server_API.app.core.Flashcards.asset_refs import (  # noqa: E402
+    extract_flashcard_asset_uuids,
+    sanitize_flashcard_text_for_search,
+)
+from tldw_Server_API.app.core.Flashcards.scheduler_sm2 import (  # noqa: E402
+    MATURE_INTERVAL_DAYS,
+    SchedulerSettingsError,
+    build_next_interval_previews,
+    coerce_queue_state,
+    get_default_scheduler_settings,
+    normalize_scheduler_settings,
+    parse_iso_datetime,
+    scheduler_settings_to_json,
+    simulate_review_transition,
+    to_iso_z,
+)
+from tldw_Server_API.app.core.Flashcards.scheduler_fsrs import (  # noqa: E402
+    FsrsSettingsError,
+    build_fsrs_next_interval_previews,
+    normalize_fsrs_settings,
+    simulate_fsrs_review_transition,
+)
 
 #
 ########################################################################################################################
 #
 # Functions:
+
+_SUPPORTED_FLASHCARD_SCHEDULERS = {"sm2_plus", "fsrs"}
+
+
+def _coerce_scheduler_type(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _SUPPORTED_FLASHCARD_SCHEDULERS else "sm2_plus"
+
+
+def _normalize_scheduler_settings_envelope(raw: Mapping[str, Any] | str | None) -> dict[str, Any]:
+    if raw is None:
+        source: dict[str, Any] = {}
+    elif isinstance(raw, str):
+        if not raw.strip():
+            source = {}
+        else:
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise SchedulerSettingsError("scheduler_settings must be valid JSON") from exc
+            if not isinstance(parsed, dict):
+                raise SchedulerSettingsError("scheduler_settings must be a JSON object")
+            source = parsed
+    elif isinstance(raw, Mapping):
+        source = dict(raw)
+    else:
+        raise SchedulerSettingsError("scheduler_settings must be a mapping or JSON string")
+
+    if "sm2_plus" in source or "fsrs" in source:
+        sm2_source = source.get("sm2_plus")
+        fsrs_source = source.get("fsrs")
+    else:
+        sm2_source = source
+        fsrs_source = None
+
+    try:
+        return {
+            "sm2_plus": normalize_scheduler_settings(sm2_source),
+            "fsrs": normalize_fsrs_settings(fsrs_source),
+        }
+    except FsrsSettingsError as exc:
+        raise SchedulerSettingsError(str(exc)) from exc
+
+
+def _simulate_scheduler_review_transition(
+    card: Mapping[str, Any],
+    *,
+    scheduler_type: str,
+    scheduler_settings_envelope: Mapping[str, Any],
+    rating: int,
+    now: datetime,
+) -> dict[str, Any]:
+    queue_state = coerce_queue_state(card)
+    if scheduler_type == "fsrs" and queue_state == "review":
+        return simulate_fsrs_review_transition(card, scheduler_settings_envelope["fsrs"], rating, now=now)
+    return simulate_review_transition(card, scheduler_settings_envelope["sm2_plus"], rating, now=now)
+
+
+def _build_scheduler_next_interval_previews(
+    card: Mapping[str, Any],
+    *,
+    scheduler_type: str,
+    scheduler_settings_envelope: Mapping[str, Any],
+    now: datetime,
+) -> dict[str, str]:
+    queue_state = coerce_queue_state(card)
+    if scheduler_type == "fsrs" and queue_state == "review":
+        return build_fsrs_next_interval_previews(card, scheduler_settings_envelope["fsrs"], now=now)
+    return build_next_interval_previews(card, scheduler_settings_envelope["sm2_plus"], now=now)
 
 # --- Order-by validation helpers (defense in depth) ---
 _ORDER_BY_COLUMN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
@@ -435,7 +528,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 36  # Schema v36 adds lean chat overview list indexes
+    _CURRENT_SCHEMA_VERSION = 38  # Schema v38 adds quiz remediation conversion state
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -528,6 +621,8 @@ class CharactersRAGDB:
         ("quizzes", "id"),
         ("quiz_questions", "id"),
         ("quiz_attempts", "id"),
+        ("study_assistant_threads", "id"),
+        ("study_assistant_messages", "id"),
         ("writing_templates", "id"),
         ("writing_themes", "id"),
         ("voice_command_events", "id"),
@@ -3046,21 +3141,123 @@ UPDATE db_schema_version
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 35;
 """
-    _MIGRATION_SQL_V35_TO_V36 = """
+    _MIGRATION_SQL_V35_TO_V36_POSTGRES = """
 /*───────────────────────────────────────────────────────────────
-  Migration to Version 36 - Conversation list indexes (2026-03-11)
+  Migration to Version 36 - Workspaces table + conversation scope (2026-03-12)
 ───────────────────────────────────────────────────────────────*/
-CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_last_modified
-  ON conversations(client_id, deleted, last_modified DESC);
-CREATE INDEX IF NOT EXISTS idx_conversations_client_character_deleted_last_modified
-  ON conversations(client_id, character_id, deleted, last_modified DESC);
-CREATE INDEX IF NOT EXISTS idx_conversations_client_deleted_created_at
-  ON conversations(client_id, deleted, created_at DESC);
+CREATE TABLE IF NOT EXISTS workspaces (
+    id            TEXT    PRIMARY KEY NOT NULL,
+    name          TEXT    NOT NULL,
+    description   TEXT,
+    metadata_json TEXT    NOT NULL DEFAULT '{}',
+    archived      BOOLEAN NOT NULL DEFAULT false,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted       BOOLEAN NOT NULL DEFAULT false,
+    client_id     TEXT    NOT NULL DEFAULT 'unknown',
+    version       INTEGER NOT NULL DEFAULT 1
+);
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'global';
+
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope_type, workspace_id);
 
 UPDATE db_schema_version
    SET version = 36
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 36;
+"""
+    _MIGRATION_SQL_V36_TO_V37 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 37 - Workspace sub-resources + flashcard scheduler state (2026-03-13)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 37
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 37;
+"""
+    _MIGRATION_SQL_V36_TO_V37_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 37 - Workspace sub-resources + flashcard scheduler state (2026-03-13)
+───────────────────────────────────────────────────────────────*/
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS tag TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_title TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_subtitle TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_color TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_provider TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_model TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_voice TEXT;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_speed REAL DEFAULT 1.0;
+
+CREATE TABLE IF NOT EXISTS workspace_sources (
+    id            TEXT    NOT NULL,
+    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    media_id      INTEGER NOT NULL,
+    title         TEXT    NOT NULL,
+    source_type   TEXT    NOT NULL,
+    url           TEXT,
+    position      INTEGER NOT NULL DEFAULT 0,
+    selected      BOOLEAN NOT NULL DEFAULT true,
+    added_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    version       INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (workspace_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_ws_sources_workspace ON workspace_sources(workspace_id);
+
+CREATE TABLE IF NOT EXISTS workspace_artifacts (
+    id              TEXT    NOT NULL,
+    workspace_id    TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    artifact_type   TEXT    NOT NULL,
+    title           TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'pending',
+    content         TEXT,
+    total_tokens    INTEGER,
+    total_cost_usd  REAL,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at    TIMESTAMP,
+    version         INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (workspace_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_ws_artifacts_workspace ON workspace_artifacts(workspace_id);
+
+CREATE TABLE IF NOT EXISTS workspace_notes (
+    id            SERIAL PRIMARY KEY,
+    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    title         TEXT    NOT NULL DEFAULT '',
+    content       TEXT    NOT NULL DEFAULT '',
+    keywords_json TEXT    NOT NULL DEFAULT '[]',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted       BOOLEAN NOT NULL DEFAULT false,
+    version       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_ws_notes_workspace ON workspace_notes(workspace_id);
+UPDATE db_schema_version
+   SET version = 37
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 37;
+"""
+    _MIGRATION_SQL_V37_TO_V38 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 38 - Quiz remediation conversion state (2026-03-13)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 38
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 38;
+"""
+    _MIGRATION_SQL_V37_TO_V38_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 38 - Quiz remediation conversion state (2026-03-13)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 38
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 38;
 """
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
@@ -4614,6 +4811,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 conn.execute(
                     "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
                 )
+            self._ensure_conversations_fts_triggers_sqlite(conn)
+            self._rebuild_conversations_fts_sqlite(conn)
             conn.execute(
                 """
                 UPDATE conversations
@@ -4738,10 +4937,51 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise SchemaError(f"Unexpected error migrating to V35 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
     def _migrate_from_v35_to_v36(self, conn: sqlite3.Connection) -> None:
-        """Migrate schema from V35 to V36 (conversation list indexes)."""
+        """Migrate schema from V35 to V36 (workspaces table + conversation scope columns)."""
         logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V35 to V36 for DB: {self.db_path_str}...")
         try:
-            conn.executescript(self._MIGRATION_SQL_V35_TO_V36)
+            # 1. Create workspaces table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    id            TEXT    PRIMARY KEY NOT NULL,
+                    name          TEXT    NOT NULL,
+                    description   TEXT,
+                    metadata_json TEXT    NOT NULL DEFAULT '{}',
+                    archived      BOOLEAN  NOT NULL DEFAULT 0,
+                    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted       BOOLEAN  NOT NULL DEFAULT 0,
+                    client_id     TEXT    NOT NULL DEFAULT 'unknown',
+                    version       INTEGER  NOT NULL DEFAULT 1
+                )
+            """)
+
+            # 2. Add scope columns to conversations
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()}
+            if "scope_type" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'global' "
+                    "CHECK(scope_type IN ('global','workspace'))"
+                )
+            if "workspace_id" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                )
+
+            # 3. Create index for scope filtering
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope_type, workspace_id)"
+            )
+
+            # 4. Update schema version
+            conn.execute(
+                """
+                UPDATE db_schema_version
+                   SET version = 36
+                 WHERE schema_name = 'rag_char_chat_schema'
+                   AND version < 36;
+                """
+            )
             final_version = self._get_db_version(conn)
             if final_version != 36:
                 raise SchemaError(  # noqa: TRY003, TRY301
@@ -4757,9 +4997,57 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V35->V36: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V36 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v36_to_v37(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V36 to V37 (workspace sub-resources + flashcard scheduler state)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V36 to V37 for DB: {self.db_path_str}...")
+        try:
+            self._ensure_workspace_subresource_schema_sqlite(conn)
+            self._ensure_flashcard_asset_schema_sqlite(conn)
+            self._ensure_flashcard_scheduler_schema_sqlite(conn)
+            conn.executescript(self._MIGRATION_SQL_V36_TO_V37)
+            final_version = self._get_db_version(conn)
+            if final_version != 37:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V36->V37 failed version check. Expected 37, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V37 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V36->V37 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V36->V37 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V36->V37: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V37 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
+    def _migrate_from_v37_to_v38(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V37 to V38 (quiz remediation conversion state)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V37 to V38 for DB: {self.db_path_str}...")
+        try:
+            self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
+            conn.executescript(self._MIGRATION_SQL_V37_TO_V38)
+            final_version = self._get_db_version(conn)
+            if final_version != 38:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V37->V38 failed version check. Expected 38, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V38 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V37->V38 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V37->V38 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V37->V38: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V38 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
+        if "voice_defaults_json" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN voice_defaults_json TEXT")
+        if "setup_json" not in profile_cols:
+            conn.execute("ALTER TABLE persona_profiles ADD COLUMN setup_json TEXT")
         if "origin_character_id" not in profile_cols:
             conn.execute("ALTER TABLE persona_profiles ADD COLUMN origin_character_id INTEGER")
         if "origin_character_name" not in profile_cols:
@@ -4778,6 +5066,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             conn.execute(
                 "ALTER TABLE conversations ADD COLUMN persona_memory_mode TEXT CHECK(persona_memory_mode IN ('read_only','read_write'))"
             )
+        self._ensure_conversations_fts_triggers_sqlite(conn)
+        self._rebuild_conversations_fts_sqlite(conn)
         conn.execute(
             """
             UPDATE conversations
@@ -4805,11 +5095,145 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 "ALTER TABLE persona_sessions ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'"
             )
 
+    def _ensure_recent_voice_command_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Backfill voice command schema columns after version-number collisions."""
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'voice_commands'"
+        ).fetchone()
+        if not table_exists:
+            return
+
+        voice_cols = {row[1] for row in conn.execute("PRAGMA table_info('voice_commands')").fetchall()}
+        if "persona_id" not in voice_cols:
+            conn.execute("ALTER TABLE voice_commands ADD COLUMN persona_id TEXT")
+        if "connection_id" not in voice_cols:
+            conn.execute("ALTER TABLE voice_commands ADD COLUMN connection_id TEXT")
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voice_commands_user_persona_enabled "
+            "ON voice_commands(user_id, persona_id, enabled, deleted)"
+        )
+
+        analytics_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'voice_command_events'"
+        ).fetchone()
+        if analytics_table_exists:
+            analytics_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info('voice_command_events')").fetchall()
+            }
+            if "persona_id" not in analytics_cols:
+                conn.execute("ALTER TABLE voice_command_events ADD COLUMN persona_id TEXT")
+            if "resolution_type" not in analytics_cols:
+                conn.execute(
+                    "ALTER TABLE voice_command_events ADD COLUMN resolution_type TEXT NOT NULL DEFAULT 'direct_command'"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time "
+                "ON voice_command_events(persona_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
+                "ON voice_command_events(persona_id, resolution_type, created_at)"
+            )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS persona_live_voice_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                persona_id TEXT,
+                session_id TEXT,
+                event_type TEXT NOT NULL,
+                commit_source TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time "
+            "ON persona_live_voice_events(persona_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time "
+            "ON persona_live_voice_events(persona_id, event_type, created_at)"
+        )
+
+        conn.executescript(
+            """
+            DROP TRIGGER IF EXISTS voice_commands_insert_sync;
+            DROP TRIGGER IF EXISTS voice_commands_update_sync;
+
+            CREATE TRIGGER IF NOT EXISTS voice_commands_insert_sync
+            AFTER INSERT ON voice_commands
+            BEGIN
+                INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                VALUES(
+                    'voice_commands',
+                    NEW.id,
+                    'create',
+                    NEW.created_at,
+                    'system',
+                    1,
+                    json_object(
+                        'id',NEW.id,
+                        'user_id',NEW.user_id,
+                        'persona_id',NEW.persona_id,
+                        'connection_id',NEW.connection_id,
+                        'name',NEW.name,
+                        'phrases',NEW.phrases,
+                        'action_type',NEW.action_type,
+                        'action_config',NEW.action_config,
+                        'priority',NEW.priority,
+                        'enabled',NEW.enabled,
+                        'requires_confirmation',NEW.requires_confirmation,
+                        'description',NEW.description,
+                        'created_at',NEW.created_at,
+                        'updated_at',NEW.updated_at,
+                        'deleted',NEW.deleted
+                    )
+                );
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS voice_commands_update_sync
+            AFTER UPDATE ON voice_commands
+            BEGIN
+                INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                VALUES(
+                    'voice_commands',
+                    NEW.id,
+                    'update',
+                    NEW.updated_at,
+                    'system',
+                    1,
+                    json_object(
+                        'id',NEW.id,
+                        'user_id',NEW.user_id,
+                        'persona_id',NEW.persona_id,
+                        'connection_id',NEW.connection_id,
+                        'name',NEW.name,
+                        'phrases',NEW.phrases,
+                        'action_type',NEW.action_type,
+                        'action_config',NEW.action_config,
+                        'priority',NEW.priority,
+                        'enabled',NEW.enabled,
+                        'requires_confirmation',NEW.requires_confirmation,
+                        'description',NEW.description,
+                        'created_at',NEW.created_at,
+                        'updated_at',NEW.updated_at,
+                        'deleted',NEW.deleted
+                    )
+                );
+            END;
+            """
+        )
+
     def _ensure_recent_persona_schema_postgres(self, conn: Any) -> None:
         """Backfill recent persona schema columns for PostgreSQL deployments."""
         if not hasattr(self.backend, "execute"):
             return
         statements = [
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS voice_defaults_json TEXT",
+            "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS setup_json TEXT",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_id INTEGER",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_name TEXT",
             "ALTER TABLE persona_profiles ADD COLUMN IF NOT EXISTS origin_character_snapshot_at TEXT",
@@ -4834,6 +5258,357 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for statement in statements:
             self.backend.execute(statement, connection=conn)
 
+    def _ensure_recent_voice_command_schema_postgres(self, conn: Any) -> None:
+        """Backfill voice command schema columns for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+
+        statements = [
+            "ALTER TABLE IF EXISTS voice_commands ADD COLUMN IF NOT EXISTS persona_id TEXT",
+            "ALTER TABLE IF EXISTS voice_commands ADD COLUMN IF NOT EXISTS connection_id TEXT",
+            "ALTER TABLE IF EXISTS voice_command_events ADD COLUMN IF NOT EXISTS persona_id TEXT",
+            (
+                "ALTER TABLE IF EXISTS voice_command_events "
+                "ADD COLUMN IF NOT EXISTS resolution_type TEXT NOT NULL DEFAULT 'direct_command'"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_commands_user_persona_enabled "
+                "ON voice_commands(user_id, persona_id, enabled, deleted)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_time "
+                "ON voice_command_events(persona_id, created_at)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_voice_command_events_persona_resolution_time "
+                "ON voice_command_events(persona_id, resolution_type, created_at)"
+            ),
+            (
+                "CREATE TABLE IF NOT EXISTS persona_live_voice_events ("
+                "id BIGSERIAL PRIMARY KEY, "
+                "user_id BIGINT NOT NULL, "
+                "persona_id TEXT, "
+                "session_id TEXT, "
+                "event_type TEXT NOT NULL, "
+                "commit_source TEXT, "
+                "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_time "
+                "ON persona_live_voice_events(persona_id, created_at)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_persona_live_voice_events_persona_type_time "
+                "ON persona_live_voice_events(persona_id, event_type, created_at)"
+            ),
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    def _ensure_note_folder_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Backfill note folder tables for SQLite deployments."""
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_folders(
+              id            INTEGER PRIMARY KEY AUTOINCREMENT,
+              name          TEXT    NOT NULL,
+              path          TEXT    UNIQUE NOT NULL COLLATE NOCASE,
+              parent_id     INTEGER REFERENCES note_folders(id)
+                             ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted       BOOLEAN  NOT NULL DEFAULT 0,
+              client_id     TEXT     NOT NULL DEFAULT 'unknown',
+              version       INTEGER  NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_parent ON note_folders(parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_path ON note_folders(path)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_note_folders_path_nocase ON note_folders(LOWER(path))",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              folder_id  INTEGER NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_memberships_folder ON note_folder_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              source_id  INTEGER NOT NULL,
+              folder_id  INTEGER NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, source_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_note_source ON note_folder_source_memberships(note_id, source_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_folder ON note_folder_source_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_keys(
+              source_id   INTEGER NOT NULL,
+              folder_key  TEXT    NOT NULL,
+              folder_id   INTEGER NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(source_id, folder_key)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_keys_folder ON note_folder_source_keys(folder_id)",
+        ]
+        for statement in statements:
+            conn.execute(statement)
+
+    def _ensure_note_folder_schema_postgres(self, conn: Any) -> None:
+        """Backfill note folder tables for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_folders(
+              id            BIGSERIAL PRIMARY KEY,
+              name          TEXT    NOT NULL,
+              path          TEXT    UNIQUE NOT NULL,
+              parent_id     BIGINT REFERENCES note_folders(id)
+                             ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id     TEXT    NOT NULL DEFAULT 'unknown',
+              version       INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_parent ON note_folders(parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_path ON note_folders(path)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              folder_id  BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_memberships_folder ON note_folder_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              source_id  INTEGER NOT NULL,
+              folder_id  BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, source_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_note_source ON note_folder_source_memberships(note_id, source_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_folder ON note_folder_source_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_keys(
+              source_id   INTEGER NOT NULL,
+              folder_key  TEXT    NOT NULL,
+              folder_id   BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(source_id, folder_key)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_keys_folder ON note_folder_source_keys(folder_id)",
+        ]
+        for statement in statements:
+            conn.execute(statement)
+
+    def _ensure_note_folder_schema_postgres(self, conn: Any) -> None:
+        """Backfill note folder tables for PostgreSQL deployments."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS note_folders(
+              id            BIGSERIAL PRIMARY KEY,
+              name          TEXT    NOT NULL,
+              path          TEXT    UNIQUE NOT NULL,
+              parent_id     BIGINT REFERENCES note_folders(id)
+                             ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              deleted       BOOLEAN NOT NULL DEFAULT FALSE,
+              client_id     TEXT    NOT NULL DEFAULT 'unknown',
+              version       INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_parent ON note_folders(parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folders_path ON note_folders(path)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              folder_id  BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_memberships_folder ON note_folder_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_memberships(
+              note_id    TEXT    NOT NULL REFERENCES notes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              source_id  INTEGER NOT NULL,
+              folder_id  BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(note_id, source_id, folder_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_note_source ON note_folder_source_memberships(note_id, source_id)",
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_memberships_folder ON note_folder_source_memberships(folder_id)",
+            """
+            CREATE TABLE IF NOT EXISTS note_folder_source_keys(
+              source_id   INTEGER NOT NULL,
+              folder_key  TEXT    NOT NULL,
+              folder_id   BIGINT  NOT NULL REFERENCES note_folders(id) ON DELETE CASCADE ON UPDATE CASCADE,
+              created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY(source_id, folder_key)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_note_folder_source_keys_folder ON note_folder_source_keys(folder_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
+    def _ensure_workspace_subresource_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure workspace settings columns and sub-resource tables exist for SQLite."""
+        try:
+            ws_cols = {row[1] for row in conn.execute("PRAGMA table_info('workspaces')").fetchall()}
+            new_ws_cols = {
+                "tag": "TEXT",
+                "banner_title": "TEXT",
+                "banner_subtitle": "TEXT",
+                "banner_color": "TEXT",
+                "audio_provider": "TEXT",
+                "audio_model": "TEXT",
+                "audio_voice": "TEXT",
+                "audio_speed": "REAL DEFAULT 1.0",
+            }
+            for col_name, col_type in new_ws_cols.items():
+                if col_name not in ws_cols:
+                    conn.execute(f"ALTER TABLE workspaces ADD COLUMN {col_name} {col_type}")  # nosec B608
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_sources (
+                    id            TEXT    NOT NULL,
+                    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    media_id      INTEGER NOT NULL,
+                    title         TEXT    NOT NULL,
+                    source_type   TEXT    NOT NULL,
+                    url           TEXT,
+                    position      INTEGER NOT NULL DEFAULT 0,
+                    selected      BOOLEAN NOT NULL DEFAULT 1,
+                    added_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    version       INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (workspace_id, id)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ws_sources_workspace ON workspace_sources(workspace_id)"
+            )
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_artifacts (
+                    id              TEXT    NOT NULL,
+                    workspace_id    TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    artifact_type   TEXT    NOT NULL,
+                    title           TEXT    NOT NULL,
+                    status          TEXT    NOT NULL DEFAULT 'pending',
+                    content         TEXT,
+                    total_tokens    INTEGER,
+                    total_cost_usd  REAL,
+                    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at    DATETIME,
+                    version         INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (workspace_id, id)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ws_artifacts_workspace ON workspace_artifacts(workspace_id)"
+            )
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_notes (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    title         TEXT    NOT NULL DEFAULT '',
+                    content       TEXT    NOT NULL DEFAULT '',
+                    keywords_json TEXT    NOT NULL DEFAULT '[]',
+                    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted       BOOLEAN NOT NULL DEFAULT 0,
+                    version       INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ws_notes_workspace ON workspace_notes(workspace_id)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite workspace sub-resource schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_workspace_subresource_schema_postgres(self, conn: Any) -> None:
+        """Ensure workspace settings columns and sub-resource tables exist for PostgreSQL."""
+        if not hasattr(self.backend, "execute"):
+            return
+        statements = [
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS tag TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_title TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_subtitle TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS banner_color TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_provider TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_model TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_voice TEXT",
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS audio_speed REAL DEFAULT 1.0",
+            """
+            CREATE TABLE IF NOT EXISTS workspace_sources (
+                id            TEXT    NOT NULL,
+                workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                media_id      INTEGER NOT NULL,
+                title         TEXT    NOT NULL,
+                source_type   TEXT    NOT NULL,
+                url           TEXT,
+                position      INTEGER NOT NULL DEFAULT 0,
+                selected      BOOLEAN NOT NULL DEFAULT true,
+                added_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                version       INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (workspace_id, id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ws_sources_workspace ON workspace_sources(workspace_id)",
+            """
+            CREATE TABLE IF NOT EXISTS workspace_artifacts (
+                id              TEXT    NOT NULL,
+                workspace_id    TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                artifact_type   TEXT    NOT NULL,
+                title           TEXT    NOT NULL,
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                content         TEXT,
+                total_tokens    INTEGER,
+                total_cost_usd  REAL,
+                created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at    TIMESTAMP,
+                version         INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (workspace_id, id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ws_artifacts_workspace ON workspace_artifacts(workspace_id)",
+            """
+            CREATE TABLE IF NOT EXISTS workspace_notes (
+                id            SERIAL PRIMARY KEY,
+                workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                title         TEXT    NOT NULL DEFAULT '',
+                content       TEXT    NOT NULL DEFAULT '',
+                keywords_json TEXT    NOT NULL DEFAULT '[]',
+                created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                deleted       BOOLEAN NOT NULL DEFAULT false,
+                version       INTEGER NOT NULL DEFAULT 1
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ws_notes_workspace ON workspace_notes(workspace_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -4844,6 +5619,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 f"Schema initialization not implemented for backend {self.backend_type}"
             )
         self._ensure_message_metadata_table()
+        self._ensure_persona_live_voice_session_summaries_table()
         self._ensure_conversation_settings_table()
 
     def ensure_character_tables_ready(self) -> None:
@@ -4983,9 +5759,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
                     self._verify_required_fts_tables_sqlite(conn)
+                    self._ensure_workspace_subresource_schema_sqlite(conn)
+                    self._ensure_flashcard_asset_schema_sqlite(conn)
+                    self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                    self._ensure_study_assistant_schema_sqlite(conn)
+                    self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
+                    self._ensure_flashcard_fts_triggers_sqlite(conn)
                     self._ensure_character_cards_fts_triggers_sqlite(conn)
                     self._ensure_notes_fts_triggers_sqlite(conn)
                     self._ensure_recent_persona_schema_sqlite(conn)
+                    self._ensure_recent_voice_command_schema_sqlite(conn)
+                    self._ensure_note_folder_schema_sqlite(conn)
                     # Seed/heal character_cards_fts before request traffic. Schema V4
                     # inserts "Default Assistant" before FTS triggers are created.
                     self._self_heal_character_cards_fts_sqlite(conn)
@@ -5093,6 +5877,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 36 and current_db_version == 35:
                         self._migrate_from_v35_to_v36(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 37 and current_db_version == 36:
+                        self._migrate_from_v36_to_v37(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 38 and current_db_version == 37:
+                        self._migrate_from_v37_to_v38(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -5420,6 +6210,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v34_to_v35(conn)
                             elif fallback_version == 35:
                                 self._migrate_from_v35_to_v36(conn)
+                            elif fallback_version == 36:
+                                self._migrate_from_v36_to_v37(conn)
+                            elif fallback_version == 37:
+                                self._migrate_from_v37_to_v38(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -5504,8 +6298,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 36 and current_db_version == 35:
                     self._migrate_from_v35_to_v36(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 37 and current_db_version == 36:
+                    self._migrate_from_v36_to_v37(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 38 and current_db_version == 37:
+                    self._migrate_from_v37_to_v38(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
+                self._ensure_recent_voice_command_schema_sqlite(conn)
+                self._ensure_note_folder_schema_sqlite(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -5513,6 +6315,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         f"Schema migration process completed, but final DB version is {final_version_check}, expected {target_version}. Manual check required.")
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
+                self._ensure_workspace_subresource_schema_sqlite(conn)
+                self._ensure_flashcard_asset_schema_sqlite(conn)
+                self._ensure_flashcard_scheduler_schema_sqlite(conn)
+                self._ensure_study_assistant_schema_sqlite(conn)
+                self._ensure_quiz_remediation_conversion_schema_sqlite(conn)
+                self._ensure_flashcard_fts_triggers_sqlite(conn)
                 self._ensure_character_cards_fts_triggers_sqlite(conn)
                 self._ensure_notes_fts_triggers_sqlite(conn)
                 # Seed/heal character_cards_fts before request traffic. Schema V4
@@ -5633,6 +6441,72 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring character_cards FTS triggers: {exc}") from exc  # noqa: TRY003
 
+    def _ensure_conversations_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Normalize conversations FTS triggers to avoid invalid delete operations.
+
+        Legacy SQLite trigger shapes update `conversations_fts` on every
+        conversation update, even when only non-search columns changed. On older
+        databases with stale `conversations_fts` contents, that unconditional
+        delete can raise `database disk image is malformed` from FTS internals.
+        Restrict FTS work to title/deleted changes only.
+        """
+
+        try:
+            conn.executescript(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts
+                USING fts5(
+                  title,
+                  content='conversations',
+                  content_rowid='rowid'
+                );
+
+                DROP TRIGGER IF EXISTS conversations_ai;
+                DROP TRIGGER IF EXISTS conversations_au;
+                DROP TRIGGER IF EXISTS conversations_ad;
+
+                CREATE TRIGGER conversations_ai
+                AFTER INSERT ON conversations BEGIN
+                  INSERT INTO conversations_fts(rowid,title)
+                  SELECT new.rowid,new.title
+                  WHERE new.deleted = 0 AND new.title IS NOT NULL;
+                END;
+
+                CREATE TRIGGER conversations_au
+                AFTER UPDATE ON conversations BEGIN
+                  INSERT INTO conversations_fts(conversations_fts,rowid,title)
+                  SELECT 'delete',old.rowid,old.title
+                  WHERE old.deleted = 0
+                    AND old.title IS NOT NULL
+                    AND (old.title IS NOT new.title OR old.deleted IS NOT new.deleted);
+
+                  INSERT INTO conversations_fts(rowid,title)
+                  SELECT new.rowid,new.title
+                  WHERE new.deleted = 0
+                    AND new.title IS NOT NULL
+                    AND (old.title IS NOT new.title OR old.deleted IS NOT new.deleted);
+                END;
+
+                CREATE TRIGGER conversations_ad
+                AFTER DELETE ON conversations BEGIN
+                  INSERT INTO conversations_fts(conversations_fts,rowid,title)
+                  SELECT 'delete',old.rowid,old.title
+                  WHERE old.deleted = 0 AND old.title IS NOT NULL;
+                END;
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring conversations FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _rebuild_conversations_fts_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Rebuild the SQLite conversations FTS index for legacy databases."""
+
+        try:
+            conn.execute("INSERT INTO conversations_fts(conversations_fts) VALUES('rebuild')")
+        except sqlite3.Error as exc:
+            logger.error("Failed rebuilding conversations_fts: {}", exc)
+            raise SchemaError(f"Failed rebuilding conversations_fts: {exc}") from exc  # noqa: TRY003
+
     def _ensure_notes_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
         """Normalize notes FTS triggers to avoid invalid delete operations.
 
@@ -5678,6 +6552,806 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             )
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring notes FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _build_flashcard_search_shadow_fields(
+        self,
+        *,
+        front: str | None,
+        back: str | None,
+        notes: str | None,
+    ) -> tuple[str, str, str]:
+        """Return sanitized search shadow text for flashcard FTS."""
+        return (
+            sanitize_flashcard_text_for_search(front),
+            sanitize_flashcard_text_for_search(back),
+            sanitize_flashcard_text_for_search(notes),
+        )
+
+    def _ensure_flashcard_asset_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure flashcard asset storage and search shadow columns exist for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_assets(
+                  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                  uuid             TEXT UNIQUE NOT NULL,
+                  card_id          INTEGER REFERENCES flashcards(id) ON DELETE SET NULL,
+                  mime_type        TEXT NOT NULL,
+                  original_filename TEXT,
+                  byte_size        INTEGER NOT NULL,
+                  sha256           TEXT NOT NULL,
+                  image_data       BLOB NOT NULL,
+                  width            INTEGER,
+                  height           INTEGER,
+                  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted          BOOLEAN NOT NULL DEFAULT 0,
+                  client_id        TEXT NOT NULL DEFAULT 'unknown',
+                  version          INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcard_assets_uuid ON flashcard_assets(uuid)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_assets_card_id ON flashcard_assets(card_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_assets_deleted ON flashcard_assets(deleted)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_assets_card_deleted ON flashcard_assets(card_id, deleted)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard_assets table: {exc}") from exc  # noqa: TRY003
+
+        try:
+            flashcard_cols = {
+                str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()
+            }
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed reading flashcards schema: {exc}") from exc  # noqa: TRY003
+
+        if not flashcard_cols:
+            return
+
+        missing_shadow_cols: list[str] = []
+        for column_name in ("front_search", "back_search", "notes_search"):
+            if column_name in flashcard_cols:
+                continue
+            try:
+                conn.execute(f"ALTER TABLE flashcards ADD COLUMN {column_name} TEXT")
+            except sqlite3.Error as exc:
+                raise SchemaError(f"Failed adding flashcards.{column_name}: {exc}") from exc  # noqa: TRY003
+            missing_shadow_cols.append(column_name)
+
+        self._ensure_flashcard_fts_triggers_sqlite(conn)
+
+        needs_backfill = bool(missing_shadow_cols)
+        if not needs_backfill:
+            try:
+                count_row = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                      FROM flashcards
+                     WHERE front_search IS NULL OR back_search IS NULL OR notes_search IS NULL
+                    """
+                ).fetchone()
+            except sqlite3.Error as exc:
+                raise SchemaError(f"Failed checking flashcard search shadow backfill: {exc}") from exc  # noqa: TRY003
+            needs_backfill = bool(count_row and int(count_row[0]) > 0)
+
+        if not needs_backfill:
+            return
+
+        try:
+            rows = conn.execute("SELECT id, front, back, notes FROM flashcards").fetchall()
+            params = []
+            for row in rows:
+                front_search, back_search, notes_search = self._build_flashcard_search_shadow_fields(
+                    front=row[1],
+                    back=row[2],
+                    notes=row[3],
+                )
+                params.append((front_search, back_search, notes_search, int(row[0])))
+            if params:
+                conn.executemany(
+                    """
+                    UPDATE flashcards
+                       SET front_search = ?, back_search = ?, notes_search = ?
+                     WHERE id = ?
+                    """,
+                    params,
+                )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed backfilling flashcard search shadow columns: {exc}") from exc  # noqa: TRY003
+
+    def _infer_queue_state_for_row(self, row: Mapping[str, Any]) -> str:
+        queue_state = str(row.get("queue_state") or "").strip().lower()
+        if queue_state in ("new", "learning", "review", "relearning", "suspended"):
+            return queue_state
+        last_reviewed_at = row.get("last_reviewed_at")
+        repetitions = int(row.get("repetitions") or 0)
+        if not last_reviewed_at:
+            return "new"
+        if repetitions in (1, 2):
+            return "learning"
+        return "review"
+
+    def _ensure_flashcard_scheduler_sync_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure deck and flashcard sync triggers include scheduler fields."""
+        try:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS decks_sync_create;
+                DROP TRIGGER IF EXISTS decks_sync_update;
+                DROP TRIGGER IF EXISTS decks_sync_delete;
+                DROP TRIGGER IF EXISTS decks_sync_undelete;
+
+                CREATE TRIGGER decks_sync_create
+                AFTER INSERT ON decks BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('decks',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_type',NEW.scheduler_type,
+                                     'scheduler_settings_json',NEW.scheduler_settings_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER decks_sync_update
+                AFTER UPDATE ON decks
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.name IS NOT NEW.name OR
+                     OLD.description IS NOT NEW.description OR
+                     OLD.scheduler_type IS NOT NEW.scheduler_type OR
+                     OLD.scheduler_settings_json IS NOT NEW.scheduler_settings_json OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_type',NEW.scheduler_type,
+                                     'scheduler_settings_json',NEW.scheduler_settings_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER decks_sync_delete
+                AFTER UPDATE ON decks
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('decks',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER decks_sync_undelete
+                AFTER UPDATE ON decks
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'scheduler_type',NEW.scheduler_type,
+                                     'scheduler_settings_json',NEW.scheduler_settings_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                DROP TRIGGER IF EXISTS flashcards_sync_create;
+                DROP TRIGGER IF EXISTS flashcards_sync_update;
+                DROP TRIGGER IF EXISTS flashcards_sync_delete;
+                DROP TRIGGER IF EXISTS flashcards_sync_undelete;
+
+                CREATE TRIGGER flashcards_sync_create
+                AFTER INSERT ON flashcards BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcards',NEW.uuid,'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                                     'notes',NEW.notes,'extra',NEW.extra,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                                     'source_ref_type',NEW.source_ref_type,'source_ref_id',NEW.source_ref_id,
+                                     'conversation_id',NEW.conversation_id,'message_id',NEW.message_id,
+                                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                                     'model_type',NEW.model_type,'reverse',NEW.reverse,
+                                     'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'scheduler_state_json',NEW.scheduler_state_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcards_sync_update
+                AFTER UPDATE ON flashcards
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.deck_id IS NOT NEW.deck_id OR
+                     OLD.front IS NOT NEW.front OR
+                     OLD.back IS NOT NEW.back OR
+                     OLD.notes IS NOT NEW.notes OR
+                     OLD.extra IS NOT NEW.extra OR
+                     OLD.is_cloze IS NOT NEW.is_cloze OR
+                     OLD.tags_json IS NOT NEW.tags_json OR
+                     OLD.source_ref_type IS NOT NEW.source_ref_type OR
+                     OLD.source_ref_id IS NOT NEW.source_ref_id OR
+                     OLD.conversation_id IS NOT NEW.conversation_id OR
+                     OLD.message_id IS NOT NEW.message_id OR
+                     OLD.ef IS NOT NEW.ef OR
+                     OLD.interval_days IS NOT NEW.interval_days OR
+                     OLD.repetitions IS NOT NEW.repetitions OR
+                     OLD.lapses IS NOT NEW.lapses OR
+                     OLD.due_at IS NOT NEW.due_at OR
+                     OLD.last_reviewed_at IS NOT NEW.last_reviewed_at OR
+                     OLD.model_type IS NOT NEW.model_type OR
+                     OLD.reverse IS NOT NEW.reverse OR
+                     OLD.queue_state IS NOT NEW.queue_state OR
+                     OLD.step_index IS NOT NEW.step_index OR
+                     OLD.suspended_reason IS NOT NEW.suspended_reason OR
+                     OLD.scheduler_state_json IS NOT NEW.scheduler_state_json OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcards',NEW.uuid,'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                                     'notes',NEW.notes,'extra',NEW.extra,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                                     'source_ref_type',NEW.source_ref_type,'source_ref_id',NEW.source_ref_id,
+                                     'conversation_id',NEW.conversation_id,'message_id',NEW.message_id,
+                                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                                     'model_type',NEW.model_type,'reverse',NEW.reverse,
+                                     'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'scheduler_state_json',NEW.scheduler_state_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcards_sync_delete
+                AFTER UPDATE ON flashcards
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcards',NEW.uuid,'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('uuid',NEW.uuid,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER flashcards_sync_undelete
+                AFTER UPDATE ON flashcards
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcards',NEW.uuid,'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('uuid',NEW.uuid,'deck_id',NEW.deck_id,'front',NEW.front,'back',NEW.back,
+                                     'notes',NEW.notes,'extra',NEW.extra,'is_cloze',NEW.is_cloze,'tags_json',NEW.tags_json,
+                                     'source_ref_type',NEW.source_ref_type,'source_ref_id',NEW.source_ref_id,
+                                     'conversation_id',NEW.conversation_id,'message_id',NEW.message_id,
+                                     'ef',NEW.ef,'interval_days',NEW.interval_days,'repetitions',NEW.repetitions,
+                                     'lapses',NEW.lapses,'due_at',NEW.due_at,'last_reviewed_at',NEW.last_reviewed_at,
+                                     'model_type',NEW.model_type,'reverse',NEW.reverse,
+                                     'queue_state',NEW.queue_state,'step_index',NEW.step_index,'suspended_reason',NEW.suspended_reason,
+                                     'scheduler_state_json',NEW.scheduler_state_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard scheduler sync triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_flashcard_scheduler_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure scheduler-related deck, flashcard, and review columns exist for SQLite."""
+        default_settings_json = scheduler_settings_to_json(None)
+        try:
+            deck_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
+            if "scheduler_settings_json" not in deck_cols:
+                conn.execute(
+                    f"ALTER TABLE decks ADD COLUMN scheduler_settings_json TEXT NOT NULL DEFAULT '{default_settings_json}'"
+                )
+            if "scheduler_type" not in deck_cols:
+                conn.execute("ALTER TABLE decks ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
+            conn.execute(
+                """
+                UPDATE decks
+                   SET scheduler_settings_json = ?
+                 WHERE scheduler_settings_json IS NULL OR trim(scheduler_settings_json) = ''
+                """,
+                (default_settings_json,),
+            )
+            conn.execute(
+                """
+                UPDATE decks
+                   SET scheduler_type = 'sm2_plus'
+                 WHERE scheduler_type IS NULL OR trim(scheduler_type) = ''
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring decks.scheduler_settings_json: {exc}") from exc  # noqa: TRY003
+
+        try:
+            flashcard_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcards')").fetchall()}
+            if "queue_state" not in flashcard_cols:
+                conn.execute("ALTER TABLE flashcards ADD COLUMN queue_state TEXT NOT NULL DEFAULT 'new'")
+            if "step_index" not in flashcard_cols:
+                conn.execute("ALTER TABLE flashcards ADD COLUMN step_index INTEGER")
+            if "suspended_reason" not in flashcard_cols:
+                conn.execute("ALTER TABLE flashcards ADD COLUMN suspended_reason TEXT")
+            if "scheduler_state_json" not in flashcard_cols:
+                conn.execute("ALTER TABLE flashcards ADD COLUMN scheduler_state_json TEXT NOT NULL DEFAULT '{}'")
+            conn.execute(
+                """
+                UPDATE flashcards
+                   SET scheduler_state_json = '{}'
+                 WHERE scheduler_state_json IS NULL OR trim(scheduler_state_json) = ''
+                """
+            )
+
+            rows = conn.execute(
+                """
+                SELECT id, queue_state, last_reviewed_at, repetitions, lapses, interval_days, due_at, created_at
+                  FROM flashcards
+                """
+            ).fetchall()
+            scheduler_params: list[tuple[str, int]] = []
+            due_params: list[tuple[str, int]] = []
+            now_iso = self._get_current_utc_timestamp_iso()
+            for row in rows:
+                record = {
+                    "queue_state": row["queue_state"],
+                    "last_reviewed_at": row["last_reviewed_at"],
+                    "repetitions": row["repetitions"],
+                    "lapses": row["lapses"],
+                    "interval_days": row["interval_days"],
+                    "due_at": row["due_at"],
+                }
+                scheduler_params.append((self._infer_queue_state_for_row(record), int(row["id"])))
+                if not row["due_at"]:
+                    due_params.append((str(row["created_at"] or now_iso), int(row["id"])))
+            if scheduler_params:
+                conn.executemany(
+                    """
+                    UPDATE flashcards
+                       SET queue_state = ?,
+                           suspended_reason = NULL
+                     WHERE id = ?
+                    """,
+                    scheduler_params,
+                )
+            if due_params:
+                conn.executemany("UPDATE flashcards SET due_at = ? WHERE id = ?", due_params)
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard scheduler columns: {exc}") from exc  # noqa: TRY003
+
+        try:
+            review_cols = {str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcard_reviews')").fetchall()}
+            if "scheduler_type" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
+            if "previous_queue_state" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_queue_state TEXT")
+            if "next_queue_state" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_queue_state TEXT")
+            if "previous_due_at" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN previous_due_at DATETIME")
+            if "next_due_at" not in review_cols:
+                conn.execute("ALTER TABLE flashcard_reviews ADD COLUMN next_due_at DATETIME")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard review scheduler columns: {exc}") from exc  # noqa: TRY003
+
+        self._ensure_flashcard_scheduler_sync_triggers_sqlite(conn)
+
+    def _ensure_flashcard_fts_triggers_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Rebuild flashcard FTS around sanitized search shadow columns."""
+        try:
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS flashcards_ai;
+                DROP TRIGGER IF EXISTS flashcards_au;
+                DROP TRIGGER IF EXISTS flashcards_ad;
+                DROP TABLE IF EXISTS flashcards_fts;
+
+                CREATE VIRTUAL TABLE flashcards_fts
+                USING fts5(
+                  front_search, back_search, notes_search,
+                  content='flashcards',
+                  content_rowid='id'
+                );
+
+                CREATE TRIGGER flashcards_ai
+                AFTER INSERT ON flashcards BEGIN
+                  INSERT INTO flashcards_fts(rowid, front_search, back_search, notes_search)
+                  SELECT new.id, new.front_search, new.back_search, new.notes_search
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER flashcards_au
+                AFTER UPDATE ON flashcards BEGIN
+                  INSERT INTO flashcards_fts(flashcards_fts, rowid, front_search, back_search, notes_search)
+                  SELECT 'delete', old.id, old.front_search, old.back_search, old.notes_search
+                  WHERE old.deleted = 0;
+
+                  INSERT INTO flashcards_fts(rowid, front_search, back_search, notes_search)
+                  SELECT new.id, new.front_search, new.back_search, new.notes_search
+                  WHERE new.deleted = 0;
+                END;
+
+                CREATE TRIGGER flashcards_ad
+                AFTER DELETE ON flashcards BEGIN
+                  INSERT INTO flashcards_fts(flashcards_fts, rowid, front_search, back_search, notes_search)
+                  SELECT 'delete', old.id, old.front_search, old.back_search, old.notes_search
+                  WHERE old.deleted = 0;
+                END;
+                """
+            )
+            conn.execute("INSERT INTO flashcards_fts(flashcards_fts) VALUES('rebuild')")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcards FTS triggers: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_flashcard_asset_schema_postgres(self, conn) -> None:
+        """Ensure flashcard asset storage and search shadow columns exist for PostgreSQL."""
+        try:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_assets(
+                  id BIGSERIAL PRIMARY KEY,
+                  uuid TEXT UNIQUE NOT NULL,
+                  card_id INTEGER REFERENCES flashcards(id) ON DELETE SET NULL,
+                  mime_type TEXT NOT NULL,
+                  original_filename TEXT,
+                  byte_size INTEGER NOT NULL,
+                  sha256 TEXT NOT NULL,
+                  image_data BYTEA NOT NULL,
+                  width INTEGER,
+                  height INTEGER,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS front_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS back_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS notes_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_assets_card_id ON flashcard_assets(card_id)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_assets_deleted ON flashcard_assets(deleted)",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL flashcard asset schema: {exc}") from exc  # noqa: TRY003
+
+        try:
+            result = self.backend.execute(
+                "SELECT id, front, back, notes, front_search, back_search, notes_search FROM flashcards",
+                connection=conn,
+            )
+            rows = getattr(result, "rows", []) or []
+            for row in rows:
+                record = dict(row)
+                front_search, back_search, notes_search = self._build_flashcard_search_shadow_fields(
+                    front=record.get("front"),
+                    back=record.get("back"),
+                    notes=record.get("notes"),
+                )
+                if (
+                    record.get("front_search") == front_search
+                    and record.get("back_search") == back_search
+                    and record.get("notes_search") == notes_search
+                ):
+                    continue
+                self.backend.execute(
+                    """
+                    UPDATE flashcards
+                       SET front_search = %s,
+                           back_search = %s,
+                           notes_search = %s
+                     WHERE id = %s
+                    """,
+                    (front_search, back_search, notes_search, int(record["id"])),
+                    connection=conn,
+                )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed backfilling PostgreSQL flashcard search shadow columns: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_flashcard_scheduler_schema_postgres(self, conn) -> None:
+        """Ensure scheduler-related deck, flashcard, and review columns exist for PostgreSQL."""
+        default_settings_json = scheduler_settings_to_json(None)
+        try:
+            self.backend.execute(
+                "ALTER TABLE decks ADD COLUMN IF NOT EXISTS scheduler_settings_json TEXT NOT NULL DEFAULT '{}'",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE decks ADD COLUMN IF NOT EXISTS scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'",
+                connection=conn,
+            )
+            self.backend.execute(
+                "UPDATE decks SET scheduler_settings_json = %s WHERE scheduler_settings_json IS NULL OR btrim(scheduler_settings_json) = ''",
+                (default_settings_json,),
+                connection=conn,
+            )
+            self.backend.execute(
+                "UPDATE decks SET scheduler_type = 'sm2_plus' WHERE scheduler_type IS NULL OR btrim(scheduler_type) = ''",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS queue_state TEXT NOT NULL DEFAULT 'new'",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS step_index INTEGER",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS suspended_reason TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS scheduler_state_json TEXT NOT NULL DEFAULT '{}'",
+                connection=conn,
+            )
+            self.backend.execute(
+                "UPDATE flashcards SET scheduler_state_json = '{}' WHERE scheduler_state_json IS NULL OR btrim(scheduler_state_json) = ''",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS previous_queue_state TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS next_queue_state TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS previous_due_at TIMESTAMPTZ",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS next_due_at TIMESTAMPTZ",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL flashcard scheduler schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_study_assistant_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure study assistant thread/message tables exist for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_assistant_threads(
+                  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                  context_type     TEXT NOT NULL CHECK(context_type IN ('flashcard', 'quiz_attempt_question')),
+                  flashcard_uuid   TEXT REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  quiz_attempt_id  INTEGER REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  question_id      INTEGER REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                  last_message_at  DATETIME,
+                  message_count    INTEGER NOT NULL DEFAULT 0,
+                  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted          BOOLEAN NOT NULL DEFAULT 0,
+                  client_id        TEXT NOT NULL DEFAULT 'unknown',
+                  version          INTEGER NOT NULL DEFAULT 1,
+                  CHECK(
+                    (context_type = 'flashcard' AND flashcard_uuid IS NOT NULL AND quiz_attempt_id IS NULL AND question_id IS NULL) OR
+                    (context_type = 'quiz_attempt_question' AND flashcard_uuid IS NULL AND quiz_attempt_id IS NOT NULL AND question_id IS NOT NULL)
+                  )
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_assistant_messages(
+                  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                  thread_id               INTEGER NOT NULL REFERENCES study_assistant_threads(id) ON DELETE CASCADE,
+                  role                    TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                  action_type             TEXT NOT NULL CHECK(action_type IN ('explain', 'mnemonic', 'follow_up', 'fact_check', 'freeform')),
+                  input_modality          TEXT NOT NULL CHECK(input_modality IN ('text', 'voice_transcript')),
+                  content                 TEXT NOT NULL,
+                  structured_payload_json TEXT,
+                  context_snapshot_json   TEXT,
+                  provider                TEXT,
+                  model                   TEXT,
+                  created_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  client_id               TEXT NOT NULL DEFAULT 'unknown'
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_assistant_threads_flashcard_active
+                    ON study_assistant_threads(context_type, flashcard_uuid)
+                 WHERE deleted = 0 AND flashcard_uuid IS NOT NULL
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_assistant_threads_quiz_question_active
+                    ON study_assistant_threads(context_type, quiz_attempt_id, question_id)
+                 WHERE deleted = 0 AND quiz_attempt_id IS NOT NULL AND question_id IS NOT NULL
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_assistant_threads_last_message_at ON study_assistant_threads(last_message_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_assistant_messages_thread_id ON study_assistant_messages(thread_id, id)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite study assistant schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_study_assistant_schema_postgres(self, conn) -> None:
+        """Ensure study assistant thread/message tables exist for PostgreSQL."""
+        try:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_assistant_threads(
+                  id BIGSERIAL PRIMARY KEY,
+                  context_type TEXT NOT NULL CHECK(context_type IN ('flashcard', 'quiz_attempt_question')),
+                  flashcard_uuid TEXT REFERENCES flashcards(uuid) ON DELETE CASCADE,
+                  quiz_attempt_id INTEGER REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  question_id INTEGER REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                  last_message_at TIMESTAMPTZ,
+                  message_count INTEGER NOT NULL DEFAULT 0,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1,
+                  CHECK(
+                    (context_type = 'flashcard' AND flashcard_uuid IS NOT NULL AND quiz_attempt_id IS NULL AND question_id IS NULL) OR
+                    (context_type = 'quiz_attempt_question' AND flashcard_uuid IS NULL AND quiz_attempt_id IS NOT NULL AND question_id IS NOT NULL)
+                  )
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS study_assistant_messages(
+                  id BIGSERIAL PRIMARY KEY,
+                  thread_id INTEGER NOT NULL REFERENCES study_assistant_threads(id) ON DELETE CASCADE,
+                  role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                  action_type TEXT NOT NULL CHECK(action_type IN ('explain', 'mnemonic', 'follow_up', 'fact_check', 'freeform')),
+                  input_modality TEXT NOT NULL CHECK(input_modality IN ('text', 'voice_transcript')),
+                  content TEXT NOT NULL,
+                  structured_payload_json TEXT,
+                  context_snapshot_json TEXT,
+                  provider TEXT,
+                  model TEXT,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  client_id TEXT NOT NULL DEFAULT 'unknown'
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_assistant_threads_flashcard_active
+                    ON study_assistant_threads(context_type, flashcard_uuid)
+                 WHERE deleted = FALSE AND flashcard_uuid IS NOT NULL
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_study_assistant_threads_quiz_question_active
+                    ON study_assistant_threads(context_type, quiz_attempt_id, question_id)
+                 WHERE deleted = FALSE AND quiz_attempt_id IS NOT NULL AND question_id IS NOT NULL
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_assistant_threads_last_message_at ON study_assistant_threads(last_message_at)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_assistant_messages_thread_id ON study_assistant_messages(thread_id, id)",
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL study assistant schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_quiz_remediation_conversion_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure quiz remediation conversion storage exists for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quiz_remediation_conversions(
+                  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+                  attempt_id                INTEGER NOT NULL REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  quiz_id                   INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+                  question_id               INTEGER NOT NULL REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                  status                    TEXT NOT NULL CHECK(status IN ('active', 'superseded')),
+                  superseded_by_id          INTEGER REFERENCES quiz_remediation_conversions(id) ON DELETE SET NULL,
+                  target_deck_id            INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  target_deck_name_snapshot TEXT,
+                  flashcard_count           INTEGER NOT NULL DEFAULT 0,
+                  flashcard_uuids_json      TEXT,
+                  source_ref_id             TEXT,
+                  created_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  client_id                 TEXT NOT NULL DEFAULT 'unknown',
+                  version                   INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_attempt_id "
+                "ON quiz_remediation_conversions(attempt_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_attempt_question "
+                "ON quiz_remediation_conversions(attempt_id, question_id)"
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_active_unique
+                    ON quiz_remediation_conversions(attempt_id, question_id)
+                 WHERE status = 'active'
+                """
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite remediation conversion schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_quiz_remediation_conversion_schema_postgres(self, conn) -> None:
+        """Ensure quiz remediation conversion storage exists for PostgreSQL."""
+        try:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quiz_remediation_conversions(
+                  id BIGSERIAL PRIMARY KEY,
+                  attempt_id INTEGER NOT NULL REFERENCES quiz_attempts(id) ON DELETE CASCADE,
+                  quiz_id INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+                  question_id INTEGER NOT NULL REFERENCES quiz_questions(id) ON DELETE CASCADE,
+                  status TEXT NOT NULL CHECK(status IN ('active', 'superseded')),
+                  superseded_by_id BIGINT REFERENCES quiz_remediation_conversions(id) ON DELETE SET NULL,
+                  target_deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+                  target_deck_name_snapshot TEXT,
+                  flashcard_count INTEGER NOT NULL DEFAULT 0,
+                  flashcard_uuids_json TEXT,
+                  source_ref_id TEXT,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_attempt_id "
+                "ON quiz_remediation_conversions(attempt_id)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_attempt_question "
+                "ON quiz_remediation_conversions(attempt_id, question_id)",
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_quiz_remediation_conversions_active_unique
+                    ON quiz_remediation_conversions(attempt_id, question_id)
+                 WHERE status = 'active'
+                """,
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL remediation conversion schema: {exc}") from exc  # noqa: TRY003
 
     def _self_heal_character_cards_fts_sqlite(self, conn: sqlite3.Connection) -> None:
         """Rebuild character_cards_fts when active card rows are not indexed.
@@ -5851,19 +7525,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V34_TO_V35, conn, expected_version=35)
                 current_version = 35
             if current_version < 36:
-                self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36, conn, expected_version=36)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V35_TO_V36_POSTGRES, conn, expected_version=36)
                 current_version = 36
+            if current_version < 37:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V36_TO_V37_POSTGRES, conn, expected_version=37)
+                current_version = 37
+            if current_version < 38:
+                self._ensure_quiz_remediation_conversion_schema_postgres(conn)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V37_TO_V38_POSTGRES, conn, expected_version=38)
+                current_version = 38
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
                     f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
                 )
 
+            self._ensure_flashcard_asset_schema_postgres(conn)
+            self._ensure_flashcard_scheduler_schema_postgres(conn)
+            self._ensure_study_assistant_schema_postgres(conn)
+            self._ensure_quiz_remediation_conversion_schema_postgres(conn)
+            self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
+            self._ensure_recent_voice_command_schema_postgres(conn)
+            self._ensure_note_folder_schema_postgres(conn)
+            self._ensure_workspace_subresource_schema_postgres(conn)
 
             if current_version < target_version:
                 logger.warning(
-                    'ChaChaNotes PostgreSQL schema is at version {} but code expects {}. Pending migrations will be addressed in a future update.',
+                    'ChaChaNotes PostgreSQL schema is at version {} but code expects {}. '
+                    'Some migrations may not yet be available for PostgreSQL.',
                     current_version,
                     target_version,
                 )
@@ -6180,6 +7870,828 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             }
         except _CHACHA_NONCRITICAL_EXCEPTIONS:
             return None
+
+    def _ensure_persona_live_voice_session_summaries_table(self) -> None:
+        """Ensure persona live-voice session summaries exist for analytics feedback."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS persona_live_voice_session_summaries(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  started_at TEXT,
+                  ended_at TEXT,
+                  auto_commit_enabled INTEGER,
+                  vad_threshold REAL,
+                  min_silence_ms INTEGER,
+                  turn_stop_secs REAL,
+                  min_utterance_secs REAL,
+                  turn_detection_changed_during_session INTEGER NOT NULL DEFAULT 0,
+                  total_committed_turns INTEGER NOT NULL DEFAULT 0,
+                  vad_auto_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_mode_required_count INTEGER NOT NULL DEFAULT 0,
+                  text_only_tts_count INTEGER NOT NULL DEFAULT 0,
+                  listening_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  thinking_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  UNIQUE(user_id, persona_id, session_id)
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            self.execute_query(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_live_voice_session_summaries_persona_time
+                ON persona_live_voice_session_summaries(persona_id, started_at, updated_at)
+                """,
+                script=False,
+                commit=True,
+            )
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS persona_live_voice_session_summaries(
+                  id BIGSERIAL PRIMARY KEY,
+                  user_id BIGINT NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                  started_at TEXT,
+                  ended_at TEXT,
+                  auto_commit_enabled BOOLEAN,
+                  vad_threshold DOUBLE PRECISION,
+                  min_silence_ms INTEGER,
+                  turn_stop_secs DOUBLE PRECISION,
+                  min_utterance_secs DOUBLE PRECISION,
+                  turn_detection_changed_during_session BOOLEAN NOT NULL DEFAULT FALSE,
+                  total_committed_turns INTEGER NOT NULL DEFAULT 0,
+                  vad_auto_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_commit_count INTEGER NOT NULL DEFAULT 0,
+                  manual_mode_required_count INTEGER NOT NULL DEFAULT 0,
+                  text_only_tts_count INTEGER NOT NULL DEFAULT 0,
+                  listening_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  thinking_recovery_count INTEGER NOT NULL DEFAULT 0,
+                  UNIQUE(user_id, persona_id, session_id)
+                )
+                """
+            )
+            self.backend.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_live_voice_session_summaries_persona_time
+                ON persona_live_voice_session_summaries(persona_id, started_at, updated_at)
+                """
+            )
+            return
+
+        raise NotImplementedError(
+            "persona_live_voice_session_summaries table creation not supported "
+            f"for backend {self.backend_type.value}"
+        )
+
+    def upsert_persona_live_voice_session_summary(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        session_id: str,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        auto_commit_enabled: bool | None = None,
+        vad_threshold: float | None = None,
+        min_silence_ms: int | None = None,
+        turn_stop_secs: float | None = None,
+        min_utterance_secs: float | None = None,
+        commit_source: str | None = None,
+        manual_mode_required_increment: int = 0,
+        text_only_tts_increment: int = 0,
+        listening_recovery_count: int | None = None,
+        thinking_recovery_count: int | None = None,
+        finalize: bool = False,
+    ) -> bool:
+        """Create or update one persona live-voice session summary row."""
+        self._ensure_persona_live_voice_session_summaries_table()
+
+        now = self._get_current_utc_timestamp_iso()
+
+        def _bool_for_db(value: bool | None) -> bool | int | None:
+            if value is None:
+                return None
+            if self.backend_type == BackendType.POSTGRESQL:
+                return bool(value)
+            return int(bool(value))
+
+        snapshot_values = {
+            "auto_commit_enabled": _bool_for_db(auto_commit_enabled),
+            "vad_threshold": float(vad_threshold) if vad_threshold is not None else None,
+            "min_silence_ms": int(min_silence_ms) if min_silence_ms is not None else None,
+            "turn_stop_secs": float(turn_stop_secs) if turn_stop_secs is not None else None,
+            "min_utterance_secs": (
+                float(min_utterance_secs) if min_utterance_secs is not None else None
+            ),
+        }
+        snapshot_provided = any(value is not None for value in snapshot_values.values())
+
+        with self.transaction():
+            row = self.execute_query(
+                """
+                SELECT *
+                FROM persona_live_voice_session_summaries
+                WHERE user_id = ? AND persona_id = ? AND session_id = ?
+                """,
+                (user_id, persona_id, session_id),
+            ).fetchone()
+
+            if row is None:
+                total_committed_turns = 1 if commit_source in {"vad_auto", "manual"} else 0
+                vad_auto_commit_count = 1 if commit_source == "vad_auto" else 0
+                manual_commit_count = 1 if commit_source == "manual" else 0
+                normalized_started_at = started_at or now
+                normalized_ended_at = ended_at or (now if finalize else None)
+                self.execute_query(
+                    """
+                    INSERT INTO persona_live_voice_session_summaries(
+                        user_id, persona_id, session_id, created_at, updated_at,
+                        started_at, ended_at, auto_commit_enabled, vad_threshold,
+                        min_silence_ms, turn_stop_secs, min_utterance_secs,
+                        turn_detection_changed_during_session, total_committed_turns,
+                        vad_auto_commit_count, manual_commit_count,
+                        manual_mode_required_count, text_only_tts_count,
+                        listening_recovery_count, thinking_recovery_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        persona_id,
+                        session_id,
+                        now,
+                        now,
+                        normalized_started_at,
+                        normalized_ended_at,
+                        snapshot_values["auto_commit_enabled"],
+                        snapshot_values["vad_threshold"],
+                        snapshot_values["min_silence_ms"],
+                        snapshot_values["turn_stop_secs"],
+                        snapshot_values["min_utterance_secs"],
+                        _bool_for_db(False),
+                        total_committed_turns,
+                        vad_auto_commit_count,
+                        manual_commit_count,
+                        max(0, int(manual_mode_required_increment or 0)),
+                        max(0, int(text_only_tts_increment or 0)),
+                        max(0, int(listening_recovery_count or 0)),
+                        max(0, int(thinking_recovery_count or 0)),
+                    ),
+                )
+                return True
+
+            existing = dict(row)
+            updates: list[str] = ["updated_at = ?"]
+            params: list[Any] = [now]
+
+            existing_snapshot_values = {
+                "auto_commit_enabled": existing.get("auto_commit_enabled"),
+                "vad_threshold": existing.get("vad_threshold"),
+                "min_silence_ms": existing.get("min_silence_ms"),
+                "turn_stop_secs": existing.get("turn_stop_secs"),
+                "min_utterance_secs": existing.get("min_utterance_secs"),
+            }
+            existing_snapshot_missing = all(
+                value is None for value in existing_snapshot_values.values()
+            )
+            if snapshot_provided and existing_snapshot_missing:
+                for field_name, value in snapshot_values.items():
+                    updates.append(f"{field_name} = ?")
+                    params.append(value)
+            elif snapshot_provided:
+                snapshot_changed = any(
+                    snapshot_values[field_name] is not None
+                    and snapshot_values[field_name] != existing_snapshot_values[field_name]
+                    for field_name in snapshot_values
+                )
+                if snapshot_changed and not bool(
+                    existing.get("turn_detection_changed_during_session")
+                ):
+                    updates.append("turn_detection_changed_during_session = ?")
+                    params.append(_bool_for_db(True))
+
+            if started_at and not existing.get("started_at"):
+                updates.append("started_at = ?")
+                params.append(started_at)
+
+            if commit_source == "vad_auto":
+                updates.extend(
+                    [
+                        "total_committed_turns = total_committed_turns + 1",
+                        "vad_auto_commit_count = vad_auto_commit_count + 1",
+                    ]
+                )
+            elif commit_source == "manual":
+                updates.extend(
+                    [
+                        "total_committed_turns = total_committed_turns + 1",
+                        "manual_commit_count = manual_commit_count + 1",
+                    ]
+                )
+
+            if manual_mode_required_increment:
+                updates.append(
+                    "manual_mode_required_count = manual_mode_required_count + ?"
+                )
+                params.append(max(0, int(manual_mode_required_increment)))
+
+            if text_only_tts_increment:
+                updates.append("text_only_tts_count = text_only_tts_count + ?")
+                params.append(max(0, int(text_only_tts_increment)))
+
+            if listening_recovery_count is not None:
+                updates.append("listening_recovery_count = ?")
+                params.append(max(0, int(listening_recovery_count)))
+
+            if thinking_recovery_count is not None:
+                updates.append("thinking_recovery_count = ?")
+                params.append(max(0, int(thinking_recovery_count)))
+
+            if ended_at:
+                updates.append("ended_at = ?")
+                params.append(ended_at)
+            elif finalize:
+                updates.append("ended_at = ?")
+                params.append(now)
+
+            params.extend([user_id, persona_id, session_id])
+            self.execute_query(
+                f"""
+                UPDATE persona_live_voice_session_summaries
+                SET {", ".join(updates)}
+                WHERE user_id = ? AND persona_id = ? AND session_id = ?
+                """,  # nosec B608
+                tuple(params),
+            )
+            return True
+
+    def list_persona_live_voice_session_summaries(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        days: int = 7,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """List recent persona live-voice session summaries for analytics feedback."""
+        self._ensure_persona_live_voice_session_summaries_table()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
+        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        cursor = self.execute_query(
+            """
+            SELECT *
+            FROM persona_live_voice_session_summaries
+            WHERE user_id = ? AND persona_id = ?
+              AND COALESCE(started_at, created_at) >= ?
+            ORDER BY COALESCE(started_at, created_at) DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (user_id, persona_id, cutoff, max(1, int(limit))),
+        )
+        return [dict(row) for row in cursor.fetchall() if row]
+
+    def get_persona_live_voice_session_summary(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Fetch one persona live-voice session summary by session id."""
+        self._ensure_persona_live_voice_session_summaries_table()
+        row = self.execute_query(
+            """
+            SELECT *
+            FROM persona_live_voice_session_summaries
+            WHERE user_id = ? AND persona_id = ? AND session_id = ?
+            """,
+            (user_id, persona_id, session_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def _ensure_persona_setup_events_table(self) -> None:
+        """Ensure append-only persona setup analytics events exist."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS persona_setup_events(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  event_id TEXT NOT NULL UNIQUE,
+                  user_id INTEGER NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  run_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  event_key TEXT,
+                  step TEXT,
+                  completion_type TEXT,
+                  detour_source TEXT,
+                  action_target TEXT,
+                  metadata_json TEXT,
+                  created_at TEXT NOT NULL
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            self.execute_query(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_persona_setup_events_event_key
+                ON persona_setup_events(user_id, persona_id, run_id, event_key)
+                WHERE event_key IS NOT NULL
+                """,
+                script=False,
+                commit=True,
+            )
+            self.execute_query(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_setup_events_persona_created
+                ON persona_setup_events(user_id, persona_id, created_at, id)
+                """,
+                script=False,
+                commit=True,
+            )
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS persona_setup_events(
+                  id BIGSERIAL PRIMARY KEY,
+                  event_id TEXT NOT NULL UNIQUE,
+                  user_id BIGINT NOT NULL,
+                  persona_id TEXT NOT NULL,
+                  run_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  event_key TEXT,
+                  step TEXT,
+                  completion_type TEXT,
+                  detour_source TEXT,
+                  action_target TEXT,
+                  metadata_json TEXT,
+                  created_at TEXT NOT NULL
+                )
+                """
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_persona_setup_events_event_key
+                ON persona_setup_events(user_id, persona_id, run_id, event_key)
+                WHERE event_key IS NOT NULL
+                """
+            )
+            self.backend.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_persona_setup_events_persona_created
+                ON persona_setup_events(user_id, persona_id, created_at, id)
+                """
+            )
+            return
+
+        raise NotImplementedError(
+            "persona_setup_events table creation not supported "
+            f"for backend {self.backend_type.value}"
+        )
+
+    def _persona_setup_event_row_to_dict(self, row: Any) -> dict[str, Any]:
+        item = dict(row)
+        event_label = str(item.get("event_id") or item.get("id") or "unknown")
+        item["metadata"] = self._decode_persona_json_object(
+            item.get("metadata_json"),
+            field_name="metadata_json",
+            context_label=f"persona setup event {event_label}",
+        )
+        return item
+
+    def _decode_persona_json_object(
+        self,
+        raw_value: Any,
+        *,
+        field_name: str,
+        context_label: str,
+    ) -> dict[str, Any]:
+        """Decode one persona JSON column into a dictionary with warning logs on invalid data."""
+        if isinstance(raw_value, dict):
+            return raw_value
+        if not isinstance(raw_value, str):
+            return {}
+
+        try:
+            decoded_value = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "Invalid JSON in {} for {}: {}",
+                field_name,
+                context_label,
+                exc,
+            )
+            return {}
+
+        if isinstance(decoded_value, dict):
+            return decoded_value
+
+        logger.warning(
+            "Expected JSON object in {} for {}, got {}.",
+            field_name,
+            context_label,
+            type(decoded_value).__name__,
+        )
+        return {}
+
+    def record_persona_setup_event(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        event_id: str,
+        run_id: str,
+        event_type: str,
+        event_key: str | None = None,
+        step: str | None = None,
+        completion_type: str | None = None,
+        detour_source: str | None = None,
+        action_target: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Insert one persona setup analytics event with optional once-only dedupe."""
+        self._ensure_persona_setup_events_table()
+        now = self._get_current_utc_timestamp_iso()
+        metadata_json = self._ensure_json_string(metadata if isinstance(metadata, dict) else {})
+
+        with self.transaction():
+            row = self.execute_query(
+                """
+                SELECT *
+                FROM persona_setup_events
+                WHERE user_id = ? AND persona_id = ? AND event_id = ?
+                """,
+                (user_id, persona_id, event_id),
+            ).fetchone()
+            if row:
+                item = self._persona_setup_event_row_to_dict(row)
+                item["deduped"] = True
+                return item
+
+            if event_key:
+                row = self.execute_query(
+                    """
+                    SELECT *
+                    FROM persona_setup_events
+                    WHERE user_id = ? AND persona_id = ? AND run_id = ? AND event_key = ?
+                    """,
+                    (user_id, persona_id, run_id, event_key),
+                ).fetchone()
+                if row:
+                    item = self._persona_setup_event_row_to_dict(row)
+                    item["deduped"] = True
+                    return item
+
+            self.execute_query(
+                """
+                INSERT INTO persona_setup_events(
+                    event_id, user_id, persona_id, run_id, event_type, event_key,
+                    step, completion_type, detour_source, action_target,
+                    metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    user_id,
+                    persona_id,
+                    run_id,
+                    event_type,
+                    event_key,
+                    step,
+                    completion_type,
+                    detour_source,
+                    action_target,
+                    metadata_json,
+                    now,
+                ),
+            )
+            row = self.execute_query(
+                """
+                SELECT *
+                FROM persona_setup_events
+                WHERE user_id = ? AND persona_id = ? AND event_id = ?
+                """,
+                (user_id, persona_id, event_id),
+            ).fetchone()
+            if not row:
+                error_message = "Failed to load inserted persona setup event."
+                raise CharactersRAGDBError(error_message)
+            item = self._persona_setup_event_row_to_dict(row)
+            item["deduped"] = False
+            return item
+
+    def list_persona_setup_events(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        days: int = 30,
+        run_id: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """List recent persona setup events for one persona."""
+        self._ensure_persona_setup_events_table()
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
+        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+        params: list[Any] = [user_id, persona_id, cutoff]
+        query = """
+            SELECT *
+            FROM persona_setup_events
+            WHERE user_id = ? AND persona_id = ? AND created_at >= ?
+        """
+        if run_id:
+            query += " AND run_id = ?"
+            params.append(run_id)
+        query += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+
+        cursor = self.execute_query(query, tuple(params))
+        return [
+            self._persona_setup_event_row_to_dict(row)
+            for row in cursor.fetchall()
+            if row
+        ]
+
+    def get_persona_setup_analytics_summary(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        days: int = 30,
+        recent_run_limit: int = 10,
+    ) -> dict[str, Any]:
+        """Aggregate recent persona setup analytics runs and summary rates."""
+        events = self.list_persona_setup_events(
+            user_id=user_id,
+            persona_id=persona_id,
+            days=days,
+            limit=5000,
+        )
+        runs: dict[str, dict[str, Any]] = {}
+        detour_started_counts: dict[str, int] = {}
+        detour_returned_counts: dict[str, int] = {}
+
+        for event in events:
+            run_id = str(event.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            run = runs.setdefault(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "started_at": None,
+                    "completed_at": None,
+                    "completion_type": None,
+                    "terminal_step": None,
+                    "handoff_clicked": False,
+                    "handoff_target_reached": False,
+                    "handoff_dismissed": False,
+                    "first_post_setup_action": False,
+                    "_reached_targets": set(),
+                    "_latest_id": -1,
+                    "_earliest_created_at": None,
+                    "_latest_step_id": -1,
+                },
+            )
+            event_id_value = int(event.get("id") or 0)
+            created_at = str(event.get("created_at") or "").strip() or None
+            event_type = str(event.get("event_type") or "").strip()
+            step = str(event.get("step") or "").strip() or None
+            detour_source = str(event.get("detour_source") or "").strip() or None
+
+            if event_id_value > int(run["_latest_id"]):
+                run["_latest_id"] = event_id_value
+            if created_at and (
+                run["_earliest_created_at"] is None
+                or created_at < str(run["_earliest_created_at"])
+            ):
+                run["_earliest_created_at"] = created_at
+            if event_type == "setup_started" and created_at and (
+                run["started_at"] is None or created_at < str(run["started_at"])
+            ):
+                run["started_at"] = created_at
+            if event_type == "setup_completed" and created_at and (
+                run["completed_at"] is None or created_at > str(run["completed_at"])
+            ):
+                run["completed_at"] = created_at
+                run["completion_type"] = (
+                    str(event.get("completion_type") or "").strip() or None
+                )
+            if step and event_id_value >= int(run["_latest_step_id"]):
+                run["_latest_step_id"] = event_id_value
+                run["terminal_step"] = step
+            if event_type == "handoff_action_clicked":
+                run["handoff_clicked"] = True
+            elif event_type == "handoff_target_reached":
+                run["handoff_target_reached"] = True
+                action_target = str(event.get("action_target") or "").strip()
+                if action_target:
+                    reached_targets = run["_reached_targets"]
+                    if isinstance(reached_targets, set):
+                        reached_targets.add(action_target)
+            elif event_type == "handoff_dismissed":
+                run["handoff_dismissed"] = True
+            elif event_type == "first_post_setup_action":
+                run["first_post_setup_action"] = True
+            elif event_type == "detour_started" and detour_source:
+                detour_started_counts[detour_source] = (
+                    detour_started_counts.get(detour_source, 0) + 1
+                )
+            elif event_type == "detour_returned" and detour_source:
+                detour_returned_counts[detour_source] = (
+                    detour_returned_counts.get(detour_source, 0) + 1
+                )
+
+        recent_runs: list[dict[str, Any]] = []
+        completed_runs = 0
+        dry_run_completion_count = 0
+        live_session_completion_count = 0
+        handoff_clicked_runs = 0
+        handoff_target_reached_runs = 0
+        first_post_setup_action_runs = 0
+        handoff_target_reached_counts: dict[str, int] = {}
+        dropoff_counts: dict[str, int] = {}
+
+        for run in sorted(
+            runs.values(),
+            key=lambda item: int(item["_latest_id"]),
+            reverse=True,
+        ):
+            if run["started_at"] is None:
+                run["started_at"] = run["_earliest_created_at"]
+            completion_type = str(run.get("completion_type") or "").strip() or None
+            if completion_type:
+                completed_runs += 1
+                if completion_type == "dry_run":
+                    dry_run_completion_count += 1
+                elif completion_type == "live_session":
+                    live_session_completion_count += 1
+            else:
+                terminal_step = str(run.get("terminal_step") or "").strip() or None
+                if terminal_step:
+                    dropoff_counts[terminal_step] = dropoff_counts.get(terminal_step, 0) + 1
+
+            if bool(run.get("handoff_clicked")):
+                handoff_clicked_runs += 1
+            if bool(run.get("handoff_target_reached")):
+                handoff_target_reached_runs += 1
+            if bool(run.get("first_post_setup_action")):
+                first_post_setup_action_runs += 1
+            reached_targets = run.get("_reached_targets")
+            if isinstance(reached_targets, set):
+                for action_target in reached_targets:
+                    handoff_target_reached_counts[action_target] = (
+                        handoff_target_reached_counts.get(action_target, 0) + 1
+                    )
+
+            recent_runs.append(
+                {
+                    "run_id": run["run_id"],
+                    "started_at": run["started_at"],
+                    "completed_at": run["completed_at"],
+                    "completion_type": completion_type,
+                    "terminal_step": run["terminal_step"],
+                    "handoff_clicked": bool(run["handoff_clicked"]),
+                    "handoff_target_reached": bool(run["handoff_target_reached"]),
+                    "handoff_dismissed": bool(run["handoff_dismissed"]),
+                    "first_post_setup_action": bool(run["first_post_setup_action"]),
+                }
+            )
+
+        total_runs = len(runs)
+        most_common_dropoff_step = None
+        if dropoff_counts:
+            most_common_dropoff_step = max(
+                dropoff_counts.items(),
+                key=lambda item: (item[1], item[0]),
+            )[0]
+
+        return {
+            "summary": {
+                "total_runs": total_runs,
+                "completed_runs": completed_runs,
+                "completion_rate": (
+                    float(completed_runs) / float(total_runs)
+                    if total_runs
+                    else 0.0
+                ),
+                "dry_run_completion_count": dry_run_completion_count,
+                "live_session_completion_count": live_session_completion_count,
+                "most_common_dropoff_step": most_common_dropoff_step,
+                "handoff_click_rate": (
+                    float(handoff_clicked_runs) / float(total_runs)
+                    if total_runs
+                    else 0.0
+                ),
+                "handoff_target_reach_rate": (
+                    float(handoff_target_reached_runs) / float(handoff_clicked_runs)
+                    if handoff_clicked_runs
+                    else 0.0
+                ),
+                "first_post_setup_action_rate": (
+                    float(first_post_setup_action_runs) / float(total_runs)
+                    if total_runs
+                    else 0.0
+                ),
+                "handoff_target_reached_counts": handoff_target_reached_counts,
+                "detour_started_counts": detour_started_counts,
+                "detour_returned_counts": detour_returned_counts,
+            },
+            "recent_runs": recent_runs[: max(1, int(recent_run_limit))],
+        }
+
+    def upsert_voice_command(
+        self,
+        *,
+        command_id: str,
+        user_id: int,
+        persona_id: str | None,
+        connection_id: str | None,
+        name: str,
+        phrases: list[str],
+        action_type: str,
+        action_config: dict[str, Any],
+        priority: int,
+        enabled: bool,
+        requires_confirmation: bool,
+        description: str | None,
+        created_at: str | None = None,
+        updated_at: str | None = None,
+    ) -> str:
+        """Insert or update a voice command record in the DB layer."""
+        final_command_id = str(command_id).strip()
+        if not final_command_id:
+            raise InputError("Voice command ID cannot be empty.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        created_timestamp = str(created_at or now)
+        updated_timestamp = str(updated_at or now)
+        phrases_json = self._serialize_json_payload(list(phrases), "Voice command phrases")
+        action_config_json = self._serialize_json_payload(
+            dict(action_config or {}),
+            "Voice command action config",
+        )
+        query = """
+            INSERT INTO voice_commands (
+                id, user_id, persona_id, connection_id, name, phrases, action_type, action_config,
+                priority, enabled, requires_confirmation, description,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                persona_id = excluded.persona_id,
+                connection_id = excluded.connection_id,
+                name = excluded.name,
+                phrases = excluded.phrases,
+                action_type = excluded.action_type,
+                action_config = excluded.action_config,
+                priority = excluded.priority,
+                enabled = excluded.enabled,
+                requires_confirmation = excluded.requires_confirmation,
+                description = excluded.description,
+                updated_at = excluded.updated_at
+        """
+        params = (
+            final_command_id,
+            int(user_id),
+            str(persona_id) if persona_id is not None else None,
+            str(connection_id) if connection_id is not None else None,
+            str(name),
+            phrases_json,
+            str(action_type),
+            action_config_json,
+            int(priority),
+            1 if enabled else 0,
+            1 if requires_confirmation else 0,
+            description,
+            created_timestamp,
+            updated_timestamp,
+        )
+        try:
+            with self.transaction():
+                self.execute_query(query, params)
+            return final_command_id
+        except CharactersRAGDBError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise CharactersRAGDBError(f"Failed to save voice command: {exc}") from exc  # noqa: TRY003
 
     # ----------------------
     # Conversation settings
@@ -7490,6 +10002,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not row:
             return None
         item = dict(row)
+        persona_label = str(item.get("id") or item.get("name") or "unknown")
+        item["voice_defaults"] = self._decode_persona_json_object(
+            item.get("voice_defaults_json"),
+            field_name="voice_defaults_json",
+            context_label=f"persona profile {persona_label}",
+        )
+        item["setup"] = self._decode_persona_json_object(
+            item.get("setup_json"),
+            field_name="setup_json",
+            context_label=f"persona profile {persona_label}",
+        )
         item["is_active"] = self._as_bool(item.get("is_active"))
         item["use_persona_state_context_default"] = self._as_bool(
             item.get("use_persona_state_context_default", True)
@@ -7536,6 +10059,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not row:
             return None
         item = dict(row)
+        row_id = item.get("id") or item.get("session_id") or item.get("uuid") or "N/A"
         item["reuse_allowed"] = self._as_bool(item.get("reuse_allowed"))
         item["deleted"] = self._as_bool(item.get("deleted"))
         item["activity_surface"] = self._normalize_persona_session_activity_surface(item.get("activity_surface"))
@@ -7544,6 +10068,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             try:
                 decoded_preferences = json.loads(raw_preferences)
             except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode JSON for field '{}' in persona session row {}. Falling back to empty object. Value preview: {}",
+                    "preferences_json",
+                    row_id,
+                    raw_preferences[:100] + ("..." if len(raw_preferences) > 100 else ""),
+                )
                 decoded_preferences = {}
             item["preferences"] = decoded_preferences if isinstance(decoded_preferences, dict) else {}
         elif isinstance(raw_preferences, dict):
@@ -7555,6 +10085,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             try:
                 item["scope_snapshot"] = json.loads(raw_snapshot)
             except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode JSON for field '{}' in persona session row {}. Falling back to empty object. Value preview: {}",
+                    "scope_snapshot_json",
+                    row_id,
+                    raw_snapshot[:100] + ("..." if len(raw_snapshot) > 100 else ""),
+                )
                 item["scope_snapshot"] = {}
         elif isinstance(raw_snapshot, dict):
             item["scope_snapshot"] = raw_snapshot
@@ -7940,6 +10476,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         use_persona_state_context_default = self._as_bool(
             profile_data.get("use_persona_state_context_default", True)
         )
+        voice_defaults_json = self._ensure_json_string(
+            profile_data.get("voice_defaults")
+            if isinstance(profile_data.get("voice_defaults"), dict)
+            else None
+        )
+        setup_json = self._ensure_json_string(
+            profile_data.get("setup") if isinstance(profile_data.get("setup"), dict) else None
+        )
         now = self._get_current_utc_timestamp_iso()
 
         character_card_id = profile_data.get("character_card_id")
@@ -7988,9 +10532,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         query = (
             "INSERT INTO persona_profiles("
             "id, user_id, name, character_card_id, origin_character_id, origin_character_name, "
-            "origin_character_snapshot_at, mode, system_prompt, "
+            "origin_character_snapshot_at, mode, system_prompt, voice_defaults_json, setup_json, "
             "is_active, use_persona_state_context_default, created_at, last_modified, deleted, version"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             persona_id,
@@ -8002,6 +10546,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             origin_character_snapshot_at,
             mode,
             system_prompt,
+            voice_defaults_json,
+            setup_json,
             is_active_db,
             use_persona_state_context_default_db,
             profile_data.get("created_at") or now,
@@ -8095,6 +10641,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "character_card_id",
             "mode",
             "system_prompt",
+            "voice_defaults",
+            "setup",
             "is_active",
             "use_persona_state_context_default",
             "deleted",
@@ -8123,6 +10671,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     except (TypeError, ValueError) as exc:
                         raise InputError("character_card_id must be an integer when provided.") from exc  # noqa: TRY003
                 set_parts.append("character_card_id = ?")
+            elif key == "voice_defaults":
+                params.append(self._ensure_json_string(value if isinstance(value, dict) else {}))
+                set_parts.append("voice_defaults_json = ?")
+            elif key == "setup":
+                params.append(self._ensure_json_string(value if isinstance(value, dict) else {}))
+                set_parts.append("setup_json = ?")
             else:
                 params.append(value)
                 set_parts.append(f"{key} = ?")
@@ -8672,6 +11226,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(query, tuple(params))
         return [self._persona_memory_row_to_dict(row) for row in cursor.fetchall() if row]
 
+    def get_persona_memory_entry_by_id(
+        self,
+        *,
+        entry_id: str,
+        user_id: str,
+        persona_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """Fetch a single persona memory entry by ID, owned by user."""
+        clauses = ["id = ?", "user_id = ?"]
+        params: list[Any] = [entry_id, user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        query = f"SELECT * FROM persona_memory_entries WHERE {' AND '.join(clauses)}"  # nosec B608
+        cursor = self.execute_query(query, tuple(params))
+        return self._persona_memory_row_to_dict(cursor.fetchone())
+
+    def count_persona_memory_entries(
+        self,
+        *,
+        user_id: str,
+        persona_id: str | None = None,
+        memory_type: str | None = None,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> int:
+        """Count persona memory entries matching the given filters."""
+        clauses = ["user_id = ?"]
+        params: list[Any] = [user_id]
+        if persona_id is not None:
+            clauses.append("persona_id = ?")
+            params.append(persona_id)
+        if memory_type is not None:
+            clauses.append("memory_type = ?")
+            params.append(str(memory_type).strip())
+        if not include_archived:
+            clauses.append("archived = 0")
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        query = f"SELECT COUNT(*) FROM persona_memory_entries WHERE {' AND '.join(clauses)}"  # nosec B608
+        cursor = self.execute_query(query, tuple(params))
+        row = cursor.fetchone()
+        return row[0] if row else 0
+
     def set_persona_memory_archived(
         self,
         *,
@@ -8697,6 +11298,80 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         update_params = [bool_cast(archived), now, *params]
         cursor = self.execute_query(query, tuple(update_params), commit=True)
         return bool(cursor.rowcount and cursor.rowcount > 0)
+
+    def update_persona_memory_entry(
+        self,
+        *,
+        entry_id: str,
+        user_id: str,
+        persona_id: str,
+        update_data: dict[str, Any],
+    ) -> bool:
+        """Update mutable persona memory entry fields."""
+        if not update_data:
+            raise InputError("No persona memory fields provided for update.")  # noqa: TRY003
+
+        allowed_fields = {
+            "content",
+            "memory_type",
+            "salience",
+            "source_conversation_id",
+            "scope_snapshot_id",
+            "session_id",
+            "archived",
+            "deleted",
+        }
+        set_parts: list[str] = []
+        params: list[Any] = []
+        bool_cast = bool if self.backend_type == BackendType.POSTGRESQL else int
+
+        for key, value in update_data.items():
+            if key not in allowed_fields:
+                continue
+            if key == "content":
+                content = str(value or "").strip()
+                if not content:
+                    raise InputError("content cannot be empty.")  # noqa: TRY003
+                params.append(content)
+                set_parts.append("content = ?")
+            elif key == "memory_type":
+                mt = str(value or "").strip()
+                if not mt:
+                    raise InputError("memory_type cannot be empty.")  # noqa: TRY003
+                params.append(mt)
+                set_parts.append("memory_type = ?")
+            elif key == "salience":
+                try:
+                    params.append(float(value))
+                except (TypeError, ValueError) as exc:
+                    raise InputError("salience must be a numeric value.") from exc  # noqa: TRY003
+                set_parts.append("salience = ?")
+            elif key in {"archived", "deleted"}:
+                params.append(bool_cast(self._as_bool(value)))
+                set_parts.append(f"{key} = ?")
+            else:
+                normalized = None if value is None else str(value).strip() or None
+                params.append(normalized)
+                set_parts.append(f"{key} = ?")
+
+        if not set_parts:
+            raise InputError("No valid persona memory fields provided for update.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1"])
+        params.append(now)
+
+        with self.transaction() as conn:
+            self._require_active_persona_profile_owner(conn, persona_id=persona_id, user_id=user_id)
+            query = (
+                "UPDATE persona_memory_entries "
+                f"SET {', '.join(set_parts)} "
+                "WHERE id = ? AND persona_id = ? AND user_id = ? AND deleted = 0"  # nosec B608
+            )
+            params.extend([entry_id, persona_id, user_id])
+            prepared_query, prepared_params = self._prepare_backend_statement(query, tuple(params))
+            cursor = conn.execute(prepared_query, prepared_params or ())
+            return cursor.rowcount > 0
 
     def backfill_persona_memory_scope_namespace(
         self,
@@ -9447,7 +12122,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             entity_col = 'entity_uuid'
                     except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
-                assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
+                if entity_col not in ("entity_id", "entity_uuid"):
+                    raise CharactersRAGDBError(  # noqa: TRY003
+                        f"Unexpected sync_log id column: {entity_col}"
+                    )
                 conn.execute(
                     f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",  # nosec B608
                     ("note_edges", edge_id, "create", now_iso, self.client_id, 1, json.dumps(payload)),
@@ -9503,7 +12181,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 entity_col = 'entity_uuid'
                         except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
-                    assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
+                    if entity_col not in ("entity_id", "entity_uuid"):
+                        raise CharactersRAGDBError(  # noqa: TRY003
+                            f"Unexpected sync_log id column: {entity_col}"
+                        )
                     conn.execute(
                         f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",  # nosec B608
                         ("note_edges", edge_id, "delete", now_iso, self.client_id, 1, json.dumps({"edge_id": edge_id})),
@@ -11632,6 +14313,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return stripped if stripped else None
         return str(value)
 
+    _ALLOWED_SCOPE_TYPES: tuple[str, ...] = ("global", "workspace")
+
+    @staticmethod
+    def _normalize_scope(
+        scope_type: str | None,
+        workspace_id: str | None,
+    ) -> tuple[str, str | None]:
+        """Validate and normalize conversation scope fields.
+
+        Returns:
+            (scope_type, workspace_id) tuple.
+
+        Raises:
+            InputError: If scope_type is invalid or workspace scope lacks workspace_id.
+        """
+        if scope_type is None:
+            scope_type = "global"
+        scope_type = scope_type.strip().lower()
+        if scope_type not in ("global", "workspace"):
+            raise InputError(  # noqa: TRY003
+                f"Invalid scope_type '{scope_type}'. Allowed: global, workspace"
+            )
+        if scope_type == "workspace":
+            if not workspace_id:
+                raise InputError("workspace_id is required when scope_type is 'workspace'.")  # noqa: TRY003
+        else:
+            workspace_id = None  # global scope never references a workspace
+        return scope_type, workspace_id
+
     def _normalize_conversation_assistant_identity(
         self,
         *,
@@ -11741,27 +14451,34 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             persona_memory_mode=conv_data.get('persona_memory_mode'),
         )
 
+        scope_type, workspace_id = self._normalize_scope(
+            conv_data.get('scope_type'), conv_data.get('workspace_id'),
+        )
+
         now = self._get_current_utc_timestamp_iso()
         query = """
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
                                            character_id, assistant_kind, assistant_id, persona_memory_mode, \
                                            title, state, topic_label, cluster_id, source, external_ref, rating, \
-                                           created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                                           created_at, last_modified, client_id, version, deleted, \
+                                           scope_type, workspace_id) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
         if self.backend_type == BackendType.POSTGRESQL:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
                 conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
-                now, now, client_id, 1, False
+                now, now, client_id, 1, False,
+                scope_type, workspace_id
             )
         else:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
                 conv_data.get('parent_conversation_id'), character_id, assistant_kind, assistant_id, persona_memory_mode,
                 conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
-                now, now, client_id, 1, 0
+                now, now, client_id, 1, 0,
+                scope_type, workspace_id
             )
         try:
             with self.transaction() as conn:
@@ -11860,6 +14577,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         include_deleted: bool = False,
         deleted_only: bool = False,
         character_scope: str | None = None,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> int:
         """
         Count total non-deleted conversations for a given user (client_id).
@@ -11884,6 +14603,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         character_scope_clause = self._conversation_character_scope_clause(character_scope)
         if character_scope_clause:
             clauses.append(character_scope_clause)
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+        clauses.append("scope_type = ?")
+        params.append(normalized_scope)
+        if normalized_workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(normalized_workspace_id)
         query = f"SELECT COUNT(*) as cnt FROM conversations WHERE {' AND '.join(clauses)}"  # nosec B608
         try:
             cursor = self.execute_query(query, tuple(params))
@@ -11900,6 +14626,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
         character_scope: str | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -11909,6 +14637,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             client_id: The user/client identifier as string.
             limit: Max number of rows to return.
             offset: Number of rows to skip.
+            scope_type: Optional scope filter ('global' or 'workspace').
+            workspace_id: Optional workspace ID filter (used with scope_type='workspace').
 
         Returns:
             List of conversation records.
@@ -11928,6 +14658,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         character_scope_clause = self._conversation_character_scope_clause(character_scope)
         if character_scope_clause:
             clauses.append(character_scope_clause)
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+        clauses.append("scope_type = ?")
+        params.append(normalized_scope)
+        if normalized_workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(normalized_workspace_id)
         query = (
             "SELECT * FROM conversations "  # nosec B608
             f"WHERE {' AND '.join(clauses)} "
@@ -12149,6 +14886,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         character_id: int,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> int:
         """
         Count non-deleted conversations for a given user scoped to a specific character.
@@ -12169,11 +14908,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             deleted_clause = "1 = 1"
         else:
             deleted_clause = "deleted = 0"
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
         query = (
-            f"SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND {deleted_clause}"  # nosec B608
+            f"SELECT COUNT(1) FROM conversations WHERE client_id = ? AND character_id = ? AND {deleted_clause} AND scope_type = ?"  # nosec B608
         )
+        params: list[Any] = [client_id, character_id, normalized_scope]
+        if normalized_workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(normalized_workspace_id)
         try:
-            cursor = self.execute_query(query, (client_id, character_id))
+            cursor = self.execute_query(query, tuple(params))
             row = cursor.fetchone()
             if row is None:
                 return 0
@@ -12195,6 +14940,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         offset: int = 0,
         include_deleted: bool = False,
         deleted_only: bool = False,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         List conversations for a given user scoped to a specific character.
@@ -12218,13 +14965,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         else:
             deleted_clause = "deleted = 0"
 
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
         query = (
             "SELECT * FROM conversations "  # nosec B608
             f"WHERE client_id = ? AND character_id = ? AND {deleted_clause} "
-            "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+            "AND scope_type = ? "
         )
+        params: list[Any] = [client_id, character_id, normalized_scope]
+        if normalized_workspace_id is not None:
+            query += "AND workspace_id = ? "
+            params.append(normalized_workspace_id)
+        query += "ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
         try:
-            cursor = self.execute_query(query, (client_id, character_id, limit, offset))
+            cursor = self.execute_query(query, tuple(params))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         except CharactersRAGDBError as e:
@@ -12835,6 +15590,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         deleted_only: bool,
         character_id: int | None,
         character_scope: str | None,
+        scope_type: str | None,
+        workspace_id: str | None,
         state: str | None,
         topic_label: str | None,
         topic_prefix: bool,
@@ -12868,6 +15625,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             params.append(character_id)
         elif normalized_character_scope != "all":
             filters.append(self._conversation_character_scope_clause(normalized_character_scope, column=f"{alias}.character_id"))
+
+        normalized_workspace_id = self._normalize_nullable_text(workspace_id)
+        normalized_scope, normalized_workspace_id = self._normalize_scope(scope_type, normalized_workspace_id)
+        filters.append(f"{alias}.scope_type = ?")
+        params.append(normalized_scope)
+        if normalized_workspace_id is not None:
+            filters.append(f"{alias}.workspace_id = ?")
+            params.append(normalized_workspace_id)
 
         if client_filter is not None:
             filters.append(f"{alias}.client_id = ?")
@@ -12944,6 +15709,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         start_date: str | None = None,
         end_date: str | None = None,
         date_field: str = "last_modified",
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Search/filter conversations with optional FTS query and metadata filters.
@@ -12965,6 +15732,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
             base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE TRUE"
             params: list[Any] = []
+            filters: list[str] = []
             if safe_query:
                 if use_deleted_text_search:
                     text_clause, text_params = self._conversation_deleted_text_search_clause(
@@ -13003,6 +15771,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 keyword_deleted_literal="FALSE",
                 deleted_true_literal="TRUE",
                 deleted_false_literal="FALSE",
+                scope_type=scope_type,
+                workspace_id=workspace_id,
             )
             params.extend(filter_params)
 
@@ -13059,6 +15829,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             keyword_deleted_literal="0",
             deleted_true_literal="1",
             deleted_false_literal="0",
+            scope_type=scope_type,
+            workspace_id=workspace_id,
         )
         filters.extend(extra_filters)
         params.extend(extra_params)
@@ -13097,6 +15869,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         half_life_days: float = 14.0,
         bm25_weight: float = 0.65,
         recency_weight: float = 0.35,
+        scope_type: str | None = None,
+        workspace_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int, float]:
         """Search conversations using DB-side ordering and pagination."""
         client_filter = self.client_id if client_id is None else client_id
@@ -13159,6 +15933,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 deleted_only=deleted_only,
                 character_id=character_id,
                 character_scope=character_scope,
+                scope_type=scope_type,
+                workspace_id=workspace_id,
                 state=state,
                 topic_label=topic_label,
                 topic_prefix=topic_prefix,
@@ -13209,6 +15985,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 deleted_only=deleted_only,
                 character_id=character_id,
                 character_scope=character_scope,
+                scope_type=scope_type,
+                workspace_id=workspace_id,
                 state=state,
                 topic_label=topic_label,
                 topic_prefix=topic_prefix,
@@ -13340,6 +16118,517 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
         return rows, total, max_bm25
+
+    # --- Workspace Methods ---
+
+    def upsert_workspace(
+        self,
+        workspace_id: str,
+        name: str,
+        *,
+        description: str | None = None,
+        metadata_json: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a workspace or return the existing one (idempotent by id).
+
+        If the workspace already exists (and is not deleted), its current row is
+        returned without modification, making the call idempotent.
+
+        Returns:
+            A dict representing the workspace row.
+
+        Raises:
+            InputError: If *workspace_id* or *name* are empty.
+            CharactersRAGDBError: On database errors.
+        """
+        if not workspace_id or not name:
+            raise InputError("workspace_id and name are required.")  # noqa: TRY003
+
+        existing = self.get_workspace(workspace_id)
+        if existing is not None:
+            return existing
+
+        now = self._get_current_utc_timestamp_iso()
+        client_id = self.client_id or "unknown"
+        query = (
+            "INSERT INTO workspaces (id, name, description, metadata_json, created_at, last_modified, deleted, client_id, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, ?, 1)"
+        )
+        params = (
+            workspace_id,
+            name,
+            description,
+            metadata_json or "{}",
+            now,
+            now,
+            client_id,
+        )
+        try:
+            with self.transaction() as conn:
+                conn.execute(query, params)
+        except sqlite3.IntegrityError:
+            # Race condition: another thread inserted between our check and insert.
+            existing = self.get_workspace(workspace_id)
+            if existing is not None:
+                return existing
+            raise  # pragma: no cover
+        return self.get_workspace(workspace_id)  # type: ignore[return-value]
+
+    def get_workspace(self, workspace_id: str) -> dict[str, Any] | None:
+        """Retrieve a non-deleted workspace by id."""
+        query = "SELECT * FROM workspaces WHERE id = ? AND deleted = 0"
+        cursor = self.execute_query(query, (workspace_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspaces(self) -> list[dict[str, Any]]:
+        """Return all non-deleted workspaces ordered by name."""
+        query = "SELECT * FROM workspaces WHERE deleted = 0 ORDER BY name"
+        cursor = self.execute_query(query, ())
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace(
+        self,
+        workspace_id: str,
+        update_data: dict[str, Any],
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace with optimistic locking.
+
+        Returns:
+            The updated workspace row dict.
+
+        Raises:
+            ConflictError: If the workspace is not found or version mismatch.
+        """
+        existing = self.get_workspace(workspace_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' not found.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+
+        now = self._get_current_utc_timestamp_iso()
+        set_clauses = ["last_modified = ?", "version = ?"]
+        params: list[Any] = [now, expected_version + 1]
+
+        for col in (
+            "name", "description", "metadata_json", "archived", "tag",
+            "banner_title", "banner_subtitle", "banner_color",
+            "audio_provider", "audio_model", "audio_voice", "audio_speed",
+        ):
+            if col in update_data:
+                set_clauses.append(f"{col} = ?")
+                params.append(update_data[col])
+
+        query = f"UPDATE workspaces SET {', '.join(set_clauses)} WHERE id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, expected_version])
+
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Workspace '{workspace_id}' concurrent update detected.",
+                    entity="workspaces",
+                    entity_id=workspace_id,
+                )
+        return self.get_workspace(workspace_id)  # type: ignore[return-value]
+
+    def delete_workspace(
+        self,
+        workspace_id: str,
+        expected_version: int,
+    ) -> bool:
+        """Soft-delete a workspace and cascade soft-delete its scoped conversations.
+
+        Returns:
+            True on success.
+
+        Raises:
+            ConflictError: If not found or version mismatch.
+        """
+        existing = self.get_workspace(workspace_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' not found.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace '{workspace_id}' version mismatch.",
+                entity="workspaces",
+                entity_id=workspace_id,
+            )
+
+        conversations = self.execute_query(
+            "SELECT id, version FROM conversations WHERE workspace_id = ? AND scope_type = ? AND deleted = 0",
+            (workspace_id, "workspace"),
+        ).fetchall()
+        for conversation in conversations:
+            conversation_id = conversation["id"] if isinstance(conversation, dict) else conversation[0]
+            conversation_version = conversation["version"] if isinstance(conversation, dict) else conversation[1]
+            failed_message_ids: set[str] = set()
+            while True:
+                batch = self.get_messages_for_conversation(conversation_id, limit=100, offset=0)
+                batch = [m for m in batch if m.get("id") not in failed_message_ids]
+                if not batch:
+                    break
+                deleted_this_batch = 0
+                for message in batch:
+                    message_id = message.get("id")
+                    if not message_id:
+                        continue
+                    try:
+                        self.soft_delete_message(message_id, message.get("version", 1))
+                        deleted_this_batch += 1
+                    except _CHACHA_NONCRITICAL_EXCEPTIONS:
+                        logger.warning(
+                            "Failed to soft-delete message {} during workspace delete {}.",
+                            message_id,
+                            workspace_id,
+                        )
+                        failed_message_ids.add(str(message_id))
+                if deleted_this_batch == 0:
+                    break
+            self.soft_delete_conversation(conversation_id, int(conversation_version))
+
+        now = self._get_current_utc_timestamp_iso()
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE workspaces SET deleted = 1, last_modified = ?, version = ? WHERE id = ? AND version = ?",
+                (now, expected_version + 1, workspace_id, expected_version),
+            )
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Workspace '{workspace_id}' concurrent delete detected.",
+                    entity="workspaces",
+                    entity_id=workspace_id,
+                )
+        return True
+
+    def hard_delete_workspace(self, workspace_id: str) -> None:
+        """Permanently delete a workspace row. FK CASCADE handles sub-resources."""
+        conversations = self.execute_query(
+            "SELECT id FROM conversations WHERE workspace_id = ? AND scope_type = ?",
+            (workspace_id, "workspace"),
+        ).fetchall()
+        for conversation in conversations:
+            conversation_id = conversation["id"] if isinstance(conversation, dict) else conversation[0]
+            self.hard_delete_conversation(str(conversation_id))
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+
+    # --- Workspace Source Methods ---
+
+    def add_workspace_source(self, workspace_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Add a source to a workspace."""
+        source_id = data.get("id")
+        if not source_id:
+            raise InputError("Source id is required.")  # noqa: TRY003
+        now = self._get_current_utc_timestamp_iso()
+        query = (
+            "INSERT INTO workspace_sources (id, workspace_id, media_id, title, source_type, url, position, selected, added_at, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)"
+        )
+        params = (
+            source_id,
+            workspace_id,
+            data.get("media_id", 0),
+            data.get("title", ""),
+            data.get("source_type", ""),
+            data.get("url"),
+            data.get("position", 0),
+            1 if data.get("selected", True) else 0,
+            now,
+        )
+        with self.transaction() as conn:
+            conn.execute(query, params)
+        return self._get_workspace_source(workspace_id, source_id)  # type: ignore[return-value]
+
+    def _get_workspace_source(self, workspace_id: str, source_id: str) -> dict[str, Any] | None:
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_sources WHERE workspace_id = ? AND id = ?",
+            (workspace_id, source_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspace_sources(self, workspace_id: str) -> list[dict[str, Any]]:
+        """List all sources for a workspace ordered by position."""
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_sources WHERE workspace_id = ? ORDER BY position, added_at",
+            (workspace_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace_source(
+        self,
+        workspace_id: str,
+        source_id: str,
+        updates: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace source with optimistic locking."""
+        existing = self._get_workspace_source(workspace_id, source_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace source '{source_id}' not found.",
+                entity="workspace_sources",
+                entity_id=source_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Source '{source_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspace_sources",
+                entity_id=source_id,
+            )
+        set_clauses = ["version = ?"]
+        params: list[Any] = [expected_version + 1]
+        for col in ("title", "source_type", "url", "position", "selected"):
+            if col in updates:
+                set_clauses.append(f"{col} = ?")
+                params.append(updates[col])
+        query = f"UPDATE workspace_sources SET {', '.join(set_clauses)} WHERE workspace_id = ? AND id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, source_id, expected_version])
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Source '{source_id}' concurrent update detected.",
+                    entity="workspace_sources",
+                    entity_id=source_id,
+                )
+        return self._get_workspace_source(workspace_id, source_id)  # type: ignore[return-value]
+
+    def delete_workspace_source(self, workspace_id: str, source_id: str) -> None:
+        """Hard-delete a workspace source."""
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workspace_sources WHERE workspace_id = ? AND id = ?",
+                (workspace_id, source_id),
+            )
+
+    def update_workspace_source_selection(self, workspace_id: str, *, selected_ids: list[str]) -> None:
+        """Batch-update selection: mark listed ids as selected, all others as unselected.
+
+        Bumps the version of every affected row so clients holding stale versions
+        will see a conflict on their next individual update.
+        """
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE workspace_sources SET selected = 0, version = version + 1 WHERE workspace_id = ?",
+                (workspace_id,),
+            )
+            if selected_ids:
+                placeholders = ", ".join("?" for _ in selected_ids)
+                conn.execute(
+                    f"UPDATE workspace_sources SET selected = 1, version = version + 1 WHERE workspace_id = ? AND id IN ({placeholders})",  # nosec B608
+                    (workspace_id, *selected_ids),
+                )
+
+    def reorder_workspace_sources(self, workspace_id: str, ordered_ids: list[str]) -> None:
+        """Set position of sources based on list order.
+
+        Bumps the version of every reordered row for conflict detection.
+        """
+        with self.transaction() as conn:
+            for idx, source_id in enumerate(ordered_ids):
+                conn.execute(
+                    "UPDATE workspace_sources SET position = ?, version = version + 1 WHERE workspace_id = ? AND id = ?",
+                    (idx, workspace_id, source_id),
+                )
+
+    # --- Workspace Artifact Methods ---
+
+    def add_workspace_artifact(self, workspace_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Add an artifact to a workspace."""
+        artifact_id = data.get("id")
+        if not artifact_id:
+            raise InputError("Artifact id is required.")  # noqa: TRY003
+        now = self._get_current_utc_timestamp_iso()
+        query = (
+            "INSERT INTO workspace_artifacts (id, workspace_id, artifact_type, title, status, content, "
+            "total_tokens, total_cost_usd, created_at, completed_at, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)"
+        )
+        params = (
+            artifact_id,
+            workspace_id,
+            data.get("artifact_type", ""),
+            data.get("title", ""),
+            data.get("status", "pending"),
+            data.get("content"),
+            data.get("total_tokens"),
+            data.get("total_cost_usd"),
+            now,
+            data.get("completed_at"),
+        )
+        with self.transaction() as conn:
+            conn.execute(query, params)
+        return self._get_workspace_artifact(workspace_id, artifact_id)  # type: ignore[return-value]
+
+    def _get_workspace_artifact(self, workspace_id: str, artifact_id: str) -> dict[str, Any] | None:
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_artifacts WHERE workspace_id = ? AND id = ?",
+            (workspace_id, artifact_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspace_artifacts(self, workspace_id: str) -> list[dict[str, Any]]:
+        """List all artifacts for a workspace."""
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_artifacts WHERE workspace_id = ? ORDER BY created_at DESC",
+            (workspace_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace_artifact(
+        self,
+        workspace_id: str,
+        artifact_id: str,
+        updates: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace artifact with optimistic locking."""
+        existing = self._get_workspace_artifact(workspace_id, artifact_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace artifact '{artifact_id}' not found.",
+                entity="workspace_artifacts",
+                entity_id=artifact_id,
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Artifact '{artifact_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspace_artifacts",
+                entity_id=artifact_id,
+            )
+        set_clauses = ["version = ?"]
+        params: list[Any] = [expected_version + 1]
+        for col in ("title", "status", "content", "total_tokens", "total_cost_usd", "completed_at"):
+            if col in updates:
+                set_clauses.append(f"{col} = ?")
+                params.append(updates[col])
+        query = f"UPDATE workspace_artifacts SET {', '.join(set_clauses)} WHERE workspace_id = ? AND id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, artifact_id, expected_version])
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Artifact '{artifact_id}' concurrent update detected.",
+                    entity="workspace_artifacts",
+                    entity_id=artifact_id,
+                )
+        return self._get_workspace_artifact(workspace_id, artifact_id)  # type: ignore[return-value]
+
+    def delete_workspace_artifact(self, workspace_id: str, artifact_id: str) -> None:
+        """Hard-delete a workspace artifact."""
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workspace_artifacts WHERE workspace_id = ? AND id = ?",
+                (workspace_id, artifact_id),
+            )
+
+    # --- Workspace Note Methods ---
+
+    def add_workspace_note(self, workspace_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Add a note to a workspace."""
+        now = self._get_current_utc_timestamp_iso()
+        import json as _json
+        keywords_json = _json.dumps(data.get("keywords", []))
+        query = (
+            "INSERT INTO workspace_notes (workspace_id, title, content, keywords_json, created_at, last_modified, deleted, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, 1)"
+        )
+        params = (
+            workspace_id,
+            data.get("title", ""),
+            data.get("content", ""),
+            keywords_json,
+            now,
+            now,
+        )
+        with self.transaction() as conn:
+            cursor = conn.execute(query, params)
+            note_id = cursor.lastrowid
+        return self._get_workspace_note(workspace_id, note_id)  # type: ignore[return-value]
+
+    def _get_workspace_note(self, workspace_id: str, note_id: int) -> dict[str, Any] | None:
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_notes WHERE workspace_id = ? AND id = ? AND deleted = 0",
+            (workspace_id, note_id),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def list_workspace_notes(self, workspace_id: str) -> list[dict[str, Any]]:
+        """List all non-deleted notes for a workspace."""
+        cursor = self.execute_query(
+            "SELECT * FROM workspace_notes WHERE workspace_id = ? AND deleted = 0 ORDER BY last_modified DESC",
+            (workspace_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_workspace_note(
+        self,
+        workspace_id: str,
+        note_id: int,
+        updates: dict[str, Any],
+        *,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        """Update a workspace note with optimistic locking."""
+        existing = self._get_workspace_note(workspace_id, note_id)
+        if existing is None:
+            raise ConflictError(  # noqa: TRY003
+                f"Workspace note '{note_id}' not found.",
+                entity="workspace_notes",
+                entity_id=str(note_id),
+            )
+        if existing["version"] != expected_version:
+            raise ConflictError(  # noqa: TRY003
+                f"Note '{note_id}' version mismatch (db={existing['version']}, expected={expected_version}).",
+                entity="workspace_notes",
+                entity_id=str(note_id),
+            )
+        now = self._get_current_utc_timestamp_iso()
+        set_clauses = ["last_modified = ?", "version = ?"]
+        params: list[Any] = [now, expected_version + 1]
+        for col in ("title", "content", "keywords_json"):
+            if col in updates:
+                set_clauses.append(f"{col} = ?")
+                params.append(updates[col])
+        query = f"UPDATE workspace_notes SET {', '.join(set_clauses)} WHERE workspace_id = ? AND id = ? AND version = ?"  # nosec B608
+        params.extend([workspace_id, note_id, expected_version])
+        with self.transaction() as conn:
+            cursor = conn.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                raise ConflictError(  # noqa: TRY003
+                    f"Note '{note_id}' concurrent update detected.",
+                    entity="workspace_notes",
+                    entity_id=str(note_id),
+                )
+        return self._get_workspace_note(workspace_id, note_id)  # type: ignore[return-value]
+
+    def delete_workspace_note(self, workspace_id: str, note_id: int) -> None:
+        """Soft-delete a workspace note."""
+        now = self._get_current_utc_timestamp_iso()
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE workspace_notes SET deleted = 1, last_modified = ? WHERE workspace_id = ? AND id = ?",
+                (now, workspace_id, note_id),
+            )
 
     # --- Message Methods ---
     def add_message(self, msg_data: dict[str, Any]) -> str | None:
@@ -13565,7 +16854,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         Raises:
             CharactersRAGDBError: For database errors.
         """
-        query = "SELECT id, conversation_id, parent_message_id, sender, content, image_data, image_mime_type, timestamp, ranking, last_modified, version, client_id, deleted FROM messages WHERE id = ? AND deleted = 0"
+        query = (
+            "SELECT m.id, m.conversation_id, m.parent_message_id, m.sender, m.content, "
+            "m.image_data, m.image_mime_type, m.timestamp, m.ranking, m.last_modified, "
+            "m.version, m.client_id, m.deleted "
+            "FROM messages m "
+            "JOIN conversations c ON c.id = m.conversation_id "
+            "WHERE m.id = ? AND m.deleted = 0 AND c.deleted = 0"
+        )
         try:
             cursor = self.execute_query(query, (message_id,))
             row = cursor.fetchone()
@@ -16267,7 +19563,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 entity_col = 'entity_uuid'
                         except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
-                    assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
+                    if entity_col not in ("entity_id", "entity_uuid"):
+                        raise CharactersRAGDBError(  # noqa: TRY003
+                            f"Unexpected sync_log id column: {entity_col}"
+                        )
 
                     sync_log_query = (
                         f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) "  # nosec B608
@@ -16459,6 +19758,340 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 out.setdefault(note_id, []).append(record)
         return out
 
+    @staticmethod
+    def _coerce_mapping_row(row: Any) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return row
+        try:
+            return dict(row)
+        except (TypeError, ValueError):
+            if hasattr(row, "keys"):
+                return {key: row[key] for key in row.keys()}
+        return None
+
+    def _normalize_note_folder_path(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip().replace("\\", "/").strip("/")
+        if not text:
+            return None
+        parts: list[str] = []
+        for raw_part in text.split("/"):
+            part = raw_part.strip()
+            if not part or part == ".":
+                continue
+            if part == "..":
+                raise InputError("Folder paths cannot contain parent traversal segments.")  # noqa: TRY003
+            parts.append(part)
+        normalized = "/".join(parts)
+        return normalized or None
+
+    def _note_folder_path_key(self, value: Any) -> str | None:
+        normalized = self._normalize_note_folder_path(value)
+        if not normalized:
+            return None
+        return normalized.lower()
+
+    def _expand_note_folder_paths(self, folder_paths: list[str] | tuple[str, ...]) -> list[str]:
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for raw_path in folder_paths:
+            normalized = self._normalize_note_folder_path(raw_path)
+            if not normalized:
+                continue
+            segments = normalized.split("/")
+            for index in range(1, len(segments) + 1):
+                candidate = "/".join(segments[:index])
+                key = self._note_folder_path_key(candidate)
+                if key is None:
+                    continue
+                if key in seen:
+                    continue
+                seen.add(key)
+                expanded.append(candidate)
+        return expanded
+
+    def _ensure_note_exists_for_folder_sync(self, conn: Any, note_id: str) -> None:
+        row = conn.execute("SELECT id FROM notes WHERE id = ?", (note_id,)).fetchone()
+        if row is None:
+            raise ConflictError("Note not found.", entity="notes", entity_id=note_id)  # noqa: TRY003
+
+    def _lookup_note_folder_row_locked(self, conn: Any, folder_path: str) -> dict[str, Any] | None:
+        normalized_path = self._normalize_note_folder_path(folder_path)
+        if not normalized_path:
+            return None
+        return self._coerce_mapping_row(
+            conn.execute(
+                "SELECT id, path, deleted, version FROM note_folders WHERE LOWER(path) = LOWER(?)",
+                (normalized_path,),
+            ).fetchone()
+        )
+
+    def _ensure_note_folder_path_locked(self, conn: Any, folder_path: str) -> int:
+        normalized_path = self._normalize_note_folder_path(folder_path)
+        if not normalized_path:
+            raise InputError("Folder path cannot be empty.")  # noqa: TRY003
+
+        existing_row = self._lookup_note_folder_row_locked(conn, normalized_path)
+        if existing_row:
+            folder_id = int(existing_row["id"])
+            if bool(existing_row.get("deleted", False)):
+                now = self._get_current_utc_timestamp_iso()
+                deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+                conn.execute(
+                    "UPDATE note_folders SET deleted = ?, last_modified = ?, version = ?, client_id = ? WHERE id = ?",
+                    (
+                        deleted_value,
+                        now,
+                        int(existing_row.get("version") or 1) + 1,
+                        self.client_id,
+                        folder_id,
+                    ),
+                )
+            return folder_id
+
+        parent_path = normalized_path.rsplit("/", 1)[0] if "/" in normalized_path else None
+        parent_id = self._ensure_note_folder_path_locked(conn, parent_path) if parent_path else None
+        stored_path = normalized_path
+        if parent_id is not None:
+            parent_row = self._coerce_mapping_row(
+                conn.execute(
+                    "SELECT path FROM note_folders WHERE id = ?",
+                    (parent_id,),
+                ).fetchone()
+            ) or {}
+            parent_display_path = self._normalize_note_folder_path(parent_row.get("path")) or parent_path
+            stored_path = f"{parent_display_path}/{normalized_path.rsplit('/', 1)[-1]}"
+        now = self._get_current_utc_timestamp_iso()
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        conn.execute(
+            """
+            INSERT INTO note_folders(
+              name, path, parent_id, created_at, last_modified, deleted, client_id, version
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                stored_path.rsplit("/", 1)[-1],
+                stored_path,
+                parent_id,
+                now,
+                now,
+                deleted_value,
+                self.client_id,
+                1,
+            ),
+        )
+        created_row = self._lookup_note_folder_row_locked(conn, stored_path)
+        if not created_row:
+            raise CharactersRAGDBError(f"Failed to create note folder path '{normalized_path}'.")  # noqa: TRY003
+        return int(created_row["id"])
+
+    def sync_note_folders(self, note_id: str, folder_paths: list[str] | tuple[str, ...]) -> list[dict[str, Any]]:
+        desired_paths = self._expand_note_folder_paths(list(folder_paths or []))
+        try:
+            with self.transaction() as conn:
+                self._ensure_note_exists_for_folder_sync(conn, note_id)
+                desired_ids = {
+                    self._ensure_note_folder_path_locked(conn, folder_path)
+                    for folder_path in desired_paths
+                }
+                existing_rows = conn.execute(
+                    "SELECT folder_id FROM note_folder_memberships WHERE note_id = ?",
+                    (note_id,),
+                ).fetchall()
+                existing_ids: set[int] = set()
+                for row in existing_rows:
+                    record = self._coerce_mapping_row(row) or {}
+                    folder_id = record.get("folder_id")
+                    if folder_id is None:
+                        continue
+                    existing_ids.add(int(folder_id))
+
+                for folder_id in existing_ids - desired_ids:
+                    conn.execute(
+                        "DELETE FROM note_folder_memberships WHERE note_id = ? AND folder_id = ?",
+                        (note_id, folder_id),
+                    )
+
+                now = self._get_current_utc_timestamp_iso()
+                for folder_id in desired_ids - existing_ids:
+                    conn.execute(
+                        """
+                        INSERT INTO note_folder_memberships(note_id, folder_id, created_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (note_id, folder_id, now),
+                    )
+        except CharactersRAGDBError:
+            raise
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed syncing manual note folders: {exc}") from exc  # noqa: TRY003
+        return self.get_note_folders_for_note(note_id)
+
+    def sync_note_source_folders(
+        self,
+        note_id: str,
+        source_id: int,
+        folder_paths: list[str] | tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        if int(source_id) <= 0:
+            raise InputError("source_id must be a positive integer.")  # noqa: TRY003
+
+        desired_paths = self._expand_note_folder_paths(list(folder_paths or []))
+        try:
+            with self.transaction() as conn:
+                self._ensure_note_exists_for_folder_sync(conn, note_id)
+                desired_pairs: list[tuple[str, int]] = []
+                for folder_path in desired_paths:
+                    folder_id = self._ensure_note_folder_path_locked(conn, folder_path)
+                    desired_pairs.append((folder_path, folder_id))
+
+                existing_rows = conn.execute(
+                    """
+                    SELECT folder_id
+                      FROM note_folder_source_memberships
+                     WHERE note_id = ? AND source_id = ?
+                    """,
+                    (note_id, int(source_id)),
+                ).fetchall()
+                existing_ids: set[int] = set()
+                for row in existing_rows:
+                    record = self._coerce_mapping_row(row) or {}
+                    folder_id = record.get("folder_id")
+                    if folder_id is None:
+                        continue
+                    existing_ids.add(int(folder_id))
+                desired_ids = {folder_id for _, folder_id in desired_pairs}
+                desired_keys = {
+                    canonical_key
+                    for folder_path, _ in desired_pairs
+                    for canonical_key in [self._note_folder_path_key(folder_path)]
+                    if canonical_key is not None
+                }
+
+                for folder_id in existing_ids - desired_ids:
+                    conn.execute(
+                        """
+                        DELETE FROM note_folder_source_memberships
+                         WHERE note_id = ? AND source_id = ? AND folder_id = ?
+                        """,
+                        (note_id, int(source_id), folder_id),
+                    )
+
+                existing_key_rows = conn.execute(
+                    """
+                    SELECT folder_key
+                      FROM note_folder_source_keys
+                     WHERE source_id = ?
+                    """,
+                    (int(source_id),),
+                ).fetchall()
+                existing_keys: set[str] = set()
+                for row in existing_key_rows:
+                    record = self._coerce_mapping_row(row) or {}
+                    folder_key = record.get("folder_key")
+                    if folder_key is None:
+                        continue
+                    existing_keys.add(str(folder_key))
+                for folder_key in existing_keys - desired_keys:
+                    conn.execute(
+                        """
+                        DELETE FROM note_folder_source_keys
+                         WHERE source_id = ? AND folder_key = ?
+                        """,
+                        (int(source_id), folder_key),
+                    )
+
+                now = self._get_current_utc_timestamp_iso()
+                for folder_path, folder_id in desired_pairs:
+                    folder_key = self._note_folder_path_key(folder_path)
+                    if not folder_key:
+                        continue
+                    conn.execute(
+                        """
+                        DELETE FROM note_folder_source_keys
+                         WHERE source_id = ? AND folder_key = ?
+                        """,
+                        (int(source_id), folder_key),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO note_folder_source_keys(source_id, folder_key, folder_id, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (int(source_id), folder_key, folder_id, now),
+                    )
+                    if folder_id in existing_ids:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO note_folder_source_memberships(note_id, source_id, folder_id, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (note_id, int(source_id), folder_id, now),
+                    )
+        except CharactersRAGDBError:
+            raise
+        except (sqlite3.Error, BackendDatabaseError) as exc:
+            raise CharactersRAGDBError(f"Failed syncing source-managed note folders: {exc}") from exc  # noqa: TRY003
+        return self.get_note_folders_for_note(note_id)
+
+    def get_note_folders_for_note(self, note_id: str) -> list[dict[str, Any]]:
+        order_clause = self._case_insensitive_order_clause("f.path")
+        query = """
+                SELECT f.id, f.name, f.path, f.parent_id
+                  FROM note_folders f
+                  JOIN (
+                        SELECT folder_id
+                          FROM note_folder_memberships
+                         WHERE note_id = ?
+                        UNION
+                        SELECT folder_id
+                          FROM note_folder_source_memberships
+                         WHERE note_id = ?
+                  ) memberships
+                    ON memberships.folder_id = f.id
+                 WHERE f.deleted = 0
+                {order_clause}
+                """.format_map(locals())  # nosec B608
+        cursor = self.execute_query(query, (note_id, note_id))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_note_folders_for_notes(self, note_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        if not note_ids:
+            return {}
+        out: dict[str, list[dict[str, Any]]] = {note_id: [] for note_id in note_ids}
+        max_vars = 450
+        path_order_expr = self._case_insensitive_order_expression("f.path")
+        for start in range(0, len(note_ids), max_vars):
+            batch = note_ids[start:start + max_vars]
+            placeholders = ",".join(["?"] * len(batch))
+            query = """
+                    SELECT memberships.note_id AS note_id, f.id, f.name, f.path, f.parent_id
+                      FROM note_folders f
+                      JOIN (
+                            SELECT note_id, folder_id
+                              FROM note_folder_memberships
+                             WHERE note_id IN ({placeholders})
+                            UNION
+                            SELECT note_id, folder_id
+                              FROM note_folder_source_memberships
+                             WHERE note_id IN ({placeholders})
+                      ) memberships
+                        ON memberships.folder_id = f.id
+                     WHERE f.deleted = 0
+                     ORDER BY memberships.note_id, {path_order_expr}
+                    """.format_map(locals())  # nosec B608
+            cursor = self.execute_query(query, tuple(batch + batch))
+            for row in cursor.fetchall():
+                record = dict(row)
+                current_note_id = str(record.pop("note_id"))
+                out.setdefault(current_note_id, []).append(record)
+        return out
+
     def get_notes_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         query = """
                 SELECT n.* \
@@ -16475,9 +20108,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     # ==========================
     # Flashcards & Decks (V5)
     # ==========================
-    def add_deck(self, name: str, description: str | None = None) -> int:
+    def add_deck(
+        self,
+        name: str,
+        description: str | None = None,
+        scheduler_settings: Mapping[str, Any] | str | None = None,
+        *,
+        scheduler_type: str = "sm2_plus",
+    ) -> int:
         """Create a deck and return its id."""
         now = self._get_current_utc_timestamp_iso()
+        scheduler_type = _coerce_scheduler_type(scheduler_type)
+        scheduler_settings_json = scheduler_settings_to_json(scheduler_settings)
         try:
             with self.transaction() as conn:
                 # Undelete if a deck with the same name exists but is deleted
@@ -16492,9 +20134,22 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     rc = conn.execute(
                         (
                             "UPDATE decks SET deleted = ?, last_modified = ?, version = ?, client_id = ?, "
-                            "description = COALESCE(?, description) WHERE id = ? AND version = ?"
+                            "description = COALESCE(?, description), "
+                            "scheduler_type = COALESCE(?, scheduler_type), "
+                            "scheduler_settings_json = COALESCE(?, scheduler_settings_json) "
+                            "WHERE id = ? AND version = ?"
                         ),
-                        (deleted_value, now, next_version, self.client_id, description, deck_id, current_version),
+                        (
+                            deleted_value,
+                            now,
+                            next_version,
+                            self.client_id,
+                            description,
+                            scheduler_type,
+                            scheduler_settings_json,
+                            deck_id,
+                            current_version,
+                        ),
                     ).rowcount
                     if rc == 0:
                         raise ConflictError(  # noqa: TRY003
@@ -16504,12 +20159,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         )
                     return deck_id
                 insert_sql = (
-                    "INSERT INTO decks(name, description, created_at, last_modified, client_id, version, deleted)"
-                    " VALUES(?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO decks(name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, client_id, version, deleted)"
+                    " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
+                    scheduler_settings_json,
+                    scheduler_type,
                     now,
                     now,
                     self.client_id,
@@ -16540,8 +20197,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e  # noqa: TRY003
 
     def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> list[dict[str, Any]]:
-        cond = "" if include_deleted else "WHERE deleted = 0"
-        query = f"SELECT id, name, description, created_at, last_modified, deleted, client_id, version FROM decks {cond} ORDER BY name LIMIT ? OFFSET ?"  # nosec B608
+        if include_deleted:
+            query = (
+                "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, "
+                "deleted, client_id, version FROM decks ORDER BY name LIMIT ? OFFSET ?"
+            )
+        else:
+            query = (
+                "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, "
+                "deleted, client_id, version FROM decks WHERE deleted = 0 ORDER BY name LIMIT ? OFFSET ?"
+            )
         try:
             cursor = self.execute_query(query, (limit, offset))
             return [dict(row) for row in cursor.fetchall()]
@@ -16551,7 +20216,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_deck(self, deck_id: int) -> dict[str, Any] | None:
         """Fetch a single deck row by id."""
         query = (
-            "SELECT id, name, description, created_at, last_modified, deleted, client_id, version "
+            "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, deleted, client_id, version "
             "FROM decks WHERE id = ?"
         )
         try:
@@ -16560,6 +20225,68 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return dict(row) if row else None
         except CharactersRAGDBError:  # noqa: TRY203
             raise
+
+    def update_deck(
+        self,
+        deck_id: int,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        scheduler_settings: Mapping[str, Any] | str | None = None,
+        scheduler_type: str | None = None,
+        expected_version: int | None = None,
+    ) -> bool:
+        """Update mutable deck fields with optimistic locking."""
+        set_parts: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            set_parts.append("name = ?")
+            params.append(name)
+        if description is not None:
+            set_parts.append("description = ?")
+            params.append(description)
+        if scheduler_settings is not None:
+            set_parts.append("scheduler_settings_json = ?")
+            params.append(scheduler_settings_to_json(scheduler_settings))
+        if scheduler_type is not None:
+            set_parts.append("scheduler_type = ?")
+            params.append(_coerce_scheduler_type(scheduler_type))
+        if not set_parts:
+            if expected_version is None:
+                return True
+            deck = self.get_deck(deck_id)
+            if not deck:
+                raise ConflictError("Deck not found", entity="decks", identifier=deck_id)  # noqa: TRY003
+            if int(deck["version"]) != expected_version:
+                raise ConflictError("Version mismatch updating deck", entity="decks", identifier=deck_id)  # noqa: TRY003
+            return True
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1", "client_id = ?"])
+        params.extend([now, self.client_id])
+
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT version FROM decks WHERE id = ? AND deleted = 0",
+                    (deck_id,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Deck not found", entity="decks", identifier=deck_id)  # noqa: TRY003
+                current_version = int(row[0])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch updating deck", entity="decks", identifier=deck_id)  # noqa: TRY003
+
+                params_final = params + [deck_id]
+                query = f"UPDATE decks SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"  # nosec B608
+                rc = conn.execute(query, tuple(params_final)).rowcount
+                return rc > 0
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE constraint failed: decks.name" in str(exc):
+                raise ConflictError("Deck name already exists", entity="decks", identifier=name or deck_id) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to update deck: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to update deck: {exc}") from exc  # noqa: TRY003
 
     def _get_flashcard_id_from_uuid(self, conn: sqlite3.Connection, card_uuid: str) -> int | None:
         row = conn.execute("SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0", (card_uuid,)).fetchone()
@@ -16578,6 +20305,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         back = card_data['back']
         notes = card_data.get('notes')
         extra = card_data.get('extra')
+        front_search, back_search, notes_search = self._build_flashcard_search_shadow_fields(
+            front=front,
+            back=back,
+            notes=notes,
+        )
         is_cloze = 1 if card_data.get('is_cloze') else 0
         tags_json = card_data.get('tags_json')
         source_ref_type = card_data.get('source_ref_type', 'manual')
@@ -16590,6 +20322,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         lapses = max(0, int(card_data.get('lapses', 0) or 0))
         due_at = self._normalize_nullable_text(card_data.get('due_at'))
         last_reviewed_at = self._normalize_nullable_text(card_data.get('last_reviewed_at'))
+        queue_state = coerce_queue_state(
+            {
+                "queue_state": card_data.get("queue_state"),
+                "last_reviewed_at": last_reviewed_at,
+                "repetitions": repetitions,
+                "lapses": lapses,
+                "interval_days": interval_days,
+                "due_at": due_at,
+            }
+        )
+        step_index = card_data.get("step_index")
+        step_index = int(step_index) if step_index is not None else None
+        suspended_reason = self._normalize_nullable_text(card_data.get("suspended_reason"))
+        if queue_state != "suspended":
+            suspended_reason = None
+        if due_at is None and queue_state in ("learning", "relearning", "review"):
+            due_at = now
         model_type = card_data.get('model_type')
         reverse_flag = card_data.get('reverse')
         if not model_type:
@@ -16604,12 +20353,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 insert_sql = (
                     """
                     INSERT INTO flashcards(
-                        uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
-                        source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days, repetitions,
-                        lapses, due_at, last_reviewed_at, created_at, last_modified,
-                        deleted, client_id, version, model_type, reverse
+                        uuid, deck_id, front, back, notes, extra, front_search, back_search, notes_search, is_cloze,
+                        tags_json, source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days,
+                        repetitions, lapses, due_at, last_reviewed_at, created_at, last_modified,
+                        deleted, client_id, version, model_type, reverse, queue_state, step_index, suspended_reason
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
@@ -16620,6 +20369,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     back,
                     notes,
                     extra,
+                    front_search,
+                    back_search,
+                    notes_search,
                     bool(is_cloze),
                     tags_json,
                     source_ref_type,
@@ -16639,6 +20391,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     1,
                     model_type,
                     bool(reverse_flag),
+                    queue_state,
+                    step_index,
+                    suspended_reason,
                 )
 
                 conn.execute(insert_sql, params)
@@ -16661,12 +20416,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 insert_sql = (
                     """
                     INSERT INTO flashcards(
-                        uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
-                        source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days, repetitions,
-                        lapses, due_at, last_reviewed_at, created_at, last_modified,
-                        deleted, client_id, version, model_type, reverse
+                        uuid, deck_id, front, back, notes, extra, front_search, back_search, notes_search, is_cloze,
+                        tags_json, source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days,
+                        repetitions, lapses, due_at, last_reviewed_at, created_at, last_modified,
+                        deleted, client_id, version, model_type, reverse, queue_state, step_index, suspended_reason
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
@@ -16681,6 +20436,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     back = card_data['back']
                     notes = card_data.get('notes')
                     extra = card_data.get('extra')
+                    front_search, back_search, notes_search = self._build_flashcard_search_shadow_fields(
+                        front=front,
+                        back=back,
+                        notes=notes,
+                    )
                     is_cloze = bool(card_data.get('is_cloze'))
                     tags_json = card_data.get('tags_json')
                     source_ref_type = card_data.get('source_ref_type', 'manual')
@@ -16693,6 +20453,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     lapses = max(0, int(card_data.get('lapses', 0) or 0))
                     due_at = self._normalize_nullable_text(card_data.get('due_at'))
                     last_reviewed_at = self._normalize_nullable_text(card_data.get('last_reviewed_at'))
+                    queue_state = coerce_queue_state(
+                        {
+                            "queue_state": card_data.get("queue_state"),
+                            "last_reviewed_at": last_reviewed_at,
+                            "repetitions": repetitions,
+                            "lapses": lapses,
+                            "interval_days": interval_days,
+                            "due_at": due_at,
+                        }
+                    )
+                    step_index = card_data.get("step_index")
+                    step_index = int(step_index) if step_index is not None else None
+                    suspended_reason = self._normalize_nullable_text(card_data.get("suspended_reason"))
+                    if queue_state != "suspended":
+                        suspended_reason = None
+                    if due_at is None and queue_state in ("learning", "relearning", "review"):
+                        due_at = now
                     model_type = card_data.get('model_type')
                     reverse_flag = card_data.get('reverse')
                     if not model_type:
@@ -16710,6 +20487,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             back,
                             notes,
                             extra,
+                            front_search,
+                            back_search,
+                            notes_search,
                             is_cloze,
                             tags_json,
                             source_ref_type,
@@ -16729,6 +20509,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             1,
                             model_type,
                             bool(reverse_flag),
+                            queue_state,
+                            step_index,
+                            suspended_reason,
                         )
                     )
 
@@ -16766,11 +20549,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # due filter
         now_iso = self._get_current_utc_timestamp_iso()
         if due_status == 'new':
-            where_clauses.append("f.last_reviewed_at IS NULL")
+            where_clauses.append("f.queue_state = ?")
+            params.append("new")
         elif due_status == 'learning':
-            where_clauses.append("f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1,2)")
+            where_clauses.append("f.queue_state IN ('learning', 'relearning') AND f.due_at IS NOT NULL AND f.due_at <= ?")
+            params.append(now_iso)
         elif due_status == 'due':
-            where_clauses.append("f.due_at IS NOT NULL AND f.due_at <= ?")
+            where_clauses.append("f.queue_state = 'review' AND f.due_at IS NOT NULL AND f.due_at <= ?")
             params.append(now_iso)
 
         # tag filter (single tag)
@@ -16807,6 +20592,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.queue_state, f.step_index, f.suspended_reason,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
             FROM flashcards f
             LEFT JOIN decks d ON d.id = f.deck_id
@@ -16843,11 +20629,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         now_iso = self._get_current_utc_timestamp_iso()
         if due_status == 'new':
-            where_clauses.append("f.last_reviewed_at IS NULL")
+            where_clauses.append("f.queue_state = ?")
+            params.append("new")
         elif due_status == 'learning':
-            where_clauses.append("f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1,2)")
+            where_clauses.append("f.queue_state IN ('learning', 'relearning') AND f.due_at IS NOT NULL AND f.due_at <= ?")
+            params.append(now_iso)
         elif due_status == 'due':
-            where_clauses.append("f.due_at IS NOT NULL AND f.due_at <= ?")
+            where_clauses.append("f.queue_state = 'review' AND f.due_at IS NOT NULL AND f.due_at <= ?")
             params.append(now_iso)
 
         join_tag = ""
@@ -16896,6 +20684,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.queue_state, f.step_index, f.suspended_reason,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
               FROM flashcards f
               LEFT JOIN decks d ON d.id = f.deck_id
@@ -16913,6 +20702,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if self.backend_type != BackendType.POSTGRESQL:
             return
         try:
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS front_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS back_search TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS notes_search TEXT",
+                connection=conn,
+            )
             # Add tsvector column
             self.backend.execute(
                 "ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS flashcards_fts_tsv tsvector",
@@ -16923,7 +20724,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 (
                     "UPDATE flashcards "
                     "SET flashcards_fts_tsv = to_tsvector('english', "
-                    "coalesce(front,'') || ' ' || coalesce(back,'') || ' ' || coalesce(notes,''))"
+                    "coalesce(front_search,'') || ' ' || coalesce(back_search,'') || ' ' || coalesce(notes_search,''))"
                 ),
                 connection=conn,
             )
@@ -16933,34 +20734,106 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 connection=conn,
             )
             # Trigger to maintain tsvector
-            try:
-                # Check if trigger already exists for this table in current schema
-                exists_res = self.backend.execute(
-                    (
-                        "SELECT 1 FROM pg_trigger t "
-                        "JOIN pg_class c ON t.tgrelid = c.oid "
-                        "JOIN pg_namespace n ON c.relnamespace = n.oid "
-                        "WHERE t.tgname = 'flashcards_fts_tsv_update' AND c.relname = 'flashcards' "
-                        "AND n.nspname = current_schema()"
-                    ),
-                    connection=conn,
-                )
-                exists = bool(getattr(exists_res, 'rows', []) )
-            except _CHACHA_NONCRITICAL_EXCEPTIONS:
-                exists = False
-            if not exists:
-                self.backend.execute(
-                    (
-                        "CREATE TRIGGER flashcards_fts_tsv_update "
-                        "BEFORE INSERT OR UPDATE OF front, back, notes ON flashcards "
-                        "FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger("
-                        "flashcards_fts_tsv, 'pg_catalog.english', front, back, notes)"
-                    ),
-                    connection=conn,
-                )
+            self.backend.execute(
+                "DROP TRIGGER IF EXISTS flashcards_fts_tsv_update ON flashcards",
+                connection=conn,
+            )
+            self.backend.execute(
+                (
+                    "CREATE TRIGGER flashcards_fts_tsv_update "
+                    "BEFORE INSERT OR UPDATE OF front_search, back_search, notes_search ON flashcards "
+                    "FOR EACH ROW EXECUTE FUNCTION tsvector_update_trigger("
+                    "flashcards_fts_tsv, 'pg_catalog.english', front_search, back_search, notes_search)"
+                ),
+                connection=conn,
+            )
         except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
             # If any statement fails due to existing objects, ignore and proceed
             logger.debug(f"_ensure_postgres_flashcards_tsvector: {e}")
+
+    def get_next_review_card(
+        self,
+        deck_id: int | None = None,
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Return the next reviewable card using backend queue priority."""
+        deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+        now_iso = self._get_current_utc_timestamp_iso()
+        if deck_id is None:
+            selections: tuple[tuple[str, str, tuple[Any, ...]], ...] = (
+                (
+                    "learning_due",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state IN ('learning', 'relearning') "
+                        "AND due_at IS NOT NULL AND due_at <= ? "
+                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                    ),
+                    (deleted_value, now_iso),
+                ),
+                (
+                    "review_due",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state = 'review' "
+                        "AND due_at IS NOT NULL AND due_at <= ? "
+                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                    ),
+                    (deleted_value, now_iso),
+                ),
+                (
+                    "new",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state = 'new' "
+                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                    ),
+                    (deleted_value,),
+                ),
+            )
+        else:
+            selections = (
+                (
+                    "learning_due",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state IN ('learning', 'relearning') "
+                        "AND due_at IS NOT NULL AND due_at <= ? AND deck_id = ? "
+                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                    ),
+                    (deleted_value, now_iso, deck_id),
+                ),
+                (
+                    "review_due",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state = 'review' "
+                        "AND due_at IS NOT NULL AND due_at <= ? AND deck_id = ? "
+                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                    ),
+                    (deleted_value, now_iso, deck_id),
+                ),
+                (
+                    "new",
+                    (
+                        "SELECT uuid FROM flashcards "
+                        "WHERE deleted = ? AND queue_state = 'new' AND deck_id = ? "
+                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                    ),
+                    (deleted_value, deck_id),
+                ),
+            )
+        try:
+            for reason, query, params in selections:
+                cursor = self.execute_query(query, tuple(params))
+                row = cursor.fetchone()
+                if not row:
+                    continue
+                card = self.get_flashcard(str(row["uuid"]))
+                if card:
+                    return card, reason
+            return None, "none"
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
 
     def _srs_sm2_update(self, ef: float, interval_days: int, repetitions: int, lapses: int, rating: int) -> dict[str, Any]:
         """
@@ -16995,43 +20868,106 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def review_flashcard(self, card_uuid: str, rating: int, answer_time_ms: int | None = None) -> dict[str, Any]:
         """Submit a review for a flashcard and update scheduling. Returns updated card fields."""
-        now = self._get_current_utc_timestamp_iso()
+        now_dt = datetime.now(timezone.utc)
+        now = to_iso_z(now_dt) or self._get_current_utc_timestamp_iso()
         try:
             with self.transaction() as conn:
                 card = conn.execute(
-                    "SELECT id, ef, interval_days, repetitions, lapses FROM flashcards WHERE uuid = ? AND deleted = 0",
-                    (card_uuid,)
+                    """
+                    SELECT f.id, f.uuid, f.deck_id, f.ef, f.interval_days, f.repetitions, f.lapses,
+                           f.due_at, f.last_reviewed_at, f.queue_state, f.step_index, f.suspended_reason,
+                           f.scheduler_state_json,
+                           COALESCE(d.scheduler_type, 'sm2_plus') AS scheduler_type,
+                           COALESCE(d.scheduler_settings_json, ?) AS scheduler_settings_json
+                      FROM flashcards f
+                      LEFT JOIN decks d ON d.id = f.deck_id
+                     WHERE f.uuid = ? AND f.deleted = 0
+                    """,
+                    (scheduler_settings_to_json(None), card_uuid),
                 ).fetchone()
                 if not card:
                     raise ConflictError("Flashcard not found", entity="flashcards", identifier=card_uuid)  # noqa: TRY003
                 card_id = int(card['id'])
-                upd = self._srs_sm2_update(card['ef'], card['interval_days'], card['repetitions'], card['lapses'], rating)
-
-                # Compute next due date
-                due_at = datetime.now(timezone.utc) + timedelta(days=upd['interval_days'])
-                due_at_iso = due_at.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+                previous_queue_state = coerce_queue_state(dict(card))
+                previous_due_at = self._normalize_nullable_text(card["due_at"])
+                scheduler_type = _coerce_scheduler_type(card["scheduler_type"])
+                scheduler_settings = _normalize_scheduler_settings_envelope(card["scheduler_settings_json"])
+                upd = _simulate_scheduler_review_transition(
+                    dict(card),
+                    scheduler_type=scheduler_type,
+                    scheduler_settings_envelope=scheduler_settings,
+                    rating=int(rating),
+                    now=now_dt,
+                )
 
                 conn.execute(
                     """
                     UPDATE flashcards
                        SET ef = ?, interval_days = ?, repetitions = ?, lapses = ?,
-                           last_reviewed_at = ?, due_at = ?, last_modified = ?, version = version + 1, client_id = ?
+                           due_at = ?, last_reviewed_at = ?, queue_state = ?, step_index = ?,
+                           suspended_reason = ?, scheduler_state_json = ?, last_modified = ?, version = version + 1, client_id = ?
                      WHERE id = ? AND deleted = 0
                     """,
-                    (upd['ef'], upd['interval_days'], upd['repetitions'], upd['lapses'], now, due_at_iso, now, self.client_id, card_id)
+                    (
+                        upd["ef"],
+                        upd["interval_days"],
+                        upd["repetitions"],
+                        upd["lapses"],
+                        upd["due_at"],
+                        upd["last_reviewed_at"],
+                        upd["queue_state"],
+                        upd["step_index"],
+                        upd["suspended_reason"],
+                        upd.get("scheduler_state_json", "{}"),
+                        now,
+                        self.client_id,
+                        card_id,
+                    )
                 )
                 conn.execute(
                     """
-                    INSERT INTO flashcard_reviews(card_id, reviewed_at, rating, answer_time_ms, scheduled_interval_days, new_ef, new_repetitions, was_lapse, client_id)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO flashcard_reviews(
+                        card_id, reviewed_at, rating, answer_time_ms, scheduled_interval_days,
+                        new_ef, new_repetitions, was_lapse, client_id, scheduler_type,
+                        previous_queue_state, next_queue_state, previous_due_at, next_due_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (card_id, now, int(rating), answer_time_ms, upd['interval_days'], upd['ef'], upd['repetitions'], 1 if upd['was_lapse'] else 0, self.client_id)
+                    (
+                        card_id,
+                        now,
+                        int(rating),
+                        answer_time_ms,
+                        upd["interval_days"] if upd["queue_state"] == "review" else None,
+                        upd["ef"],
+                        upd["repetitions"],
+                        1 if upd["was_lapse"] else 0,
+                        self.client_id,
+                        scheduler_type,
+                        previous_queue_state,
+                        upd["queue_state"],
+                        previous_due_at,
+                        upd["due_at"],
+                    )
                 )
                 updated = conn.execute(
-                    "SELECT uuid, ef, interval_days, repetitions, lapses, due_at, last_reviewed_at, last_modified, version FROM flashcards WHERE id = ?",
+                    """
+                    SELECT uuid, ef, interval_days, repetitions, lapses, due_at, last_reviewed_at,
+                           last_modified, version, queue_state, step_index, suspended_reason, scheduler_state_json
+                      FROM flashcards
+                     WHERE id = ?
+                    """,
                     (card_id,)
                 ).fetchone()
-                return dict(updated)
+                updated_payload = dict(updated)
+                updated_payload["scheduler_type"] = scheduler_type
+                updated_payload["next_intervals"] = _build_scheduler_next_interval_previews(
+                    updated_payload,
+                    scheduler_type=scheduler_type,
+                    scheduler_settings_envelope=scheduler_settings,
+                    now=now_dt,
+                )
+                return updated_payload
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e  # noqa: TRY003
 
@@ -17107,10 +21043,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     d.id AS deck_id,
                     d.name AS deck_name,
                     COUNT(f.id) AS total_count,
-                    SUM(CASE WHEN f.last_reviewed_at IS NULL THEN 1 ELSE 0 END) AS new_count,
-                    SUM(CASE WHEN f.last_reviewed_at IS NOT NULL AND f.repetitions IN (1, 2) THEN 1 ELSE 0 END) AS learning_count,
-                    SUM(CASE WHEN f.due_at IS NOT NULL AND f.due_at <= ? THEN 1 ELSE 0 END) AS due_count,
-                    SUM(CASE WHEN f.repetitions >= 3 THEN 1 ELSE 0 END) AS mature_count
+                    SUM(CASE WHEN f.queue_state = 'new' THEN 1 ELSE 0 END) AS new_count,
+                    SUM(CASE WHEN f.queue_state IN ('learning', 'relearning') THEN 1 ELSE 0 END) AS learning_count,
+                    SUM(CASE WHEN f.queue_state IN ('learning', 'relearning', 'review') AND f.due_at IS NOT NULL AND f.due_at <= ? THEN 1 ELSE 0 END) AS due_count,
+                    SUM(CASE WHEN f.queue_state = 'review' AND f.interval_days >= ? THEN 1 ELSE 0 END) AS mature_count
                 FROM decks d
                 LEFT JOIN flashcards f
                     ON f.deck_id = d.id
@@ -17119,7 +21055,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 GROUP BY d.id, d.name
                 ORDER BY d.name ASC
                 """.format_map(locals()),  # nosec B608
-                (now_iso, *deck_scope_params),
+                (now_iso, MATURE_INTERVAL_DAYS, *deck_scope_params),
             ).fetchall()
 
             decks = []
@@ -17201,6 +21137,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
+                   f.queue_state, f.step_index, f.suspended_reason, f.scheduler_state_json, d.scheduler_type,
                    f.created_at, f.last_modified, f.deleted, f.client_id, f.version, f.model_type, f.reverse
               FROM flashcards f
               LEFT JOIN decks d ON d.id = f.deck_id
@@ -17212,6 +21149,185 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return dict(row) if row else None
         except CharactersRAGDBError:  # noqa: TRY203
             raise
+
+    def add_flashcard_asset(
+        self,
+        *,
+        image_bytes: bytes,
+        mime_type: str,
+        original_filename: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> str:
+        """Persist a managed flashcard image asset and return its UUID."""
+        if not image_bytes:
+            raise InputError("Flashcard asset image_bytes must not be empty")  # noqa: TRY003
+
+        asset_uuid = self._generate_uuid()
+        now = self._get_current_utc_timestamp_iso()
+        sha256 = hashlib.sha256(image_bytes).hexdigest()
+        try:
+            with self.transaction() as conn:
+                insert_sql = (
+                    """
+                    INSERT INTO flashcard_assets(
+                        uuid, card_id, mime_type, original_filename, byte_size, sha256,
+                        image_data, width, height, created_at, last_modified, deleted, client_id, version
+                    )
+                    VALUES(?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """
+                )
+                params = (
+                    asset_uuid,
+                    mime_type,
+                    original_filename,
+                    len(image_bytes),
+                    sha256,
+                    image_bytes,
+                    width,
+                    height,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+                conn.execute(insert_sql, params)
+            return asset_uuid
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard asset: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to add flashcard asset: {exc}") from exc  # noqa: TRY003
+
+    def get_flashcard_asset(self, asset_uuid: str) -> dict[str, Any] | None:
+        """Fetch flashcard asset metadata by UUID."""
+        query = """
+            SELECT fa.uuid, fa.mime_type, fa.original_filename, fa.byte_size, fa.sha256,
+                   fa.width, fa.height, fa.created_at, fa.last_modified, fa.deleted,
+                   fa.client_id, fa.version, f.uuid AS card_uuid
+              FROM flashcard_assets fa
+              LEFT JOIN flashcards f ON f.id = fa.card_id
+             WHERE fa.uuid = ? AND fa.deleted = 0
+        """
+        try:
+            cur = self.execute_query(query, (asset_uuid,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def get_flashcard_asset_content(self, asset_uuid: str) -> bytes | None:
+        """Fetch raw bytes for a flashcard asset by UUID."""
+        query = "SELECT image_data FROM flashcard_assets WHERE uuid = ? AND deleted = 0"
+        try:
+            cur = self.execute_query(query, (asset_uuid,))
+            row = cur.fetchone()
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+        if not row:
+            return None
+        blob = row[0]
+        if isinstance(blob, memoryview):
+            return blob.tobytes()
+        return bytes(blob) if blob is not None else None
+
+    def reconcile_flashcard_asset_refs(
+        self,
+        card_uuid: str,
+        *,
+        front: str | None,
+        back: str | None,
+        extra: str | None,
+        notes: str | None,
+    ) -> list[str]:
+        """Attach referenced assets to a card and detach removed assets."""
+        referenced_asset_uuids: list[str] = []
+        for text in (front, back, extra, notes):
+            for asset_uuid in extract_flashcard_asset_uuids(text):
+                if asset_uuid not in referenced_asset_uuids:
+                    referenced_asset_uuids.append(asset_uuid)
+
+        try:
+            with self.transaction() as conn:
+                card_row = conn.execute(
+                    "SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0",
+                    (card_uuid,),
+                ).fetchone()
+                if not card_row:
+                    raise CharactersRAGDBError("Flashcard not found or deleted")  # noqa: TRY003
+                card_id = int(card_row[0])
+
+                existing_asset_rows = conn.execute(
+                    "SELECT id, uuid, card_id FROM flashcard_assets WHERE deleted = 0"
+                ).fetchall()
+                assets_by_uuid = {str(row[1]): row for row in existing_asset_rows}
+                for asset_uuid in referenced_asset_uuids:
+                    asset_row = assets_by_uuid.get(asset_uuid)
+                    if not asset_row:
+                        raise InputError(f"Flashcard asset not found: {asset_uuid}")  # noqa: TRY003
+                    attached_card_id = asset_row[2]
+                    if attached_card_id is not None and int(attached_card_id) != card_id:
+                        raise ConflictError(
+                            "Flashcard asset is attached to a different card",
+                            entity="flashcard_assets",
+                            identifier=asset_uuid,
+                        )
+
+                now = self._get_current_utc_timestamp_iso()
+                for asset_uuid in referenced_asset_uuids:
+                    conn.execute(
+                        """
+                        UPDATE flashcard_assets
+                           SET card_id = ?, last_modified = ?, version = version + 1, client_id = ?
+                         WHERE uuid = ? AND deleted = 0
+                        """,
+                        (card_id, now, self.client_id, asset_uuid),
+                    )
+
+                existing_attached_rows = conn.execute(
+                    "SELECT uuid FROM flashcard_assets WHERE card_id = ? AND deleted = 0",
+                    (card_id,),
+                ).fetchall()
+                referenced_set = set(referenced_asset_uuids)
+                for row in existing_attached_rows:
+                    existing_uuid = str(row[0])
+                    if existing_uuid in referenced_set:
+                        continue
+                    conn.execute(
+                        """
+                        UPDATE flashcard_assets
+                           SET card_id = NULL, last_modified = ?, version = version + 1, client_id = ?
+                         WHERE uuid = ? AND deleted = 0
+                        """,
+                        (now, self.client_id, existing_uuid),
+                    )
+            return referenced_asset_uuids
+        except (BackendDatabaseError, sqlite3.Error) as exc:
+            raise CharactersRAGDBError(f"Failed to reconcile flashcard asset refs: {exc}") from exc  # noqa: TRY003
+
+    def cleanup_stale_flashcard_assets(self, *, older_than: timedelta | None = None) -> int:
+        """Soft-delete unattached flashcard assets older than the provided age."""
+        age = older_than or timedelta(hours=24)
+        cutoff = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE flashcard_assets
+                       SET deleted = 1,
+                           last_modified = ?,
+                           version = version + 1,
+                           client_id = ?
+                     WHERE card_id IS NULL
+                       AND deleted = 0
+                       AND created_at <= ?
+                    """,
+                    (now, self.client_id, cutoff),
+                )
+                return int(cursor.rowcount or 0)
+        except (BackendDatabaseError, sqlite3.Error) as exc:
+            raise CharactersRAGDBError(f"Failed to cleanup stale flashcard assets: {exc}") from exc  # noqa: TRY003
 
     def update_flashcard(
         self,
@@ -17231,6 +21347,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if k in allowed:
                 set_parts.append(f"{k} = ?")
                 params.append(v)
+                if k == "front":
+                    set_parts.append("front_search = ?")
+                    params.append(sanitize_flashcard_text_for_search(v))
+                elif k == "back":
+                    set_parts.append("back_search = ?")
+                    params.append(sanitize_flashcard_text_for_search(v))
+                elif k == "notes":
+                    set_parts.append("notes_search = ?")
+                    params.append(sanitize_flashcard_text_for_search(v))
         norm_tags: list[str] | None = None
         if tags is not None:
             norm_tags = [t.strip() for t in tags if t and t.strip()]
@@ -17325,6 +21450,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                            interval_days = 0,
                            repetitions = 0,
                            lapses = 0,
+                           queue_state = 'new',
+                           step_index = NULL,
+                           suspended_reason = NULL,
+                           scheduler_state_json = '{}',
                            due_at = ?,
                            last_reviewed_at = NULL,
                            last_modified = ?,
@@ -17570,6 +21699,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             item["source_bundle_json"] = [source_bundle]
         else:
             item["source_bundle_json"] = None
+        return item
+
+    def _deserialize_quiz_remediation_conversion_row(self, row: Any) -> dict[str, Any] | None:
+        item = self._deserialize_row_fields(row, ["flashcard_uuids_json"])
+        if not item:
+            return None
+        flashcard_uuids = item.get("flashcard_uuids_json")
+        if isinstance(flashcard_uuids, list):
+            item["flashcard_uuids_json"] = flashcard_uuids
+        else:
+            item["flashcard_uuids_json"] = []
+        item["superseded_count"] = int(item.get("superseded_count") or 0)
         return item
 
     def _public_quiz_question(self, question: dict[str, Any]) -> dict[str, Any]:
@@ -18245,6 +22386,770 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             return {"items": items, "count": total}  # noqa: TRY300
         except CharactersRAGDBError:  # noqa: TRY203
             raise
+
+    def _format_quiz_answer_value_for_remediation(
+        self,
+        value: Any,
+        question: dict[str, Any] | None,
+    ) -> str:
+        """Format a graded quiz answer into stable remediation text."""
+        if value is None:
+            return "No answer"
+
+        question_type = str((question or {}).get("question_type") or "").strip().lower()
+        options = (question or {}).get("options") or []
+
+        if question_type == "fill_blank":
+            if isinstance(value, str):
+                parsed_rules = self._parse_fill_blank_json_rules(value)
+                if parsed_rules:
+                    accepted = [entry for entry, _fuzzy, _threshold in parsed_rules if entry]
+                    if accepted:
+                        return " / ".join(accepted)
+            if isinstance(value, list):
+                return " / ".join(str(item) for item in value if str(item).strip())
+            return str(value)
+
+        if question_type == "multi_select":
+            indices = self._normalize_multi_select_indices(value)
+            if not indices:
+                return str(value)
+            labels = [options[index] if 0 <= index < len(options) else str(index) for index in indices]
+            return " / ".join(str(label) for label in labels)
+
+        if question_type == "multiple_choice":
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                return str(value)
+            if 0 <= index < len(options):
+                return str(options[index])
+            return str(value)
+
+        if question_type == "matching":
+            pairs = self._normalize_matching_map(value)
+            if not pairs:
+                return str(value)
+            return " / ".join(f"{left} -> {right}" for left, right in pairs.items())
+
+        if question_type == "true_false":
+            normalized = str(value).strip().lower()
+            if normalized == "true":
+                return "True"
+            if normalized == "false":
+                return "False"
+
+        if isinstance(value, list):
+            return " / ".join(str(item) for item in value)
+
+        return str(value)
+
+    def _build_quiz_remediation_entries(
+        self,
+        *,
+        attempt_id: int,
+        question_ids: list[int],
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        """Load and validate missed question entries for remediation conversion."""
+        attempt = self.get_attempt(attempt_id, include_questions=True, include_answers=True)
+        if not attempt:
+            raise ConflictError("Attempt not found", entity="quiz_attempts", identifier=attempt_id)  # noqa: TRY003
+        if not attempt.get("completed_at"):
+            raise InputError("Quiz attempt must be completed before remediation flashcards can be created.")  # noqa: TRY003
+
+        normalized_question_ids: list[int] = []
+        seen_question_ids: set[int] = set()
+        for question_id in question_ids:
+            try:
+                normalized_question_id = int(question_id)
+            except (TypeError, ValueError) as exc:
+                raise InputError("question_ids must contain integers.") from exc  # noqa: TRY003
+            if normalized_question_id in seen_question_ids:
+                continue
+            normalized_question_ids.append(normalized_question_id)
+            seen_question_ids.add(normalized_question_id)
+
+        if not normalized_question_ids:
+            raise InputError("Select at least one missed question to convert.")  # noqa: TRY003
+
+        questions = attempt.get("questions") or []
+        answers = attempt.get("answers") or []
+        questions_by_id = {int(question["id"]): question for question in questions if question.get("id") is not None}
+        answers_by_id = {
+            int(answer["question_id"]): answer
+            for answer in answers
+            if answer.get("question_id") is not None
+        }
+
+        invalid_ids = [question_id for question_id in normalized_question_ids if question_id not in questions_by_id]
+        if invalid_ids:
+            raise InputError(f"Question IDs not found in quiz attempt: {invalid_ids}")  # noqa: TRY003
+
+        quiz = self.get_quiz(int(attempt["quiz_id"]))
+        if not quiz:
+            raise ConflictError("Quiz not found", entity="quizzes", identifier=attempt["quiz_id"])  # noqa: TRY003
+        quiz_name = str(quiz.get("name") or f"Quiz #{attempt['quiz_id']}")
+
+        entries: list[dict[str, Any]] = []
+        for question_id in normalized_question_ids:
+            question = questions_by_id[question_id]
+            answer = answers_by_id.get(question_id)
+            if not answer or answer.get("is_correct") is not False:
+                raise InputError(f"Question {question_id} was not missed in this completed attempt.")  # noqa: TRY003
+
+            question_text = str(
+                question.get("question_text") or f"Question #{question_id}"
+            ).strip() or f"Question #{question_id}"
+            correct_answer_text = self._format_quiz_answer_value_for_remediation(
+                answer.get("correct_answer"),
+                question,
+            )
+            user_answer_text = self._format_quiz_answer_value_for_remediation(
+                answer.get("user_answer"),
+                question,
+            )
+            explanation = answer.get("explanation")
+            explanation_suffix = f"\n\nExplanation: {explanation}" if explanation else ""
+            dedupe_key = f"{question_text.strip().lower()}::{correct_answer_text.strip().lower()}"
+            entries.append(
+                {
+                    "question_id": question_id,
+                    "question_text": question_text,
+                    "correct_answer_text": correct_answer_text,
+                    "user_answer_text": user_answer_text,
+                    "explanation": explanation,
+                    "dedupe_key": dedupe_key,
+                    "source_ref_id": f"quiz-attempt:{attempt_id}:question:{question_id}",
+                    "flashcard_payload": {
+                        "front": question_text,
+                        "back": f"Correct answer: {correct_answer_text}{explanation_suffix}",
+                        "notes": (
+                            f'Created from quiz "{quiz_name}" (attempt #{attempt_id}). '
+                            f"Your answer: {user_answer_text}"
+                        ),
+                        "tags_json": self._ensure_json_string(["quiz-missed", "quiz-review"]) or "[]",
+                        "source_ref_type": "manual",
+                        "source_ref_id": f"quiz-attempt:{attempt_id}:question:{question_id}",
+                    },
+                }
+            )
+
+        return attempt, quiz, entries
+
+    def convert_quiz_remediation_questions(
+        self,
+        *,
+        attempt_id: int,
+        question_ids: list[int],
+        target_deck_id: int | None = None,
+        create_deck_name: str | None = None,
+        create_deck_scheduler_type: str | None = None,
+        create_deck_scheduler_settings: Mapping[str, Any] | str | None = None,
+        replace_active: bool = False,
+    ) -> dict[str, Any]:
+        """Convert missed attempt questions into flashcards plus remediation conversion rows."""
+        normalized_create_deck_name = (create_deck_name or "").strip() or None
+        if target_deck_id is not None and normalized_create_deck_name is not None:
+            raise InputError("Specify either target_deck_id or create_deck_name, not both.")  # noqa: TRY003
+        if target_deck_id is None and normalized_create_deck_name is None:
+            raise InputError("Provide target_deck_id or create_deck_name for remediation conversion.")  # noqa: TRY003
+
+        attempt, quiz, entries = self._build_quiz_remediation_entries(
+            attempt_id=int(attempt_id),
+            question_ids=question_ids,
+        )
+        ordered_question_ids = [int(entry["question_id"]) for entry in entries]
+        target_deck: dict[str, Any] | None = None
+
+        if target_deck_id is not None:
+            deck = self.get_deck(int(target_deck_id))
+            if not deck or bool(deck.get("deleted")):
+                raise InputError(f"Deck {target_deck_id} does not exist or is deleted.")  # noqa: TRY003
+            target_deck = {"id": int(deck["id"]), "name": str(deck.get("name") or f"Deck #{deck['id']}")}
+
+        try:
+            with self.transaction() as conn:
+                active_rows = conn.execute(
+                    "SELECT qrc.id, qrc.attempt_id, qrc.quiz_id, qrc.question_id, qrc.status, "
+                    "qrc.superseded_by_id, qrc.target_deck_id, qrc.target_deck_name_snapshot, "
+                    "qrc.flashcard_count, qrc.flashcard_uuids_json, qrc.source_ref_id, qrc.created_at, "
+                    "qrc.last_modified, qrc.client_id, qrc.version, "
+                    "(SELECT COUNT(*) FROM quiz_remediation_conversions history "
+                    " WHERE history.attempt_id = qrc.attempt_id AND history.question_id = qrc.question_id "
+                    "   AND history.status = ?) AS superseded_count "
+                    "FROM quiz_remediation_conversions qrc WHERE qrc.attempt_id = ? AND qrc.status = ?",
+                    ("superseded", int(attempt_id), "active"),
+                ).fetchall()
+                existing_by_question = {
+                    int(item["question_id"]): item
+                    for item in (
+                        self._deserialize_quiz_remediation_conversion_row(row)
+                        for row in active_rows
+                    )
+                    if item is not None and int(item["question_id"]) in ordered_question_ids
+                }
+
+                pending_entries: list[dict[str, Any]] = []
+                results_by_question: dict[int, dict[str, Any]] = {}
+                for entry in entries:
+                    existing = existing_by_question.get(int(entry["question_id"]))
+                    if existing and not replace_active:
+                        results_by_question[int(entry["question_id"])] = {
+                            "question_id": int(entry["question_id"]),
+                            "status": "already_exists",
+                            "conversion": existing,
+                            "flashcard_uuids": list(existing.get("flashcard_uuids_json") or []),
+                        }
+                        continue
+                    pending_entries.append(entry)
+
+                if pending_entries and normalized_create_deck_name is not None and target_deck is None:
+                    created_deck_id = self.add_deck(
+                        normalized_create_deck_name,
+                        description=None,
+                        scheduler_type=_coerce_scheduler_type(create_deck_scheduler_type),
+                        scheduler_settings=create_deck_scheduler_settings,
+                    )
+                    deck = self.get_deck(int(created_deck_id))
+                    target_deck = {
+                        "id": int(created_deck_id),
+                        "name": str((deck or {}).get("name") or normalized_create_deck_name),
+                    }
+
+                deduped_entries: dict[str, dict[str, Any]] = {}
+                for entry in pending_entries:
+                    deduped_entries.setdefault(str(entry["dedupe_key"]), entry)
+
+                dedupe_uuid_map: dict[str, list[str]] = {}
+                created_flashcard_uuids: list[str] = []
+                if pending_entries:
+                    if target_deck is None:
+                        raise InputError("Target deck resolution failed for remediation conversion.")  # noqa: TRY003
+                    flashcard_payloads = []
+                    for dedupe_entry in deduped_entries.values():
+                        payload = dict(dedupe_entry["flashcard_payload"])
+                        payload["deck_id"] = int(target_deck["id"])
+                        flashcard_payloads.append(payload)
+                    created_flashcard_uuids = self.add_flashcards_bulk(flashcard_payloads)
+                    for dedupe_entry, flashcard_uuid in zip(deduped_entries.values(), created_flashcard_uuids, strict=False):
+                        dedupe_uuid_map[str(dedupe_entry["dedupe_key"])] = [flashcard_uuid]
+
+                for entry in pending_entries:
+                    question_id = int(entry["question_id"])
+                    previous_active = existing_by_question.get(question_id)
+                    now = self._get_current_utc_timestamp_iso()
+                    if previous_active and replace_active:
+                        conn.execute(
+                            "UPDATE quiz_remediation_conversions "
+                            "SET status = ?, superseded_by_id = NULL, last_modified = ?, client_id = ?, version = version + 1 "
+                            "WHERE id = ?",
+                            ("superseded", now, self.client_id, int(previous_active["id"])),
+                        )
+
+                    flashcard_uuids = list(dedupe_uuid_map.get(str(entry["dedupe_key"])) or [])
+                    insert_sql = (
+                        "INSERT INTO quiz_remediation_conversions("
+                        "attempt_id, quiz_id, question_id, status, superseded_by_id, target_deck_id, "
+                        "target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, source_ref_id, "
+                        "created_at, last_modified, client_id, version"
+                        ") VALUES(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    )
+                    insert_params = (
+                        int(attempt_id),
+                        int(quiz["id"]),
+                        question_id,
+                        "active",
+                        int(target_deck["id"]) if target_deck is not None else None,
+                        str((target_deck or {}).get("name") or ""),
+                        len(flashcard_uuids),
+                        self._ensure_json_string(flashcard_uuids) or "[]",
+                        str(entry["source_ref_id"]),
+                        now,
+                        now,
+                        self.client_id,
+                        1,
+                    )
+                    if self.backend_type == BackendType.POSTGRESQL:
+                        cursor = conn.execute(insert_sql + " RETURNING id", insert_params)
+                        row = cursor.fetchone()
+                        conversion_id = int(row["id"]) if row else None
+                    else:
+                        cursor = conn.execute(insert_sql, insert_params)
+                        conversion_id = int(cursor.lastrowid)
+                    if conversion_id is None:
+                        raise CharactersRAGDBError("Failed to determine remediation conversion ID after insert")  # noqa: TRY003
+
+                    if previous_active and replace_active:
+                        conn.execute(
+                            "UPDATE quiz_remediation_conversions "
+                            "SET superseded_by_id = ?, last_modified = ?, client_id = ?, version = version + 1 "
+                            "WHERE id = ?",
+                            (conversion_id, now, self.client_id, int(previous_active["id"])),
+                        )
+
+                    conversion_row = conn.execute(
+                        "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
+                        "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
+                        "source_ref_id, created_at, last_modified, client_id, version "
+                        "FROM quiz_remediation_conversions WHERE id = ?",
+                        (conversion_id,),
+                    ).fetchone()
+                    conversion = self._deserialize_quiz_remediation_conversion_row(conversion_row)
+                    if not conversion:
+                        raise CharactersRAGDBError("Failed to load remediation conversion after insert")  # noqa: TRY003
+                    prior_superseded_count = int(previous_active.get("superseded_count") or 0) if previous_active else 0
+                    conversion["superseded_count"] = prior_superseded_count + (
+                        1 if previous_active and replace_active else 0
+                    )
+
+                    results_by_question[question_id] = {
+                        "question_id": question_id,
+                        "status": "superseded_and_created" if previous_active and replace_active else "created",
+                        "conversion": conversion,
+                        "flashcard_uuids": flashcard_uuids,
+                    }
+
+                ordered_results = [results_by_question[question_id] for question_id in ordered_question_ids]
+                return {
+                    "attempt_id": int(attempt_id),
+                    "quiz_id": int(quiz["id"]),
+                    "target_deck": target_deck,
+                    "results": ordered_results,
+                    "created_flashcard_uuids": created_flashcard_uuids,
+                }
+        except sqlite3.IntegrityError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    f"Active remediation conversion already exists for attempt {attempt_id}.",
+                    entity="quiz_remediation_conversions",
+                    entity_id=str(attempt_id),
+                ) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    f"Active remediation conversion already exists for attempt {attempt_id}.",
+                    entity="quiz_remediation_conversions",
+                    entity_id=str(attempt_id),
+                ) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to convert remediation questions: {exc}") from exc  # noqa: TRY003
+
+    def create_quiz_remediation_conversion(
+        self,
+        *,
+        attempt_id: int,
+        quiz_id: int,
+        question_id: int,
+        target_deck_id: int | None,
+        target_deck_name_snapshot: str | None,
+        flashcard_uuids: list[str] | None,
+        source_ref_id: str | None,
+    ) -> dict[str, Any]:
+        """Create an active remediation conversion row for a quiz attempt question."""
+        now = self._get_current_utc_timestamp_iso()
+        normalized_flashcard_uuids = [str(uuid) for uuid in (flashcard_uuids or []) if str(uuid).strip()]
+        flashcard_uuids_json = self._ensure_json_string(normalized_flashcard_uuids) or "[]"
+        normalized_deck_name = (target_deck_name_snapshot or "").strip() or None
+        normalized_source_ref = (source_ref_id or "").strip() or None
+        params = (
+            int(attempt_id),
+            int(quiz_id),
+            int(question_id),
+            "active",
+            target_deck_id,
+            normalized_deck_name,
+            len(normalized_flashcard_uuids),
+            flashcard_uuids_json,
+            normalized_source_ref,
+            now,
+            now,
+            self.client_id,
+            1,
+        )
+        insert_sql = (
+            "INSERT INTO quiz_remediation_conversions("
+            "attempt_id, quiz_id, question_id, status, superseded_by_id, target_deck_id, "
+            "target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, source_ref_id, "
+            "created_at, last_modified, client_id, version"
+            ") VALUES(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    conversion_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    conversion_id = int(cursor.lastrowid)
+                if conversion_id is None:
+                    raise CharactersRAGDBError("Failed to determine remediation conversion ID after insert")  # noqa: TRY003
+            created = self.execute_query(
+                "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
+                "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
+                "source_ref_id, created_at, last_modified, client_id, version "
+                "FROM quiz_remediation_conversions WHERE id = ?",
+                (conversion_id,),
+            ).fetchone()
+            payload = self._deserialize_quiz_remediation_conversion_row(created)
+            if not payload:
+                raise CharactersRAGDBError("Failed to load remediation conversion after insert")  # noqa: TRY003
+            return payload
+        except sqlite3.IntegrityError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Active remediation conversion already exists for this attempt question.",
+                    entity="quiz_remediation_conversions",
+                    entity_id=f"{attempt_id}:{question_id}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to create remediation conversion: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Active remediation conversion already exists for this attempt question.",
+                    entity="quiz_remediation_conversions",
+                    entity_id=f"{attempt_id}:{question_id}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to create remediation conversion: {exc}") from exc  # noqa: TRY003
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def supersede_quiz_remediation_conversion(
+        self,
+        *,
+        attempt_id: int,
+        question_id: int,
+        superseded_by_id: int | None,
+    ) -> dict[str, Any] | None:
+        """Mark the active remediation conversion for an attempt question as superseded."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                existing = conn.execute(
+                    "SELECT id FROM quiz_remediation_conversions "
+                    "WHERE attempt_id = ? AND question_id = ? AND status = ?",
+                    (int(attempt_id), int(question_id), "active"),
+                ).fetchone()
+                if not existing:
+                    return None
+                conversion_id = int(existing["id"])
+                conn.execute(
+                    "UPDATE quiz_remediation_conversions "
+                    "SET status = ?, superseded_by_id = ?, last_modified = ?, client_id = ?, version = version + 1 "
+                    "WHERE id = ?",
+                    ("superseded", superseded_by_id, now, self.client_id, conversion_id),
+                )
+            row = self.execute_query(
+                "SELECT id, attempt_id, quiz_id, question_id, status, superseded_by_id, "
+                "target_deck_id, target_deck_name_snapshot, flashcard_count, flashcard_uuids_json, "
+                "source_ref_id, created_at, last_modified, client_id, version "
+                "FROM quiz_remediation_conversions WHERE id = ?",
+                (conversion_id,),
+            ).fetchone()
+            return self._deserialize_quiz_remediation_conversion_row(row)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to supersede remediation conversion: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to supersede remediation conversion: {exc}") from exc  # noqa: TRY003
+
+    def list_attempt_remediation_conversions(self, attempt_id: int) -> dict[str, Any]:
+        """List active remediation conversions for an attempt with superseded history count."""
+        try:
+            active_cursor = self.execute_query(
+                "SELECT qrc.id, qrc.attempt_id, qrc.quiz_id, qrc.question_id, qrc.status, "
+                "qrc.superseded_by_id, qrc.target_deck_id, qrc.target_deck_name_snapshot, "
+                "qrc.flashcard_count, qrc.flashcard_uuids_json, qrc.source_ref_id, qrc.created_at, "
+                "qrc.last_modified, qrc.client_id, qrc.version, "
+                "(SELECT COUNT(*) FROM quiz_remediation_conversions history "
+                " WHERE history.attempt_id = qrc.attempt_id AND history.question_id = qrc.question_id "
+                "   AND history.status = ?) AS superseded_count "
+                "FROM quiz_remediation_conversions qrc WHERE qrc.attempt_id = ? AND qrc.status = ? "
+                "ORDER BY qrc.question_id ASC, qrc.created_at DESC, qrc.id DESC",
+                ("superseded", int(attempt_id), "active"),
+            )
+            items = [
+                item
+                for item in (
+                    self._deserialize_quiz_remediation_conversion_row(row)
+                    for row in active_cursor.fetchall()
+                )
+                if item is not None
+            ]
+            count_row = self.execute_query(
+                "SELECT COUNT(*) AS count FROM quiz_remediation_conversions "
+                "WHERE attempt_id = ? AND status = ?",
+                (int(attempt_id), "superseded"),
+            ).fetchone()
+            superseded_count = int(count_row["count"]) if count_row else 0
+            return {
+                "attempt_id": int(attempt_id),
+                "items": items,
+                "count": len(items),
+                "superseded_count": superseded_count,
+            }
+        except CharactersRAGDBError:  # noqa: TRY203
+            raise
+
+    def get_or_create_study_assistant_thread(
+        self,
+        *,
+        context_type: str,
+        flashcard_uuid: str | None = None,
+        quiz_attempt_id: int | None = None,
+        question_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Return an active study-assistant thread for the provided context, creating one if needed."""
+        normalized_context = str(context_type or "").strip().lower()
+        if normalized_context == "flashcard":
+            if not flashcard_uuid:
+                raise InputError("flashcard_uuid is required for flashcard study assistant threads.")  # noqa: TRY003
+            select_sql = (
+                "SELECT id, context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+                "created_at, last_modified, deleted, client_id, version "
+                "FROM study_assistant_threads WHERE context_type = ? AND flashcard_uuid = ? AND deleted = 0"
+            )
+            where_params: tuple[Any, ...] = (normalized_context, flashcard_uuid)
+            insert_params: tuple[Any, ...] = (
+                normalized_context,
+                flashcard_uuid,
+                None,
+                None,
+            )
+        elif normalized_context == "quiz_attempt_question":
+            if quiz_attempt_id is None or question_id is None:
+                raise InputError(  # noqa: TRY003
+                    "quiz_attempt_id and question_id are required for quiz attempt study assistant threads."
+                )
+            select_sql = (
+                "SELECT id, context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+                "created_at, last_modified, deleted, client_id, version "
+                "FROM study_assistant_threads WHERE context_type = ? AND quiz_attempt_id = ? AND question_id = ? AND deleted = 0"
+            )
+            where_params = (normalized_context, int(quiz_attempt_id), int(question_id))
+            insert_params = (
+                normalized_context,
+                None,
+                int(quiz_attempt_id),
+                int(question_id),
+            )
+        else:
+            raise InputError("context_type must be 'flashcard' or 'quiz_attempt_question'.")  # noqa: TRY003
+
+        existing = self.execute_query(select_sql, where_params).fetchone()
+        if existing:
+            item = dict(existing)
+            item["deleted"] = bool(item.get("deleted"))
+            return item
+
+        now = self._get_current_utc_timestamp_iso()
+        insert_sql = (
+            "INSERT INTO study_assistant_threads("
+            "context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+            "created_at, last_modified, deleted, client_id, version"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        params = insert_params + (
+            None,
+            0,
+            now,
+            now,
+            False,
+            self.client_id,
+            1,
+        )
+
+        try:
+            with self.transaction() as conn:
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    thread_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    thread_id = int(cursor.lastrowid)
+                if thread_id is None:
+                    raise CharactersRAGDBError("Failed to determine study assistant thread ID after insert")  # noqa: TRY003
+        except sqlite3.IntegrityError as exc:
+            if not self._is_unique_violation(exc):
+                raise CharactersRAGDBError(f"Failed to create study assistant thread: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if not self._is_unique_violation(exc):
+                raise CharactersRAGDBError(f"Failed to create study assistant thread: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create study assistant thread: {exc}") from exc  # noqa: TRY003
+
+        created = self.execute_query(select_sql, where_params).fetchone()
+        if not created:
+            raise CharactersRAGDBError("Study assistant thread was not readable after create")  # noqa: TRY003
+        item = dict(created)
+        item["deleted"] = bool(item.get("deleted"))
+        return item
+
+    def get_study_assistant_thread(self, thread_id: int) -> dict[str, Any] | None:
+        """Fetch an active study-assistant thread by ID."""
+        query = (
+            "SELECT id, context_type, flashcard_uuid, quiz_attempt_id, question_id, last_message_at, message_count, "
+            "created_at, last_modified, deleted, client_id, version "
+            "FROM study_assistant_threads WHERE id = ? AND deleted = 0"
+        )
+        row = self.execute_query(query, (thread_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["deleted"] = bool(item.get("deleted"))
+        return item
+
+    def list_study_assistant_messages(
+        self,
+        thread_id: int,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List study-assistant messages for a thread in ascending order."""
+        query = (
+            "SELECT id, thread_id, role, action_type, input_modality, content, structured_payload_json, "
+            "context_snapshot_json, provider, model, created_at, client_id "
+            "FROM study_assistant_messages WHERE thread_id = ? ORDER BY id ASC LIMIT ? OFFSET ?"
+        )
+        cursor = self.execute_query(query, (thread_id, int(limit), int(offset)))
+        items: list[dict[str, Any]] = []
+        for row in cursor.fetchall():
+            item = self._deserialize_row_fields(row, ["structured_payload_json", "context_snapshot_json"])
+            if not item:
+                continue
+            item["structured_payload"] = item.pop("structured_payload_json", {}) or {}
+            item["context_snapshot"] = item.pop("context_snapshot_json", {}) or {}
+            items.append(item)
+        return items
+
+    def append_study_assistant_message(
+        self,
+        *,
+        thread_id: int,
+        role: str,
+        action_type: str,
+        input_modality: str,
+        content: str,
+        structured_payload: dict[str, Any] | None = None,
+        context_snapshot: dict[str, Any] | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        expected_thread_version: int | None = None,
+    ) -> dict[str, Any]:
+        """Append a study-assistant message and update thread counters/versioning."""
+        normalized_role = str(role or "").strip().lower()
+        if normalized_role not in {"user", "assistant"}:
+            raise InputError("role must be 'user' or 'assistant'.")  # noqa: TRY003
+
+        normalized_action = str(action_type or "").strip().lower()
+        if normalized_action not in {"explain", "mnemonic", "follow_up", "fact_check", "freeform"}:
+            raise InputError(  # noqa: TRY003
+                "action_type must be one of explain, mnemonic, follow_up, fact_check, or freeform."
+            )
+
+        normalized_modality = str(input_modality or "").strip().lower()
+        if normalized_modality not in {"text", "voice_transcript"}:
+            raise InputError("input_modality must be 'text' or 'voice_transcript'.")  # noqa: TRY003
+
+        normalized_content = str(content or "").strip()
+        if not normalized_content:
+            raise InputError("content is required for study assistant messages.")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        structured_payload_json = self._ensure_json_string(structured_payload or {})
+        context_snapshot_json = self._ensure_json_string(context_snapshot or {})
+        insert_sql = (
+            "INSERT INTO study_assistant_messages("
+            "thread_id, role, action_type, input_modality, content, structured_payload_json, context_snapshot_json, "
+            "provider, model, created_at, client_id"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        insert_params = (
+            int(thread_id),
+            normalized_role,
+            normalized_action,
+            normalized_modality,
+            normalized_content,
+            structured_payload_json,
+            context_snapshot_json,
+            provider,
+            model,
+            now,
+            self.client_id,
+        )
+
+        try:
+            with self.transaction() as conn:
+                thread_row = conn.execute(
+                    "SELECT id, version FROM study_assistant_threads WHERE id = ? AND deleted = 0",
+                    (int(thread_id),),
+                ).fetchone()
+                if not thread_row:
+                    raise ConflictError(  # noqa: TRY003
+                        "Study assistant thread not found",
+                        entity="study_assistant_threads",
+                        identifier=thread_id,
+                    )
+
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", insert_params)
+                    row = cursor.fetchone()
+                    message_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, insert_params)
+                    message_id = int(cursor.lastrowid)
+
+                if message_id is None:
+                    raise CharactersRAGDBError("Failed to determine study assistant message ID after insert")  # noqa: TRY003
+
+                thread_update_params: tuple[Any, ...]
+                thread_update_sql = (
+                    "UPDATE study_assistant_threads "
+                    "SET last_message_at = ?, message_count = message_count + 1, last_modified = ?, "
+                    "version = version + 1, client_id = ? "
+                    "WHERE id = ? AND deleted = 0"
+                )
+                thread_update_params = (now, now, self.client_id, int(thread_id))
+                if expected_thread_version is not None:
+                    thread_update_sql += " AND version = ?"
+                    thread_update_params = (
+                        now,
+                        now,
+                        self.client_id,
+                        int(thread_id),
+                        int(expected_thread_version),
+                    )
+
+                thread_update_cursor = conn.execute(thread_update_sql, thread_update_params)
+                if getattr(thread_update_cursor, "rowcount", 0) == 0:
+                    raise ConflictError(
+                        "Version mismatch updating study assistant thread",
+                        entity="study_assistant_threads",
+                        identifier=thread_id,
+                    )
+
+                message_row = conn.execute(
+                    "SELECT id, thread_id, role, action_type, input_modality, content, structured_payload_json, "
+                    "context_snapshot_json, provider, model, created_at, client_id "
+                    "FROM study_assistant_messages WHERE id = ?",
+                    (message_id,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to append study assistant message: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to append study assistant message: {exc}") from exc  # noqa: TRY003
+
+        item = self._deserialize_row_fields(message_row, ["structured_payload_json", "context_snapshot_json"])
+        if not item:
+            raise CharactersRAGDBError("Study assistant message was not readable after insert")  # noqa: TRY003
+        item["structured_payload"] = item.pop("structured_payload_json", {}) or {}
+        item["context_snapshot"] = item.pop("context_snapshot_json", {}) or {}
+        return item
 
     def _check_answer(self, question: dict[str, Any], user_answer: Any) -> bool:
         """Grade a single answer based on question type."""
@@ -19369,8 +24274,7 @@ class TransactionContextManager:
         self.db._ensure_sqlite_backend()
         self.conn = self.db.get_connection()
         if not self.conn.in_transaction:
-            # Using deferred transaction by default. Could be "IMMEDIATE" or "EXCLUSIVE" if needed.
-            self.conn.execute("BEGIN")
+            begin_immediate_if_needed(self.conn)
             self.is_outermost_transaction = True
             logger.debug(f"Transaction started (outermost) on thread {threading.get_ident()}.")
         else:

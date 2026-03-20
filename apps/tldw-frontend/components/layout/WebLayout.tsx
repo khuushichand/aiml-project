@@ -39,8 +39,7 @@ import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { setSettingsReturnTo } from "@/utils/settings-return"
 import { WorkflowIntegrationHost } from "@/components/Common/Workflow"
 import {
-  DOCUMENT_WORKSPACE_PATH,
-  WORKSPACE_PLAYGROUND_PATH
+  VIEWPORT_CONSTRAINED_PATHS
 } from "@/routes/route-paths"
 import {
   CHAT_BACKGROUND_IMAGE_SETTING,
@@ -125,13 +124,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     useState<BackendUnreachableDetail | null>(null)
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
   const isChatScreen = location.pathname === "/chat"
-  const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
-  const isWorkspacePlayground = location.pathname === WORKSPACE_PLAYGROUND_PATH
-  const isMediaMultiRoute = location.pathname === "/media-multi"
-  const isViewportConstrainedRoute =
-    isDocumentWorkspace ||
-    isWorkspacePlayground ||
-    isMediaMultiRoute
+  const isViewportConstrainedRoute = (VIEWPORT_CONSTRAINED_PATHS as readonly string[]).includes(location.pathname)
   const chatScreenBackgroundStyle =
     isChatScreen && chatBackgroundImage
       ? {
@@ -355,7 +348,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         <ChatSidebar
           collapsed={chatSidebarCollapsed}
           onToggleCollapse={() => setChatSidebarCollapsed((prev) => !prev)}
-          className="sticky top-0 shrink-0 border-r border-border border-border"
+          className="sticky top-0 shrink-0 border-r border-border"
         />
       )}
       <main
@@ -369,13 +362,25 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             {children}
             {shortcutLoading && renderShortcutOverlay()}
           </div>
+        ) : isViewportConstrainedRoute ? (
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <div className="relative z-20 w-full shrink-0">
+              <Header
+                onToggleSidebar={hideSidebar ? undefined : toggleSidebar}
+                sidebarCollapsed={
+                  showChatSidebar && isMobileViewport
+                    ? !sidebarOpen
+                    : chatSidebarCollapsed
+                }
+              />
+            </div>
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              {children}
+              {shortcutLoading && renderShortcutOverlay()}
+            </div>
+          </div>
         ) : (
-          <div
-            className={classNames(
-              "relative flex flex-col",
-              isViewportConstrainedRoute ? "min-h-0 flex-1" : "min-h-[135vh]"
-            )}
-          >
+          <div className="relative flex flex-col min-h-[135vh]">
             <div className="relative z-20 w-full">
               <Header
                 onToggleSidebar={hideSidebar ? undefined : toggleSidebar}

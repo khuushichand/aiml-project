@@ -4,6 +4,7 @@ import { useConnectionState } from "@/hooks/useConnectionState"
 import { useConnectionStore } from "@/store/connection"
 import { isRecoverableAuthConfigError } from "@/services/auth-errors"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
+import type { ChatScope } from "@/types/chat-scope"
 
 export type ServerChatHistoryItem = ServerChatSummary & {
   createdAtMs: number
@@ -101,11 +102,13 @@ export const deriveServerChatHistoryViewState = ({
   error: unknown
 }): {
   data: ServerChatHistoryItem[]
+  total: number
   sidebarRefreshState: "recoverable-error"
   hasUsableData: boolean
   isShowingStaleData: boolean
 } => ({
   data: previousData,
+  total: previousData.length,
   sidebarRefreshState: "recoverable-error",
   hasUsableData: previousData.length > 0,
   isShowingStaleData: previousData.length > 0
@@ -170,6 +173,7 @@ type UseServerChatHistoryOptions = {
   enabled?: boolean
   includeDeleted?: boolean
   deletedOnly?: boolean
+  scope?: ChatScope
   mode?: "overview" | "search"
   page?: number
   limit?: number
@@ -211,6 +215,7 @@ export const useServerChatHistory = (
   const mode = options?.mode ?? "overview"
   const includeDeleted = options?.includeDeleted ?? false
   const deletedOnly = options?.deletedOnly ?? false
+  const scope = options?.scope
   const filterMode = options?.filterMode ?? (deletedOnly ? "trash" : "all")
   const characterScope = getCharacterScopeForFilterMode(filterMode)
   const overviewPage = Math.max(1, Math.trunc(options?.page ?? 1))
@@ -263,7 +268,8 @@ export const useServerChatHistory = (
             ? searchLimit
             : overviewLimit
           : null,
-        filterMode
+        filterMode,
+        scope
       }
     ],
     enabled: isEnabled,
@@ -281,7 +287,7 @@ export const useServerChatHistory = (
               ...(deletedOnly ? { deleted_only: true } : {}),
               ...(characterScope ? { character_scope: characterScope } : {})
             },
-            { signal }
+            { signal, scope }
           )
 
           return {
@@ -302,7 +308,7 @@ export const useServerChatHistory = (
               ...(includeDeleted ? { include_deleted: true } : {}),
               ...(deletedOnly ? { deleted_only: true } : {})
             },
-            { signal }
+            { signal, scope }
           )
 
           return {
@@ -323,7 +329,7 @@ export const useServerChatHistory = (
                 ...(includeDeleted ? { include_deleted: true } : {}),
                 ...(deletedOnly ? { deleted_only: true } : {})
               },
-              { signal: pageSignal }
+              { signal: pageSignal, scope }
             ),
           {
             signal

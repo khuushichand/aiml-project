@@ -105,6 +105,8 @@ router = APIRouter(
 # WebSocket router (separate to avoid auth middleware conflicts)
 ws_router = APIRouter()
 
+_AUTH_ACCESS_KIND = "access"
+
 
 # Helper functions
 
@@ -116,6 +118,25 @@ def _action_type_to_voice(action_type: ActionType) -> VoiceActionType:
 def _voice_to_action_type(voice_type: VoiceActionType) -> ActionType:
     """Convert API VoiceActionType to internal ActionType."""
     return ActionType(voice_type.value)
+
+
+def _voice_command_to_info(command: VoiceCommand) -> VoiceCommandInfo:
+    """Serialize an internal voice command into the API response model."""
+    return VoiceCommandInfo(
+        id=command.id,
+        user_id=command.user_id,
+        persona_id=command.persona_id,
+        connection_id=command.connection_id,
+        name=command.name,
+        phrases=command.phrases,
+        action_type=_action_type_to_voice(command.action_type),
+        action_config=command.action_config,
+        priority=command.priority,
+        enabled=command.enabled,
+        requires_confirmation=command.requires_confirmation,
+        description=command.description,
+        created_at=command.created_at,
+    )
 
 
 def _looks_like_jwt(token: Optional[str]) -> bool:
@@ -146,7 +167,7 @@ async def _authenticate_websocket(
             from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 
             jwt_service = get_jwt_service()
-            payload = await jwt_service.verify_token_async(token, token_type="access")
+            payload = await jwt_service.verify_token_async(token, token_type=_AUTH_ACCESS_KIND)
             session_manager = await get_session_manager()
             if await session_manager.is_token_blacklisted(token, payload.get("jti")):
                 return False, None
@@ -272,6 +293,7 @@ async def process_voice_command(
         user_id=current_user.id,
         session_id=request.session_id,
         db=db,
+        persona_id=request.persona_id,
     )
 
     # Build intent message
@@ -329,6 +351,7 @@ async def process_voice_command(
 async def list_voice_commands(
     include_system: bool = Query(True, description="Include system commands"),
     include_disabled: bool = Query(False, description="Include disabled commands"),
+    persona_id: Optional[str] = Query(None, description="Optional persona scope"),
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> VoiceCommandListResponse:
@@ -340,30 +363,17 @@ async def list_voice_commands(
         db,
         user_id=current_user.id,
         include_disabled=include_disabled,
+        persona_id=persona_id,
     )
 
     commands = registry.get_all_commands(
         current_user.id,
         include_system=include_system,
         include_disabled=include_disabled,
+        persona_id=persona_id,
     )
 
-    command_infos = [
-        VoiceCommandInfo(
-            id=cmd.id,
-            user_id=cmd.user_id,
-            name=cmd.name,
-            phrases=cmd.phrases,
-            action_type=_action_type_to_voice(cmd.action_type),
-            action_config=cmd.action_config,
-            priority=cmd.priority,
-            enabled=cmd.enabled,
-            requires_confirmation=cmd.requires_confirmation,
-            description=cmd.description,
-            created_at=cmd.created_at,
-        )
-        for cmd in commands
-    ]
+    command_infos = [_voice_command_to_info(cmd) for cmd in commands]
 
     return VoiceCommandListResponse(
         commands=command_infos,
@@ -387,6 +397,8 @@ async def create_voice_command(
     command = VoiceCommand(
         id=str(uuid.uuid4()),
         user_id=current_user.id,
+        persona_id=definition.persona_id,
+        connection_id=definition.connection_id,
         name=definition.name,
         phrases=definition.phrases,
         action_type=_voice_to_action_type(definition.action_type),
@@ -403,23 +415,16 @@ async def create_voice_command(
     registry.load_defaults()
     registry.register_command(command)
 
-    saved = get_voice_command_db(db, command.id, current_user.id)
+    saved = get_voice_command_db(
+        db,
+        command.id,
+        current_user.id,
+        persona_id=definition.persona_id,
+    )
     if not saved:
         saved = command
 
-    return VoiceCommandInfo(
-        id=saved.id,
-        user_id=saved.user_id,
-        name=saved.name,
-        phrases=saved.phrases,
-        action_type=_action_type_to_voice(saved.action_type),
-        action_config=saved.action_config,
-        priority=saved.priority,
-        enabled=saved.enabled,
-        requires_confirmation=saved.requires_confirmation,
-        description=saved.description,
-        created_at=saved.created_at,
-    )
+    return _voice_command_to_info(saved)
 
 
 @router.get(
@@ -430,6 +435,7 @@ async def create_voice_command(
 )
 async def get_voice_command_endpoint(
     command_id: str,
+    persona_id: Optional[str] = Query(None, description="Optional persona scope"),
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> VoiceCommandInfo:
@@ -437,10 +443,10 @@ async def get_voice_command_endpoint(
     registry = get_voice_command_registry()
     registry.load_defaults()
 
-    command = get_voice_command_db(db, command_id, current_user.id)
+    command = get_voice_command_db(db, command_id, current_user.id, persona_id=persona_id)
     if not command:
         # Fallback to system registry commands
-        command = registry.get_command(command_id, current_user.id)
+        command = registry.get_command(command_id, current_user.id, persona_id=persona_id)
 
     if not command:
         raise HTTPException(
@@ -454,19 +460,7 @@ async def get_voice_command_endpoint(
             detail="Not authorized to access this command",
         )
 
-    return VoiceCommandInfo(
-        id=command.id,
-        user_id=command.user_id,
-        name=command.name,
-        phrases=command.phrases,
-        action_type=_action_type_to_voice(command.action_type),
-        action_config=command.action_config,
-        priority=command.priority,
-        enabled=command.enabled,
-        requires_confirmation=command.requires_confirmation,
-        description=command.description,
-        created_at=command.created_at,
-    )
+    return _voice_command_to_info(command)
 
 
 @router.put(
@@ -478,11 +472,13 @@ async def get_voice_command_endpoint(
 async def update_voice_command(
     command_id: str,
     definition: VoiceCommandDefinition,
+    persona_id: Optional[str] = Query(None, description="Optional persona scope"),
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> VoiceCommandInfo:
     """Update a voice command."""
-    existing = get_voice_command_db(db, command_id, current_user.id)
+    effective_persona_id = definition.persona_id if definition.persona_id is not None else persona_id
+    existing = get_voice_command_db(db, command_id, current_user.id, persona_id=effective_persona_id)
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -505,6 +501,8 @@ async def update_voice_command(
     updated = VoiceCommand(
         id=command_id,
         user_id=current_user.id,
+        persona_id=effective_persona_id if effective_persona_id is not None else existing.persona_id,
+        connection_id=definition.connection_id if definition.connection_id is not None else existing.connection_id,
         name=definition.name,
         phrases=definition.phrases,
         action_type=_voice_to_action_type(definition.action_type),
@@ -522,21 +520,14 @@ async def update_voice_command(
     registry.load_defaults()
     registry.register_command(updated)
 
-    saved = get_voice_command_db(db, command_id, current_user.id) or updated
+    saved = get_voice_command_db(
+        db,
+        command_id,
+        current_user.id,
+        persona_id=updated.persona_id,
+    ) or updated
 
-    return VoiceCommandInfo(
-        id=saved.id,
-        user_id=saved.user_id,
-        name=saved.name,
-        phrases=saved.phrases,
-        action_type=_action_type_to_voice(saved.action_type),
-        action_config=saved.action_config,
-        priority=saved.priority,
-        enabled=saved.enabled,
-        requires_confirmation=saved.requires_confirmation,
-        description=saved.description,
-        created_at=saved.created_at,
-    )
+    return _voice_command_to_info(saved)
 
 
 @router.post(
@@ -548,11 +539,12 @@ async def update_voice_command(
 async def toggle_voice_command(
     command_id: str,
     payload: VoiceCommandToggleRequest,
+    persona_id: Optional[str] = Query(None, description="Optional persona scope"),
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> VoiceCommandInfo:
     """Toggle a voice command enabled state."""
-    existing = get_voice_command_db(db, command_id, current_user.id)
+    existing = get_voice_command_db(db, command_id, current_user.id, persona_id=persona_id)
     if not existing:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -568,6 +560,8 @@ async def toggle_voice_command(
     updated = VoiceCommand(
         id=command_id,
         user_id=existing.user_id,
+        persona_id=existing.persona_id,
+        connection_id=existing.connection_id,
         name=existing.name,
         phrases=existing.phrases,
         action_type=existing.action_type,
@@ -585,21 +579,14 @@ async def toggle_voice_command(
     registry.load_defaults()
     registry.register_command(updated)
 
-    saved = get_voice_command_db(db, command_id, current_user.id) or updated
+    saved = get_voice_command_db(
+        db,
+        command_id,
+        current_user.id,
+        persona_id=existing.persona_id,
+    ) or updated
 
-    return VoiceCommandInfo(
-        id=saved.id,
-        user_id=saved.user_id,
-        name=saved.name,
-        phrases=saved.phrases,
-        action_type=_action_type_to_voice(saved.action_type),
-        action_config=saved.action_config,
-        priority=saved.priority,
-        enabled=saved.enabled,
-        requires_confirmation=saved.requires_confirmation,
-        description=saved.description,
-        created_at=saved.created_at,
-    )
+    return _voice_command_to_info(saved)
 
 
 @router.get(
@@ -638,10 +625,13 @@ async def get_voice_command_usage(
 )
 async def delete_voice_command(
     command_id: str,
+    persona_id: Optional[str] = Query(None, description="Optional persona scope"),
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> None:
     """Delete a voice command."""
+    existing = get_voice_command_db(db, command_id, current_user.id, persona_id=persona_id)
+    scoped_persona_id = existing.persona_id if existing else persona_id
     deleted = delete_voice_command_db(db, command_id, current_user.id)
     if not deleted:
         raise HTTPException(
@@ -650,7 +640,7 @@ async def delete_voice_command(
         )
 
     registry = get_voice_command_registry()
-    registry.unregister_command(command_id, current_user.id)
+    registry.unregister_command(command_id, current_user.id, persona_id=scoped_persona_id)
 
 
 @router.get(

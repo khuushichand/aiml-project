@@ -665,90 +665,146 @@ def process_pdf(
                         should_ocr = True
 
                 if should_ocr:
-                    backend = _get_ocr_backend(ocr_backend if ocr_backend not in (None, "auto") else None)
-                    if backend is None:
-                        logging.warning("OCR requested but no available OCR backend found.")
-                        result["warnings"] = (result.get("warnings") or []) + [
-                            "OCR requested but no backend available"
-                        ]
-                    else:
-                        # Determine small concurrency for OCR if configured
-                        try:
-                            import os as _os
-                            concurrency_env = _os.getenv("OCR_PAGE_CONCURRENCY")
-                            if concurrency_env is not None:
-                                concurrency_env = int(concurrency_env)
-                            else:
-                                # Fall back to config default if present
-                                cfg = loaded_config_data.get('OCR', {}) if loaded_config_data else {}
-                                concurrency_env = int(cfg.get('page_concurrency_default', 1))
-                        except _PDF_NONCRITICAL_EXCEPTIONS:
-                            concurrency_env = 1
+                    requested_backend = (ocr_backend or "").strip().lower()
+                    if requested_backend == "mineru":
+                        mineru_warnings: list[str] = []
+                        if (ocr_lang or "eng") != "eng":
+                            mineru_warnings.append("MinerU ignores ocr_lang in v1")
+                        if ocr_dpi != 300:
+                            mineru_warnings.append("MinerU ignores ocr_dpi in v1")
 
-                        ocr_text, page_count, ocr_pages, structured_pages = _ocr_pdf_pages(
-                            pdf_path=path_for_processing,
-                            lang=ocr_lang or "eng",
-                            dpi=ocr_dpi,
-                            backend=backend,
-                            per_page_min_text=ocr_min_page_text_chars,
-                            per_page_check=True,
-                            concurrency=max(1, concurrency_env),
-                            output_format=ocr_output_format,
-                            prompt_preset=ocr_prompt_preset,
-                        )
-                        result.setdefault("analysis_details", {})
-                        details = {
-                            "backend": getattr(backend, "name", type(backend).__name__),
-                            "mode": (ocr_mode or "fallback").lower(),
-                            "dpi": ocr_dpi,
-                            "lang": ocr_lang or "eng",
-                            "total_pages": page_count,
-                            "ocr_pages": ocr_pages,
-                            "page_concurrency": max(1, concurrency_env),
-                            "output_format": ocr_output_format,
-                            "prompt_preset": ocr_prompt_preset,
-                        }
-                        # Attach backend-specific metadata if available
                         try:
-                            if hasattr(backend, "describe") and callable(backend.describe):
-                                extra = backend.describe() or {}
-                                if isinstance(extra, dict):
-                                    details.update(extra)
-                        except _PDF_NONCRITICAL_EXCEPTIONS:
-                            pass
-                        if structured_pages is not None:
+                            mineru_result = _run_mineru_document_ocr(
+                                pdf_path=Path(path_for_processing),
+                                output_format=ocr_output_format,
+                                prompt_preset=ocr_prompt_preset,
+                                requested_lang=ocr_lang,
+                                requested_dpi=ocr_dpi,
+                            )
+                            result.setdefault("analysis_details", {})
+                            details = dict(mineru_result.get("details") or {})
+                            details.setdefault("backend", "mineru")
+                            details.setdefault("mode", (ocr_mode or "fallback").lower())
+                            details.setdefault("lang", ocr_lang or "eng")
+                            details.setdefault("dpi", ocr_dpi)
+                            details.setdefault("output_format", ocr_output_format)
+                            details.setdefault("prompt_preset", ocr_prompt_preset)
+                            details["warnings"] = mineru_warnings + list(mineru_result.get("warnings") or [])
+
+                            structured = mineru_result.get("structured")
+                            if structured is not None:
+                                details["structured"] = structured
+
+                            result["analysis_details"]["ocr"] = details
+                            result["warnings"] = (result.get("warnings") or []) + details["warnings"]
+
+                            ocr_text = str(mineru_result.get("text") or "")
+                            if ocr_text.strip():
+                                result["content"] = ocr_text
+                                result["parser_used"] = f"{result['parser_used']}+mineru"
+                            else:
+                                result["warnings"] = (result.get("warnings") or []) + ["MinerU produced no text"]
+                        except _PDF_NONCRITICAL_EXCEPTIONS as _ocr_err:
+                            logging.error(f"MinerU OCR error for {filename}: {_ocr_err}", exc_info=True)
+                            result.setdefault("analysis_details", {})
+                            result["analysis_details"]["ocr"] = {
+                                "backend": "mineru",
+                                "mode": (ocr_mode or "fallback").lower(),
+                                "lang": ocr_lang or "eng",
+                                "dpi": ocr_dpi,
+                                "output_format": ocr_output_format,
+                                "prompt_preset": ocr_prompt_preset,
+                                "error": str(_ocr_err),
+                                "warnings": mineru_warnings,
+                            }
+                            result["warnings"] = (result.get("warnings") or []) + mineru_warnings + [
+                                f"OCR error: {_ocr_err}"
+                            ]
+                    else:
+                        backend = _get_ocr_backend(ocr_backend if ocr_backend not in (None, "auto") else None)
+                        if backend is None:
+                            logging.warning("OCR requested but no available OCR backend found.")
+                            result["warnings"] = (result.get("warnings") or []) + [
+                                "OCR requested but no backend available"
+                            ]
+                        else:
+                            # Determine small concurrency for OCR if configured
                             try:
-                                from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
-                                    OCRResult,
-                                    normalize_ocr_format,
-                                )
-                                fmt = normalize_ocr_format(ocr_output_format)
-                                if fmt == "unknown":
-                                    fmt = "text"
-                                details["structured"] = OCRResult(
-                                    text=ocr_text or "",
-                                    format=fmt,
-                                    pages=structured_pages,
-                                    meta={
-                                        "backend": details.get("backend"),
-                                        "mode": details.get("mode"),
-                                        "prompt_preset": ocr_prompt_preset,
-                                        "output_format": ocr_output_format,
-                                    },
-                                ).as_dict()
+                                import os as _os
+                                concurrency_env = _os.getenv("OCR_PAGE_CONCURRENCY")
+                                if concurrency_env is not None:
+                                    concurrency_env = int(concurrency_env)
+                                else:
+                                    # Fall back to config default if present
+                                    cfg = loaded_config_data.get('OCR', {}) if loaded_config_data else {}
+                                    concurrency_env = int(cfg.get('page_concurrency_default', 1))
+                            except _PDF_NONCRITICAL_EXCEPTIONS:
+                                concurrency_env = 1
+
+                            ocr_text, page_count, ocr_pages, structured_pages = _ocr_pdf_pages(
+                                pdf_path=path_for_processing,
+                                lang=ocr_lang or "eng",
+                                dpi=ocr_dpi,
+                                backend=backend,
+                                per_page_min_text=ocr_min_page_text_chars,
+                                per_page_check=True,
+                                concurrency=max(1, concurrency_env),
+                                output_format=ocr_output_format,
+                                prompt_preset=ocr_prompt_preset,
+                            )
+                            result.setdefault("analysis_details", {})
+                            details = {
+                                "backend": getattr(backend, "name", type(backend).__name__),
+                                "mode": (ocr_mode or "fallback").lower(),
+                                "dpi": ocr_dpi,
+                                "lang": ocr_lang or "eng",
+                                "total_pages": page_count,
+                                "ocr_pages": ocr_pages,
+                                "page_concurrency": max(1, concurrency_env),
+                                "output_format": ocr_output_format,
+                                "prompt_preset": ocr_prompt_preset,
+                            }
+                            # Attach backend-specific metadata if available
+                            try:
+                                if hasattr(backend, "describe") and callable(backend.describe):
+                                    extra = backend.describe() or {}
+                                    if isinstance(extra, dict):
+                                        details.update(extra)
                             except _PDF_NONCRITICAL_EXCEPTIONS:
                                 pass
-                        result["analysis_details"]["ocr"] = details
+                            if structured_pages is not None:
+                                try:
+                                    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
+                                        OCRResult,
+                                        normalize_ocr_format,
+                                    )
+                                    fmt = normalize_ocr_format(ocr_output_format)
+                                    if fmt == "unknown":
+                                        fmt = "text"
+                                    details["structured"] = OCRResult(
+                                        text=ocr_text or "",
+                                        format=fmt,
+                                        pages=structured_pages,
+                                        meta={
+                                            "backend": details.get("backend"),
+                                            "mode": details.get("mode"),
+                                            "prompt_preset": ocr_prompt_preset,
+                                            "output_format": ocr_output_format,
+                                        },
+                                    ).as_dict()
+                                except _PDF_NONCRITICAL_EXCEPTIONS:
+                                    pass
+                            result["analysis_details"]["ocr"] = details
 
-                        if ocr_text and ocr_text.strip():
-                            if (ocr_mode or "fallback").lower() == "always" or content_text_len < max(ocr_min_page_text_chars, 1):
-                                result["content"] = ocr_text
-                                result["parser_used"] = f"{result['parser_used']}+ocr"
+                            if ocr_text and ocr_text.strip():
+                                if (ocr_mode or "fallback").lower() == "always" or content_text_len < max(ocr_min_page_text_chars, 1):
+                                    result["content"] = ocr_text
+                                    result["parser_used"] = f"{result['parser_used']}+ocr"
+                                else:
+                                    result["content"] = (content or "") + "\n\n" + ocr_text
+                                    result["parser_used"] = f"{result['parser_used']}+ocr-appended"
                             else:
-                                result["content"] = (content or "") + "\n\n" + ocr_text
-                                result["parser_used"] = f"{result['parser_used']}+ocr-appended"
-                        else:
-                            result["warnings"] = (result.get("warnings") or []) + ["OCR produced no text"]
+                                result["warnings"] = (result.get("warnings") or []) + ["OCR produced no text"]
             except _PDF_NONCRITICAL_EXCEPTIONS as _ocr_err:
                 logging.error(f"OCR error for {filename}: {_ocr_err}", exc_info=True)
                 result["warnings"] = (result.get("warnings") or []) + [f"OCR error: {_ocr_err}"]
@@ -1546,3 +1602,25 @@ def _ocr_pdf_pages(
                 text_by_index[idx - 1] = f"## Page {idx}\n\n{page_text.strip()}\n\n---\n"
 
     return ("".join(text_by_index).strip(), page_count, ocr_pages, structured_pages)
+
+
+def _run_mineru_document_ocr(
+    *,
+    pdf_path: Path,
+    output_format: str | None = None,
+    prompt_preset: str | None = None,
+    requested_lang: str | None = None,
+    requested_dpi: int | None = None,
+) -> dict[str, Any]:
+    """Run the optional MinerU adapter with a local import boundary for PDF OCR."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
+        run_mineru_document_ocr,
+    )
+
+    return run_mineru_document_ocr(
+        pdf_path=pdf_path,
+        output_format=output_format,
+        prompt_preset=prompt_preset,
+        requested_lang=requested_lang,
+        requested_dpi=requested_dpi,
+    )

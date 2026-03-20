@@ -505,7 +505,6 @@ describe("DictionariesManager entry stage-2 editing and validation flows", () =>
     const user = userEvent.setup()
     tldwClientMock.validateDictionary.mockResolvedValueOnce({
       ok: false,
-      schema_version: 1,
       errors: [
         {
           code: "regex_unsafe",

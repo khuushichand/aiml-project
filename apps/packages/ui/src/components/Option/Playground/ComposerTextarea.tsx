@@ -115,7 +115,13 @@ export const ComposerTextarea = React.memo(function ComposerTextarea({
         onCompositionEnd={onCompositionEnd}
         onMouseDown={onMouseDown}
         onMouseUp={onMouseUp}
-        onKeyDown={onKeyDown}
+        onKeyDown={(e) => {
+          try {
+            onKeyDown(e)
+          } catch (err) {
+            console.error("[ComposerTextarea] onKeyDown error:", err)
+          }
+        }}
         onFocus={onFocus}
         ref={textareaRef}
         className={`w-full resize-none bg-transparent text-base leading-6 text-text placeholder:text-text-muted/80 focus-within:outline-none focus:ring-0 focus-visible:ring-0 ring-0 border-0 ${
@@ -123,7 +129,13 @@ export const ComposerTextarea = React.memo(function ComposerTextarea({
             ? "cursor-not-allowed text-text-muted placeholder:text-text-subtle"
             : ""
         } ${isProMode ? "px-3 py-2.5" : "px-3 py-2"}`}
-        onPaste={onPaste}
+        onPaste={(e) => {
+          try {
+            onPaste(e)
+          } catch (err) {
+            console.error("[ComposerTextarea] onPaste error:", err)
+          }
+        }}
         aria-expanded={ariaExpanded}
         rows={rows}
         style={{

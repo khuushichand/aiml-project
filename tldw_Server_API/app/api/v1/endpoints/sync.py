@@ -6,7 +6,7 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 #
 # 3rd-party imports
@@ -33,7 +33,11 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 #
 # DB Mgmt
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ConflictError, DatabaseError, InputError, MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.errors import (
+    ConflictError,
+    DatabaseError,
+    InputError,
+)
 from tldw_Server_API.app.core.Sync.Sync_Client import SYNC_BATCH_SIZE
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
@@ -129,7 +133,7 @@ def _is_client_validation_error(errors: list[str]) -> bool:
 async def receive_changes_from_client(
     payload: ClientChangesPayload,
     user_id: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ):
     """
     Receives a batch of sync log entries from a client, applies them
@@ -185,7 +189,7 @@ async def send_changes_to_client(
     client_id: str,
     since_change_id: int = 0,
     user_id: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: Any = Depends(get_media_db_for_user)
 ):
     """
     Sends sync log entries from the user's server-side database back to
@@ -286,7 +290,7 @@ async def send_changes_to_client(
 class ServerSyncProcessor:
     """Handles applying changes received from a client to the server's user DB."""
 
-    def __init__(self, db: MediaDatabase, user_id: str, requesting_client_id: str):
+    def __init__(self, db: Any, user_id: str, requesting_client_id: str):
         self.db = db
         self.user_id = user_id
         self.requesting_client_id = requesting_client_id # Client making the current API call

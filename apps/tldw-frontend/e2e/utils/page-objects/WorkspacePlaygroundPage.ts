@@ -19,6 +19,7 @@ export class WorkspacePlaygroundPage {
   readonly chatPanel: Locator
   readonly studioPanel: Locator
   readonly globalSearchModal: Locator
+  readonly globalSearchInput: Locator
   readonly addSourceModal: Locator
 
   constructor(page: Page) {
@@ -32,6 +33,9 @@ export class WorkspacePlaygroundPage {
       .getByRole("dialog")
       .filter({ hasText: /search workspace/i })
       .first()
+    this.globalSearchInput = this.globalSearchModal.getByPlaceholder(
+      /search sources, chat, and notes/i
+    )
     this.addSourceModal = page
       .getByRole("dialog")
       .filter({ hasText: /add sources/i })
@@ -45,6 +49,26 @@ export class WorkspacePlaygroundPage {
         ;(portal as HTMLElement).style.pointerEvents = "none"
       })
     })
+  }
+
+  private async waitForModalBackdropsToClear(): Promise<void> {
+    await expect(
+      this.page.locator(
+        "div.fixed.inset-0.z-50.bg-black\\/50, div.fixed.inset-0.z-50.backdrop-blur-sm, .ant-modal-mask"
+      )
+    ).toHaveCount(0, { timeout: 10_000 })
+  }
+
+  private async clickWhenActionable(locator: Locator): Promise<void> {
+    await expect(locator).toBeVisible({ timeout: 10_000 })
+    await this.disableNextJsPortalPointerInterception()
+    try {
+      await locator.click({ trial: true, timeout: 3_000 })
+    } catch {
+      await this.disableNextJsPortalPointerInterception()
+      await locator.click({ trial: true, timeout: 3_000 })
+    }
+    await locator.click()
   }
 
   async goto(): Promise<void> {
@@ -61,6 +85,25 @@ export class WorkspacePlaygroundPage {
     await this.disableNextJsPortalPointerInterception()
   }
 
+  async resetWorkspace(name = "Workspace E2E"): Promise<void> {
+    await this.page.evaluate((workspaceName) => {
+      const store = (window as { __tldw_useWorkspaceStore?: unknown })
+        .__tldw_useWorkspaceStore as
+        | {
+            getState?: () => {
+              initializeWorkspace?: (name?: string) => void
+            }
+          }
+        | undefined
+
+      if (!store?.getState) {
+        throw new Error("Workspace store is unavailable on window")
+      }
+
+      store.getState().initializeWorkspace?.(workspaceName)
+    }, name)
+  }
+
   async openGlobalSearchWithShortcut(): Promise<void> {
     await this.page.locator("body").click()
     await this.page.keyboard.press("Control+k")
@@ -68,77 +111,72 @@ export class WorkspacePlaygroundPage {
       await this.page.keyboard.press("Meta+k")
     }
     await expect(this.globalSearchModal).toBeVisible({ timeout: 10_000 })
+    await expect(this.globalSearchInput).toBeVisible({ timeout: 10_000 })
   }
 
   async closeGlobalSearchWithEscape(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    const closeButton = this.globalSearchModal
-      .locator("button.ant-modal-close")
-      .first()
-    if (await closeButton.isVisible().catch(() => false)) {
-      await closeButton.click({ force: true })
-    } else {
-      await this.page.keyboard.press("Escape")
-    }
+    await expect(this.globalSearchInput).toBeVisible({ timeout: 10_000 })
+    await this.globalSearchInput.click()
+    await expect(this.globalSearchInput).toBeFocused({ timeout: 10_000 })
+    await this.globalSearchInput.press("Escape")
     await expect(this.globalSearchModal).toBeHidden({ timeout: 10_000 })
+    await this.waitForModalBackdropsToClear()
+  }
+
+  async searchWorkspace(query: string): Promise<void> {
+    await expect(this.globalSearchInput).toBeVisible({ timeout: 10_000 })
+    await this.globalSearchInput.fill(query)
   }
 
   async hideSourcesPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
-      .getByRole("button", { name: /hide sources/i })
-      .first()
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.sourcesPanel.getByRole("button", { name: /hide sources/i })
+    )
     await expect(this.sourcesPanel).toBeHidden({ timeout: 10_000 })
   }
 
   async showSourcesPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
-      .getByRole("button", { name: /show sources/i })
-      .first()
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.page.getByRole("button", { name: /show sources/i }).first()
+    )
     await expect(this.sourcesPanel).toBeVisible({ timeout: 10_000 })
   }
 
   async hideStudioPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
-      .getByRole("button", { name: /hide studio/i })
-      .first()
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.studioPanel.getByRole("button", { name: /hide studio/i })
+    )
     await expect(this.studioPanel).toBeHidden({ timeout: 10_000 })
   }
 
   async showStudioPane(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    await this.page
-      .getByRole("button", { name: /show studio/i })
-      .first()
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.page.getByRole("button", { name: /show studio/i }).first()
+    )
     await expect(this.studioPanel).toBeVisible({ timeout: 10_000 })
   }
 
   async openAddSourcesModal(): Promise<void> {
     await expect(this.sourcesPanel).toBeVisible({ timeout: 10_000 })
     await this.disableNextJsPortalPointerInterception()
-    await this.sourcesPanel
-      .getByRole("button", { name: /^add$/i })
-      .click({ force: true })
+    await this.clickWhenActionable(
+      this.sourcesPanel.getByRole("button", { name: /^add$/i })
+    )
     await expect(this.addSourceModal).toBeVisible({ timeout: 10_000 })
   }
 
   async closeAddSourcesModal(): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
-    const closeButton = this.addSourceModal
-      .locator("button.ant-modal-close")
-      .first()
-    if (await closeButton.isVisible().catch(() => false)) {
-      await closeButton.click({ force: true })
-    } else {
-      await this.page.keyboard.press("Escape")
-    }
+    await this.clickWhenActionable(
+      this.addSourceModal.locator("button.ant-modal-close").first()
+    )
     await expect(this.addSourceModal).toBeHidden({ timeout: 10_000 })
+    await this.waitForModalBackdropsToClear()
   }
 
   async seedSources(sources: WorkspaceSeedSource[]): Promise<void> {
@@ -196,6 +234,10 @@ export class WorkspacePlaygroundPage {
       )
   }
 
+  getSourceRowByTitle(title: string): Locator {
+    return this.page.locator("[data-source-id]").filter({ hasText: title }).first()
+  }
+
   async selectSourceById(sourceId: string): Promise<void> {
     await this.disableNextJsPortalPointerInterception()
     const checkbox = this.page.locator(
@@ -234,6 +276,49 @@ export class WorkspacePlaygroundPage {
     await expect(
       this.page.locator(`[data-source-id="${sourceId}"] input[type="checkbox"]`)
     ).toBeChecked()
+  }
+
+  async selectSourceByTitle(title: string): Promise<void> {
+    const row = this.getSourceRowByTitle(title)
+    await expect(row).toBeVisible({ timeout: 10_000 })
+    const sourceId = await row.getAttribute("data-source-id")
+    if (!sourceId) {
+      throw new Error(`Unable to resolve workspace source id for "${title}"`)
+    }
+    await this.selectSourceById(sourceId)
+  }
+
+  async expectSourceSelectedByTitle(title: string): Promise<void> {
+    const row = this.getSourceRowByTitle(title)
+    await expect(row).toBeVisible({ timeout: 10_000 })
+    await expect(row.locator('input[type="checkbox"]')).toBeChecked()
+  }
+
+  getSelectedSourceTag(title: string): Locator {
+    return this.chatPanel.locator(".ant-tag").filter({ hasText: title }).first()
+  }
+
+  getChatInput(): Locator {
+    return this.chatPanel.locator("textarea").first()
+  }
+
+  async sendChatMessage(message: string): Promise<void> {
+    const input = this.getChatInput()
+    await expect(input).toBeVisible({ timeout: 10_000 })
+    await input.fill(message)
+    await this.chatPanel.getByRole("button", { name: /send/i }).click()
+  }
+
+  getGlobalSearchResult(text: string): Locator {
+    return this.globalSearchModal.getByRole("button").filter({ hasText: text }).first()
+  }
+
+  getStudioOutputButton(label: string): Locator {
+    return this.studioPanel.getByRole("button", { name: label, exact: true })
+  }
+
+  getStudioArtifactCards(): Locator {
+    return this.studioPanel.locator("[data-testid^='studio-artifact-card-']")
   }
 }
 

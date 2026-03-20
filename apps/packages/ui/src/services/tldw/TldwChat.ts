@@ -126,8 +126,12 @@ const sanitizeMessages = (messages: ChatMessage[]): ChatMessage[] => {
         return null
       }
 
-      const toolCallId = message.tool_call_id.trim()
-      const content = message.content.trim()
+      const rawToolCallId = (message as any).tool_call_id
+      const toolCallId =
+        typeof rawToolCallId === "string" ? rawToolCallId.trim() : ""
+      const rawContent = message.content
+      const content =
+        typeof rawContent === "string" ? rawContent.trim() : ""
       if (!toolCallId || !content) return null
       return { ...message, tool_call_id: toolCallId, content }
     })
@@ -140,10 +144,23 @@ const buildRequestMessages = (
 ): ChatMessage[] => {
   const sanitizedMessages = sanitizeMessages(messages)
   const systemPrompt = normalizeSystemPrompt(options.systemPrompt)
-  const withSystemPrompt =
-    systemPrompt && sanitizedMessages[0]?.role !== "system"
-      ? [{ role: "system", content: systemPrompt } as ChatMessage, ...sanitizedMessages]
-      : sanitizedMessages
+  let withSystemPrompt: ChatMessage[]
+  if (systemPrompt) {
+    if (sanitizedMessages[0]?.role === "system") {
+      // Replace existing system message with the user-configured one
+      withSystemPrompt = [
+        { role: "system", content: systemPrompt } as ChatMessage,
+        ...sanitizedMessages.slice(1)
+      ]
+    } else {
+      withSystemPrompt = [
+        { role: "system", content: systemPrompt } as ChatMessage,
+        ...sanitizedMessages
+      ]
+    }
+  } else {
+    withSystemPrompt = sanitizedMessages
+  }
 
   return normalizeMessagesForProvider(
     withSystemPrompt,
@@ -233,6 +250,7 @@ const normalizeChatTools = (
 
 export interface TldwChatOptions {
   model: string
+  routing?: ChatCompletionRequest["routing"]
   temperature?: number
   logprobs?: boolean
   topLogprobs?: number
@@ -326,6 +344,7 @@ export class TldwChatService {
       const request: ChatCompletionRequest = {
         messages: requestMessages,
         model: options.model,
+        routing: options.routing,
         stream: false,
         temperature: options.temperature,
         logprobs: options.logprobs,
@@ -407,6 +426,7 @@ export class TldwChatService {
       const request: ChatCompletionRequest = {
         messages: requestMessages,
         model: options.model,
+        routing: options.routing,
         stream: true,
         temperature: options.temperature,
         logprobs: options.logprobs,
@@ -446,21 +466,39 @@ export class TldwChatService {
 
       const stream = tldwClient.streamChatCompletion(request, { signal: this.currentController.signal })
 
-      for await (const chunk of stream) {
-        // Check if stream was cancelled
-        if (this.currentController?.signal.aborted) {
-          break
-        }
+      const STREAM_IDLE_TIMEOUT_MS = 30_000
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
+      const controller = this.currentController
 
-        // Call the onChunk callback if provided
-        if (onChunk) {
-          onChunk(chunk)
-        }
+      const resetIdleTimer = () => {
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => {
+          controller?.abort()
+        }, STREAM_IDLE_TIMEOUT_MS)
+      }
 
-        const token = extractTokenFromChunk(chunk)
-        if (token) {
-          yield token
+      try {
+        resetIdleTimer()
+        for await (const chunk of stream) {
+          resetIdleTimer()
+
+          // Check if stream was cancelled
+          if (controller?.signal.aborted) {
+            break
+          }
+
+          // Call the onChunk callback if provided
+          if (onChunk) {
+            onChunk(chunk)
+          }
+
+          const token = extractTokenFromChunk(chunk)
+          if (token) {
+            yield token
+          }
         }
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer)
       }
     } catch (error) {
       console.error('Stream completion failed:', error)
@@ -535,17 +573,20 @@ export class TldwChatService {
       if (typeof content === "string") {
         totalChars += content.length
       } else if (Array.isArray(content)) {
-        // Roughly approximate by concatenating any text fields
-        const text = content
-          .map((part: any) => {
-            if (typeof part === "string") return part
-            if (part?.type === "text" && typeof part.text === "string") {
-              return part.text
-            }
-            return ""
-          })
-          .join(" ")
-        totalChars += text.length
+        let partTokens = 0
+        for (const part of content as any[]) {
+          if (typeof part === "string") {
+            partTokens += part.length
+          } else if (part?.type === "text" && typeof part.text === "string") {
+            partTokens += part.text.length
+          } else if (part?.type === "image_url") {
+            // Rough image token estimate: 85 tokens for low detail, 765 for high
+            const detail = part.image_url?.detail
+            const imageTokens = detail === "low" ? 85 : 765
+            partTokens += imageTokens * 4 // convert to char-equivalents
+          }
+        }
+        totalChars += partTokens
       } else if (content != null) {
         try {
           totalChars += JSON.stringify(content).length

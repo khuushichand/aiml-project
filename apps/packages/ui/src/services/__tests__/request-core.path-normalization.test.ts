@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest"
 
 import { deriveRequestTimeout, tldwRequest } from "@/services/tldw/request-core"
 
+const getFetchCall = (
+  fetchFn: ReturnType<typeof vi.fn>,
+  index = 0
+): [string, RequestInit?] | undefined =>
+  fetchFn.mock.calls[index] as [string, RequestInit?] | undefined
+
 describe("request-core media path normalization", () => {
   it("normalizes media listing path with trailing slash before query", async () => {
     const fetchFn = vi.fn(async () =>
@@ -29,7 +35,7 @@ describe("request-core media path normalization", () => {
     )
 
     expect(fetchFn).toHaveBeenCalledTimes(1)
-    expect(fetchFn.mock.calls[0]?.[0]).toBe(
+    expect(getFetchCall(fetchFn)?.[0]).toBe(
       "http://127.0.0.1:8000/api/v1/media?page=1&results_per_page=20&include_keywords=true"
     )
     expect(response.ok).toBe(true)
@@ -102,7 +108,7 @@ describe("request-core absolute URL policy", () => {
 
     expect(response.ok).toBe(true)
     expect(fetchFn).toHaveBeenCalledTimes(1)
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://example.com/api/v1/health")
+    expect(getFetchCall(fetchFn)?.[0]).toBe("https://example.com/api/v1/health")
   })
 
   it("does not inject auth headers for allowlisted absolute URLs", async () => {
@@ -129,7 +135,7 @@ describe("request-core absolute URL policy", () => {
       }
     )
 
-    const requestInit = fetchFn.mock.calls[0]?.[1] as RequestInit | undefined
+    const requestInit = getFetchCall(fetchFn)?.[1]
     const headerEntries = Object.entries((requestInit?.headers || {}) as Record<string, string>)
     const authHeader = headerEntries.find(([key]) => key.toLowerCase() === "authorization")
 
@@ -162,6 +168,6 @@ describe("request-core absolute URL policy", () => {
 
     expect(response.ok).toBe(true)
     expect(fetchFn).toHaveBeenCalledTimes(1)
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8000/openapi.json")
+    expect(getFetchCall(fetchFn)?.[0]).toBe("http://127.0.0.1:8000/openapi.json")
   })
 })

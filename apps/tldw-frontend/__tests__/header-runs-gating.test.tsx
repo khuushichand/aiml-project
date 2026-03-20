@@ -35,6 +35,7 @@ import { Header } from "@web/components/layout/Header"
 
 const originalEnableRunsLink = process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK
 const originalRequireAdmin = process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN
+const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
 
 const resetEnv = () => {
   if (originalEnableRunsLink === undefined) {
@@ -46,6 +47,11 @@ const resetEnv = () => {
     delete process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN
   } else {
     process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN = originalRequireAdmin
+  }
+  if (originalDeploymentMode === undefined) {
+    delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+  } else {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
   }
 }
 

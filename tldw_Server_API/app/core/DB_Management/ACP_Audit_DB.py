@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS acp_audit_events (
@@ -61,8 +64,7 @@ class ACPAuditDB:
         if conn is None:
             os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
             conn = sqlite3.connect(self._db_path, timeout=10)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
+            configure_sqlite_connection(conn)
             self._conn_local.conn = conn
         return conn
 

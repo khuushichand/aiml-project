@@ -5,7 +5,10 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useDemoMode } from "@/context/demo-mode"
 import { useScrollToServerCard } from "@/hooks/useScrollToServerCard"
-import { useConnectionActions } from "@/hooks/useConnectionState"
+import {
+  useConnectionActions,
+  useConnectionUxState
+} from "@/hooks/useConnectionState"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectionProblemBanner from "@/components/Common/ConnectionProblemBanner"
 import { StatusBadge } from "@/components/Common/StatusBadge"
@@ -417,6 +420,39 @@ const DemoQuizPreview: React.FC<{ quizzes: DemoQuiz[] }> = ({ quizzes }) => {
   )
 }
 
+const InlineConnectionWarning = ({
+  message,
+  retryActionLabel,
+  onRetry,
+  retryDisabled,
+  testId
+}: {
+  message: string
+  retryActionLabel?: string
+  onRetry?: () => void
+  retryDisabled?: boolean
+  testId: string
+}) => (
+  <div
+    data-testid={testId}
+    className="rounded-2xl border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-text"
+  >
+    <div className="font-medium">{message}</div>
+    {retryActionLabel && onRetry ? (
+      <div className="mt-2 flex justify-start text-xs">
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={retryDisabled}
+          className="inline-flex items-center gap-1 text-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-primary"
+        >
+          {retryActionLabel}
+        </button>
+      </div>
+    ) : null}
+  </div>
+)
+
 /**
  * QuizWorkspace handles connection state, demo mode, and feature availability.
  * When online and feature is available, it renders QuizPlayground.
@@ -426,6 +462,7 @@ export const QuizWorkspace: React.FC = () => {
   const navigate = useNavigate()
   const isOnline = useServerOnline()
   const { demoEnabled } = useDemoMode()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const scrollToServerCard = useScrollToServerCard("/quiz")
   const { checkOnce } = useConnectionActions()
@@ -450,6 +487,136 @@ export const QuizWorkspace: React.FC = () => {
       })
   }, [checkOnce, checkingConnection])
 
+  const offlineBannerProps = React.useMemo(() => {
+    if (uxState === "error_auth" || uxState === "configuring_auth") {
+      return {
+        badgeLabel: "Credentials required",
+        title: t("option:quiz.authTitle", {
+          defaultValue: "Add your credentials to use Quiz Playground"
+        }),
+        description: t("option:quiz.authDescription", {
+          defaultValue:
+            "Quiz Playground needs valid credentials before it can create or review quizzes against your tldw server."
+        }),
+        examples: [
+          t("option:quiz.authExample1", {
+            defaultValue:
+              "Use the connection card at the top of this page to repair your server URL or API key."
+          })
+        ],
+        primaryActionLabel: t("option:connectionCard.buttonGoToServerCard", {
+          defaultValue: "Go to server card"
+        }),
+        onPrimaryAction: scrollToServerCard
+      }
+    }
+    if (uxState === "unconfigured" || uxState === "configuring_url") {
+      return {
+        badgeLabel: "Setup required",
+        title: t("option:quiz.setupTitle", {
+          defaultValue: "Finish setup to use Quiz Playground"
+        }),
+        description: hasCompletedFirstRun
+          ? t("option:quiz.setupDescriptionReturning", {
+              defaultValue:
+                "Quiz Playground still needs a configured tldw server before it can load your real quizzes."
+            })
+          : t("option:quiz.setupDescriptionFirstRun", {
+              defaultValue:
+                "Finish connecting your tldw server before Quiz Playground can load your real quizzes."
+            }),
+        examples: [
+          t("option:quiz.setupExample1", {
+            defaultValue:
+              "Use the connection card at the top of this page to finish server setup."
+          })
+        ],
+        primaryActionLabel: t("option:connectionCard.buttonGoToServerCard", {
+          defaultValue: "Go to server card"
+        }),
+        onPrimaryAction: scrollToServerCard
+      }
+    }
+    if (uxState === "error_unreachable") {
+      return {
+        badgeLabel: "Server unreachable",
+        title: t("option:quiz.unreachableTitle", {
+          defaultValue: "Can't reach your tldw server right now"
+        }),
+        description: t("option:quiz.unreachableDescription", {
+          defaultValue:
+            "Quiz Playground depends on a reachable tldw server. Review the server card above, then retry the connection check."
+        }),
+        examples: [
+          t("option:quiz.unreachableExample1", {
+            defaultValue:
+              "If your server is running, confirm the URL in the connection card still points to the right host."
+          })
+        ],
+        primaryActionLabel: t("option:connectionCard.buttonGoToServerCard", {
+          defaultValue: "Go to server card"
+        }),
+        onPrimaryAction: scrollToServerCard,
+        retryActionLabel: t("option:buttonRetry", "Retry connection"),
+        onRetry: handleRetryConnection,
+        retryDisabled: checkingConnection
+      }
+    }
+    return {
+      badgeLabel: "Not connected",
+      title: t("option:quiz.emptyConnectTitle", {
+        defaultValue: "Connect to use Quiz Playground"
+      }),
+      description: t("option:quiz.emptyConnectDescription", {
+        defaultValue:
+          "This view needs a connected server. Use the server connection card above to fix your connection, then return here to create and take quizzes."
+      }),
+      examples: [
+        t("option:quiz.emptyConnectExample1", {
+          defaultValue:
+            "Use the connection card at the top of this page to add your server URL and API key."
+        })
+      ],
+      primaryActionLabel: t("option:connectionCard.buttonGoToServerCard", {
+        defaultValue: "Go to server card"
+      }),
+      onPrimaryAction: scrollToServerCard,
+      retryActionLabel: t("option:buttonRetry", "Retry connection"),
+      onRetry: handleRetryConnection,
+      retryDisabled: checkingConnection
+    }
+  }, [
+    checkingConnection,
+    handleRetryConnection,
+    hasCompletedFirstRun,
+    scrollToServerCard,
+    t,
+    uxState
+  ])
+
+  const demoConnectionWarning = React.useMemo(() => {
+    if (uxState === "error_auth" || uxState === "configuring_auth") {
+      return {
+        message:
+          "Demo stays available, but your Quiz Playground credentials need attention."
+      }
+    }
+    if (uxState === "unconfigured" || uxState === "configuring_url") {
+      return {
+        message: "Demo stays available while you finish Quiz Playground setup."
+      }
+    }
+    if (uxState === "error_unreachable") {
+      return {
+        message: "Demo stays available, but your tldw server is unreachable.",
+        retryActionLabel: t("option:buttonRetry", "Retry connection"),
+        onRetry: handleRetryConnection,
+        retryDisabled: checkingConnection
+      }
+    }
+    return null
+  }, [checkingConnection, handleRetryConnection, t, uxState])
+
   // Offline state - show demo or connection banner
   if (!isOnline) {
     return demoEnabled ? (
@@ -460,6 +627,15 @@ export const QuizWorkspace: React.FC = () => {
             description={betaDescription}
           />
         </div>
+        {demoConnectionWarning ? (
+          <InlineConnectionWarning
+            testId="quiz-demo-connection-warning"
+            message={demoConnectionWarning.message}
+            retryActionLabel={demoConnectionWarning.retryActionLabel}
+            onRetry={demoConnectionWarning.onRetry}
+            retryDisabled={demoConnectionWarning.retryDisabled}
+          />
+        ) : null}
         <FeatureEmptyState
           title={
             <span className="inline-flex items-center gap-2">
@@ -497,38 +673,26 @@ export const QuizWorkspace: React.FC = () => {
         <DemoQuizPreview quizzes={demoQuizzes} />
       </div>
     ) : (
-      <div className="space-y-4">
-        <div className="flex justify-end">
-          <QuizBetaBadge
-            label={t("common:beta", { defaultValue: "Beta" })}
-            description={betaDescription}
+        <div className="space-y-4">
+          <div className="flex justify-end">
+            <QuizBetaBadge
+              label={t("common:beta", { defaultValue: "Beta" })}
+              description={betaDescription}
+            />
+          </div>
+          <ConnectionProblemBanner
+            badgeLabel={offlineBannerProps.badgeLabel}
+            title={offlineBannerProps.title}
+            description={offlineBannerProps.description}
+            examples={offlineBannerProps.examples}
+            primaryActionLabel={offlineBannerProps.primaryActionLabel}
+            onPrimaryAction={offlineBannerProps.onPrimaryAction}
+            retryActionLabel={offlineBannerProps.retryActionLabel}
+            onRetry={offlineBannerProps.onRetry}
+            retryDisabled={offlineBannerProps.retryDisabled}
           />
         </div>
-        <ConnectionProblemBanner
-          badgeLabel="Not connected"
-          title={t("option:quiz.emptyConnectTitle", {
-            defaultValue: "Connect to use Quiz Playground"
-          })}
-          description={t("option:quiz.emptyConnectDescription", {
-            defaultValue:
-              "This view needs a connected server. Use the server connection card above to fix your connection, then return here to create and take quizzes."
-          })}
-          examples={[
-            t("option:quiz.emptyConnectExample1", {
-              defaultValue:
-                "Use the connection card at the top of this page to add your server URL and API key."
-            })
-          ]}
-          primaryActionLabel={t("option:connectionCard.buttonGoToServerCard", {
-            defaultValue: "Go to server card"
-          })}
-          onPrimaryAction={scrollToServerCard}
-          retryActionLabel={t("option:buttonRetry", "Retry connection")}
-          onRetry={handleRetryConnection}
-          retryDisabled={checkingConnection}
-        />
-      </div>
-    )
+      )
   }
 
   // Feature not supported on this server

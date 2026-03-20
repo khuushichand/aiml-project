@@ -2,7 +2,7 @@ import React from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { KnowledgeQA } from "../index"
-import { MemoryRouter } from "react-router-dom"
+import { MemoryRouter, useNavigate } from "react-router-dom"
 
 const state = {
   settingsPanelOpen: false,
@@ -94,6 +94,10 @@ vi.mock("@/hooks/useConnectionState", () => ({
     isChecking: connectivity.isChecking,
     lastCheckedAt: connectivity.lastCheckedAt,
   }),
+  useConnectionUxState: () => ({
+    uxState: "connected_ok" as const,
+    hasCompletedFirstRun: true,
+  }),
 }))
 
 vi.mock("@/hooks/useMediaQuery", () => ({
@@ -168,6 +172,16 @@ function setResearchMode() {
 }
 
 describe("KnowledgeQA golden layout guardrails", () => {
+  function RouteNavigator({ path }: { path: string }) {
+    const navigate = useNavigate()
+
+    React.useEffect(() => {
+      navigate(path)
+    }, [navigate, path])
+
+    return null
+  }
+
   const renderKnowledgeQa = (initialEntries: string[] = ["/knowledge"]) =>
     render(
       <MemoryRouter initialEntries={initialEntries}>
@@ -193,6 +207,8 @@ describe("KnowledgeQA golden layout guardrails", () => {
     state.settings.include_media_ids = []
     state.settings.include_note_ids = []
     state.currentThreadId = null
+    state.selectThread = vi.fn().mockResolvedValue(true)
+    state.selectSharedThread = vi.fn().mockResolvedValue(true)
     state.searchHistory = []
     state.restoreFromHistory = vi.fn()
     state.messages = []
@@ -474,9 +490,181 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(state.selectThread).toHaveBeenCalledWith("thread-42")
   })
 
+  it("retries thread permalinks on the same mounted page after a transient failure", async () => {
+    vi.useFakeTimers()
+    state.selectThread = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+
+    renderKnowledgeQa(["/knowledge/thread/thread-42"])
+
+    expect(state.selectThread).toHaveBeenCalledTimes(1)
+    expect(state.selectThread).toHaveBeenCalledWith("thread-42")
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectThread).toHaveBeenCalledTimes(2)
+    expect(state.selectThread).toHaveBeenNthCalledWith(2, "thread-42")
+  })
+
+  it("resets thread permalink retry budget when navigating to a different thread on the same page", async () => {
+    vi.useFakeTimers()
+    state.selectThread = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={["/knowledge/thread/thread-a"]}>
+        <RouteNavigator path="/knowledge/thread/thread-a" />
+        <KnowledgeQA />
+      </MemoryRouter>
+    )
+
+    expect(state.selectThread).toHaveBeenCalledTimes(1)
+    expect(state.selectThread).toHaveBeenNthCalledWith(1, "thread-a")
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(
+      <MemoryRouter initialEntries={["/knowledge/thread/thread-a"]}>
+        <RouteNavigator path="/knowledge/thread/thread-b" />
+        <KnowledgeQA />
+      </MemoryRouter>
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectThread).toHaveBeenCalledTimes(2)
+    expect(state.selectThread).toHaveBeenNthCalledWith(2, "thread-b")
+
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectThread).toHaveBeenCalledTimes(3)
+    expect(state.selectThread).toHaveBeenNthCalledWith(3, "thread-b")
+
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectThread).toHaveBeenCalledTimes(4)
+    expect(state.selectThread).toHaveBeenNthCalledWith(4, "thread-b")
+  })
+
   it("hydrates shared conversations from tokenized permalink routes", () => {
     renderKnowledgeQa(["/knowledge/shared/share-token-abc"])
 
     expect(state.selectSharedThread).toHaveBeenCalledWith("share-token-abc")
+  })
+
+  it("retries shared permalinks on the same mounted page after a transient failure", async () => {
+    vi.useFakeTimers()
+    state.selectSharedThread = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+
+    renderKnowledgeQa(["/knowledge/shared/share-token-abc"])
+
+    expect(state.selectSharedThread).toHaveBeenCalledTimes(1)
+    expect(state.selectSharedThread).toHaveBeenCalledWith("share-token-abc")
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectSharedThread).toHaveBeenCalledTimes(2)
+    expect(state.selectSharedThread).toHaveBeenNthCalledWith(2, "share-token-abc")
+  })
+
+  it("resets shared permalink retry budget when navigating to a different shared route on the same page", async () => {
+    vi.useFakeTimers()
+    state.selectSharedThread = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={["/knowledge/shared/share-a"]}>
+        <RouteNavigator path="/knowledge/shared/share-a" />
+        <KnowledgeQA />
+      </MemoryRouter>
+    )
+
+    expect(state.selectSharedThread).toHaveBeenCalledTimes(1)
+    expect(state.selectSharedThread).toHaveBeenNthCalledWith(1, "share-a")
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    rerender(
+      <MemoryRouter initialEntries={["/knowledge/shared/share-a"]}>
+        <RouteNavigator path="/knowledge/shared/share-b" />
+        <KnowledgeQA />
+      </MemoryRouter>
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectSharedThread).toHaveBeenCalledTimes(2)
+    expect(state.selectSharedThread).toHaveBeenNthCalledWith(2, "share-b")
+
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectSharedThread).toHaveBeenCalledTimes(3)
+    expect(state.selectSharedThread).toHaveBeenNthCalledWith(3, "share-b")
+
+    act(() => {
+      vi.advanceTimersByTime(1500)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectSharedThread).toHaveBeenCalledTimes(4)
+    expect(state.selectSharedThread).toHaveBeenNthCalledWith(4, "share-b")
   })
 })

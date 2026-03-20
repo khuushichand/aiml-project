@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from ....DB_Management.media_db.api import managed_media_database
 from ....Slides.slides_db import ConflictError
 from ..base import BaseModule, create_tool_definition
 from ..disk_space import get_free_disk_space_gb
@@ -556,6 +557,7 @@ class SlidesModule(BaseModule):
             "marp_theme": row.marp_theme,
             "template_id": row.template_id,
             "settings": row.settings,
+            "studio_data": getattr(row, "studio_data", None),
             "slides": row.slides,
             "slides_text": row.slides_text,
             "source_type": row.source_type,
@@ -659,6 +661,8 @@ class SlidesModule(BaseModule):
             slides_text = self._extract_slides_text(slides)
             settings = args.get("settings")
             settings_json = json.dumps(settings) if settings else None
+            studio_data = args.get("studio_data")
+            studio_data_json = json.dumps(studio_data) if studio_data else None
 
             row = db.create_presentation(
                 presentation_id=None,
@@ -668,6 +672,7 @@ class SlidesModule(BaseModule):
                 marp_theme=args.get("marp_theme"),
                 template_id=args.get("template_id"),
                 settings=settings_json,
+                studio_data=studio_data_json,
                 slides=slides,
                 slides_text=slides_text,
                 source_type="manual",
@@ -716,6 +721,8 @@ class SlidesModule(BaseModule):
             # Process settings if present
             if "settings" in updates and isinstance(updates["settings"], dict):
                 updates["settings"] = json.dumps(updates["settings"])
+            if "studio_data" in updates and isinstance(updates["studio_data"], dict):
+                updates["studio_data"] = json.dumps(updates["studio_data"])
 
             # Update slides_text if slides changed
             if "slides" in updates and "slides_text" not in updates:
@@ -1039,7 +1046,7 @@ class SlidesModule(BaseModule):
 
             # Extract fields to restore
             restore_fields = {}
-            for key in ["title", "description", "theme", "marp_theme", "settings", "slides", "custom_css"]:
+            for key in ["title", "description", "theme", "marp_theme", "settings", "studio_data", "slides", "custom_css"]:
                 if key in payload:
                     restore_fields[key] = payload[key]
 
@@ -1302,6 +1309,7 @@ class SlidesModule(BaseModule):
                 marp_theme=None,
                 template_id=None,
                 settings=None,
+                studio_data=None,
                 slides=slides_json,
                 slides_text=slides_text,
                 source_type=source_type,
@@ -1324,15 +1332,15 @@ class SlidesModule(BaseModule):
             media_path = context.db_paths.get("media")
             if not media_path:
                 return None
-            from ....DB_Management.Media_DB_v2 import MediaDatabase
-            db = MediaDatabase(db_path=media_path, client_id="mcp_slides_gen")
-            try:
+            with managed_media_database(
+                "mcp_slides_gen",
+                db_path=media_path,
+                initialize=False,
+            ) as db:
                 media = db.get_media_by_id(media_id)
                 if not media:
                     return None
                 return media.get("content") or media.get("transcript") or media.get("summary")
-            finally:
-                db.close_all_connections()
         except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get media content: {e}")
             return None

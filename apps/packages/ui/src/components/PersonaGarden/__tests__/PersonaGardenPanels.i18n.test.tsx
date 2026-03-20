@@ -10,6 +10,11 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
+    fetchWithAuth: () =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ commands: [] })
+      }),
     listPersonaExemplars: () => Promise.resolve([]),
     createPersonaExemplar: () => Promise.resolve({}),
     updatePersonaExemplar: () => Promise.resolve({}),
@@ -18,10 +23,38 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
+vi.mock("@/hooks/useResolvedPersonaVoiceDefaults", () => ({
+  PERSONA_TURN_DETECTION_BALANCED_DEFAULTS: {
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
+  },
+  useResolvedPersonaVoiceDefaults: () => ({
+    sttLanguage: "en-US",
+    sttModel: "whisper-1",
+    ttsProvider: "tldw",
+    ttsVoice: "af_heart",
+    confirmationMode: "destructive_only",
+    voiceChatTriggerPhrases: [],
+    autoResume: true,
+    bargeIn: false,
+    autoCommitEnabled: true,
+    vadThreshold: 0.5,
+    minSilenceMs: 250,
+    turnStopSecs: 0.2,
+    minUtteranceSecs: 0.4
+  })
+}))
+
+import { CommandsPanel } from "../CommandsPanel"
+import { ConnectionsPanel } from "../ConnectionsPanel"
 import { PersonaGardenTabs } from "../PersonaGardenTabs"
 import { PoliciesPanel } from "../PoliciesPanel"
 import { ProfilePanel } from "../ProfilePanel"
 import { ScopesPanel } from "../ScopesPanel"
+import { TestLabPanel } from "../TestLabPanel"
 import { VoiceExamplesPanel } from "../VoiceExamplesPanel"
 
 describe("Persona Garden panel i18n", () => {
@@ -29,13 +62,47 @@ describe("Persona Garden panel i18n", () => {
     render(
       <>
         <ProfilePanel
-          selectedPersonaId=""
-          selectedPersonaName=""
+          selectedPersonaId="persona-1"
+          selectedPersonaName="Persona One"
           personaCount={3}
           connected={false}
           sessionId={null}
+          isActive={false}
+          setupAnalytics={{
+            persona_id: "persona-1",
+            summary: {
+              total_runs: 1,
+              completed_runs: 1,
+              completion_rate: 1,
+              dry_run_completion_count: 1,
+              live_session_completion_count: 0,
+              most_common_dropoff_step: null,
+              handoff_click_rate: 1,
+              handoff_target_reach_rate: 1,
+              first_post_setup_action_rate: 1,
+              handoff_target_reached_counts: {},
+              detour_started_counts: {},
+              detour_returned_counts: {}
+            },
+            recent_runs: []
+          }}
+        />
+        <CommandsPanel
+          selectedPersonaId=""
+          selectedPersonaName=""
+          isActive={false}
+        />
+        <TestLabPanel
+          selectedPersonaId=""
+          selectedPersonaName=""
+          isActive={false}
         />
         <VoiceExamplesPanel
+          selectedPersonaId=""
+          selectedPersonaName=""
+          isActive={false}
+        />
+        <ConnectionsPanel
           selectedPersonaId=""
           selectedPersonaName=""
           isActive={false}
@@ -49,10 +116,25 @@ describe("Persona Garden panel i18n", () => {
       screen.getByText("sidepanel:personaGarden.profile.heading")
     ).toBeInTheDocument()
     expect(
-      screen.getByText("sidepanel:personaGarden.profile.noneSelected")
+      screen.queryByText("sidepanel:personaGarden.profile.noneSelected")
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText("sidepanel:personaGarden.profile.assistantDefaultsHeading")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("sidepanel:personaGarden.profile.setupAnalyticsHeading")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("sidepanel:personaGarden.commands.heading")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("sidepanel:personaGarden.testLab.heading")
     ).toBeInTheDocument()
     expect(
       screen.getByText("sidepanel:personaGarden.voiceExamples.heading")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("sidepanel:personaGarden.connections.heading")
     ).toBeInTheDocument()
     expect(
       screen.getByText("sidepanel:personaGarden.policies.heading")

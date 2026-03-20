@@ -45,7 +45,6 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.RAG.rag_service.agentic_chunker import (
     AgenticConfig,
     agentic_rag_pipeline,
@@ -260,7 +259,7 @@ def _build_effective_request_payload(
 def _build_unified_pipeline_kwargs(
     request: UnifiedRAGRequest,
     db_paths: dict[str, Optional[str]],
-    media_db: MediaDatabase,
+    media_db: Any,
     chacha_db: CharactersRAGDB,
     current_user: Optional[User],
 ) -> dict[str, Any]:
@@ -617,7 +616,7 @@ class AblationRequest(BaseModel):  # type: ignore[misc]
 async def rag_ablate(
     request: AblationRequest,
     current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     kanban_db_path = _resolve_kanban_db_path(current_user)
@@ -1155,7 +1154,7 @@ async def unified_search_endpoint(
     request: UnifiedRAGRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     """
@@ -1401,7 +1400,7 @@ async def unified_batch_endpoint(
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     """
@@ -1618,7 +1617,7 @@ async def simple_search_endpoint(
     top_k: int = 10,
     sources: Optional[list[str]] = None,
     current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     """
@@ -1711,7 +1710,7 @@ async def resume_batch_endpoint(
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     """Resume a batch RAG operation from a previously saved checkpoint."""
@@ -1907,7 +1906,7 @@ async def unified_search_stream_endpoint(
     request_raw: Request,
     request: UnifiedRAGRequest,
     current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     if not request.enable_generation:
@@ -2271,7 +2270,7 @@ async def advanced_search_endpoint(
     with_citations: bool = True,
     with_answer: bool = True,
     current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: Any = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
     """

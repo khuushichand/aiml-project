@@ -4,8 +4,11 @@ import { ManageTab } from "../ManageTab"
 import { clearSetting } from "@/services/settings/registry"
 import { FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING } from "@/services/settings/ui-settings"
 import type { Flashcard } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 import {
+  useUpdateFlashcardsBulkMutation,
   useDecksQuery,
+  useFlashcardDocumentQuery,
   useManageQuery,
   useTagSuggestionsQuery,
   useUpdateFlashcardMutation,
@@ -79,10 +82,14 @@ vi.mock("@/utils/flashcards-shortcut-hint-telemetry", () => ({
 }))
 
 vi.mock("../../hooks", () => ({
+  DOCUMENT_VIEW_SUPPORTED_SORTS: ["due", "created"],
+  getFlashcardDocumentQueryKey: vi.fn(() => ["flashcards:document", 1]),
   useDecksQuery: vi.fn(),
+  useFlashcardDocumentQuery: vi.fn(),
   useManageQuery: vi.fn(),
   useTagSuggestionsQuery: vi.fn(),
   useUpdateFlashcardMutation: vi.fn(),
+  useUpdateFlashcardsBulkMutation: vi.fn(),
   useResetFlashcardSchedulingMutation: vi.fn(),
   useDeleteFlashcardMutation: vi.fn(),
   useCardsKeyboardNav: vi.fn(),
@@ -133,6 +140,7 @@ const sampleCard: Flashcard = {
   interval_days: 5,
   repetitions: 3,
   lapses: 1,
+  queue_state: "review",
   due_at: null,
   last_reviewed_at: null,
   last_modified: null,
@@ -157,7 +165,9 @@ describe("ManageTab scheduling metadata visibility", () => {
           description: null,
           deleted: false,
           client_id: "test",
-          version: 1
+          version: 1,
+          scheduler_type: "sm2_plus",
+          scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
         }
       ],
       isLoading: false
@@ -170,12 +180,35 @@ describe("ManageTab scheduling metadata visibility", () => {
       },
       isFetching: false
     } as any)
+    vi.mocked(useFlashcardDocumentQuery).mockReturnValue({
+      items: [sampleCard],
+      isFetching: false,
+      isLoading: false,
+      isTruncated: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      supportedSorts: ["due", "created"],
+      data: {
+        pages: [
+          {
+            items: [sampleCard],
+            isTruncated: false,
+            total: 1
+          }
+        ]
+      }
+    } as any)
     vi.mocked(useTagSuggestionsQuery).mockReturnValue({
       data: ["biology", "chemistry", "physics"],
       isLoading: false
     } as any)
     vi.mocked(useUpdateFlashcardMutation).mockReturnValue({
       mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useUpdateFlashcardsBulkMutation).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({ results: [] }),
       isPending: false
     } as any)
     vi.mocked(useResetFlashcardSchedulingMutation).mockReturnValue({

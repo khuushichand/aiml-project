@@ -129,6 +129,20 @@ describe("AnswerPanel state guardrails", () => {
     expect(state.setSettingsPanelOpen).toHaveBeenCalledWith(true)
   })
 
+  it("treats whitespace-only answers as missing generated content", () => {
+    state.answer = "   "
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+
+    render(<AnswerPanel />)
+
+    expect(
+      screen.getByText(
+        "Found 1 relevant source. Enable answer generation in settings to get a synthesized response."
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText("AI Answer")).not.toBeInTheDocument()
+  })
+
   it("keeps citation jump interaction wired to source focus", () => {
     state.answer = "Use method [1] for better recall."
     state.citations = [{ index: 1 }]
@@ -255,6 +269,78 @@ describe("AnswerPanel state guardrails", () => {
     )
   })
 
+  it("resets feedback state when the active answer session changes even if the answer text is unchanged", async () => {
+    state.answer = "Grounded answer"
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+    state.messages = [{ id: "assistant-1", role: "assistant" }]
+
+    const { rerender } = render(<AnswerPanel />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Helpful" }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Helpful" })).toHaveAttribute(
+        "aria-pressed",
+        "true"
+      )
+    )
+
+    state.currentThreadId = "thread-2"
+    state.messages = [{ id: "assistant-2", role: "assistant" }]
+    rerender(<AnswerPanel />)
+
+    expect(screen.getByRole("button", { name: "Helpful" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    )
+  })
+
+  it("ignores stale feedback completions after the user switches to a different answer session", async () => {
+    let resolveFeedback: ((value: { ok: boolean }) => void) | null = null
+    submitExplicitFeedbackMock.mockImplementation(
+      () =>
+        new Promise<{ ok: boolean }>((resolve) => {
+          resolveFeedback = resolve
+        })
+    )
+    state.answer = "Grounded answer"
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+    state.messages = [{ id: "assistant-1", role: "assistant" }]
+
+    const { rerender } = render(<AnswerPanel />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Helpful" }))
+
+    await waitFor(() =>
+      expect(submitExplicitFeedbackMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversation_id: "thread-1",
+          message_id: "assistant-1",
+          helpful: true,
+        })
+      )
+    )
+
+    state.currentThreadId = "thread-2"
+    state.messages = [{ id: "assistant-2", role: "assistant" }]
+    rerender(<AnswerPanel />)
+
+    resolveFeedback?.({ ok: true })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole("button", { name: "Helpful" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    )
+    expect(screen.getByRole("button", { name: "Helpful" })).not.toBeDisabled()
+    expect(messageOpenMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", content: "Feedback submitted." })
+    )
+  })
+
   it("renders markdown structures and keeps inline citation buttons accessible", () => {
     state.answer = [
       "Key points:",
@@ -355,6 +441,118 @@ describe("AnswerPanel state guardrails", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy answer" }))
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("Result with source [1]"))
+  })
+
+  it("keeps the latest copy-answer confirmation visible until the latest timeout completes", async () => {
+    vi.useFakeTimers()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, {
+      clipboard: { writeText },
+    })
+    state.answer = "Result with source [1]"
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+    state.citations = [{ index: 1 }]
+
+    render(<AnswerPanel />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(writeText).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Copied" }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(writeText).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(screen.getByRole("button", { name: "Copy answer" })).toBeInTheDocument()
+  })
+
+  it("ignores stale copy-answer completions after the user switches to a different answer session", async () => {
+    let resolveCopy: (() => void) | null = null
+    const writeText = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCopy = resolve
+        })
+    )
+    Object.assign(navigator, {
+      clipboard: { writeText },
+    })
+    state.answer = "Result with source [1]"
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+    state.citations = [{ index: 1 }]
+    state.messages = [{ id: "assistant-1", role: "assistant" }]
+
+    const { rerender } = render(<AnswerPanel />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("Result with source [1]"))
+
+    state.currentThreadId = "thread-2"
+    state.messages = [{ id: "assistant-2", role: "assistant" }]
+    rerender(<AnswerPanel />)
+
+    resolveCopy?.()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole("button", { name: "Copy answer" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument()
+    expect(messageOpenMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "success", content: "Answer copied." })
+    )
+  })
+
+  it("clears answer-length loading state when the active answer session changes", async () => {
+    let resolveRerun: (() => void) | null = null
+    state.answer = "Long answer that should support summarize and expand controls."
+    state.results = [{ id: "r1", metadata: { title: "Doc 1" } }]
+    state.messages = [{ id: "assistant-1", role: "assistant" }]
+    state.settings.max_generation_tokens = 1000
+    state.rerunWithTokenLimit = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRerun = resolve
+        })
+    )
+
+    const { rerender } = render(<AnswerPanel />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Summarize" }))
+
+    await waitFor(() => expect(state.rerunWithTokenLimit).toHaveBeenCalledWith(600))
+    expect(screen.getByRole("button", { name: "Summarizing..." })).toBeDisabled()
+
+    state.currentThreadId = "thread-2"
+    state.messages = [{ id: "assistant-2", role: "assistant" }]
+    rerender(<AnswerPanel />)
+
+    expect(screen.getByRole("button", { name: "Summarize" })).toBeEnabled()
+    expect(screen.getByRole("button", { name: "Show more" })).toBeEnabled()
+    expect(screen.queryByRole("button", { name: "Summarizing..." })).not.toBeInTheDocument()
+
+    resolveRerun?.()
+    await act(async () => {
+      await Promise.resolve()
+    })
   })
 
   it("reruns with adjusted token limits from summarize/show-more controls", async () => {

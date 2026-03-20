@@ -172,6 +172,74 @@ def test_create_source_endpoint_returns_400_for_invalid_local_directory(
 
 
 @pytest.mark.integration
+def test_create_source_endpoint_returns_400_for_invalid_git_repository_payload(
+    ingestion_sources_client,
+    monkeypatch,
+):
+    client, auth_headers = ingestion_sources_client
+
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+
+    async def _unexpected_get_db_pool():
+        raise AssertionError(
+            "create endpoint should reject invalid git repository payloads before opening the DB"
+        )
+
+    monkeypatch.setattr(ep, "get_db_pool", _unexpected_get_db_pool)
+
+    response = client.post(
+        "/api/v1/ingestion-sources/",
+        headers=auth_headers,
+        json={
+            "source_type": "git_repository",
+            "sink_type": "notes",
+            "policy": "canonical",
+            "config": {
+                "mode": "remote_github_repo",
+                "repo_url": "https://gitlab.com/example/repo",
+            },
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "GitHub" in response.json()["detail"]
+
+
+@pytest.mark.integration
+def test_create_source_endpoint_rejects_git_repository_media_sink(
+    ingestion_sources_client,
+    monkeypatch,
+):
+    client, auth_headers = ingestion_sources_client
+
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+
+    async def _unexpected_get_db_pool():
+        raise AssertionError(
+            "create endpoint should reject unsupported git_repository sink combinations before opening the DB"
+        )
+
+    monkeypatch.setattr(ep, "get_db_pool", _unexpected_get_db_pool)
+
+    response = client.post(
+        "/api/v1/ingestion-sources/",
+        headers=auth_headers,
+        json={
+            "source_type": "git_repository",
+            "sink_type": "media",
+            "policy": "canonical",
+            "config": {
+                "mode": "remote_github_repo",
+                "repo_url": "https://github.com/example/repo",
+            },
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "Git repository sources currently support the notes sink only"
+
+
+@pytest.mark.integration
 def test_archive_upload_endpoint_stages_snapshot_and_enqueues_job(tmp_path, ingestion_sources_client, monkeypatch):
     client, auth_headers = ingestion_sources_client
     os.environ["USER_DB_BASE_DIR"] = str(tmp_path / "user_dbs")
@@ -847,6 +915,96 @@ def test_reattach_item_endpoint_clears_detached_status(tmp_path, ingestion_sourc
             persisted_binding = json.loads(item_row["binding_json"])
             assert persisted_binding["sync_status"] == "sync_managed"
             assert persisted_binding["current_version"] == int(note["version"])
+
+    import asyncio
+
+    asyncio.run(_run_test())
+
+
+@pytest.mark.integration
+def test_patch_source_endpoint_allows_git_repository_identity_updates_before_first_success(
+    tmp_path,
+    ingestion_sources_client,
+    monkeypatch,
+):
+    client, auth_headers = ingestion_sources_client
+
+    import aiosqlite
+    import tldw_Server_API.app.api.v1.endpoints.ingestion_sources as ep
+    from tldw_Server_API.app.core.Ingestion_Sources.service import (
+        create_source,
+        ensure_ingestion_sources_schema,
+        get_source_by_id,
+    )
+
+    class _FakePool:
+        def __init__(self, db):
+            self._db = db
+
+        class _Tx:
+            def __init__(self, db):
+                self._db = db
+
+            async def __aenter__(self):
+                return self._db
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        def transaction(self):
+            return self._Tx(self._db)
+
+    async def _run_test() -> None:
+        meta_db_path = tmp_path / "ingestion_sources.sqlite3"
+        async with aiosqlite.connect(str(meta_db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            await ensure_ingestion_sources_schema(db)
+            source = await create_source(
+                db,
+                user_id=1,
+                payload={
+                    "source_type": "git_repository",
+                    "sink_type": "notes",
+                    "policy": "canonical",
+                    "config": {
+                        "mode": "remote_github_repo",
+                        "repo_url": "https://github.com/example/repo",
+                    },
+                },
+            )
+
+            async def _fake_get_db_pool():
+                return _FakePool(db)
+
+            monkeypatch.setattr(ep, "get_db_pool", _fake_get_db_pool)
+
+            response = client.patch(
+                f"/api/v1/ingestion-sources/{int(source['id'])}",
+                headers=auth_headers,
+                json={
+                    "config": {
+                        "mode": "remote_github_repo",
+                        "repo_url": "https://github.com/example/repo",
+                        "ref": "main",
+                        "root_subpath": "docs/notes",
+                    }
+                },
+            )
+
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["config"] == {
+                "mode": "remote_github_repo",
+                "repo_url": "https://github.com/example/repo",
+                "repo_owner": "example",
+                "repo_name": "repo",
+                "ref": "main",
+                "root_subpath": "docs/notes",
+            }
+
+            persisted = await get_source_by_id(db, source_id=int(source["id"]), user_id=1)
+            assert persisted is not None
+            assert persisted["config"] == payload["config"]
 
     import asyncio
 

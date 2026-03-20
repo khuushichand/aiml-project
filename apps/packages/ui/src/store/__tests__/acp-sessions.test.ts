@@ -53,6 +53,12 @@ describe("ACP sessions store", () => {
         workspace_group_id: "group-1",
         scope_snapshot_id: "scope-1",
         forked_from: "root-session",
+        policy_snapshot_version: "resolved-v1",
+        policy_snapshot_fingerprint: "snapshot-123",
+        policy_snapshot_refreshed_at: "2026-03-14T12:00:00+00:00",
+        policy_summary: { allowed_tool_count: 2, approval_mode: "require_approval" },
+        policy_provenance_summary: { source_kinds: ["capability_mapping"] },
+        policy_refresh_error: null,
       },
     ])
 
@@ -73,6 +79,13 @@ describe("ACP sessions store", () => {
       workspace_group_id: "group-1",
       scope_snapshot_id: "scope-1",
       forked_from: "root-session",
+      policy_snapshot_version: "resolved-v1",
+      policy_snapshot_fingerprint: "snapshot-123",
+      policy_snapshot_refreshed_at: "2026-03-14T12:00:00+00:00",
+      policy_summary: { allowed_tool_count: 2, approval_mode: "require_approval" },
+      policy_provenance_summary: { source_kinds: ["capability_mapping"] },
+      policy_refresh_error: null,
+      fork_lineage: ["root-session"],
       messages: [],
       cwd: "/workspace/repo",
     })
@@ -83,5 +96,9 @@ describe("ACP sessions store", () => {
     expect(session?.workspaceId).toBe("workspace-1")
     expect(session?.workspaceGroupId).toBe("group-1")
     expect(session?.scopeSnapshotId).toBe("scope-1")
+    expect(session?.policySnapshotVersion).toBe("resolved-v1")
+    expect(session?.policySnapshotFingerprint).toBe("snapshot-123")
+    expect(session?.policySummary?.approval_mode).toBe("require_approval")
+    expect(session?.policyProvenanceSummary?.source_kinds).toEqual(["capability_mapping"])
   })
 })

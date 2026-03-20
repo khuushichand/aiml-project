@@ -2,6 +2,7 @@ import types
 import importlib
 import importlib.machinery
 import sys
+import builtins
 
 import pytest
 
@@ -200,6 +201,28 @@ def test_resolve_provider_for_model_uses_parser(monkeypatch):
     assert provider == "faster-whisper"
     assert model == "whisper-1"
     assert variant is None
+
+
+@pytest.mark.unit
+def test_resolve_provider_for_model_keeps_parakeet_when_parser_import_fails(monkeypatch):
+    spa = _import_module()
+    registry = spa.SttProviderRegistry()
+    real_import = builtins.__import__
+
+    monkeypatch.delitem(sys.modules, _AUDIO_LIB_MODULE, raising=False)
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 1 and name == "Audio_Transcription_Lib":
+            raise ImportError("simulated parser import failure")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    provider, model, variant = registry.resolve_provider_for_model("parakeet-onnx")
+
+    assert provider == "parakeet"
+    assert model == "parakeet"
+    assert variant == "onnx"
 
 
 @pytest.mark.unit

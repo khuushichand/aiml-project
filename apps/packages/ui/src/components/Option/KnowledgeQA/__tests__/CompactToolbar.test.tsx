@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import React from "react"
+import type { RagSource } from "@/services/rag/unified-rag"
 
 vi.mock("@/libs/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -12,7 +13,7 @@ vi.mock("@/services/rag/unified-rag", () => ({}))
 import { CompactToolbar } from "../context/CompactToolbar"
 
 const defaultProps = {
-  sources: [] as string[],
+  sources: [] as RagSource[],
   preset: "balanced" as const,
   webEnabled: false,
   onToggleWeb: vi.fn(),

@@ -99,6 +99,13 @@ SINGLE_USER_API_KEY_PLACEHOLDERS = {
     "CHANGE-ME-to-a-secure-key-at-least-16-chars",
 }
 AUTHNZ_DEFAULT_ENV_FILE = Path(__file__).resolve().parents[3] / "Config_Files" / ".env"
+ENTERPRISE_SUPPORTED_PROFILES = {
+    "enterprise",
+    "enterprise-postgres",
+    "enterprise_postgres",
+    "multi-user-postgres",
+    "multi_user_postgres",
+}
 
 #######################################################################################################################
 #
@@ -150,6 +157,26 @@ class Settings(BaseSettings):
     MAGIC_LINK_EXPIRE_MINUTES: int = Field(
         default=15,
         description="Magic link token expiration time in minutes"
+    )
+
+    PUBLIC_WEB_BASE_URL: Optional[str] = Field(
+        default=None,
+        description="Public web application base URL used for hosted auth and billing links"
+    )
+
+    PUBLIC_PASSWORD_RESET_PATH: str = Field(
+        default="/auth/reset-password",
+        description="Public hosted path for password reset completion"
+    )
+
+    PUBLIC_EMAIL_VERIFICATION_PATH: str = Field(
+        default="/auth/verify-email",
+        description="Public hosted path for email verification completion"
+    )
+
+    PUBLIC_MAGIC_LINK_PATH: str = Field(
+        default="/auth/magic-link",
+        description="Public hosted path for magic-link verification"
     )
 
     JWT_ALGORITHM: str = Field(
@@ -440,6 +467,29 @@ class Settings(BaseSettings):
     OPENAI_OAUTH_REFRESH_LOCK_BACKEND: Literal["memory", "redis", "db"] = Field(
         default="memory",
         description="Backend used for OpenAI OAuth refresh locking",
+    )
+
+    # ===== Enterprise Federation / MCP Broker =====
+    AUTH_FEDERATION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable enterprise OIDC federation features. Supported only in "
+            "multi-user PostgreSQL deployments."
+        ),
+    )
+    MCP_CREDENTIAL_BROKER_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable brokered MCP credential resolution. Supported only in "
+            "multi-user PostgreSQL deployments and requires secret backends."
+        ),
+    )
+    SECRET_BACKENDS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable managed secret-backend references. Supported only in "
+            "multi-user PostgreSQL deployments."
+        ),
     )
 
     # ===== Token Rotation =====
@@ -748,6 +798,7 @@ class Settings(BaseSettings):
         super().__init__(**kwargs)
         self._ensure_jwt_secret()
         self._validate_api_key()
+        self._apply_enterprise_guardrails()
 
     def _ensure_jwt_secret(self):
         """Ensure JWT secret exists with secure handling"""
@@ -880,6 +931,65 @@ class Settings(BaseSettings):
                 if weak:
                     raise ValueError(SINGLE_USER_KEY_PRODUCTION_WEAK)
 
+    def _apply_enterprise_guardrails(self) -> None:
+        """Log guardrail decisions for enterprise-only feature flags."""
+        if self.AUTH_FEDERATION_ENABLED and not self.enterprise_federation_supported:
+            logger.warning(
+                "AUTH_FEDERATION_ENABLED is set but enterprise federation is disabled: {}",
+                ", ".join(self.enterprise_support_matrix_errors),
+            )
+
+        if self.SECRET_BACKENDS_ENABLED and not self.enterprise_secret_backends_supported:
+            logger.warning(
+                "SECRET_BACKENDS_ENABLED is set but enterprise secret backends are disabled: {}",
+                ", ".join(self.enterprise_support_matrix_errors),
+            )
+
+        if self.MCP_CREDENTIAL_BROKER_ENABLED and not self.enterprise_mcp_credential_broker_supported:
+            reasons = list(self.enterprise_support_matrix_errors)
+            if not self.SECRET_BACKENDS_ENABLED:
+                reasons.append("SECRET_BACKENDS_ENABLED must also be enabled")
+            logger.warning(
+                "MCP_CREDENTIAL_BROKER_ENABLED is set but broker support is disabled: {}",
+                ", ".join(reasons),
+            )
+
+    @property
+    def enterprise_support_matrix_errors(self) -> tuple[str, ...]:
+        """Return reasons why enterprise features are unavailable."""
+        errors: list[str] = []
+        if self.AUTH_MODE != "multi_user":
+            errors.append("AUTH_MODE=multi_user is required")
+        if not _database_url_is_postgres(self.DATABASE_URL):
+            errors.append("PostgreSQL DATABASE_URL is required")
+        if not _profile_supports_enterprise_features(getattr(self, "PROFILE", None)):
+            errors.append("PROFILE is not supported for enterprise features")
+        return tuple(errors)
+
+    @property
+    def enterprise_deployment_supported(self) -> bool:
+        """Return True when the deployment matches the enterprise support matrix."""
+        return not self.enterprise_support_matrix_errors
+
+    @property
+    def enterprise_federation_supported(self) -> bool:
+        """Return True when OIDC federation may run in this deployment."""
+        return self.AUTH_FEDERATION_ENABLED and self.enterprise_deployment_supported
+
+    @property
+    def enterprise_secret_backends_supported(self) -> bool:
+        """Return True when secret-backend features may run in this deployment."""
+        return self.SECRET_BACKENDS_ENABLED and self.enterprise_deployment_supported
+
+    @property
+    def enterprise_mcp_credential_broker_supported(self) -> bool:
+        """Return True when MCP credential brokering may run in this deployment."""
+        return (
+            self.MCP_CREDENTIAL_BROKER_ENABLED
+            and self.enterprise_deployment_supported
+            and self.enterprise_secret_backends_supported
+        )
+
     @field_validator("JWT_SECRET_KEY")
     @classmethod
     def validate_jwt_secret(cls, v, info):
@@ -982,6 +1092,20 @@ class Settings(BaseSettings):
                 return _bool_from_str(env_val)
         return v
 
+    @field_validator(
+        "AUTH_FEDERATION_ENABLED",
+        "MCP_CREDENTIAL_BROKER_ENABLED",
+        "SECRET_BACKENDS_ENABLED",
+        mode="before",
+    )
+    @classmethod
+    def parse_enterprise_feature_flags(cls, v):
+        if v is None:
+            return False
+        if isinstance(v, str):
+            return _bool_from_str(v)
+        return bool(v)
+
     @field_validator("OPENAI_OAUTH_CLIENT_ID", "OPENAI_OAUTH_CLIENT_SECRET", mode="before")
     @classmethod
     def normalize_openai_oauth_secret_fields(cls, v):
@@ -1081,6 +1205,17 @@ def _bool_from_str(val: str) -> bool:
     return _is_truthy(str(val).strip())
 
 
+def _database_url_is_postgres(database_url: str | None) -> bool:
+    text = str(database_url or "").strip().lower()
+    return text.startswith(("postgres://", "postgresql://"))
+
+
+def _profile_supports_enterprise_features(profile: str | None) -> bool:
+    if not isinstance(profile, str) or not profile.strip():
+        return True
+    return profile.strip().lower() in ENTERPRISE_SUPPORTED_PROFILES
+
+
 def _split_csv(val) -> list[str]:
     if val is None:
         return []
@@ -1159,6 +1294,13 @@ def _load_overrides_from_config() -> dict:
             "openai_oauth_refresh_lock_backend",
             lambda v: str(v).strip().lower(),
         )
+        maybe_set("AUTH_FEDERATION_ENABLED", "auth_federation_enabled", _bool_from_str)
+        maybe_set(
+            "MCP_CREDENTIAL_BROKER_ENABLED",
+            "mcp_credential_broker_enabled",
+            _bool_from_str,
+        )
+        maybe_set("SECRET_BACKENDS_ENABLED", "secret_backends_enabled", _bool_from_str)
         maybe_set("ENABLE_REGISTRATION", "enable_registration", _bool_from_str)
         # Legacy aliases in config.txt
         maybe_set("ENABLE_REGISTRATION", "registration_enabled", _bool_from_str)
@@ -1177,6 +1319,22 @@ def _load_overrides_from_config() -> dict:
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
         maybe_set("MAGIC_LINK_EXPIRE_MINUTES", "magic_link_expire_minutes", lambda v: int(v))
+        maybe_set("PUBLIC_WEB_BASE_URL", "public_web_base_url", lambda v: v.strip())
+        maybe_set(
+            "PUBLIC_PASSWORD_RESET_PATH",
+            "public_password_reset_path",
+            lambda v: v.strip(),
+        )
+        maybe_set(
+            "PUBLIC_EMAIL_VERIFICATION_PATH",
+            "public_email_verification_path",
+            lambda v: v.strip(),
+        )
+        maybe_set(
+            "PUBLIC_MAGIC_LINK_PATH",
+            "public_magic_link_path",
+            lambda v: v.strip(),
+        )
         maybe_set("REDIS_URL", "redis_url", lambda v: v.strip())
         maybe_set("SECURITY_ALERTS_ENABLED", "security_alerts_enabled", _bool_from_str)
         maybe_set("SECURITY_ALERT_MIN_SEVERITY", "security_alert_min_severity", lambda v: v.strip())

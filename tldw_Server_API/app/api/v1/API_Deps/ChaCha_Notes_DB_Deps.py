@@ -29,6 +29,9 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     SchemaError,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection,
+)
 
 #
 #######################################################################################################################
@@ -209,10 +212,14 @@ def _apply_sqlite_tuning(db_instance: CharactersRAGDB) -> None:
         return
     try:
         conn = db_instance.get_connection()
-        # Harden concurrency characteristics
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA busy_timeout = 10000")
+        configure_sqlite_connection(
+            conn,
+            use_wal=True,
+            synchronous="NORMAL",
+            foreign_keys=True,
+            busy_timeout_ms=10000,
+            temp_store=None,
+        )
     except (CharactersRAGDBError, sqlite3.Error, OSError, RuntimeError, ValueError) as e:
         logger.debug(f"ChaChaNotes tuning skipped: {e}")
 
@@ -220,7 +227,14 @@ def _apply_sqlite_tuning(db_instance: CharactersRAGDB) -> None:
 def _health_check_instance(db_instance: CharactersRAGDB) -> bool:
     try:
         conn = db_instance.get_connection()
-        conn.execute("PRAGMA busy_timeout = 1000")
+        configure_sqlite_connection(
+            conn,
+            use_wal=False,
+            synchronous=None,
+            foreign_keys=True,
+            busy_timeout_ms=1000,
+            temp_store=None,
+        )
         conn.execute("SELECT 1")
         return True
     except (CharactersRAGDBError, sqlite3.Error, OSError, RuntimeError, ValueError) as e:
@@ -400,10 +414,10 @@ async def get_chacha_db_for_user_id(user_id: int, client_id: str | None = None) 
     This helper mirrors get_chacha_db_for_user but is intended for non-request contexts
     (e.g., WebSocket handlers) where we already know the user id.
     """
-    if not isinstance(user_id, int):
+    if isinstance(user_id, bool) or not isinstance(user_id, int) or user_id <= 0:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="User identification failed for ChaChaNotes DB.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid owner_user_id.",
         )
 
     db_instance = await _get_or_init_db_instance(user_id, client_id or str(user_id))
@@ -457,6 +471,21 @@ async def get_chacha_db_for_user(current_user: User = Depends(get_request_user))
         _chacha_default_char_tasks.add(task)
         task.add_done_callback(_chacha_default_char_tasks.discard)
     return db_instance
+
+
+async def get_chacha_db_for_owner(owner_user_id: int) -> CharactersRAGDB:
+    """
+    Return a CharactersRAGDB for an arbitrary user (the workspace owner).
+
+    Used by the sharing module to read sources from the owner's DB
+    while the accessor chats with their own DB.
+    """
+    if not isinstance(owner_user_id, int):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid owner_user_id.",
+        )
+    return await _get_or_init_db_instance(owner_user_id, str(owner_user_id))
 
 
 def close_all_chacha_db_instances():

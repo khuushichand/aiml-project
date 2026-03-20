@@ -9,7 +9,6 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Claims_Extraction.claims_embeddings import claim_embedding_id
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 
@@ -41,7 +40,7 @@ def _cosine_similarity(
     return dot / (norm_a * norm_b)
 
 
-def _iter_claims_for_user(db: MediaDatabase, user_id: str, page_size: int = 1000) -> Iterable[dict[str, Any]]:
+def _iter_claims_for_user(db: Any, user_id: str, page_size: int = 1000) -> Iterable[dict[str, Any]]:
     offset = 0
     while True:
         rows = db.list_claims(owner_user_id=user_id, limit=page_size, offset=offset, include_deleted=False)
@@ -62,7 +61,7 @@ def _batched_ids(ids: list[str], batch_size: int) -> Iterable[list[str]]:
 
 def _load_claim_embeddings(
     *,
-    db: MediaDatabase,
+    db: Any,
     user_id: str,
     batch_size: int,
 ) -> tuple[list[ClaimEmbedding], int]:
@@ -118,7 +117,7 @@ def _load_claim_embeddings(
                 continue
             try:
                 vec = [float(x) for x in embedding]
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             norm = _vector_norm(vec)
             if norm <= 0:
@@ -199,7 +198,7 @@ def _cluster_embeddings(
 
 def rebuild_claim_clusters_embeddings(
     *,
-    db: MediaDatabase,
+    db: Any,
     user_id: str,
     min_size: int,
     similarity_threshold: float | None = None,

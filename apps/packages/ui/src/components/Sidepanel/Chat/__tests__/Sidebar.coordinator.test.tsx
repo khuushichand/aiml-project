@@ -7,7 +7,7 @@ import { SidepanelChatSidebar } from "../Sidebar"
 import { useChatSurfaceCoordinatorStore } from "@/store/chat-surface-coordinator"
 
 const useServerChatHistoryMock = vi.hoisted(() =>
-  vi.fn(() => ({ data: [], isLoading: false }))
+  vi.fn((_options?: unknown) => ({ data: [], isLoading: false }))
 )
 const fullTextSearchChatHistoriesMock = vi.hoisted(() =>
   vi.fn(async () => [])

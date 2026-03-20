@@ -1,4 +1,4 @@
-export type IngestionSourceType = "local_directory" | "archive_snapshot"
+export type IngestionSourceType = "local_directory" | "archive_snapshot" | "git_repository"
 export type IngestionSinkType = "media" | "notes"
 export type IngestionLifecyclePolicy = "canonical" | "import_only"
 

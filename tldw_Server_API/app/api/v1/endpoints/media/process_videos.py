@@ -19,6 +19,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_permissions,
 )
+from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_videos_form,
@@ -34,7 +35,6 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
     MEDIA_CREATE,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
@@ -62,11 +62,12 @@ router = APIRouter()
     dependencies=[
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
+        Depends(guard_storage_quota),
     ],
 )
 async def process_videos_endpoint(
     background_tasks: BackgroundTasks,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     form_data: ProcessVideosForm = Depends(get_process_videos_form),
     files: list[UploadFile] | None = File(
         None,

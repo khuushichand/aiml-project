@@ -263,7 +263,9 @@ describe("DictionariesManager chat integration stage-2", () => {
       )
     })
 
-    const deactivateCall = confirmDangerMock.mock.calls[0]?.[0]
+    const confirmDangerCalls = confirmDangerMock.mock
+      .calls as unknown as Array<[Record<string, unknown>]>
+    const deactivateCall = confirmDangerCalls[0]?.[0]
     expect(String(deactivateCall?.content || "")).toContain("1 active chat session")
     expect(String(deactivateCall?.content || "")).toContain("3 linked chat sessions")
 
@@ -275,7 +277,7 @@ describe("DictionariesManager chat integration stage-2", () => {
       expect(confirmDangerMock).toHaveBeenCalledTimes(2)
     })
 
-    const deleteCall = confirmDangerMock.mock.calls[1]?.[0]
+    const deleteCall = confirmDangerCalls[1]?.[0]
     expect(String(deleteCall?.content || "")).toContain(
       "linked to 3 chat session(s), including 1 active session(s)"
     )

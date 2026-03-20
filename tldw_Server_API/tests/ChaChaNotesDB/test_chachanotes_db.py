@@ -18,7 +18,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     SchemaError,
     InputError,
-    ConflictError
+    ConflictError,
+    TransactionContextManager,
 )
 #
 #######################################################################################################################
@@ -972,6 +973,48 @@ class TestNotes:
         titles = sorted([r['title'] for r in results])  # Sort for predictable assertion
         assert titles == ["Alpha Note", "Beta Note"]
 
+    def test_sync_note_source_folders_preserves_manual_and_other_sources(self, db_instance: CharactersRAGDB):
+        note_id = db_instance.add_note("Foldered Note", "Body")
+        assert note_id is not None
+
+        db_instance.sync_note_folders(note_id, ["manual"])
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["docs", "docs/api"])
+        db_instance.sync_note_source_folders(note_id, source_id=22, folder_paths=["guides"])
+
+        initial_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert initial_paths == ["docs", "docs/api", "guides", "manual"]
+
+        db_instance.sync_note_source_folders(
+            note_id,
+            source_id=11,
+            folder_paths=["docs", "docs/reference"],
+        )
+
+        updated_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert updated_paths == ["docs", "docs/reference", "guides", "manual"]
+
+    def test_sync_note_source_folders_reuses_case_insensitive_paths_without_stale_keys(self, db_instance: CharactersRAGDB):
+        note_id = db_instance.add_note("Case Foldered Note", "Body")
+        assert note_id is not None
+
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["Docs/API"])
+        db_instance.sync_note_source_folders(note_id, source_id=11, folder_paths=["docs/reference"])
+
+        updated_paths = [row["path"] for row in db_instance.get_note_folders_for_note(note_id)]
+        assert updated_paths == ["Docs", "Docs/reference"]
+
+        conn = db_instance.get_connection()
+        source_key_rows = conn.execute(
+            """
+            SELECT folder_key
+              FROM note_folder_source_keys
+             WHERE source_id = ?
+             ORDER BY folder_key
+            """,
+            (11,),
+        ).fetchall()
+        assert [row["folder_key"] for row in source_key_rows] == ["docs", "docs/reference"]
+
 
 class TestKeywordsAndCollections:
     def test_add_keyword(self, db_instance: CharactersRAGDB):
@@ -1091,6 +1134,58 @@ class TestKeywordsAndCollections:
 
 
 class TestSyncLog:
+    def test_sync_log_entry_on_create_deck_includes_scheduler_fields(self, db_instance: CharactersRAGDB):
+        initial_log_max_id = db_instance.get_latest_sync_log_change_id()
+        deck_id = db_instance.add_deck(
+            "Sync FSRS Deck",
+            scheduler_type="fsrs",
+            scheduler_settings={"fsrs": {"target_retention": 0.88, "maximum_interval_days": 7300}},
+        )
+
+        log_entries = db_instance.get_sync_log_entries(since_change_id=initial_log_max_id)
+        deck_log_entry = None
+        for entry in log_entries:
+            if entry["entity"] == "decks" and entry["entity_id"] == str(deck_id) and entry["operation"] == "create":
+                deck_log_entry = entry
+                break
+
+        assert deck_log_entry is not None
+        assert deck_log_entry["payload"]["scheduler_type"] == "fsrs"
+        settings = json.loads(deck_log_entry["payload"]["scheduler_settings_json"])
+        assert settings["sm2_plus"]["new_steps_minutes"] == [1, 10]
+        assert settings["fsrs"]["target_retention"] == pytest.approx(0.88)
+
+    def test_sync_log_entry_on_fsrs_review_includes_scheduler_state(self, db_instance: CharactersRAGDB):
+        deck_id = db_instance.add_deck("Review Sync Deck", scheduler_type="fsrs")
+        card_uuid = db_instance.add_flashcard(
+            {
+                "deck_id": deck_id,
+                "front": "Review sync",
+                "back": "Answer",
+                "queue_state": "review",
+                "interval_days": 12,
+                "repetitions": 7,
+                "lapses": 1,
+                "last_reviewed_at": "2026-03-01T00:00:00Z",
+                "due_at": "2026-03-13T00:00:00Z",
+            }
+        )
+
+        latest_change_id = db_instance.get_latest_sync_log_change_id()
+        db_instance.review_flashcard(card_uuid, rating=3, answer_time_ms=1500)
+
+        new_entries = db_instance.get_sync_log_entries(since_change_id=latest_change_id)
+        update_log_entry = None
+        for entry in new_entries:
+            if entry["entity"] == "flashcards" and entry["entity_id"] == card_uuid and entry["operation"] == "update":
+                update_log_entry = entry
+                break
+
+        assert update_log_entry is not None
+        assert update_log_entry["payload"]["scheduler_state_json"] != "{}"
+        state = json.loads(update_log_entry["payload"]["scheduler_state_json"])
+        assert state["stability"] > 0
+
     def test_sync_log_entry_on_add_character(self, db_instance: CharactersRAGDB):
         initial_log_max_id = db_instance.get_latest_sync_log_change_id()
         card_data = _create_sample_card_data("SyncLogChar")
@@ -1251,6 +1346,37 @@ class TestTransactions:
         # Check that the first insert was rolled back
         assert len(db_instance.list_character_cards()) == initial_count
         assert db_instance.get_character_card_by_name(card_data_name) is None
+
+    def test_transaction_context_manager_uses_begin_immediate(self):
+        class _RecordingConnection:
+            def __init__(self) -> None:
+                self.in_transaction = False
+                self.statements: list[str] = []
+                self.committed = False
+                self.rolled_back = False
+
+            def execute(self, sql: str, *args):
+                self.statements.append(sql)
+                if sql == "BEGIN IMMEDIATE":
+                    self.in_transaction = True
+                return None
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def rollback(self) -> None:
+                self.rolled_back = True
+
+        conn = _RecordingConnection()
+        db = CharactersRAGDB.__new__(CharactersRAGDB)
+        db._ensure_sqlite_backend = lambda: None
+        db.get_connection = lambda: conn
+
+        with TransactionContextManager(db):
+            pass
+
+        assert conn.statements == ["BEGIN IMMEDIATE"]
+        assert conn.committed is True
 
 # More tests can be added for:
 # - Specific FTS trigger behavior (though search tests cover them indirectly)

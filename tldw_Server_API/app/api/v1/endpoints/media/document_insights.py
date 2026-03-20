@@ -28,7 +28,9 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_latest_transcription,
+)
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.LLM_Calls.structured_output import (
@@ -42,7 +44,7 @@ router = APIRouter(tags=["Document Workspace"])
 DEFAULT_MAX_CONTENT_LENGTH = 5000
 
 
-def _get_db_scope(db: MediaDatabase) -> str:
+def _get_db_scope(db: Any) -> str:
     """Return a stable scope identifier for the active MediaDatabase."""
     return getattr(db, "db_path_str", None) or str(getattr(db, "db_path", ""))
 
@@ -164,7 +166,7 @@ def _normalize_insights(raw_insights: list[Any]) -> list[InsightItem]:
 async def generate_document_insights(
     media_id: int = Path(..., description="The ID of the media item"),
     request: GenerateInsightsRequest | None = None,
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> DocumentInsightsResponse:
     """

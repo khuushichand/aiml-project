@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import threading
 from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock
 import uuid
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_repository import (
+    MediaRepository,
+)
 
 
 def _insert_claim_record(db: MediaDatabase) -> None:
@@ -223,6 +227,99 @@ def test_delete_fts_keyword_postgres_nulls_vector() -> None:
     sql, params = db._execute_with_connection.call_args.args[1:]
     assert sql.strip().startswith("UPDATE keywords SET keyword_fts_tsv = NULL")
     assert params == (7,)
+
+
+def test_media_repository_uses_execution_helper_for_postgres_chunk_persistence(monkeypatch) -> None:
+    import tldw_Server_API.app.core.config as config_module
+
+    monkeypatch.setattr(config_module, "rag_enable_structure_index", lambda: False, raising=False)
+
+    executed: List[Tuple[str, Any]] = []
+
+    class _Cursor:
+        def __init__(
+            self,
+            *,
+            fetchone_result: Dict[str, Any] | None = None,
+            rowcount: int = 1,
+            lastrowid: int | None = None,
+        ) -> None:
+            self._fetchone_result = fetchone_result
+            self.rowcount = rowcount
+            self.lastrowid = lastrowid
+
+        def fetchone(self):
+            return self._fetchone_result
+
+    class _Conn:
+        pass
+
+    conn = _Conn()
+
+    class _FakeDb:
+        backend_type = BackendType.POSTGRESQL
+        client_id = "pg-media-repo"
+        backend = object()
+        _media_insert_lock = threading.Lock()
+
+        def __init__(self) -> None:
+            self._uuid_counter = 0
+
+        def _get_current_utc_timestamp_str(self) -> str:
+            return "2026-03-15T23:40:00.000Z"
+
+        def transaction(self):
+            @contextmanager
+            def _ctx():
+                yield conn
+
+            return _ctx()
+
+        def _execute_with_connection(self, conn_arg: Any, query: str, params: Any = None):
+            assert conn_arg is conn
+            executed.append((query, params))
+            if "INSERT INTO Media (" in query:
+                return _Cursor(fetchone_result={"id": 41})
+            return _Cursor()
+
+        def _fetchone_with_connection(self, conn_arg: Any, query: str, params: Any = None):
+            assert conn_arg is conn
+            return None
+
+        def _generate_uuid(self) -> str:
+            self._uuid_counter += 1
+            return f"uuid-{self._uuid_counter}"
+
+        def _resolve_scope_ids(self) -> tuple[None, None]:
+            return None, None
+
+        def _log_sync_event(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def _update_fts_media(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def update_keywords_for_media(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def create_document_version(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    repo = MediaRepository(session=_FakeDb())
+
+    media_id, media_uuid, message = repo.add_media_with_keywords(
+        title="Chunked PG doc",
+        content="chunk source",
+        media_type="text",
+        keywords=[],
+        overwrite=True,
+        chunks=[{"text": "chunk one", "chunk_type": "text"}],
+    )
+
+    assert media_id == 41
+    assert media_uuid == "uuid-1"
+    assert message == "Media 'Chunked PG doc' added."
+    assert any("INSERT INTO UnvectorizedMediaChunks" in sql for sql, _ in executed)
 
 
 def test_backup_database_postgres_returns_false(tmp_path: Path) -> None:

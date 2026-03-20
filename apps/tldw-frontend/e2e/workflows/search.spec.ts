@@ -11,6 +11,7 @@
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../utils/fixtures"
 import { SearchPage } from "../utils/page-objects"
 import { seedAuth, generateTestId, waitForConnection } from "../utils/helpers"
+import { expectApiCall } from "../utils/api-assertions"
 
 test.describe("Search Workflow", () => {
   test.beforeEach(async ({ page }) => {
@@ -66,10 +67,17 @@ test.describe("Search Workflow", () => {
       await searchPage.waitForReady()
 
       const testQuery = "test search query"
+
+      // Capture the API call triggered by the search action
+      const apiCall = expectApiCall(authedPage, { url: "/api/v1/" })
       await searchPage.search(testQuery)
 
       // Wait for results or no-results state
       await searchPage.waitForResults()
+
+      // Verify the search API call returned a successful response
+      const { response } = await apiCall
+      expect(response.status()).toBeLessThan(400)
 
       // Verify search was performed (results or empty state shown)
       const _hasResults = !(await searchPage.hasNoResults())
@@ -88,8 +96,14 @@ test.describe("Search Workflow", () => {
       await searchPage.goto()
       await searchPage.waitForReady()
 
+      // Capture the API call triggered by the search action
+      const apiCall = expectApiCall(authedPage, { url: "/api/v1/" })
       await searchPage.search("content")
       await searchPage.waitForResults()
+
+      // Verify the search API call returned a successful response
+      const { response } = await apiCall
+      expect(response.status()).toBeLessThan(400)
 
       const results = await searchPage.getResults()
 

@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user, get_chacha_db_for_user_id
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
@@ -28,6 +31,12 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     GenerateFromPromptRequest,
     GenerateFromRagRequest,
     PresentationCreateRequest,
+    PresentationRenderArtifactInfo,
+    PresentationRenderArtifactListResponse,
+    PresentationRenderFormat,
+    PresentationRenderJobResponse,
+    PresentationRenderJobStatusResponse,
+    PresentationRenderRequest,
     PresentationListResponse,
     PresentationPatchRequest,
     PresentationReorderRequest,
@@ -41,14 +50,25 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     SlidesHealthResponse,
     SlidesTemplateListResponse,
     SlidesTemplateResponse,
+    VisualStyleCreateRequest,
+    VisualStyleListResponse,
+    VisualStylePatchRequest,
+    VisualStyleResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_DELETE, MEDIA_READ, MEDIA_UPDATE
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
+from tldw_Server_API.app.core.DB_Management.media_db.api import MediaDbSession
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+    get_latest_transcription,
+)
+from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
-from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase
+from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase, VisualStyleRow
+from tldw_Server_API.app.core.Slides.slides_assets import resolve_slide_asset
 from tldw_Server_API.app.core.Slides.slides_export import (
     SlidesAssetsMissingError,
     SlidesExportError,
@@ -77,6 +97,12 @@ from tldw_Server_API.app.core.Slides.slides_templates import (
     get_slide_template,
     list_slide_templates,
 )
+from tldw_Server_API.app.core.Slides.visual_styles import (
+    VisualStylePreset,
+    get_builtin_visual_style,
+    list_builtin_visual_styles,
+)
+from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter(prefix="/slides", tags=["slides"])
 
@@ -134,6 +160,9 @@ _SLIDES_NONCRITICAL_EXCEPTIONS = (
     json.JSONDecodeError,
 )
 
+_PRESENTATION_STUDIO_TRANSITIONS = {"fade", "cut", "wipe", "zoom"}
+_PRESENTATION_STUDIO_TIMING_MODES = {"auto", "manual"}
+
 
 def _parse_etag(raw: str | None) -> int:
     if not raw:
@@ -146,6 +175,31 @@ def _parse_etag(raw: str | None) -> int:
 
 def _format_etag(version: int) -> str:
     return f'W/"v{version}"'
+
+
+def _slides_jobs_manager() -> JobManager:
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
+    if not db_url:
+        return JobManager()
+    backend = "postgres" if db_url.startswith("postgres") else None
+    return JobManager(backend=backend, db_url=db_url)
+
+
+def _render_enabled() -> bool:
+    return is_truthy(os.getenv("PRESENTATION_RENDER_ENABLED", "true"))
+
+
+def _presentation_render_queue_name() -> str:
+    configured_queue = (os.getenv("PRESENTATION_RENDER_JOBS_QUEUE") or "").strip().lower()
+    if configured_queue in {"default", "high", "low"}:
+        return configured_queue
+    if configured_queue.endswith("-high"):
+        return "high"
+    if configured_queue.endswith("-low"):
+        return "low"
+    if configured_queue.endswith("-default"):
+        return "default"
+    return "default"
 
 
 def _normalize_dt(value: str) -> datetime:
@@ -165,6 +219,50 @@ def _slide_from_obj(obj: Any) -> Slide:
     return Slide.parse_obj(obj)
 
 
+def _normalize_presentation_studio_transition(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _PRESENTATION_STUDIO_TRANSITIONS else "fade"
+
+
+def _normalize_presentation_studio_manual_duration_ms(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric_value <= 0:
+        return None
+    return int(round(numeric_value))
+
+
+def _normalize_presentation_studio_timing_mode(value: Any, *, has_manual_duration: bool) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in _PRESENTATION_STUDIO_TIMING_MODES:
+        return "manual" if has_manual_duration else "auto"
+    if normalized == "manual" and not has_manual_duration:
+        return "auto"
+    return normalized
+
+
+def _normalize_slide_studio_metadata(metadata: dict[str, Any]) -> None:
+    studio = metadata.get("studio")
+    if studio is None:
+        return
+    if not isinstance(studio, dict):
+        raise HTTPException(status_code=422, detail="slide_studio_metadata_invalid")
+
+    manual_duration_ms = _normalize_presentation_studio_manual_duration_ms(
+        studio.get("manual_duration_ms")
+    )
+    studio["transition"] = _normalize_presentation_studio_transition(studio.get("transition"))
+    studio["manual_duration_ms"] = manual_duration_ms
+    studio["timing_mode"] = _normalize_presentation_studio_timing_mode(
+        studio.get("timing_mode"),
+        has_manual_duration=manual_duration_ms is not None,
+    )
+
+
 def _normalize_slides(slides: list[Slide]) -> list[Slide]:
     orders = [slide.order for slide in slides]
     if any(order < 0 for order in orders):
@@ -178,6 +276,7 @@ def _normalize_slides(slides: list[Slide]) -> list[Slide]:
             slide.metadata = {}
         if not isinstance(slide.metadata, dict):
             raise HTTPException(status_code=422, detail="slide_metadata_invalid")
+        _normalize_slide_studio_metadata(slide.metadata)
         _validate_slide_images(slide.metadata)
     return ordered
 
@@ -207,6 +306,23 @@ def _flatten_slides_text(slides: list[Slide]) -> str:
             images = metadata.get("images")
             parts.extend(collect_image_alt_text(images if isinstance(images, list) else None))
     return "\n".join(parts)
+
+
+def _normalize_job_status(job_status: Any) -> str:
+    status_value = str(job_status or "").strip().lower()
+    return status_value or "queued"
+
+
+def _safe_json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _validate_theme(theme: str) -> None:
@@ -241,10 +357,30 @@ def _validate_settings(settings: dict[str, Any] | None) -> dict[str, Any] | None
     return settings
 
 
+def _validate_custom_css(
+    custom_css: Any,
+    *,
+    detail: str = "invalid_custom_css",
+) -> str | None:
+    if custom_css is None:
+        return None
+    if not isinstance(custom_css, str):
+        raise HTTPException(status_code=422, detail=detail)
+    return custom_css
+
+
 def _serialize_settings(settings: dict[str, Any] | None) -> str | None:
     if settings is None:
         return None
     return json.dumps(settings)
+
+
+def _serialize_studio_data(studio_data: dict[str, Any] | None) -> str | None:
+    if studio_data is None:
+        return None
+    if not isinstance(studio_data, dict):
+        raise HTTPException(status_code=422, detail="invalid_studio_data")
+    return json.dumps(studio_data)
 
 
 def _deserialize_settings(value: str | None) -> dict[str, Any] | None:
@@ -254,6 +390,36 @@ def _deserialize_settings(value: str | None) -> dict[str, Any] | None:
         parsed = json.loads(value)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail="invalid_settings_json") from exc
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _deserialize_studio_data(value: str | None) -> dict[str, Any] | None:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="invalid_studio_data_json") from exc
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _serialize_visual_style_snapshot(snapshot: dict[str, Any] | None) -> str | None:
+    """Serialize a validated visual-style snapshot for presentation persistence."""
+    if snapshot is None:
+        return None
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=422, detail="invalid_visual_style_snapshot")
+    return json.dumps(snapshot, ensure_ascii=True)
+
+
+def _deserialize_visual_style_snapshot(value: str | None) -> dict[str, Any] | None:
+    """Deserialize a persisted visual-style snapshot into a dictionary payload."""
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="invalid_visual_style_snapshot_json") from exc
     return parsed if isinstance(parsed, dict) else None
 
 
@@ -296,11 +462,32 @@ def _apply_template_defaults(
     *,
     request: Any,
     template: SlidesTemplate | None,
+    visual_style_snapshot: dict[str, Any] | None = None,
 ) -> tuple[str, str | None, dict[str, Any] | None, str | None]:
     theme = request.theme if _field_was_set(request, "theme") else None
     marp_theme = request.marp_theme if _field_was_set(request, "marp_theme") else None
     settings = request.settings if _field_was_set(request, "settings") else None
-    custom_css = request.custom_css if _field_was_set(request, "custom_css") else None
+    custom_css = _validate_custom_css(request.custom_css) if _field_was_set(request, "custom_css") else None
+
+    appearance_defaults = (
+        visual_style_snapshot.get("appearance_defaults")
+        if isinstance(visual_style_snapshot, dict) and isinstance(visual_style_snapshot.get("appearance_defaults"), dict)
+        else {}
+    )
+    if "custom_css" in appearance_defaults:
+        appearance_defaults = dict(appearance_defaults)
+        appearance_defaults["custom_css"] = _validate_custom_css(
+            appearance_defaults.get("custom_css"),
+            detail="invalid_visual_style_custom_css",
+        )
+    if theme is None:
+        theme = appearance_defaults.get("theme")
+    if marp_theme is None:
+        marp_theme = appearance_defaults.get("marp_theme")
+    if settings is None:
+        settings = appearance_defaults.get("settings")
+    if custom_css is None:
+        custom_css = appearance_defaults.get("custom_css")
 
     if template:
         if theme is None:
@@ -310,7 +497,7 @@ def _apply_template_defaults(
         if settings is None:
             settings = template.settings
         if custom_css is None:
-            custom_css = template.custom_css
+            custom_css = _validate_custom_css(template.custom_css)
 
     if theme is None:
         theme = "black"
@@ -333,6 +520,162 @@ def _template_to_response(template: SlidesTemplate) -> SlidesTemplateResponse:
         settings=template.settings,
         default_slides=slides,
         custom_css=template.custom_css,
+    )
+
+
+def _deserialize_visual_style_payload(value: str) -> dict[str, Any]:
+    """Deserialize a stored visual-style payload and assert its top-level shape."""
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="visual_style_payload_invalid") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="visual_style_payload_invalid")
+    return payload
+
+
+def _validate_visual_style_appearance_defaults(appearance_defaults: dict[str, Any]) -> dict[str, Any]:
+    """Validate the appearance defaults section for a visual-style payload."""
+    if not isinstance(appearance_defaults, dict):
+        raise HTTPException(status_code=422, detail="invalid_visual_style_appearance_defaults")
+    validated = dict(appearance_defaults)
+    if "theme" in validated:
+        if validated.get("theme") is not None:
+            _validate_theme(validated.get("theme"))
+    if "marp_theme" in validated:
+        validated["marp_theme"] = _validate_marp_theme(validated.get("marp_theme"))
+    if "settings" in validated:
+        validated["settings"] = _validate_settings(validated.get("settings"))
+    if "custom_css" in validated:
+        validated["custom_css"] = _validate_custom_css(
+            validated.get("custom_css"),
+            detail="invalid_visual_style_custom_css",
+        )
+    return validated
+
+
+def _serialize_visual_style_payload(
+    *,
+    description: str | None,
+    generation_rules: dict[str, Any],
+    artifact_preferences: list[str],
+    appearance_defaults: dict[str, Any],
+    fallback_policy: dict[str, Any],
+) -> str:
+    """Serialize a validated visual-style payload for database storage."""
+    payload = {
+        "description": description,
+        "generation_rules": generation_rules,
+        "artifact_preferences": artifact_preferences,
+        "appearance_defaults": _validate_visual_style_appearance_defaults(appearance_defaults),
+        "fallback_policy": fallback_policy,
+    }
+    return json.dumps(payload, ensure_ascii=True)
+
+
+def _visual_style_response_from_builtin(style: VisualStylePreset) -> VisualStyleResponse:
+    return VisualStyleResponse(
+        id=style.style_id,
+        name=style.name,
+        scope="builtin",
+        description=style.description,
+        version=style.version,
+        generation_rules=style.generation_rules,
+        artifact_preferences=list(style.artifact_preferences),
+        appearance_defaults=style.appearance_defaults,
+        fallback_policy=style.fallback_policy,
+        created_at=None,
+        updated_at=None,
+    )
+
+
+def _visual_style_response_from_row(row: VisualStyleRow) -> VisualStyleResponse:
+    """Convert a stored visual-style row into the public API response shape."""
+    payload = _deserialize_visual_style_payload(row.style_payload)
+    generation_rules = payload.get("generation_rules") if isinstance(payload.get("generation_rules"), dict) else {}
+    appearance_defaults = payload.get("appearance_defaults") if isinstance(payload.get("appearance_defaults"), dict) else {}
+    fallback_policy = payload.get("fallback_policy") if isinstance(payload.get("fallback_policy"), dict) else {}
+    artifact_preferences_raw = payload.get("artifact_preferences")
+    artifact_preferences = artifact_preferences_raw if isinstance(artifact_preferences_raw, list) else []
+    version = payload.get("version")
+    return VisualStyleResponse(
+        id=row.id,
+        name=row.name,
+        scope=row.scope,
+        description=payload.get("description") if isinstance(payload.get("description"), str) else None,
+        version=version if isinstance(version, int) else None,
+        generation_rules=generation_rules,
+        artifact_preferences=[str(item) for item in artifact_preferences],
+        appearance_defaults=appearance_defaults,
+        fallback_policy=fallback_policy,
+        created_at=_normalize_dt(row.created_at),
+        updated_at=_normalize_dt(row.updated_at),
+    )
+
+
+def _resolve_visual_style_response(style_id: str, db: SlidesDatabase) -> VisualStyleResponse:
+    builtin = get_builtin_visual_style(style_id)
+    if builtin is not None:
+        return _visual_style_response_from_builtin(builtin)
+    try:
+        row = db.get_visual_style_by_id(style_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+    return _visual_style_response_from_row(row)
+
+
+def _visual_style_snapshot_from_response(style: VisualStyleResponse) -> dict[str, Any]:
+    return {
+        "id": style.id,
+        "scope": style.scope,
+        "name": style.name,
+        "version": style.version,
+        "description": style.description,
+        "generation_rules": style.generation_rules,
+        "artifact_preferences": style.artifact_preferences,
+        "appearance_defaults": style.appearance_defaults,
+        "fallback_policy": style.fallback_policy,
+    }
+
+
+def _resolve_presentation_visual_style(
+    *,
+    visual_style_id: str | None,
+    visual_style_scope: str | None,
+    db: SlidesDatabase,
+) -> tuple[str | None, str | None, str | None, int | None, str | None]:
+    if visual_style_id is None and visual_style_scope is None:
+        return None, None, None, None, None
+    if visual_style_id is None:
+        raise HTTPException(status_code=422, detail="visual_style_id_required")
+    if visual_style_scope is None:
+        raise HTTPException(status_code=422, detail="visual_style_scope_required")
+
+    resolved_id = visual_style_id.strip()
+    if not resolved_id:
+        raise HTTPException(status_code=422, detail="visual_style_id_required")
+
+    resolved_scope = visual_style_scope.strip().lower()
+    if resolved_scope == "builtin":
+        builtin = get_builtin_visual_style(resolved_id)
+        if builtin is None:
+            raise HTTPException(status_code=404, detail="visual_style_not_found")
+        style = _visual_style_response_from_builtin(builtin)
+    elif resolved_scope == "user":
+        try:
+            row = db.get_visual_style_by_id(resolved_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+        style = _visual_style_response_from_row(row)
+    else:
+        raise HTTPException(status_code=422, detail="invalid_visual_style_scope")
+
+    return (
+        style.id,
+        style.scope,
+        style.name,
+        style.version,
+        _serialize_visual_style_snapshot(_visual_style_snapshot_from_response(style)),
     )
 
 
@@ -365,6 +708,12 @@ def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
     settings = payload.get("settings")
     if isinstance(settings, str):
         settings = _deserialize_settings(settings)
+    studio_data = payload.get("studio_data")
+    if isinstance(studio_data, str):
+        studio_data = _deserialize_studio_data(studio_data)
+    visual_style_snapshot = payload.get("visual_style_snapshot")
+    if isinstance(visual_style_snapshot, str):
+        visual_style_snapshot = _deserialize_visual_style_snapshot(visual_style_snapshot)
     source_ref = payload.get("source_ref")
     if isinstance(source_ref, str):
         source_ref = _deserialize_source_ref(source_ref)
@@ -387,7 +736,13 @@ def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
         theme=payload.get("theme") or "black",
         marp_theme=payload.get("marp_theme"),
         template_id=payload.get("template_id"),
+        visual_style_id=payload.get("visual_style_id"),
+        visual_style_scope=payload.get("visual_style_scope"),
+        visual_style_name=payload.get("visual_style_name"),
+        visual_style_version=payload.get("visual_style_version"),
+        visual_style_snapshot=visual_style_snapshot if isinstance(visual_style_snapshot, dict) or visual_style_snapshot is None else None,
         settings=settings if isinstance(settings, dict) or settings is None else None,
+        studio_data=studio_data if isinstance(studio_data, dict) or studio_data is None else None,
         slides=slides,
         custom_css=payload.get("custom_css"),
         source_type=payload.get("source_type"),
@@ -431,7 +786,13 @@ def _build_presentation_response(row) -> PresentationResponse:
         theme=row.theme,
         marp_theme=getattr(row, "marp_theme", None),
         template_id=getattr(row, "template_id", None),
+        visual_style_id=getattr(row, "visual_style_id", None),
+        visual_style_scope=getattr(row, "visual_style_scope", None),
+        visual_style_name=getattr(row, "visual_style_name", None),
+        visual_style_version=getattr(row, "visual_style_version", None),
+        visual_style_snapshot=_deserialize_visual_style_snapshot(getattr(row, "visual_style_snapshot", None)),
         settings=_deserialize_settings(row.settings),
+        studio_data=_deserialize_studio_data(getattr(row, "studio_data", None)),
         slides=slides,
         custom_css=row.custom_css,
         source_type=row.source_type,
@@ -498,6 +859,18 @@ def _format_notes(notes: list[dict[str, Any]]) -> str:
     return "\n\n".join(parts).strip()
 
 
+async def _resolve_notes_db_for_request(http_request: Request, current_user: User) -> CharactersRAGDB:
+    """Resolve the per-user notes DB lazily while still honoring test/app dependency overrides."""
+
+    override_fn = http_request.app.dependency_overrides.get(get_chacha_db_for_user)
+    if override_fn is not None:
+        result = override_fn()
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+    return await get_chacha_db_for_user_id(current_user.id, str(current_user.id))
+
+
 def _format_rag_documents(documents: list[Any]) -> str:
     parts: list[str] = []
     for doc in documents:
@@ -521,8 +894,20 @@ def _generate_presentation(
     source_ref: Any | None,
     source_query: str | None,
 ) -> PresentationResponse:
+    visual_style_id, visual_style_scope, visual_style_name, visual_style_version, visual_style_snapshot = (
+        _resolve_presentation_visual_style(
+            visual_style_id=getattr(request, "visual_style_id", None),
+            visual_style_scope=getattr(request, "visual_style_scope", None),
+            db=db,
+        )
+    )
+    visual_style_snapshot_dict = _deserialize_visual_style_snapshot(visual_style_snapshot)
     template = _resolve_template(getattr(request, "template_id", None))
-    theme, marp_theme, settings, custom_css = _apply_template_defaults(request=request, template=template)
+    theme, marp_theme, settings, custom_css = _apply_template_defaults(
+        request=request,
+        template=template,
+        visual_style_snapshot=visual_style_snapshot_dict,
+    )
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(marp_theme)
     settings = _validate_settings(settings)
@@ -560,6 +945,7 @@ def _generate_presentation(
             enable_chunking=request.enable_chunking,
             chunk_size_tokens=request.chunk_size_tokens,
             summary_tokens=request.summary_tokens,
+            visual_style_snapshot=visual_style_snapshot_dict,
         )
     except SlidesSourceTooLargeError as exc:
         _record_generation_error("input_too_large")
@@ -596,7 +982,13 @@ def _generate_presentation(
         theme=theme,
         marp_theme=marp_theme,
         template_id=template.template_id if template else None,
+        visual_style_id=visual_style_id,
+        visual_style_scope=visual_style_scope,
+        visual_style_name=visual_style_name,
+        visual_style_version=visual_style_version,
+        visual_style_snapshot=visual_style_snapshot,
         settings=_serialize_settings(settings),
+        studio_data=None,
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
         slides_text=slides_text,
         source_type=source_type,
@@ -633,8 +1025,20 @@ async def create_presentation(
     title = request.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="title_required")
+    visual_style_id, visual_style_scope, visual_style_name, visual_style_version, visual_style_snapshot = (
+        _resolve_presentation_visual_style(
+            visual_style_id=request.visual_style_id,
+            visual_style_scope=request.visual_style_scope,
+            db=db,
+        )
+    )
+    visual_style_snapshot_dict = _deserialize_visual_style_snapshot(visual_style_snapshot)
     template = _resolve_template(request.template_id)
-    theme, marp_theme, settings, custom_css = _apply_template_defaults(request=request, template=template)
+    theme, marp_theme, settings, custom_css = _apply_template_defaults(
+        request=request,
+        template=template,
+        visual_style_snapshot=visual_style_snapshot_dict,
+    )
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(marp_theme)
     settings = _validate_settings(settings)
@@ -650,7 +1054,13 @@ async def create_presentation(
         theme=theme,
         marp_theme=marp_theme,
         template_id=template.template_id if template else None,
+        visual_style_id=visual_style_id,
+        visual_style_scope=visual_style_scope,
+        visual_style_name=visual_style_name,
+        visual_style_version=visual_style_version,
+        visual_style_snapshot=visual_style_snapshot,
         settings=_serialize_settings(settings),
+        studio_data=_serialize_studio_data(request.studio_data),
         slides=json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
         slides_text=slides_text,
         source_type="manual",
@@ -752,8 +1162,20 @@ async def update_presentation(
     title = request.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="title_required")
+    visual_style_id, visual_style_scope, visual_style_name, visual_style_version, visual_style_snapshot = (
+        _resolve_presentation_visual_style(
+            visual_style_id=request.visual_style_id,
+            visual_style_scope=request.visual_style_scope,
+            db=db,
+        )
+    )
+    visual_style_snapshot_dict = _deserialize_visual_style_snapshot(visual_style_snapshot)
     template = _resolve_template(request.template_id)
-    theme, marp_theme, settings, custom_css = _apply_template_defaults(request=request, template=template)
+    theme, marp_theme, settings, custom_css = _apply_template_defaults(
+        request=request,
+        template=template,
+        visual_style_snapshot=visual_style_snapshot_dict,
+    )
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(marp_theme)
     settings = _validate_settings(settings)
@@ -771,7 +1193,13 @@ async def update_presentation(
                 "theme": theme,
                 "marp_theme": marp_theme,
                 "template_id": template.template_id if template else None,
+                "visual_style_id": visual_style_id,
+                "visual_style_scope": visual_style_scope,
+                "visual_style_name": visual_style_name,
+                "visual_style_version": visual_style_version,
+                "visual_style_snapshot": visual_style_snapshot,
                 "settings": _serialize_settings(settings),
+                "studio_data": _serialize_studio_data(request.studio_data),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
                 "slides_text": slides_text,
                 "custom_css": custom_css,
@@ -819,9 +1247,31 @@ async def patch_presentation(
     if _field_was_set(request, "template_id"):
         template = _resolve_template(request.template_id)
         update_fields["template_id"] = template.template_id if template else None
+    if _field_was_set(request, "visual_style_id") or _field_was_set(request, "visual_style_scope"):
+        if request.visual_style_id is None and request.visual_style_scope is None:
+            update_fields["visual_style_id"] = None
+            update_fields["visual_style_scope"] = None
+            update_fields["visual_style_name"] = None
+            update_fields["visual_style_version"] = None
+            update_fields["visual_style_snapshot"] = None
+        else:
+            visual_style_id, visual_style_scope, visual_style_name, visual_style_version, visual_style_snapshot = (
+                _resolve_presentation_visual_style(
+                    visual_style_id=request.visual_style_id,
+                    visual_style_scope=request.visual_style_scope,
+                    db=db,
+                )
+            )
+            update_fields["visual_style_id"] = visual_style_id
+            update_fields["visual_style_scope"] = visual_style_scope
+            update_fields["visual_style_name"] = visual_style_name
+            update_fields["visual_style_version"] = visual_style_version
+            update_fields["visual_style_snapshot"] = visual_style_snapshot
     if request.settings is not None:
         settings = _validate_settings(request.settings)
         update_fields["settings"] = _serialize_settings(settings)
+    if _field_was_set(request, "studio_data"):
+        update_fields["studio_data"] = _serialize_studio_data(request.studio_data)
     if request.slides is not None:
         slides = _normalize_slides([_slide_from_obj(s) for s in request.slides])
         update_fields["slides"] = json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides])
@@ -984,6 +1434,183 @@ async def get_template(template_id: str) -> SlidesTemplateResponse:
 
 
 @router.get(
+    "/styles",
+    response_model=VisualStyleListResponse,
+    summary="List visual styles",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.styles.list"))],
+)
+async def list_visual_styles(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> VisualStyleListResponse:
+    builtin_presets = list_builtin_visual_styles()
+    builtin_total = len(builtin_presets)
+    builtin_slice = builtin_presets[offset : offset + limit]
+    remaining = limit - len(builtin_slice)
+    user_offset = max(offset - builtin_total, 0)
+    user_rows: list[VisualStyleRow] = []
+    if remaining > 0:
+        user_rows, _ = db.list_visual_styles(limit=remaining, offset=user_offset)
+    total_count = builtin_total + db.count_visual_styles()
+    styles = [
+        *(_visual_style_response_from_builtin(style) for style in builtin_slice),
+        *(_visual_style_response_from_row(row) for row in user_rows),
+    ]
+    return VisualStyleListResponse(styles=styles, total_count=total_count, limit=limit, offset=offset)
+
+
+@router.get(
+    "/styles/{style_id}",
+    response_model=VisualStyleResponse,
+    summary="Get visual style",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.styles.get"))],
+)
+async def get_visual_style(
+    style_id: str,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> VisualStyleResponse:
+    return _resolve_visual_style_response(style_id, db)
+
+
+@router.post(
+    "/styles",
+    response_model=VisualStyleResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create visual style",
+    dependencies=[Depends(require_permissions(MEDIA_CREATE)), Depends(rbac_rate_limit("slides.styles.create"))],
+)
+async def create_visual_style(
+    request: VisualStyleCreateRequest,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> VisualStyleResponse:
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="visual_style_name_required")
+    row = db.create_visual_style(
+        name=name,
+        scope="user",
+        style_payload=_serialize_visual_style_payload(
+            description=request.description,
+            generation_rules=request.generation_rules,
+            artifact_preferences=request.artifact_preferences,
+            appearance_defaults=request.appearance_defaults,
+            fallback_policy=request.fallback_policy,
+        ),
+    )
+    return _visual_style_response_from_row(row)
+
+
+@router.patch(
+    "/styles/{style_id}",
+    response_model=VisualStyleResponse,
+    summary="Patch visual style",
+    dependencies=[Depends(require_permissions(MEDIA_UPDATE)), Depends(rbac_rate_limit("slides.styles.update"))],
+)
+async def patch_visual_style(
+    style_id: str,
+    request: VisualStylePatchRequest,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> VisualStyleResponse:
+    if get_builtin_visual_style(style_id) is not None:
+        raise HTTPException(status_code=403, detail="builtin_visual_style_read_only")
+    try:
+        existing = db.get_visual_style_by_id(style_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+    payload = _deserialize_visual_style_payload(existing.style_payload)
+    merged_description = (
+        request.description if _field_was_set(request, "description") else payload.get("description")
+    )
+    merged_generation_rules = (
+        request.generation_rules
+        if _field_was_set(request, "generation_rules")
+        else payload.get("generation_rules") or {}
+    )
+    if merged_generation_rules is None:
+        merged_generation_rules = {}
+    merged_artifact_preferences = (
+        request.artifact_preferences
+        if _field_was_set(request, "artifact_preferences")
+        else payload.get("artifact_preferences") or []
+    )
+    if merged_artifact_preferences is None:
+        merged_artifact_preferences = []
+    merged_appearance_defaults = (
+        request.appearance_defaults
+        if _field_was_set(request, "appearance_defaults")
+        else payload.get("appearance_defaults") or {}
+    )
+    if merged_appearance_defaults is None:
+        merged_appearance_defaults = {}
+    merged_fallback_policy = (
+        request.fallback_policy
+        if _field_was_set(request, "fallback_policy")
+        else payload.get("fallback_policy") or {}
+    )
+    if merged_fallback_policy is None:
+        merged_fallback_policy = {}
+    name = (
+        request.name.strip() if _field_was_set(request, "name") and isinstance(request.name, str) else existing.name
+    )
+    if not name:
+        raise HTTPException(status_code=422, detail="visual_style_name_required")
+    if not any(
+        _field_was_set(request, field_name)
+        for field_name in {
+            "name",
+            "description",
+            "generation_rules",
+            "artifact_preferences",
+            "appearance_defaults",
+            "fallback_policy",
+        }
+    ):
+        raise HTTPException(status_code=400, detail="no_fields_to_update")
+    try:
+        row = db.update_visual_style(
+            style_id=style_id,
+            name=name,
+            style_payload=_serialize_visual_style_payload(
+                description=merged_description if isinstance(merged_description, str) or merged_description is None else None,
+                generation_rules=merged_generation_rules if isinstance(merged_generation_rules, dict) else {},
+                artifact_preferences=[str(item) for item in merged_artifact_preferences]
+                if isinstance(merged_artifact_preferences, list)
+                else [],
+                appearance_defaults=merged_appearance_defaults if isinstance(merged_appearance_defaults, dict) else {},
+                fallback_policy=merged_fallback_policy if isinstance(merged_fallback_policy, dict) else {},
+            ),
+            expected_updated_at=existing.updated_at,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="visual_style_not_found") from None
+    except ConflictError:
+        raise HTTPException(status_code=409, detail="visual_style_version_conflict") from None
+    return _visual_style_response_from_row(row)
+
+
+@router.delete(
+    "/styles/{style_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete visual style",
+    dependencies=[Depends(require_permissions(MEDIA_DELETE)), Depends(rbac_rate_limit("slides.styles.delete"))],
+)
+async def delete_visual_style(
+    style_id: str,
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+) -> Response:
+    if get_builtin_visual_style(style_id) is not None:
+        raise HTTPException(status_code=403, detail="builtin_visual_style_read_only")
+    try:
+        deleted = db.delete_visual_style(style_id)
+    except ConflictError:
+        raise HTTPException(status_code=409, detail="visual_style_in_use") from None
+    if not deleted:
+        raise HTTPException(status_code=404, detail="visual_style_not_found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
     "/presentations/{presentation_id}/versions",
     response_model=PresentationVersionListResponse,
     summary="List presentation versions",
@@ -1060,6 +1687,7 @@ async def restore_presentation_version(
     _validate_theme(theme)
     marp_theme = _validate_marp_theme(restored.marp_theme)
     settings = _validate_settings(restored.settings)
+    studio_data = restored.studio_data if isinstance(restored.studio_data, dict) or restored.studio_data is None else None
     slides = _normalize_slides(restored.slides)
     slides_text = _flatten_slides_text(slides)
     title = restored.title.strip()
@@ -1074,7 +1702,13 @@ async def restore_presentation_version(
                 "theme": theme,
                 "marp_theme": marp_theme,
                 "template_id": restored.template_id,
+                "visual_style_id": restored.visual_style_id,
+                "visual_style_scope": restored.visual_style_scope,
+                "visual_style_name": restored.visual_style_name,
+                "visual_style_version": restored.visual_style_version,
+                "visual_style_snapshot": _serialize_visual_style_snapshot(restored.visual_style_snapshot),
                 "settings": _serialize_settings(settings),
+                "studio_data": _serialize_studio_data(studio_data),
                 "slides": json.dumps([slide.model_dump() if hasattr(slide, "model_dump") else slide.dict() for slide in slides]),
                 "slides_text": slides_text,
                 "custom_css": restored.custom_css,
@@ -1094,6 +1728,146 @@ async def restore_presentation_version(
     response.headers["ETag"] = _format_etag(row.version)
     response.headers["Last-Modified"] = row.last_modified
     return _build_presentation_response(row)
+
+
+@router.post(
+    "/presentations/{presentation_id}/render-jobs",
+    response_model=PresentationRenderJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Submit a presentation render job",
+    dependencies=[Depends(require_permissions(MEDIA_UPDATE)), Depends(rbac_rate_limit("slides.render.submit"))],
+)
+async def submit_presentation_render_job(
+    presentation_id: str,
+    request: PresentationRenderRequest,
+    if_match: str | None = Header(None, alias="If-Match"),
+    db: SlidesDatabase = Depends(get_slides_db_for_user),
+    current_user: User = Depends(get_request_user),
+    job_manager: JobManager = Depends(_slides_jobs_manager),
+) -> PresentationRenderJobResponse:
+    if not _render_enabled():
+        raise HTTPException(status_code=503, detail="presentation_render_unavailable")
+    expected_version = _parse_etag(if_match)
+    try:
+        row = db.get_presentation_by_id(presentation_id, include_deleted=False)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="presentation_not_found") from None
+    if int(row.version) != expected_version:
+        raise HTTPException(status_code=412, detail="precondition_failed")
+
+    render_format = str(request.format.value if hasattr(request.format, "value") else request.format)
+    payload = {
+        "user_id": int(current_user.id),
+        "presentation_id": presentation_id,
+        "presentation_version": int(row.version),
+        "format": render_format,
+        "theme": row.theme,
+        "title": row.title,
+    }
+    job = await asyncio.to_thread(
+        job_manager.create_job,
+        domain="presentation_render",
+        queue=_presentation_render_queue_name(),
+        job_type="presentation_render",
+        payload=payload,
+        owner_user_id=str(current_user.id),
+        priority=5,
+        max_retries=2,
+    )
+    return PresentationRenderJobResponse(
+        job_id=int(job["id"]),
+        status=_normalize_job_status(job.get("status")),
+        job_type="presentation_render",
+        presentation_id=presentation_id,
+        presentation_version=int(row.version),
+        format=PresentationRenderFormat(render_format),
+    )
+
+
+@router.get(
+    "/render-jobs/{job_id}",
+    response_model=PresentationRenderJobStatusResponse,
+    summary="Get presentation render job status",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.render.status"))],
+)
+async def get_presentation_render_job_status(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+    job_manager: JobManager = Depends(_slides_jobs_manager),
+) -> PresentationRenderJobStatusResponse:
+    job = await asyncio.to_thread(job_manager.get_job, int(job_id))
+    if not job:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    if str(job.get("owner_user_id") or "") != str(current_user.id):
+        raise HTTPException(status_code=404, detail="job_not_found")
+
+    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    render_format = payload.get("format")
+    format_value = PresentationRenderFormat(render_format) if render_format in {"mp4", "webm"} else None
+    error_text = None
+    for key in ("last_error", "error_message", "error_code"):
+        if job.get(key):
+            error_text = str(job.get(key))
+            break
+
+    return PresentationRenderJobStatusResponse(
+        job_id=int(job["id"]),
+        status=_normalize_job_status(job.get("status")),
+        job_type=str(job.get("job_type") or "presentation_render"),
+        presentation_id=payload.get("presentation_id"),
+        presentation_version=payload.get("presentation_version"),
+        format=format_value,
+        output_id=result.get("output_id"),
+        download_url=result.get("download_url"),
+        error=error_text,
+    )
+
+
+@router.get(
+    "/presentations/{presentation_id}/render-artifacts",
+    response_model=PresentationRenderArtifactListResponse,
+    summary="List presentation render artifacts",
+    dependencies=[Depends(require_permissions(MEDIA_READ)), Depends(rbac_rate_limit("slides.render.artifacts"))],
+)
+async def list_presentation_render_artifacts(
+    presentation_id: str,
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
+) -> PresentationRenderArtifactListResponse:
+    artifacts: list[PresentationRenderArtifactInfo] = []
+    page_size = 200
+    offset = 0
+    total = 1
+    while offset < total:
+        rows, total = await asyncio.to_thread(
+            collections_db.list_output_artifacts,
+            limit=page_size,
+            offset=offset,
+            type_="presentation_render",
+            metadata_origin="presentation_studio",
+            metadata_presentation_id=presentation_id,
+        )
+        for row in rows:
+            metadata = _safe_json_dict(getattr(row, "metadata_json", None))
+            fmt = str(getattr(row, "format", "") or "").lower()
+            if fmt not in {"mp4", "webm"}:
+                continue
+            created_at = getattr(row, "created_at", None)
+            artifacts.append(
+                PresentationRenderArtifactInfo(
+                    output_id=int(getattr(row, "id")),
+                    format=PresentationRenderFormat(fmt),
+                    title=getattr(row, "title", None),
+                    download_url=f"/api/v1/outputs/{int(getattr(row, 'id'))}/download",
+                    presentation_version=metadata.get("presentation_version"),
+                    created_at=_normalize_dt(created_at) if isinstance(created_at, str) else None,
+                )
+            )
+        offset += page_size
+    return PresentationRenderArtifactListResponse(
+        presentation_id=presentation_id,
+        artifacts=artifacts,
+    )
 
 
 @router.post(
@@ -1130,12 +1904,14 @@ async def generate_from_prompt(
 async def generate_from_chat(
     request: GenerateFromChatRequest,
     response: Response,
+    http_request: Request,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
 ) -> PresentationResponse:
     conversation_id = request.conversation_id.strip()
     if not conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id_required")
+    notes_db = await _resolve_notes_db_for_request(http_request, current_user)
     conversation = notes_db.get_conversation_by_id(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
@@ -1164,7 +1940,7 @@ async def generate_from_media(
     request: GenerateFromMediaRequest,
     response: Response,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    media_db: MediaDbSession = Depends(get_media_db_for_user),
 ) -> PresentationResponse:
     try:
         media_id = int(request.media_id)
@@ -1196,11 +1972,13 @@ async def generate_from_media(
 async def generate_from_notes(
     request: GenerateFromNotesRequest,
     response: Response,
+    http_request: Request,
     db: SlidesDatabase = Depends(get_slides_db_for_user),
-    notes_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
 ) -> PresentationResponse:
     if not request.note_ids:
         raise HTTPException(status_code=422, detail="note_ids_required")
+    notes_db = await _resolve_notes_db_for_request(http_request, current_user)
     notes: list[dict[str, Any]] = []
     missing: list[str] = []
     for note_id in request.note_ids:
@@ -1285,6 +2063,7 @@ async def export_presentation(
     pdf_margin_left: str | None = Query(None),
     pdf_margin_right: str | None = Query(None),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
+    collections_db: CollectionsDatabase = Depends(get_collections_db_for_user),
 ) -> Response:
     try:
         row = db.get_presentation_by_id(presentation_id, include_deleted=False)
@@ -1295,6 +2074,17 @@ async def export_presentation(
     slides = [_slide_from_obj(item) for item in slides_raw]
     slides = _normalize_slides(slides)
     settings = _deserialize_settings(row.settings)
+    try:
+        user_id = int(db.client_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="user_unavailable") from exc
+
+    def _asset_resolver(asset_ref: str) -> dict[str, Any]:
+        return resolve_slide_asset(
+            asset_ref,
+            collections_db=collections_db,
+            user_id=user_id,
+        )
     try:
         metrics = get_metrics_registry()
     except _SLIDES_NONCRITICAL_EXCEPTIONS:
@@ -1308,12 +2098,15 @@ async def export_presentation(
         media_type = "application/json"
     elif format == ExportFormat.MARKDOWN:
         try:
-            body = export_presentation_markdown(
+            markdown_text = await asyncio.to_thread(
+                export_presentation_markdown,
                 title=row.title,
                 slides=slides,
                 theme=row.theme,
                 marp_theme=getattr(row, "marp_theme", None),
-            ).encode("utf-8")
+                asset_resolver=_asset_resolver,
+            )
+            body = markdown_text.encode("utf-8")
         except SlidesExportInputError as exc:
             if metrics is not None:
                 with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
@@ -1354,6 +2147,7 @@ async def export_presentation(
                 settings=settings,
                 custom_css=row.custom_css,
                 pdf_options=pdf_options,
+                asset_resolver=_asset_resolver,
             )
         except SlidesExportInputError as exc:
             if metrics is not None:
@@ -1375,12 +2169,14 @@ async def export_presentation(
         media_type = "application/pdf"
     elif format == ExportFormat.REVEAL:
         try:
-            body = export_presentation_bundle(
+            body = await asyncio.to_thread(
+                export_presentation_bundle,
                 title=row.title,
                 slides=slides,
                 theme=row.theme,
                 settings=settings,
                 custom_css=row.custom_css,
+                asset_resolver=_asset_resolver,
             )
         except SlidesAssetsMissingError as exc:
             if metrics is not None:

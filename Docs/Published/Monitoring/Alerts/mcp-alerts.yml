@@ -1,0 +1,67 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: tldw-mcp
+    folder: TLDW
+    interval: 1m
+    rules:
+      # MCP p95 latency > 1.0s for 5 minutes
+      - uid: tldw_mcp_p95_high
+        title: MCP p95 latency high
+        condition: B
+        for: 5m
+        annotations:
+          summary: 'MCP p95 latency > 1.0s'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: histogram_quantile(0.95, sum(rate(mcp_request_duration_seconds_bucket[5m])) by (le))
+              instant: false
+              interval: ""
+              legendFormat: "p95"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 1
+              refId: B
+      # MCP rate limit spikes (> 10/min for 5 minutes)
+      - uid: tldw_mcp_rate_limit_spike
+        title: MCP rate limit hits high
+        condition: B
+        for: 5m
+        annotations:
+          summary: 'MCP rate limit hits > 10/min'
+        labels:
+          severity: info
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: sum(rate(mcp_rate_limit_hits_total[1m]))
+              instant: false
+              interval: ""
+              legendFormat: "rate_limit_hits"
+              range: true
+              refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              params:
+                - 10
+              refId: B

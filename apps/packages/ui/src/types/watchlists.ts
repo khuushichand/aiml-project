@@ -199,7 +199,13 @@ export interface WatchlistJobUpdate {
 // Run Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled"
+export type RunStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
 
 export interface RunStats {
   items_found?: number

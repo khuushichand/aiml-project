@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { FlashcardEditDrawer } from "../FlashcardEditDrawer"
 import type { Flashcard } from "@/services/flashcards"
+import { DEFAULT_SCHEDULER_SETTINGS_ENVELOPE } from "../../utils/scheduler-settings"
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -23,6 +24,18 @@ vi.mock("react-i18next", () => ({
       }
       return key
     }
+  })
+}))
+
+vi.mock("@/hooks/useAntdMessage", () => ({
+  useAntdMessage: () => ({
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+    loading: vi.fn(),
+    open: vi.fn(),
+    destroy: vi.fn()
   })
 }))
 
@@ -63,6 +76,7 @@ const sampleCard: Flashcard = {
   interval_days: 17,
   repetitions: 6,
   lapses: 4,
+  queue_state: "review",
   due_at: "2026-02-20T10:30:00Z",
   last_reviewed_at: "2026-02-18T08:15:00Z",
   last_modified: null,
@@ -95,7 +109,9 @@ describe("FlashcardEditDrawer reset scheduling action", () => {
             description: null,
             deleted: false,
             client_id: "1",
-            version: 1
+            version: 1,
+            scheduler_type: "sm2_plus",
+            scheduler_settings: DEFAULT_SCHEDULER_SETTINGS_ENVELOPE
           }
         ]}
       />

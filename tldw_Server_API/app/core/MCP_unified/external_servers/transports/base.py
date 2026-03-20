@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 if TYPE_CHECKING:  # pragma: no cover
     from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+    from ..config_schema import ExternalMCPServerConfig
 
 
 @dataclass(slots=True)
@@ -26,6 +27,15 @@ class ExternalToolCallResult:
 
     content: Any
     is_error: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class BrokeredExternalCredential:
+    """Ephemeral per-call auth material resolved outside long-lived adapter state."""
+
+    headers: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -62,5 +72,38 @@ class ExternalMCPTransportAdapter(ABC):
         tool_name: str,
         arguments: dict[str, Any],
         context: Optional["RequestContext"] = None,
+        runtime_auth: BrokeredExternalCredential | None = None,
     ) -> ExternalToolCallResult:
         """Execute a tool on the external server and normalize the result."""
+
+
+def clone_external_server_config(
+    server_config: "ExternalMCPServerConfig",
+) -> "ExternalMCPServerConfig":
+    """Deep-copy an external server config without mutating long-lived adapter state."""
+    if hasattr(server_config, "model_copy"):
+        return server_config.model_copy(deep=True)  # type: ignore[attr-defined]
+    return server_config.copy(deep=True)
+
+
+async def call_tool_with_ephemeral_adapter(
+    *,
+    server_config: "ExternalMCPServerConfig",
+    adapter_factory: Callable[["ExternalMCPServerConfig"], ExternalMCPTransportAdapter],
+    prepare_config: Callable[["ExternalMCPServerConfig"], None],
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> ExternalToolCallResult:
+    """Run one external tool call against a short-lived adapter with cloned config."""
+    ephemeral_config = clone_external_server_config(server_config)
+    prepare_config(ephemeral_config)
+    ephemeral_adapter = adapter_factory(ephemeral_config)
+    try:
+        await ephemeral_adapter.connect()
+        return await ephemeral_adapter.call_tool(
+            tool_name,
+            arguments,
+            runtime_auth=None,
+        )
+    finally:
+        await ephemeral_adapter.close()

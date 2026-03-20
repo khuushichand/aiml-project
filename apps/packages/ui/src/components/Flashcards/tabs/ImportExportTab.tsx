@@ -17,26 +17,33 @@ import { useTranslation } from "react-i18next"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
 import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { processInChunks } from "@/utils/chunk-processing"
+import { ImageOcclusionTransferPanel } from "./ImageOcclusionTransferPanel"
+import { NewDeckConfigurationFields } from "../components/NewDeckConfigurationFields"
 import {
   useCreateDeckMutation,
   useCreateFlashcardMutation,
+  useCreateFlashcardsBulkMutation,
   useDecksQuery,
   useGenerateFlashcardsMutation,
   useImportFlashcardsMutation,
   useImportFlashcardsApkgMutation,
   useImportFlashcardsJsonMutation,
-  useImportLimitsQuery
+  useImportLimitsQuery,
+  usePreviewStructuredQaImportMutation
 } from "../hooks"
 import { getUtf8ByteLength } from "../utils/field-byte-limit"
+import { useDeckSchedulerDraft } from "../hooks/useDeckSchedulerDraft"
 import { FileDropZone } from "../components"
 import { FLASHCARDS_HELP_LINKS } from "../constants"
+import { formatSchedulerSummary } from "../utils/scheduler-settings"
 import {
   deleteFlashcard,
   exportFlashcards,
   exportFlashcardsFile,
   getFlashcard,
   listFlashcards,
-  type FlashcardsImportError
+  type FlashcardsImportError,
+  type StructuredQaImportPreviewDraft
 } from "@/services/flashcards"
 import type { FlashcardsGenerateIntent } from "@/services/tldw/flashcards-generate-handoff"
 
@@ -62,8 +69,14 @@ interface GeneratedCardDraft {
   extra?: string | null
 }
 
+interface StructuredImportDraft extends StructuredQaImportPreviewDraft {
+  id: string
+  selected: boolean
+  tags: string[]
+}
+
 type SupportedDelimiter = "\t" | "," | ";" | "|"
-type ImportMode = "delimited" | "json" | "apkg"
+type ImportMode = "delimited" | "json" | "apkg" | "structured"
 type GenerateSourceType = Exclude<
   NonNullable<FlashcardsGenerateIntent["sourceType"]>,
   "manual"
@@ -82,7 +95,7 @@ interface GeneratePanelProps {
 type TransferActionStatus = "success" | "warning" | "error"
 
 interface TransferActionSummaryInput {
-  area: "import" | "export" | "generate"
+  area: "import" | "export" | "generate" | "occlusion"
   status: TransferActionStatus
   message: string
 }
@@ -101,6 +114,8 @@ const LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS = 300
 const LARGE_IMPORT_CONFIRM_THRESHOLD_APKG_BYTES = 5 * 1024 * 1024
 const APKG_ESTIMATED_BYTES_PER_CARD = 4096
 const SUPPORTED_DELIMITERS: SupportedDelimiter[] = ["\t", ",", ";", "|"]
+const NEW_DECK_OPTION_VALUE = "__new__" as const
+type DeckSelectionValue = number | typeof NEW_DECK_OPTION_VALUE | null | undefined
 const IMPORT_HELP_ANCHORS = {
   columns: "flashcards-import-help-columns",
   delimiter: "flashcards-import-help-delimiter",
@@ -185,7 +200,7 @@ const normalizeGeneratedCards = (value: unknown): GeneratedCardDraft[] => {
                 .map((tag) => tag.trim())
                 .filter((tag) => tag.length > 0)
             : []
-      return {
+      const draft: GeneratedCardDraft = {
         id: `generated-${index}-${front.slice(0, 16)}`,
         front,
         back,
@@ -194,9 +209,22 @@ const normalizeGeneratedCards = (value: unknown): GeneratedCardDraft[] => {
         notes: typeof item.notes === "string" ? item.notes : null,
         extra: typeof item.extra === "string" ? item.extra : null
       }
+      return draft
     })
     .filter((item): item is GeneratedCardDraft => item !== null)
 }
+
+const normalizeStructuredDrafts = (
+  drafts: StructuredQaImportPreviewDraft[]
+): StructuredImportDraft[] =>
+  drafts.map((draft, index) => ({
+    ...draft,
+    id: `structured-${index}-${draft.line_start}`,
+    selected: true,
+    tags: Array.isArray(draft.tags)
+      ? draft.tags.map((tag) => String(tag || "").trim()).filter((tag) => tag.length > 0)
+      : []
+  }))
 
 const normalizeImportErrors = (value: unknown): FlashcardsImportError[] => {
   if (!Array.isArray(value)) return []
@@ -210,11 +238,12 @@ const normalizeImportErrors = (value: unknown): FlashcardsImportError[] => {
       }
       const line = typeof row.line === "number" ? row.line : null
       const index = typeof row.index === "number" ? row.index : null
-      return {
+      const importError: FlashcardsImportError = {
         error: rawError,
         line,
         index
       }
+      return importError
     })
     .filter((item): item is FlashcardsImportError => item !== null)
 }
@@ -232,6 +261,45 @@ const normalizeImportedItems = (value: unknown): ImportedCardReference[] => {
       }
     })
     .filter((item): item is ImportedCardReference => item !== null)
+}
+
+const buildStructuredDraftSaveError = (
+  draft: StructuredImportDraft,
+  maxFieldLength: number | null
+): FlashcardsImportError | null => {
+  const front = draft.front.trim()
+  const back = draft.back.trim()
+
+  if (!front) {
+    return {
+      line: draft.line_start,
+      error: "Missing required field: Front"
+    }
+  }
+  if (!back) {
+    return {
+      line: draft.line_start,
+      error: "Missing required field: Back"
+    }
+  }
+  if (maxFieldLength != null) {
+    const fieldLengths = [
+      ["Front", front],
+      ["Back", back],
+      ["Notes", draft.notes || ""],
+      ["Extra", draft.extra || ""]
+    ] as const
+    const tooLongField = fieldLengths.find(
+      ([, value]) => getUtf8ByteLength(value) > maxFieldLength
+    )
+    if (tooLongField) {
+      return {
+        line: draft.line_start,
+        error: `Field too long: ${tooLongField[0]} (> ${maxFieldLength} bytes)`
+      }
+    }
+  }
+  return null
 }
 
 const countDelimiterOccurrences = (line: string, delimiter: string): number =>
@@ -315,9 +383,14 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
   const { showUndoNotification } = useUndoNotification()
   const { t } = useTranslation(["option", "common"])
   const limitsQuery = useImportLimitsQuery()
+  const decksQuery = useDecksQuery()
+  const createDeckMutation = useCreateDeckMutation()
+  const createBulkMutation = useCreateFlashcardsBulkMutation()
   const importMutation = useImportFlashcardsMutation()
   const importJsonMutation = useImportFlashcardsJsonMutation()
   const importApkgMutation = useImportFlashcardsApkgMutation()
+  const previewStructuredMutation = usePreviewStructuredQaImportMutation()
+  const decks = decksQuery.data || []
 
   const [content, setContent] = React.useState("")
   const [importMode, setImportMode] = React.useState<ImportMode>("delimited")
@@ -325,10 +398,44 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
   const [delimiter, setDelimiter] = React.useState<string>("\t")
   const [hasHeader, setHasHeader] = React.useState<boolean>(true)
   const [lastResult, setLastResult] = React.useState<ImportResultSummary | null>(null)
+  const [structuredDrafts, setStructuredDrafts] = React.useState<StructuredImportDraft[]>([])
+  const [structuredPreviewErrors, setStructuredPreviewErrors] = React.useState<
+    FlashcardsImportError[]
+  >([])
+  const [structuredTargetDeckId, setStructuredTargetDeckId] =
+    React.useState<DeckSelectionValue>(undefined)
+  const [structuredNewDeckName, setStructuredNewDeckName] = React.useState(() =>
+    t("option:flashcards.structuredImportDeckName", {
+      defaultValue: "Structured Import"
+    })
+  )
   const [confirmLargeImportOpen, setConfirmLargeImportOpen] = React.useState(false)
   const [importHelpActiveKeys, setImportHelpActiveKeys] = React.useState<string[]>([
     "columns"
   ])
+  const structuredSchedulerDraft = useDeckSchedulerDraft()
+  const structuredSelectedDeck = React.useMemo(
+    () =>
+      typeof structuredTargetDeckId === "number"
+        ? decks.find((deck) => deck.id === structuredTargetDeckId) ?? null
+        : null,
+    [decks, structuredTargetDeckId]
+  )
+  const structuredDeckOptions = React.useMemo(
+    () => [
+      ...decks.map((deck) => ({
+        label: deck.name,
+        value: deck.id
+      })),
+      {
+        label: t("option:flashcards.createNewDeck", {
+          defaultValue: "Create new deck"
+        }),
+        value: NEW_DECK_OPTION_VALUE
+      }
+    ],
+    [decks, t]
+  )
 
   const selectedDelimiterLabel = React.useMemo(() => {
     if (delimiter === "\t") {
@@ -342,6 +449,83 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
     }
     return t("option:flashcards.pipeShort", { defaultValue: "Pipe" })
   }, [delimiter, t])
+
+  React.useEffect(() => {
+    if (structuredTargetDeckId !== undefined) return
+    if (decks.length > 0) {
+      setStructuredTargetDeckId(decks[0].id)
+      return
+    }
+    setStructuredTargetDeckId(NEW_DECK_OPTION_VALUE)
+  }, [decks, structuredTargetDeckId])
+
+  const structuredMaxFieldLength = React.useMemo(() => {
+    const rawValue = limitsQuery.data?.max_field_length
+    return typeof rawValue === "number" && rawValue > 0 ? rawValue : null
+  }, [limitsQuery.data])
+
+  const updateStructuredDraft = React.useCallback(
+    (id: string, patch: Partial<StructuredImportDraft>) => {
+      setStructuredDrafts((prev) =>
+        prev.map((draft) => (draft.id === id ? { ...draft, ...patch } : draft))
+      )
+    },
+    []
+  )
+
+  const removeStructuredDraft = React.useCallback((id: string) => {
+    setStructuredDrafts((prev) => prev.filter((draft) => draft.id !== id))
+  }, [])
+
+  const resolveStructuredTargetDeckId = React.useCallback(async (): Promise<number> => {
+    if (typeof structuredTargetDeckId === "number") return structuredTargetDeckId
+    if (structuredTargetDeckId === undefined && decks.length > 0) {
+      return decks[0].id
+    }
+    if (
+      structuredTargetDeckId === NEW_DECK_OPTION_VALUE ||
+      (structuredTargetDeckId == null && decks.length === 0)
+    ) {
+      const name = structuredNewDeckName.trim()
+      if (!name) {
+        throw new Error(
+          t("option:flashcards.newDeckNameRequired", {
+            defaultValue: "Enter a deck name."
+          })
+        )
+      }
+      const schedulerSettings = structuredSchedulerDraft.getValidatedSettings()
+      if (!schedulerSettings) {
+        throw new Error(
+          t("option:flashcards.schedulerDraftInvalid", {
+            defaultValue: "Draft has validation errors."
+          })
+        )
+      }
+      const createdDeck = await createDeckMutation.mutateAsync({
+        name,
+        scheduler_type: schedulerSettings.scheduler_type,
+        scheduler_settings: schedulerSettings.scheduler_settings
+      })
+      setStructuredTargetDeckId(createdDeck.id)
+      return createdDeck.id
+    }
+    if (structuredTargetDeckId == null && decks.length > 0) {
+      return decks[0].id
+    }
+    throw new Error(
+      t("option:flashcards.newDeckNameRequired", {
+        defaultValue: "Enter a deck name."
+      })
+    )
+  }, [
+    createDeckMutation,
+    decks,
+    structuredNewDeckName,
+    structuredSchedulerDraft,
+    structuredTargetDeckId,
+    t
+  ])
 
   const scrollToImportHelp = React.useCallback((anchorId?: string) => {
     if (!anchorId || typeof document === "undefined") return
@@ -436,13 +620,17 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
       ? estimatedImportRows
       : importMode === "json"
         ? estimateJsonItemCount(content)
-        : estimatedApkgItems
+        : importMode === "structured"
+          ? nonEmptyLineCount
+          : estimatedApkgItems
   const importPayloadBytes = getUtf8ByteLength(content)
   const requiresLargeImportConfirmation =
     importMode === "apkg"
       ? apkgFileSizeBytes >= LARGE_IMPORT_CONFIRM_THRESHOLD_APKG_BYTES ||
         estimatedImportItems >= LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS
-      : estimatedImportItems >= LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS
+      : importMode === "structured"
+        ? false
+        : estimatedImportItems >= LARGE_IMPORT_CONFIRM_THRESHOLD_ROWS
 
   const invalidateFlashcardQueries = React.useCallback(async () => {
     await qc.invalidateQueries({
@@ -452,6 +640,180 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
         query.queryKey[0].startsWith("flashcards:")
     })
   }, [qc])
+
+  const handleStructuredPreview = React.useCallback(async () => {
+    try {
+      setLastResult(null)
+      const preview = await previewStructuredMutation.mutateAsync({
+        content
+      })
+      const drafts = normalizeStructuredDrafts(preview.drafts)
+      setStructuredDrafts(drafts)
+      setStructuredPreviewErrors(normalizeImportErrors(preview.errors))
+
+      if (drafts.length === 0) {
+        const warningCopy = t("option:flashcards.structuredPreviewEmpty", {
+          defaultValue:
+            "No labeled Q&A pairs were detected. Use Q:/A: or Question:/Answer: labels."
+        })
+        message.warning(warningCopy)
+        onTransferAction?.({
+          area: "import",
+          status: "warning",
+          message: warningCopy
+        })
+        return
+      }
+
+      const successCopy = t("option:flashcards.structuredPreviewReady", {
+        defaultValue: "Prepared {{count}} structured drafts for review.",
+        count: drafts.length
+      })
+      message.success(successCopy)
+      onTransferAction?.({
+        area: "import",
+        status: preview.errors.length > 0 ? "warning" : "success",
+        message: successCopy
+      })
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : "Structured preview failed"
+      message.error(errorMessage)
+      onTransferAction?.({
+        area: "import",
+        status: "error",
+        message: errorMessage
+      })
+    }
+  }, [content, message, onTransferAction, previewStructuredMutation, t])
+
+  const handleSaveStructuredDrafts = React.useCallback(async () => {
+    const selectedDrafts = structuredDrafts.filter((draft) => draft.selected)
+    const draftValidationResults = selectedDrafts.map((draft) => ({
+      draft,
+      error: buildStructuredDraftSaveError(draft, structuredMaxFieldLength)
+    }))
+    const savableDrafts = draftValidationResults
+      .filter((entry) => entry.error === null)
+      .map((entry) => entry.draft)
+    const skippedSaveErrors = draftValidationResults.flatMap((entry) =>
+      entry.error ? [entry.error] : []
+    )
+
+    if (savableDrafts.length === 0) {
+      message.warning(
+        t("option:flashcards.structuredSaveNoneSelected", {
+          defaultValue: "Select at least one valid draft to save."
+        })
+      )
+      return
+    }
+
+    try {
+      const deckId = await resolveStructuredTargetDeckId()
+      const payload = savableDrafts.map((draft) => ({
+        deck_id: deckId,
+        front: draft.front.trim(),
+        back: draft.back.trim(),
+        notes: draft.notes || undefined,
+        extra: draft.extra || undefined,
+        tags: draft.tags,
+        model_type: "basic" as const,
+        reverse: false,
+        is_cloze: false,
+        source_ref_type: "manual" as const
+      }))
+      const created = await createBulkMutation.mutateAsync(payload)
+      const createdItems = normalizeImportedItems(created.items)
+      const submittedDraftIds = new Set(savableDrafts.map((draft) => draft.id))
+      const resultErrors = [...structuredPreviewErrors, ...skippedSaveErrors]
+
+      setStructuredDrafts((prev) =>
+        prev.filter((draft) => !submittedDraftIds.has(draft.id))
+      )
+      setLastResult({
+        imported: createdItems.length,
+        skipped: resultErrors.length,
+        errors: resultErrors
+      })
+
+      const saveFeedbackCopy =
+        resultErrors.length > 0
+          ? t("option:flashcards.structuredSavePartial", {
+              defaultValue:
+                "Saved {{count}} structured cards, skipped {{skipped}} drafts.",
+              count: createdItems.length,
+              skipped: resultErrors.length
+            })
+          : t("option:flashcards.structuredSaveSuccess", {
+              defaultValue: "Saved {{count}} structured cards.",
+              count: createdItems.length
+            })
+      if (resultErrors.length > 0) {
+        message.warning(saveFeedbackCopy)
+      } else {
+        message.success(saveFeedbackCopy)
+      }
+      onTransferAction?.({
+        area: "import",
+        status: resultErrors.length > 0 ? "warning" : "success",
+        message: saveFeedbackCopy
+      })
+
+      if (createdItems.length > 0) {
+        showUndoNotification({
+          title: t("option:flashcards.structuredUndoTitle", {
+            defaultValue: "Structured import saved"
+          }),
+          description: t("option:flashcards.importUndoHint", {
+            defaultValue:
+              "Undo within {{seconds}}s to remove {{count}} imported cards.",
+            seconds: IMPORT_UNDO_SECONDS,
+            count: createdItems.length
+          }),
+          duration: IMPORT_UNDO_SECONDS,
+          onUndo: async () => {
+            let failedRollbacks = 0
+            await processInChunks(createdItems, IMPORT_UNDO_CHUNK_SIZE, async (chunk) => {
+              const results = await Promise.allSettled(
+                chunk.map(async (item) => {
+                  const latest = await getFlashcard(item.uuid)
+                  await deleteFlashcard(item.uuid, latest.version)
+                })
+              )
+              failedRollbacks += results.filter((result) => result.status === "rejected").length
+            })
+            await invalidateFlashcardQueries()
+            if (failedRollbacks > 0) {
+              throw new Error(
+                t("option:flashcards.importUndoPartialFailure", {
+                  defaultValue: "Some imported cards could not be rolled back."
+                })
+              )
+            }
+          }
+        })
+      }
+    } catch (e: unknown) {
+      const errorMessage = e instanceof Error ? e.message : "Structured save failed"
+      message.error(errorMessage)
+      onTransferAction?.({
+        area: "import",
+        status: "error",
+        message: errorMessage
+      })
+    }
+  }, [
+    createBulkMutation,
+    invalidateFlashcardQueries,
+    message,
+    onTransferAction,
+    resolveStructuredTargetDeckId,
+    showUndoNotification,
+    structuredDrafts,
+    structuredMaxFieldLength,
+    structuredPreviewErrors,
+    t
+  ])
 
   const performImport = React.useCallback(async () => {
     try {
@@ -611,7 +973,9 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
       ? importMutation.isPending
       : importMode === "json"
         ? importJsonMutation.isPending
-        : importApkgMutation.isPending
+        : importMode === "structured"
+          ? previewStructuredMutation.isPending || createBulkMutation.isPending
+          : importApkgMutation.isPending
 
   return (
     <div className="flex flex-col gap-3">
@@ -629,6 +993,10 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
               if (value !== "apkg") {
                 setApkgFile(null)
               }
+              if (value !== "structured") {
+                setStructuredDrafts([])
+                setStructuredPreviewErrors([])
+              }
             }}
             data-testid="flashcards-import-format"
             options={[
@@ -642,6 +1010,12 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                 value: "json",
                 label: t("option:flashcards.importFormatJson", {
                   defaultValue: "JSON / JSONL"
+                })
+              },
+              {
+                value: "structured",
+                label: t("option:flashcards.importFormatStructured", {
+                  defaultValue: "Structured Q&A"
                 })
               },
               {
@@ -663,6 +1037,11 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                   defaultValue:
                     "Paste JSON array, {\"items\": [...]}, or JSONL (one JSON object per line)."
                 })
+              : importMode === "structured"
+                ? t("option:flashcards.importHelpStructured", {
+                    defaultValue:
+                      "Paste labeled notes with Q:/A: or Question:/Answer: pairs, then preview and approve drafts before saving."
+                  })
               : t("option:flashcards.importHelpApkg", {
                   defaultValue:
                     "Upload an APKG file exported from Anki. Decks, card templates, tags, and scheduling state will be imported."
@@ -673,6 +1052,8 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
             ? "Deck\tFront\tBack\tTags\tNotes\nMy deck\tWhat is a closure?\tA function with preserved outer scope.\tjavascript; fundamentals\tLecture 3"
             : importMode === "json"
               ? '[{"deck":"My deck","front":"What is a closure?","back":"A function with preserved outer scope.","tags":["javascript","fundamentals"]}]'
+              : importMode === "structured"
+                ? "Q: What is ATP?\nA: Primary cellular energy currency.\n\nQuestion: What is glycolysis?\nAnswer: Cytosolic glucose breakdown."
               : "my_deck.apkg"}
         </pre>
         <Collapse
@@ -776,6 +1157,25 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                       )
                     }
                   ]
+              : importMode === "structured"
+                ? [
+                    {
+                      key: "structured",
+                      label: t("option:flashcards.importHelpStructuredTitle", {
+                        defaultValue: "Structured preview rules"
+                      }),
+                      children: (
+                        <div data-testid="flashcards-import-help-structured">
+                          <Text type="secondary" className="block text-xs">
+                            {t("option:flashcards.importStructuredFieldsHelp", {
+                              defaultValue:
+                                "Accepted labels: Q:/A: and Question:/Answer:. Continuation lines stay with the current question or answer until the next labeled block."
+                            })}
+                          </Text>
+                        </div>
+                      )
+                    }
+                  ]
               : [
                   {
                     key: "apkg",
@@ -800,7 +1200,11 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
           data-testid="flashcards-import-help-accordion"
         />
         <a
-          href={FLASHCARDS_HELP_LINKS.importFormats}
+          href={
+            importMode === "structured"
+              ? FLASHCARDS_HELP_LINKS.structuredImport
+              : FLASHCARDS_HELP_LINKS.importFormats
+          }
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-primary hover:underline"
@@ -820,6 +1224,8 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
             accept={
               importMode === "delimited"
                 ? ".csv,.tsv,.txt"
+                : importMode === "structured"
+                  ? ".txt,.md"
                 : ".json,.jsonl,.ndjson,.txt"
             }
           />
@@ -877,6 +1283,55 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
                 />
               </Space>
             </Space>
+          ) : importMode === "structured" ? (
+            <div className="space-y-3">
+              <Form.Item
+                label={t("option:flashcards.structuredTargetDeck", {
+                  defaultValue: "Target deck"
+                })}
+                className="!mb-1"
+              >
+                <Select
+                  allowClear
+                  value={structuredTargetDeckId ?? undefined}
+                  onChange={(value) => {
+                    setStructuredTargetDeckId((value as DeckSelectionValue) ?? null)
+                  }}
+                  options={structuredDeckOptions}
+                  data-testid="flashcards-structured-target-deck"
+                />
+              </Form.Item>
+              {structuredTargetDeckId === NEW_DECK_OPTION_VALUE ? (
+                <NewDeckConfigurationFields
+                  deckName={structuredNewDeckName}
+                  onDeckNameChange={setStructuredNewDeckName}
+                  schedulerDraft={structuredSchedulerDraft}
+                  nameTestId="flashcards-structured-new-deck-name"
+                />
+              ) : structuredSelectedDeck?.scheduler_settings ? (
+                <Text
+                  type="secondary"
+                  className="block text-xs"
+                  data-testid="flashcards-structured-selected-deck-summary"
+                >
+                  {formatSchedulerSummary(
+                    structuredSelectedDeck.scheduler_type,
+                    structuredSelectedDeck.scheduler_settings
+                  )}
+                </Text>
+              ) : null}
+              <Button
+                type="primary"
+                onClick={() => void handleStructuredPreview()}
+                loading={previewStructuredMutation.isPending}
+                disabled={!content.trim()}
+                data-testid="flashcards-structured-preview-button"
+              >
+                {t("option:flashcards.structuredPreviewButton", {
+                  defaultValue: "Preview structured drafts"
+                })}
+              </Button>
+            </div>
           ) : (
             <Text
               type="secondary"
@@ -943,94 +1398,205 @@ const ImportPanel: React.FC<TransferActionReporterProps> = ({ onTransferAction }
           description={importPreflightWarning}
         />
       )}
-      <Button
-        type="primary"
-        onClick={handleImport}
-        loading={activeImportPending}
-        disabled={importMode === "apkg" ? !apkgFile : !content.trim()}
-        data-testid="flashcards-import-button"
-      >
-        {t("option:flashcards.importButton", { defaultValue: "Import" })}
-      </Button>
-      <Modal
-        open={confirmLargeImportOpen}
-        onCancel={() => setConfirmLargeImportOpen(false)}
-        title={t("option:flashcards.largeImportConfirmTitle", {
-          defaultValue: "Confirm large import"
-        })}
-        footer={[
-          <Button key="cancel" onClick={() => setConfirmLargeImportOpen(false)}>
-            {t("common:cancel", { defaultValue: "Cancel" })}
-          </Button>,
+      {importMode !== "structured" && (
+        <>
           <Button
-            key="confirm"
             type="primary"
-            onClick={handleConfirmLargeImport}
-            data-testid="flashcards-import-confirm-large"
+            onClick={handleImport}
+            loading={activeImportPending}
+            disabled={importMode === "apkg" ? !apkgFile : !content.trim()}
+            data-testid="flashcards-import-button"
           >
-            {t("option:flashcards.largeImportConfirmAction", {
-              defaultValue: "Import now"
+            {t("option:flashcards.importButton", { defaultValue: "Import" })}
+          </Button>
+          <Modal
+            open={confirmLargeImportOpen}
+            onCancel={() => setConfirmLargeImportOpen(false)}
+            title={t("option:flashcards.largeImportConfirmTitle", {
+              defaultValue: "Confirm large import"
+            })}
+            footer={[
+              <Button key="cancel" onClick={() => setConfirmLargeImportOpen(false)}>
+                {t("common:cancel", { defaultValue: "Cancel" })}
+              </Button>,
+              <Button
+                key="confirm"
+                type="primary"
+                onClick={handleConfirmLargeImport}
+                data-testid="flashcards-import-confirm-large"
+              >
+                {t("option:flashcards.largeImportConfirmAction", {
+                  defaultValue: "Import now"
+                })}
+              </Button>
+            ]}
+          >
+            <div className="space-y-1 text-sm">
+              <Text>
+                {t("option:flashcards.largeImportConfirmRows", {
+                  defaultValue: "You are about to import approximately {{count}} items.",
+                  count: estimatedImportItems
+                })}
+              </Text>
+              <Text type="secondary" className="block">
+                {t("option:flashcards.largeImportConfirmImpact", {
+                  defaultValue:
+                    importMode === "delimited"
+                      ? "This may create many cards at once. Review delimiter/header settings before confirming."
+                      : importMode === "json"
+                        ? "This may create many cards at once. Review JSON structure before confirming."
+                        : "This APKG may expand into many cards. Review selected file details before confirming."
+                })}
+              </Text>
+              {importMode === "delimited" ? (
+                <Text type="secondary" className="block">
+                  {t("option:flashcards.largeImportConfirmSummary", {
+                    defaultValue:
+                      "Summary: {{rows}} non-empty lines, delimiter {{delimiter}}, header {{header}}, payload {{bytes}} bytes.",
+                    rows: nonEmptyLineCount,
+                    delimiter: selectedDelimiterLabel,
+                    header: hasHeader
+                      ? t("common:yes", { defaultValue: "Yes" })
+                      : t("common:no", { defaultValue: "No" }),
+                    bytes: importPayloadBytes
+                  })}
+                </Text>
+              ) : importMode === "json" ? (
+                <Text type="secondary" className="block">
+                  {t("option:flashcards.largeImportConfirmSummaryJson", {
+                    defaultValue:
+                      "Summary: detected {{format}} format, {{rows}} non-empty lines, payload {{bytes}} bytes.",
+                    format: detectedJsonImportFormat === "jsonl" ? "JSONL" : "JSON",
+                    rows: nonEmptyLineCount,
+                    bytes: importPayloadBytes
+                  })}
+                </Text>
+              ) : (
+                <Text type="secondary" className="block">
+                  {t("option:flashcards.largeImportConfirmSummaryApkg", {
+                    defaultValue:
+                      "Summary: file {{fileName}}, size {{bytes}} bytes, estimated {{count}} cards.",
+                    fileName:
+                      apkgFile?.name ||
+                      t("option:flashcards.importApkgUnknownFile", {
+                        defaultValue: "unknown.apkg"
+                      }),
+                    bytes: apkgFileSizeBytes,
+                    count: estimatedImportItems
+                  })}
+                </Text>
+              )}
+            </div>
+          </Modal>
+        </>
+      )}
+
+      {importMode === "structured" && structuredPreviewErrors.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          data-testid="flashcards-structured-preview-errors"
+          title={t("option:flashcards.structuredPreviewErrorsTitle", {
+            defaultValue: "Preview warnings"
+          })}
+          description={
+            <div className="space-y-1 text-xs">
+              {structuredPreviewErrors.map((error, index) => (
+                <div key={`${error.line ?? "line"}-${index}`}>
+                  <Text code>
+                    {typeof error.line === "number"
+                      ? t("option:flashcards.importErrorLine", {
+                          defaultValue: "Line {{line}}",
+                          line: error.line
+                        })
+                      : t("option:flashcards.importErrorRowUnknown", {
+                          defaultValue: "Unknown row"
+                        })}
+                  </Text>
+                  <Text className="ml-2">{error.error}</Text>
+                </div>
+              ))}
+            </div>
+          }
+        />
+      )}
+
+      {importMode === "structured" && structuredDrafts.length > 0 && (
+        <div className="space-y-2">
+          <Text strong>
+            {t("option:flashcards.structuredPreviewTitle", {
+              defaultValue: "Structured drafts (editable before save)"
+            })}
+          </Text>
+          {structuredDrafts.map((draft, index) => (
+            <Card
+              key={draft.id}
+              size="small"
+              title={t("option:flashcards.generatedCardTitle", {
+                defaultValue: "Card {{index}}",
+                index: index + 1
+              })}
+              extra={
+                <Button
+                  type="text"
+                  danger
+                  size="small"
+                  onClick={() => removeStructuredDraft(draft.id)}
+                >
+                  {t("common:remove", { defaultValue: "Remove" })}
+                </Button>
+              }
+            >
+              <Space orientation="vertical" className="w-full">
+                <label className="inline-flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={draft.selected}
+                    onChange={(event) =>
+                      updateStructuredDraft(draft.id, {
+                        selected: event.target.checked
+                      })
+                    }
+                    data-testid={`flashcards-structured-draft-selected-${index}`}
+                  />
+                  <span>
+                    {t("option:flashcards.structuredDraftMeta", {
+                      defaultValue: "Use lines {{start}}-{{end}}",
+                      start: draft.line_start,
+                      end: draft.line_end
+                    })}
+                  </span>
+                </label>
+                <Input.TextArea
+                  value={draft.front}
+                  rows={2}
+                  onChange={(event) =>
+                    updateStructuredDraft(draft.id, { front: event.target.value })
+                  }
+                />
+                <Input.TextArea
+                  value={draft.back}
+                  rows={3}
+                  onChange={(event) =>
+                    updateStructuredDraft(draft.id, { back: event.target.value })
+                  }
+                />
+              </Space>
+            </Card>
+          ))}
+          <Button
+            type="primary"
+            onClick={() => void handleSaveStructuredDrafts()}
+            loading={createBulkMutation.isPending || createDeckMutation.isPending}
+            disabled={!structuredDrafts.some((draft) => draft.selected)}
+            data-testid="flashcards-structured-save-button"
+          >
+            {t("option:flashcards.structuredSaveButton", {
+              defaultValue: "Save selected drafts"
             })}
           </Button>
-        ]}
-      >
-        <div className="space-y-1 text-sm">
-          <Text>
-            {t("option:flashcards.largeImportConfirmRows", {
-              defaultValue: "You are about to import approximately {{count}} items.",
-              count: estimatedImportItems
-            })}
-          </Text>
-          <Text type="secondary" className="block">
-            {t("option:flashcards.largeImportConfirmImpact", {
-              defaultValue:
-                importMode === "delimited"
-                  ? "This may create many cards at once. Review delimiter/header settings before confirming."
-                  : importMode === "json"
-                    ? "This may create many cards at once. Review JSON structure before confirming."
-                    : "This APKG may expand into many cards. Review selected file details before confirming."
-            })}
-          </Text>
-          {importMode === "delimited" ? (
-            <Text type="secondary" className="block">
-              {t("option:flashcards.largeImportConfirmSummary", {
-                defaultValue:
-                  "Summary: {{rows}} non-empty lines, delimiter {{delimiter}}, header {{header}}, payload {{bytes}} bytes.",
-                rows: nonEmptyLineCount,
-                delimiter: selectedDelimiterLabel,
-                header: hasHeader
-                  ? t("common:yes", { defaultValue: "Yes" })
-                  : t("common:no", { defaultValue: "No" }),
-                bytes: importPayloadBytes
-              })}
-            </Text>
-          ) : importMode === "json" ? (
-            <Text type="secondary" className="block">
-              {t("option:flashcards.largeImportConfirmSummaryJson", {
-                defaultValue:
-                  "Summary: detected {{format}} format, {{rows}} non-empty lines, payload {{bytes}} bytes.",
-                format: detectedJsonImportFormat === "jsonl" ? "JSONL" : "JSON",
-                rows: nonEmptyLineCount,
-                bytes: importPayloadBytes
-              })}
-            </Text>
-          ) : (
-            <Text type="secondary" className="block">
-              {t("option:flashcards.largeImportConfirmSummaryApkg", {
-                defaultValue:
-                  "Summary: file {{fileName}}, size {{bytes}} bytes, estimated {{count}} cards.",
-                fileName:
-                  apkgFile?.name ||
-                  t("option:flashcards.importApkgUnknownFile", {
-                    defaultValue: "unknown.apkg"
-                  }),
-                bytes: apkgFileSizeBytes,
-                count: estimatedImportItems
-              })}
-            </Text>
-          )}
         </div>
-      </Modal>
+      )}
 
       {lastResult && (
         <Alert
@@ -1416,6 +1982,7 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   const generateMutation = useGenerateFlashcardsMutation()
   const createMutation = useCreateFlashcardMutation()
   const createDeckMutation = useCreateDeckMutation()
+  const decks = decksQuery.data || []
 
   const sourceContext = React.useMemo<GenerateSourceContext | null>(() => {
     if (!initialIntent) return null
@@ -1440,17 +2007,44 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   const [provider, setProvider] = React.useState("")
   const [model, setModel] = React.useState("")
   const [focusTopicsInput, setFocusTopicsInput] = React.useState("")
-  const [targetDeckId, setTargetDeckId] = React.useState<number | null | undefined>(undefined)
+  const [targetDeckId, setTargetDeckId] = React.useState<DeckSelectionValue>(undefined)
+  const [newDeckName, setNewDeckName] = React.useState(() =>
+    t("option:flashcards.generatedDeckName", {
+      defaultValue: "Generated Flashcards"
+    })
+  )
   const [generatedCards, setGeneratedCards] = React.useState<GeneratedCardDraft[]>([])
   const [generationError, setGenerationError] = React.useState<string | null>(null)
   const [isSaving, setIsSaving] = React.useState(false)
+  const generatedDeckSchedulerDraft = useDeckSchedulerDraft()
+  const selectedDeck = React.useMemo(
+    () => (typeof targetDeckId === "number" ? decks.find((deck) => deck.id === targetDeckId) ?? null : null),
+    [decks, targetDeckId]
+  )
+  const deckOptions = React.useMemo(
+    () => [
+      ...decks.map((deck) => ({
+        label: deck.name,
+        value: deck.id
+      })),
+      {
+        label: t("option:flashcards.createNewDeck", {
+          defaultValue: "Create new deck"
+        }),
+        value: NEW_DECK_OPTION_VALUE
+      }
+    ],
+    [decks, t]
+  )
 
   React.useEffect(() => {
     if (targetDeckId != null) return
-    if ((decksQuery.data || []).length > 0) {
-      setTargetDeckId((decksQuery.data || [])[0].id)
+    if (decks.length > 0) {
+      setTargetDeckId(decks[0].id)
+      return
     }
-  }, [decksQuery.data, targetDeckId])
+    setTargetDeckId(NEW_DECK_OPTION_VALUE)
+  }, [decks, targetDeckId])
 
   const updateGeneratedCard = React.useCallback(
     (id: string, patch: Partial<GeneratedCardDraft>) => {
@@ -1534,16 +2128,40 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
   ])
 
   const resolveTargetDeckId = React.useCallback(async (): Promise<number> => {
-    if (targetDeckId != null) return targetDeckId
-    if ((decksQuery.data || []).length > 0) return (decksQuery.data || [])[0].id
-    const createdDeck = await createDeckMutation.mutateAsync({
-      name: t("option:flashcards.generatedDeckName", {
-        defaultValue: "Generated Flashcards"
+    if (typeof targetDeckId === "number") return targetDeckId
+    if (targetDeckId === undefined && decks.length > 0) return decks[0].id
+    if (targetDeckId === NEW_DECK_OPTION_VALUE || (targetDeckId == null && decks.length === 0)) {
+      const name = newDeckName.trim()
+      if (!name) {
+        throw new Error(
+          t("option:flashcards.newDeckNameRequired", {
+            defaultValue: "Enter a deck name."
+          })
+        )
+      }
+      const schedulerSettings = generatedDeckSchedulerDraft.getValidatedSettings()
+      if (!schedulerSettings) {
+        throw new Error(
+          t("option:flashcards.schedulerDraftInvalid", {
+            defaultValue: "Draft has validation errors."
+          })
+        )
+      }
+      const createdDeck = await createDeckMutation.mutateAsync({
+        name,
+        scheduler_type: schedulerSettings.scheduler_type,
+        scheduler_settings: schedulerSettings.scheduler_settings
       })
-    })
-    setTargetDeckId(createdDeck.id)
-    return createdDeck.id
-  }, [createDeckMutation, decksQuery.data, t, targetDeckId])
+      setTargetDeckId(createdDeck.id)
+      return createdDeck.id
+    }
+    if (targetDeckId == null && decks.length > 0) return decks[0].id
+    throw new Error(
+      t("option:flashcards.newDeckNameRequired", {
+        defaultValue: "Enter a deck name."
+      })
+    )
+  }, [createDeckMutation, decks, generatedDeckSchedulerDraft, newDeckName, t, targetDeckId])
 
   const handleSaveGeneratedCards = React.useCallback(async () => {
     if (generatedCards.length === 0) return
@@ -1738,14 +2356,27 @@ const GeneratePanel: React.FC<GeneratePanelProps & TransferActionReporterProps> 
           <Select
             allowClear
             value={targetDeckId ?? undefined}
-            onChange={setTargetDeckId}
+            onChange={(value) => setTargetDeckId((value as DeckSelectionValue) ?? null)}
             data-testid="flashcards-generate-deck"
-            options={(decksQuery.data || []).map((deck) => ({
-              label: deck.name,
-              value: deck.id
-            }))}
+            options={deckOptions}
           />
         </Form.Item>
+        {targetDeckId === NEW_DECK_OPTION_VALUE ? (
+          <NewDeckConfigurationFields
+            deckName={newDeckName}
+            onDeckNameChange={setNewDeckName}
+            schedulerDraft={generatedDeckSchedulerDraft}
+            nameTestId="flashcards-generate-new-deck-name"
+          />
+        ) : selectedDeck?.scheduler_settings ? (
+          <Text
+            type="secondary"
+            className="block text-xs -mt-2 mb-2"
+            data-testid="flashcards-generate-selected-deck-summary"
+          >
+            {formatSchedulerSummary(selectedDeck.scheduler_type, selectedDeck.scheduler_settings)}
+          </Text>
+        ) : null}
         <Form.Item
           label={t("option:flashcards.generateProvider", {
             defaultValue: "Provider (optional)"
@@ -1902,9 +2533,13 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
         ? t("option:flashcards.importTitle", { defaultValue: "Import Flashcards" })
         : lastTransferAction.area === "export"
           ? t("option:flashcards.exportTitle", { defaultValue: "Export Flashcards" })
-          : t("option:flashcards.generateTitle", {
-              defaultValue: "Generate Flashcards"
-            })
+          : lastTransferAction.area === "occlusion"
+            ? t("option:flashcards.occlusionTitle", {
+                defaultValue: "Image Occlusion"
+              })
+            : t("option:flashcards.generateTitle", {
+                defaultValue: "Generate Flashcards"
+              })
     return t("option:flashcards.transferSummaryLastAction", {
       defaultValue: "{{area}} · {{message}} · {{time}}",
       area: areaLabel,
@@ -1914,9 +2549,9 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
   }, [lastTransferAction, t])
 
   return (
-    <div className="grid gap-4 grid-cols-1 xl:grid-cols-3">
+    <div className="grid gap-4 grid-cols-1 xl:grid-cols-4">
       <Card
-        className="xl:col-span-3"
+        className="xl:col-span-4"
         title={t("option:flashcards.transferSummaryTitle", {
           defaultValue: "Transfer summary"
         })}
@@ -1931,7 +2566,8 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
             </Text>
             <Text type="secondary">
               {t("option:flashcards.transferSummaryFormatsValue", {
-                defaultValue: "Import: CSV, TSV, JSON, JSONL, APKG · Export: TSV, CSV, APKG"
+                defaultValue:
+                  "Import: CSV, TSV, JSON, JSONL, Structured Q&A, APKG · Author: Generate, Image Occlusion · Export: TSV, CSV, APKG"
               })}
             </Text>
           </div>
@@ -1996,6 +2632,13 @@ export const ImportExportTab: React.FC<ImportExportTabProps> = ({ generateIntent
           initialIntent={generateIntent || null}
           onTransferAction={handleTransferAction}
         />
+      </Card>
+      <Card
+        title={t("option:flashcards.occlusionTitle", {
+          defaultValue: "Image Occlusion"
+        })}
+      >
+        <ImageOcclusionTransferPanel onTransferAction={handleTransferAction} />
       </Card>
     </div>
   )

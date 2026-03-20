@@ -355,7 +355,7 @@ describe("ManageTab bulk and duplicate actions", () => {
     expect(popconfirm).not.toBeNull()
     if (!popconfirm) return
 
-    fireEvent.click(within(popconfirm).getByRole("button", { name: /^Delete$/i }))
+    fireEvent.click(within(popconfirm as HTMLElement).getByRole("button", { name: /^Delete$/i }))
 
     await waitFor(() => {
       expect(deleteQuizMutateAsync).toHaveBeenCalledTimes(2)

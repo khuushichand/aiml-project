@@ -33,6 +33,7 @@ from .backends.query_utils import (
     prepare_backend_many_statement,
     prepare_backend_statement,
 )
+from .sqlite_policy import configure_sqlite_connection
 
 _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -530,10 +531,7 @@ class WorkflowsDatabase:
                 c = sqlite3.connect(self.db_path, check_same_thread=False)
                 c.row_factory = sqlite3.Row
                 try:
-                    c.execute("PRAGMA journal_mode=WAL;")
-                    c.execute("PRAGMA synchronous=NORMAL;")
-                    c.execute("PRAGMA foreign_keys=ON;")
-                    c.execute("PRAGMA busy_timeout=5000;")
+                    configure_sqlite_connection(c)
                     c.execute("PRAGMA wal_autocheckpoint=1000;")
                 except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS:
                     pass
@@ -647,10 +645,7 @@ class WorkflowsDatabase:
 
     def _enable_wal(self) -> None:
         try:
-            self._conn.execute("PRAGMA journal_mode=WAL;")
-            self._conn.execute("PRAGMA synchronous=NORMAL;")
-            # Reduce writer stalls and enable periodic checkpoints
-            self._conn.execute("PRAGMA busy_timeout=5000;")
+            configure_sqlite_connection(self._conn)
             self._conn.execute("PRAGMA wal_autocheckpoint=1000;")
         except _WORKFLOWS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to enable WAL on workflows DB: {e}")

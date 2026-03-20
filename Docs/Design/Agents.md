@@ -19,6 +19,8 @@ https://github.com/slopus/happy
 https://github.com/samuelclay/crabigator
 https://github.com/googleworkspace/cli
 
+https://github.com/Nano-Collective/nanocoder
+https://github.com/skorokithakis/stavrobot
 
 https://www.productcurious.com/p/a-pms-guide-to-ai-agent-architecture
 https://medium.com/@idohlevi/accidentally-built-a-real-time-ai-enforcement-system-for-claude-code-221197748c5e

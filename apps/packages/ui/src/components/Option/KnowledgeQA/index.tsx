@@ -12,14 +12,21 @@ import { ExportDialog } from "./ExportDialog"
 import { KnowledgeQALayout } from "./layout/KnowledgeQALayout"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import { useConnectionActions, useConnectionState } from "@/hooks/useConnectionState"
+import {
+  useConnectionActions,
+  useConnectionState,
+  useConnectionUxState
+} from "@/hooks/useConnectionState"
 import { WifiOff, AlertCircle } from "lucide-react"
 import {
   getRetryCountdownSeconds,
   KNOWLEDGE_QA_RETRY_INTERVAL_MS,
   KNOWLEDGE_QA_RETRY_TICK_MS,
 } from "./retryScheduler"
-import { useLocation } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
+
+const ROUTE_HYDRATION_RETRY_DELAY_MS = 1500
+const ROUTE_HYDRATION_MAX_RETRIES = 2
 
 function normalizeThreadId(rawValue: string | null | undefined): string | null {
   if (typeof rawValue !== "string") return null
@@ -56,14 +63,23 @@ function KnowledgeQAContent() {
   } = useKnowledgeQA()
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [retryNowMs, setRetryNowMs] = useState(() => Date.now())
+  const [routeHydrationRetryVersion, setRouteHydrationRetryVersion] = useState(0)
   const routeHydratedThreadRef = useRef<string | null>(null)
   const routeHydratedShareRef = useRef<string | null>(null)
+  const routeRetryThreadTargetRef = useRef<string | null>(null)
+  const routeRetryShareTargetRef = useRef<string | null>(null)
+  const routeHydrationThreadRetriesRef = useRef(0)
+  const routeHydrationShareRetriesRef = useRef(0)
+  const routeHydrationThreadTimeoutRef = useRef<number | null>(null)
+  const routeHydrationShareTimeoutRef = useRef<number | null>(null)
   const location = useLocation()
+  const navigate = useNavigate()
   const online = useServerOnline(KNOWLEDGE_QA_RETRY_INTERVAL_MS)
   const { capabilities, loading: capabilitiesLoading, refresh: refreshCapabilities } =
     useServerCapabilities()
   const { checkOnce } = useConnectionActions()
   const { isChecking, lastCheckedAt } = useConnectionState()
+  const { uxState } = useConnectionUxState()
 
   // Check if RAG is supported
   const hasRag = capabilities?.hasRag ?? true
@@ -105,36 +121,146 @@ function KnowledgeQAContent() {
     return () => window.clearInterval(interval)
   }, [online])
 
+  useEffect(
+    () => () => {
+      if (routeHydrationThreadTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationThreadTimeoutRef.current)
+      }
+      if (routeHydrationShareTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationShareTimeoutRef.current)
+      }
+    },
+    []
+  )
+
   useEffect(() => {
     if (!routeShareToken) {
       routeHydratedShareRef.current = null
+      routeRetryShareTargetRef.current = null
+      routeHydrationShareRetriesRef.current = 0
+      if (routeHydrationShareTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationShareTimeoutRef.current)
+        routeHydrationShareTimeoutRef.current = null
+      }
       return
+    }
+    if (routeRetryShareTargetRef.current !== routeShareToken) {
+      routeRetryShareTargetRef.current = routeShareToken
+      routeHydrationShareRetriesRef.current = 0
+      if (routeHydrationShareTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationShareTimeoutRef.current)
+        routeHydrationShareTimeoutRef.current = null
+      }
     }
     if (routeHydratedShareRef.current === routeShareToken) {
       return
     }
     routeHydratedShareRef.current = routeShareToken
-    void selectSharedThread(routeShareToken)
-  }, [routeShareToken, selectSharedThread])
+    let cancelled = false
+    void (async () => {
+      const loaded = await selectSharedThread(routeShareToken)
+      if (cancelled || routeHydratedShareRef.current !== routeShareToken) {
+        return
+      }
+      if (loaded) {
+        routeHydrationShareRetriesRef.current = 0
+        if (routeHydrationShareTimeoutRef.current != null) {
+          window.clearTimeout(routeHydrationShareTimeoutRef.current)
+          routeHydrationShareTimeoutRef.current = null
+        }
+        return
+      }
+      routeHydratedShareRef.current = null
+      if (routeHydrationShareRetriesRef.current >= ROUTE_HYDRATION_MAX_RETRIES) {
+        return
+      }
+      routeHydrationShareRetriesRef.current += 1
+      if (routeHydrationShareTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationShareTimeoutRef.current)
+      }
+      routeHydrationShareTimeoutRef.current = window.setTimeout(() => {
+        routeHydrationShareTimeoutRef.current = null
+        setRouteHydrationRetryVersion((version) => version + 1)
+      }, ROUTE_HYDRATION_RETRY_DELAY_MS)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [routeShareToken, routeHydrationRetryVersion, selectSharedThread])
 
   useEffect(() => {
     if (routeShareToken) {
       routeHydratedThreadRef.current = null
+      routeRetryThreadTargetRef.current = null
+      routeHydrationThreadRetriesRef.current = 0
+      if (routeHydrationThreadTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationThreadTimeoutRef.current)
+        routeHydrationThreadTimeoutRef.current = null
+      }
       return
     }
     if (!routeThreadId) {
       routeHydratedThreadRef.current = null
+      routeRetryThreadTargetRef.current = null
+      routeHydrationThreadRetriesRef.current = 0
+      if (routeHydrationThreadTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationThreadTimeoutRef.current)
+        routeHydrationThreadTimeoutRef.current = null
+      }
+      return
+    }
+    if (routeRetryThreadTargetRef.current !== routeThreadId) {
+      routeRetryThreadTargetRef.current = routeThreadId
+      routeHydrationThreadRetriesRef.current = 0
+      if (routeHydrationThreadTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationThreadTimeoutRef.current)
+        routeHydrationThreadTimeoutRef.current = null
+      }
+    }
+    if (currentThreadId === routeThreadId) {
+      routeHydratedThreadRef.current = routeThreadId
+      routeHydrationThreadRetriesRef.current = 0
+      if (routeHydrationThreadTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationThreadTimeoutRef.current)
+        routeHydrationThreadTimeoutRef.current = null
+      }
       return
     }
     if (routeHydratedThreadRef.current === routeThreadId) {
       return
     }
     routeHydratedThreadRef.current = routeThreadId
-    if (currentThreadId === routeThreadId) {
-      return
+    let cancelled = false
+    void (async () => {
+      const loaded = await selectThread(routeThreadId)
+      if (cancelled || routeHydratedThreadRef.current !== routeThreadId) {
+        return
+      }
+      if (loaded) {
+        routeHydrationThreadRetriesRef.current = 0
+        if (routeHydrationThreadTimeoutRef.current != null) {
+          window.clearTimeout(routeHydrationThreadTimeoutRef.current)
+          routeHydrationThreadTimeoutRef.current = null
+        }
+        return
+      }
+      routeHydratedThreadRef.current = null
+      if (routeHydrationThreadRetriesRef.current >= ROUTE_HYDRATION_MAX_RETRIES) {
+        return
+      }
+      routeHydrationThreadRetriesRef.current += 1
+      if (routeHydrationThreadTimeoutRef.current != null) {
+        window.clearTimeout(routeHydrationThreadTimeoutRef.current)
+      }
+      routeHydrationThreadTimeoutRef.current = window.setTimeout(() => {
+        routeHydrationThreadTimeoutRef.current = null
+        setRouteHydrationRetryVersion((version) => version + 1)
+      }, ROUTE_HYDRATION_RETRY_DELAY_MS)
+    })()
+    return () => {
+      cancelled = true
     }
-    void selectThread(routeThreadId)
-  }, [currentThreadId, routeShareToken, routeThreadId, selectThread])
+  }, [currentThreadId, routeHydrationRetryVersion, routeShareToken, routeThreadId, selectThread])
 
   const handleRetryConnection = () => {
     void checkOnce()
@@ -142,6 +268,88 @@ function KnowledgeQAContent() {
 
   const handleRetryCapabilities = () => {
     void refreshCapabilities()
+  }
+
+  if (!online && uxState !== "testing") {
+    if (uxState === "error_auth" || uxState === "configuring_auth") {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
+            <h2 className="text-xl font-semibold mb-2">
+              Add your credentials to use Knowledge QA
+            </h2>
+            <p className="text-text-muted mb-4">
+              Your server is reachable, but Knowledge QA needs valid credentials before it can load.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/settings/tldw")}
+              className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+            >
+              Open Settings
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    if (uxState === "unconfigured" || uxState === "configuring_url") {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
+            <h2 className="text-xl font-semibold mb-2">
+              Finish setup to use Knowledge QA
+            </h2>
+            <p className="text-text-muted mb-4">
+              Complete the tldw server setup flow, then return here to search your knowledge base.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+            >
+              Finish Setup
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    if (uxState === "error_unreachable") {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
+            <h2 className="text-xl font-semibold mb-2">Can't reach your tldw server right now</h2>
+            <p className="text-text-muted mb-3">
+              Your server settings are saved, but Knowledge QA cannot reach the tldw server right now.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={handleRetryConnection}
+                disabled={isChecking}
+                className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isChecking ? "Checking connection..." : "Retry connection"}
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate("/settings/health")}
+                className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+              >
+                Health & diagnostics
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-text-muted">
+              Retrying automatically in {retryCountdownSeconds}s...
+            </p>
+          </div>
+        </div>
+      )
+    }
   }
 
   // Offline state

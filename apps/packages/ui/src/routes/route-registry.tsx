@@ -36,11 +36,13 @@ import {
   Zap,
   Sparkles,
   ListTodo,
+  Users,
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -67,6 +69,14 @@ export type RouteDefinition = {
   targets?: PlatformTarget[]
   nav?: RouteNav
 }
+
+const HOSTED_VISIBLE_OPTION_PATHS = new Set([
+  "/",
+  "/chat",
+  "/media",
+  "/knowledge",
+  "/collections"
+])
 const OptionSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/general-settings"),
   "GeneralSettings"
@@ -160,6 +170,7 @@ const OptionSettingsPromptStudio = createSettingsRoute(
 const OptionAdminServer = lazy(() => import("./option-admin-server"))
 const OptionAdminLlamacpp = lazy(() => import("./option-admin-llamacpp"))
 const OptionAdminMlx = lazy(() => import("./option-admin-mlx"))
+const OptionAdminRuntimeConfig = lazy(() => import("./option-admin-runtime-config"))
 const OptionChatSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ChatSettings"),
   "ChatSettings"
@@ -206,6 +217,12 @@ const OptionSourcesNew = lazy(() => import("./option-sources-new"))
 const OptionSourcesDetail = lazy(() => import("./option-sources-detail"))
 const OptionAdminSources = lazy(() => import("./option-admin-sources"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
+const OptionPresentationStudio = lazy(() => import("./option-presentation-studio"))
+const OptionPresentationStudioNew = lazy(() => import("./option-presentation-studio-new"))
+const OptionPresentationStudioStart = lazy(() => import("./option-presentation-studio-start"))
+const OptionPresentationStudioDetail = lazy(
+  () => import("./option-presentation-studio-detail")
+)
 const OptionChatWorkflows = lazy(() => import("./option-chat-workflows"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
@@ -217,6 +234,8 @@ const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 const OptionSetup = lazy(() => import("./option-setup"))
 const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
 const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
+const OptionSharedWithMe = lazy(() => import("./option-shared-with-me"))
+const OptionPublicShare = lazy(() => import("./option-public-share"))
 // OptionChat is eagerly imported above
 
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
@@ -422,6 +441,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "settings:chatbooksNav",
       icon: BookText,
       order: 4
+    }
+  },
+  {
+    kind: "options",
+    path: "/shared",
+    element: <OptionSharedWithMe />,
+    nav: {
+      group: "knowledge",
+      labelToken: "settings:sharedWithMe",
+      icon: Users,
+      order: 4.5
     }
   },
   {
@@ -660,6 +690,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 3
     }
   },
+  { kind: "options", path: "/share/:token", element: <OptionPublicShare /> },
   { kind: "options", path: "/knowledge", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/knowledge/thread/:threadId", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/knowledge/shared/:shareToken", element: <OptionKnowledgeWorkspace /> },
@@ -684,6 +715,33 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 10,
       beta: true
     }
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio",
+    element: <OptionPresentationStudio />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.presentationStudio",
+      icon: ImageIcon,
+      order: 10.25,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/new",
+    element: <OptionPresentationStudioNew />
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/start",
+    element: <OptionPresentationStudioStart />
+  },
+  {
+    kind: "options",
+    path: "/presentation-studio/:projectId",
+    element: <OptionPresentationStudioDetail />
   },
   {
     kind: "options",
@@ -861,6 +919,19 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/admin/runtime-config",
+    element: <OptionAdminRuntimeConfig />,
+    targets: ALL_TARGETS,
+    nav: {
+      group: "server",
+      labelToken: "option:header.adminRuntimeConfig",
+      icon: SlidersHorizontal,
+      order: 10,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
     path: "/quick-chat-popout",
     element: <OptionQuickChatPopout />,
     targets: ALL_TARGETS
@@ -900,7 +971,9 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
 ]
 
 export const optionRoutes = ROUTE_DEFINITIONS.filter(
-  (route) => route.kind === "options"
+  (route) =>
+    route.kind === "options" &&
+    (!isHostedTldwDeployment() || HOSTED_VISIBLE_OPTION_PATHS.has(route.path))
 )
 
 export const sidepanelRoutes = ROUTE_DEFINITIONS.filter(

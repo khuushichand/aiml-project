@@ -1,0 +1,218 @@
+# Horizontal Scaling Guide
+
+This document describes how to run multiple tldw_server instances behind a load balancer, sharing rate-limiting and governance state through Redis.
+
+## Prerequisites
+
+| Component | Purpose |
+|-----------|---------|
+| **Redis 7+** | Shared state for the Resource Governor (rate limits, concurrency leases) |
+| **Load balancer** | Distributes traffic across instances (nginx, Caddy, Traefik, cloud ALB, etc.) |
+| **Shared filesystem or object store** | Required if instances share SQLite databases; alternatively use PostgreSQL for AuthNZ |
+
+## Configuration
+
+### Environment variables
+
+Set these on every application instance:
+
+```bash
+# Required for shared governance state
+REDIS_URL=redis://redis-host:6379/0
+
+# AuthNZ — use PostgreSQL for multi-node (SQLite does not support concurrent writers)
+DATABASE_URL=postgresql+asyncpg://user:pass@pg-host:5432/tldw_auth
+
+# Optional: tune governor fail mode when Redis becomes unreachable at runtime
+# Options: "allow" (default, open-fail) or "deny" (closed-fail)
+RG_REDIS_FAIL_MODE=allow
+```
+
+### Governor backend selection
+
+The governor factory (`governor_factory.py`) selects the backend automatically:
+
+1. If `REDIS_URL` is set **and** Redis responds to a `PING`, the `RedisResourceGovernor` is used.
+2. Otherwise, the `MemoryResourceGovernor` is used (suitable for single-node only).
+
+You can also call the factory explicitly in application code:
+
+```python
+from tldw_Server_API.app.core.Resource_Governance.governor_factory import create_governor
+
+governor = create_governor()  # auto-detects from REDIS_URL
+```
+
+## What is shared via Redis
+
+| Data | Redis key pattern | Notes |
+|------|-------------------|-------|
+| Sliding-window request counts | `rg:win:{policy}:{category}:{scope}:{entity}` | ZSET with timestamps |
+| Token counters | `rg:win:{policy}:tokens:{scope}:{entity}` | Fixed-window INCRBY with TTL |
+| Concurrency leases | `rg:lease:{policy}:{category}:{scope}:{entity}` | ZSET with expiry scores |
+| Reservation handles | `rg:handle:{handle_id}` | JSON blob with TTL |
+| Idempotency records | `rg:op:{op_id}` | JSON blob with TTL |
+
+All keys are namespaced (default `rg:`) and use automatic TTLs so stale data is cleaned up.
+
+## What remains per-instance
+
+| Component | Reason |
+|-----------|--------|
+| In-memory caches (RAG semantic cache, LRU caches) | No distributed cache layer yet |
+| Event broadcaster (SSE/WebSocket) | Events are dispatched locally; no Redis pub/sub bridge |
+| Background task queues | FastAPI `BackgroundTasks` are process-local |
+| SQLite databases (Media DB, ChaChaNotes) | File-level locking; see limitations below |
+
+## Limitations
+
+1. **No distributed event bus.** Server-sent events and WebSocket notifications are per-instance. Clients connected to instance A will not see events triggered on instance B.
+
+2. **Per-instance caches.** The RAG semantic cache and other in-memory caches are not synchronized across instances. Cache warm-up happens independently on each node, and cache invalidation is local only.
+
+3. **SQLite databases.** SQLite does not support concurrent writers from multiple processes on a network filesystem. For multi-node deployments:
+   - Migrate AuthNZ to PostgreSQL (`DATABASE_URL=postgresql+asyncpg://...`).
+   - Media DB and ChaChaNotes remain SQLite and are per-user; if instances share the same filesystem, only one writer should access a given user database at a time.
+
+4. **Background tasks.** Long-running ingestion or transcription jobs run in-process. There is no distributed task queue (e.g., Celery) yet.
+
+## Docker Compose example
+
+```yaml
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tldw
+      POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: tldw_auth
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tldw"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfiles/Dockerfile
+    deploy:
+      replicas: 3
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://tldw:changeme@postgres:5432/tldw_auth
+      AUTH_MODE: multi_user
+      RG_REDIS_FAIL_MODE: allow
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - shared_data:/app/Databases
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+
+volumes:
+  redis_data:
+  pg_data:
+  shared_data:
+```
+
+## Load balancer configuration
+
+### General guidelines
+
+- Use **least-connections** or **round-robin** balancing for stateless REST endpoints.
+- Enable **sticky sessions** (IP hash or cookie-based) if clients rely on WebSocket connections or SSE streams, since the event broadcaster is per-instance.
+- Set appropriate health check paths: `GET /api/v1/config/quickstart` or a dedicated `/health` endpoint.
+- Forward the original client IP via `X-Forwarded-For` and configure `RG_CLIENT_IP_HEADER` and `RG_TRUSTED_PROXIES` so the Resource Governor sees real client IPs.
+
+### nginx example
+
+```nginx
+upstream tldw_backend {
+    least_conn;
+    server app:8000;
+    # With Docker Compose deploy.replicas, Docker DNS resolves
+    # "app" to all replica IPs automatically.
+}
+
+server {
+    listen 80;
+
+    location / {
+        proxy_pass http://tldw_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # Timeouts for long-running requests (transcription, ingestion)
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+```
+
+### Trusted proxy configuration
+
+Set these environment variables on each app instance so the Resource Governor resolves client IPs correctly behind a reverse proxy:
+
+```bash
+# Header containing the real client IP
+RG_CLIENT_IP_HEADER=X-Forwarded-For
+
+# CIDR ranges of trusted proxies (comma-separated)
+RG_TRUSTED_PROXIES=172.16.0.0/12,10.0.0.0/8
+```
+
+## Monitoring
+
+When running multiple instances, aggregate metrics across all nodes:
+
+- Each instance exposes Prometheus metrics at `/metrics` (if enabled).
+- Resource Governor metrics (`rg_decisions_total`, `rg_denials_total`, `rg_concurrency_active`) include a `backend` label (`redis` vs `memory`) to confirm all nodes use the shared backend.
+- Monitor Redis memory usage and connection count to ensure the governor data fits comfortably in RAM.
+
+## Scaling checklist
+
+- [ ] Redis is deployed and reachable from all app instances
+- [ ] `REDIS_URL` is set on every instance
+- [ ] AuthNZ database migrated to PostgreSQL
+- [ ] Load balancer configured with health checks
+- [ ] `RG_CLIENT_IP_HEADER` and `RG_TRUSTED_PROXIES` set for correct IP resolution
+- [ ] Sticky sessions enabled for WebSocket/SSE endpoints (if used)
+- [ ] Prometheus scraping configured for all instances
+- [ ] Tested failover: Redis goes down, instances fall back to in-memory governor

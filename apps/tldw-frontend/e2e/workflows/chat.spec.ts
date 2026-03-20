@@ -12,6 +12,7 @@
 import { test, expect, skipIfServerUnavailable, skipIfNoModels, assertNoCriticalErrors } from "../utils/fixtures"
 import { ChatPage } from "../utils/page-objects"
 import { seedAuth, generateTestId } from "../utils/helpers"
+import { expectApiCall } from "../utils/api-assertions"
 
 test.describe("Chat Workflow", () => {
   test.beforeEach(async ({ page }) => {
@@ -50,10 +51,22 @@ test.describe("Chat Workflow", () => {
       await chatPage.waitForReady()
 
       const testMessage = `Hello, this is a test message ${generateTestId()}`
+
+      const apiCall = expectApiCall(authedPage, {
+        method: "POST",
+        url: "/api/v1/chat/completions",
+      }, 60_000)
+
       await chatPage.sendMessage(testMessage)
 
       // Wait for response to appear
       await chatPage.waitForResponse(60000)
+
+      // Verify the API call was made with correct structure
+      const { request, response } = await apiCall
+      expect(response.status()).toBeLessThan(400)
+      const requestBody = request.postDataJSON()
+      expect(requestBody).toHaveProperty("messages")
 
       // Verify messages in the conversation
       const messages = await chatPage.getMessages()

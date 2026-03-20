@@ -4,13 +4,10 @@
 from typing import Any, Optional
 
 # Local Imports
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
     check_media_exists as _check_media_exists,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version as _get_document_version,
 )
 
@@ -20,7 +17,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 # Functions:
 
 def process_media_update(
-    db: MediaDatabase,
+    db: Any,
     *,
     media_id: int,
     content: Optional[str] = None,
@@ -92,7 +89,7 @@ def process_media_update(
 
 
 def process_synced_media_update(
-    db: MediaDatabase,
+    db: Any,
     *,
     media_id: int,
     content: str,

@@ -17,7 +17,9 @@ export const focusTextArea = (textareaRef?: React.RefObject<HTMLTextAreaElement>
         textareaElement.focus()
       }
     }
-  } catch (e) { }
+  } catch (e) {
+    // best-effort focus — failure is harmless if element is not in DOM
+  }
 }
 
 export const validateBeforeSubmit = (

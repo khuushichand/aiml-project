@@ -28,7 +28,7 @@ describe("LoadingStatus accessibility announcements", () => {
     let progressCallback: (() => void) | null = null
     vi.spyOn(window, "setInterval").mockImplementation((cb: TimerHandler) => {
       progressCallback = cb as () => void
-      return 1 as unknown as number
+      return {} as ReturnType<typeof setInterval>
     })
     vi.spyOn(window, "clearInterval").mockImplementation(() => {})
 

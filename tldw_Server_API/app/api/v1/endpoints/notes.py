@@ -711,6 +711,23 @@ def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: list[dict[str, Any]])
     return notes_data
 
 
+def _attach_folders_bulk(db: CharactersRAGDB, notes_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    note_ids = [nd.get("id") for nd in notes_data if isinstance(nd, dict) and nd.get("id")]
+    if not note_ids:
+        return notes_data
+    try:
+        folder_map = db.get_note_folders_for_notes(note_ids)
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        logger.warning(f"Bulk folder lookup failed: {e}")
+        return notes_data
+    for nd in notes_data:
+        if isinstance(nd, dict):
+            nid = nd.get("id")
+            if nid:
+                nd["folders"] = folder_map.get(nid, [])
+    return notes_data
+
+
 # --- Keyword attach helper ----------------------------------------------------
 def _attach_keywords_inline(db: CharactersRAGDB, note_dict: dict[str, Any]) -> dict[str, Any]:
     try:
@@ -718,6 +735,15 @@ def _attach_keywords_inline(db: CharactersRAGDB, note_dict: dict[str, Any]) -> d
             note_dict['keywords'] = db.get_keywords_for_note(note_id=note_dict['id'])
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to attach keywords to note {note_dict.get('id')}: {e}")
+    return note_dict
+
+
+def _attach_folders_inline(db: CharactersRAGDB, note_dict: dict[str, Any]) -> dict[str, Any]:
+    try:
+        if note_dict and note_dict.get("id"):
+            note_dict["folders"] = db.get_note_folders_for_note(note_id=note_dict["id"])
+    except _NOTES_NONCRITICAL_EXCEPTIONS as e:
+        logger.warning(f"Failed to attach folders to note {note_dict.get('id')}: {e}")
     return note_dict
 
 
@@ -838,6 +864,7 @@ def _build_import_note_companion_event(
             f"Imported {str(operation).replace('_', ' ')} note could not be reloaded."
         )
     reloaded_note = _attach_keywords_inline(db, reloaded_note)
+    reloaded_note = _attach_folders_inline(db, reloaded_note)
     return build_note_bulk_import_activity(
         note=reloaded_note,
         operation=operation,
@@ -1201,6 +1228,7 @@ async def create_note(
                                 detail="Note created but could not be retrieved.")
         # Attach keywords inline
         created_note_data = _attach_keywords_inline(db, created_note_data)
+        created_note_data = _attach_folders_inline(db, created_note_data)
         if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
             created_note_data["keyword_sync"] = {
                 "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
@@ -1242,6 +1270,7 @@ async def list_notes(
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
         logger.debug(f"User (DB client_id: {db.client_id}) listing notes: limit={limit}, offset={offset}")
         notes_data = db.list_notes(limit=limit, offset=offset)
+        _attach_folders_bulk(db, notes_data)
         # Attach keywords inline for each note (optional for performance)
         if include_keywords:
             try:
@@ -1297,6 +1326,7 @@ async def list_deleted_notes(
         logger.debug(
             f"User (DB client_id: {db.client_id}) listing deleted notes: limit={limit}, offset={offset}")
         notes_data = db.list_deleted_notes(limit=limit, offset=offset)
+        _attach_folders_bulk(db, notes_data)
         if include_keywords:
             try:
                 _attach_keywords_bulk(db, notes_data)
@@ -1370,6 +1400,7 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
             )
         else:
             notes_data = db.search_notes(search_term=query_term, limit=limit, offset=offset)
+        _attach_folders_bulk(db, notes_data)
         # Attach keywords inline (optional)
         if include_keywords:
             try:
@@ -2766,12 +2797,8 @@ async def get_note(
 
     # If note_data is found, it's a dict from the DB. Pydantic will validate it on return.
     # No need for an explicit try-except for Pydantic here, FastAPI handles it.
-    # Attach keywords inline
-    try:
-        kw_rows = db.get_keywords_for_note(note_id=note_id)
-        note_data['keywords'] = kw_rows
-    except _NOTES_NONCRITICAL_EXCEPTIONS as kw_fetch_err:
-        logger.warning(f"Fetching keywords for note {note_id} failed: {kw_fetch_err}")
+    note_data = _attach_keywords_inline(db, note_data)
+    note_data = _attach_folders_inline(db, note_data)
     return note_data
 
 
@@ -3164,6 +3191,7 @@ async def update_note(
             logger.error(f"Note '{note_id}' not found after successful update for user (DB client_id: {db.client_id}).")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found after update.")
         updated_note_data = _attach_keywords_inline(db, updated_note_data)
+        updated_note_data = _attach_folders_inline(db, updated_note_data)
         if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
             updated_note_data["keyword_sync"] = {
                 "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
@@ -3301,6 +3329,7 @@ async def patch_note(
         if not updated_note_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found after update.")
         updated_note_data = _attach_keywords_inline(db, updated_note_data)
+        updated_note_data = _attach_folders_inline(db, updated_note_data)
         if keyword_sync_summary and keyword_sync_summary.get("failed_count", 0) > 0:
             updated_note_data["keyword_sync"] = {
                 "failed_count": int(keyword_sync_summary.get("failed_count", 0)),
@@ -3341,7 +3370,7 @@ async def delete_note(
         existing_note = db.get_note_by_id(note_id=note_id, include_deleted=True)
         was_active = bool(existing_note) and not bool(existing_note.get("deleted"))
         note_for_activity = (
-            _attach_keywords_inline(db, dict(existing_note))
+            _attach_folders_inline(db, _attach_keywords_inline(db, dict(existing_note)))
             if was_active and existing_note
             else None
         )
@@ -3431,11 +3460,12 @@ async def restore_note(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail=f"Note '{note_id}' not found after restore.")
 
-        # Fetch keywords for the note
         keywords = db.get_keywords_for_note(note_id)
+        folders = db.get_note_folders_for_note(note_id)
         if was_deleted:
             restored_note_for_activity = dict(restored_note)
             restored_note_for_activity["keywords"] = list(keywords or [])
+            restored_note_for_activity["folders"] = list(folders or [])
             record_note_restored(user_id=current_user.id, note=restored_note_for_activity)
         keyword_responses = [
             KeywordResponse(
@@ -3459,7 +3489,8 @@ async def restore_note(
             version=restored_note.get('version', 1),
             client_id=restored_note.get('client_id', ''),
             deleted=bool(restored_note.get('deleted', False)),
-            keywords=keyword_responses
+            keywords=keyword_responses,
+            folders=list(folders or []),
         )
     except _NOTES_NONCRITICAL_EXCEPTIONS as e:
         handle_db_errors(e, "note")
@@ -3603,6 +3634,7 @@ async def bulk_create_notes(
             if not nd:
                 raise CharactersRAGDBError("Created note could not be retrieved.")
             nd = _attach_keywords_inline(db, nd)
+            nd = _attach_folders_inline(db, nd)
             companion_events.append(
                 build_note_bulk_import_activity(
                     note=nd,

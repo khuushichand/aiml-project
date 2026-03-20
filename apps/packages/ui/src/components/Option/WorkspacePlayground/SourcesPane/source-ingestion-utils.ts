@@ -104,13 +104,12 @@ export const resolveSourceUploadMaxSizeBytes = (value: unknown): number =>
   resolveSourceUploadMaxSizeMb(value) * 1024 * 1024
 
 export const getConfiguredSourceUploadMaxSizeBytes = (): number => {
-  const envValue =
+  const importMetaEnv =
     typeof import.meta !== "undefined"
-      ? (import.meta as Record<string, unknown>).env &&
-        (
-          (import.meta as Record<string, unknown>).env as Record<string, unknown>
-        ).VITE_WORKSPACE_UPLOAD_MAX_SIZE_MB
+      ? ((import.meta as unknown as { env?: Record<string, unknown> }).env ?? undefined)
       : undefined
+  const envValue =
+    importMetaEnv?.VITE_WORKSPACE_UPLOAD_MAX_SIZE_MB
 
   return resolveSourceUploadMaxSizeBytes(envValue)
 }

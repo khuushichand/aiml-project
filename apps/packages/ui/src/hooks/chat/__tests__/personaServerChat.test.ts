@@ -67,7 +67,8 @@ describe("ensurePersonaServerChat", () => {
         assistant_kind: "persona",
         assistant_id: "garden-helper",
         persona_memory_mode: DEFAULT_PERSONA_MEMORY_MODE
-      })
+      }),
+      undefined
     )
     expect(setters.setServerChatId).toHaveBeenCalledWith("persona-chat-1")
     expect(setters.setServerChatAssistantKind).toHaveBeenCalledWith("persona")
@@ -82,6 +83,50 @@ describe("ensurePersonaServerChat", () => {
       historyId: "history-1",
       personaMemoryMode: "read_only"
     })
+  })
+
+  it("passes workspace scope through when creating a persona-backed chat", async () => {
+    const setters = createSetterBundle()
+    const createChat = vi.fn().mockResolvedValue({
+      id: "persona-chat-3",
+      title: "Scoped persona chat",
+      assistant_kind: "persona",
+      assistant_id: "garden-helper",
+      persona_memory_mode: "read_only"
+    })
+
+    await ensurePersonaServerChat({
+      assistant: {
+        kind: "persona",
+        id: "garden-helper",
+        name: "Garden Helper"
+      },
+      serverChatId: null,
+      serverChatTitle: null,
+      serverChatAssistantKind: null,
+      serverChatAssistantId: null,
+      serverChatPersonaMemoryMode: null,
+      serverChatState: "in-progress",
+      serverChatTopic: null,
+      serverChatClusterId: null,
+      serverChatSource: null,
+      serverChatExternalRef: null,
+      historyId: null,
+      temporaryChat: false,
+      scope: { type: "workspace", workspaceId: "workspace-1" },
+      createChat,
+      ensureServerChatHistoryId: vi.fn().mockResolvedValue("history-3"),
+      invalidateServerChatHistory: vi.fn(),
+      ...setters
+    })
+
+    expect(createChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistant_kind: "persona",
+        assistant_id: "garden-helper"
+      }),
+      { scope: { type: "workspace", workspaceId: "workspace-1" } }
+    )
   })
 
   it("reuses an existing matching persona chat without creating a new one", async () => {

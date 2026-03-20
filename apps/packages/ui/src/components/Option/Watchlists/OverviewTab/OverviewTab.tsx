@@ -19,6 +19,7 @@ import {
   Tag,
   Tooltip
 } from "antd"
+import type { StepsProps } from "antd"
 import {
   AlertTriangle,
   CheckCircle2,
@@ -1119,7 +1120,7 @@ export const OverviewTab: React.FC = () => {
       pipelineHasValidEmailRecipients
   )
   const pipelineReviewComplete = pipelineScopeComplete && pipelineBriefingComplete
-  const pipelineStepItems = useMemo(() => ([
+  const pipelineStepItems = useMemo<NonNullable<StepsProps["items"]>>(() => ([
     {
       title: t("watchlists:overview.pipelineSetup.steps.scope", "Scope"),
       status: pipelineScopeComplete ? "finish" : pipelineSetupStep === 0 ? "process" : "wait"

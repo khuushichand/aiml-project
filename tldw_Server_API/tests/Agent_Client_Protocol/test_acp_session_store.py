@@ -46,6 +46,38 @@ async def test_register_and_record_prompt_preserve_creation_config_and_bootstrap
 
 
 @pytest.mark.asyncio
+async def test_session_store_exposes_policy_snapshot_fields_in_info_and_detail_dict(tmp_path):
+    _db = ACPSessionsDB(db_path=str(tmp_path / "store_test.db"))
+    store = ACPSessionStore(db=_db)
+
+    await store.register_session(
+        session_id="session-policy",
+        user_id=7,
+        agent_type="codex",
+        name="Policy Session",
+        cwd="/tmp/project",
+        policy_snapshot_version="v1",
+        policy_snapshot_fingerprint="policy-fingerprint",
+        policy_snapshot_refreshed_at="2026-03-14T12:00:00+00:00",
+        policy_summary={"allowed_tools": 3},
+        policy_provenance_summary={"sources": ["mcp_hub"]},
+        policy_refresh_error="stale snapshot",
+    )
+
+    record = await store.get_session("session-policy")
+    assert record is not None
+    assert record.policy_snapshot_version == "v1"
+    assert record.policy_snapshot_fingerprint == "policy-fingerprint"
+
+    info = record.to_info_dict()
+    detail = record.to_detail_dict()
+    assert info["policy_snapshot_refreshed_at"] == "2026-03-14T12:00:00+00:00"
+    assert info["policy_summary"] == {"allowed_tools": 3}
+    assert info["policy_provenance_summary"] == {"sources": ["mcp_hub"]}
+    assert detail["policy_refresh_error"] == "stale snapshot"
+
+
+@pytest.mark.asyncio
 async def test_record_prompt_marks_session_non_bootstrappable_when_assistant_text_cannot_be_normalized(tmp_path):
     _db = ACPSessionsDB(db_path=str(tmp_path / "store_test.db"))
     store = ACPSessionStore(db=_db)

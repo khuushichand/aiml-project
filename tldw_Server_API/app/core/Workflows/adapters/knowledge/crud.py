@@ -11,7 +11,9 @@ This module includes adapters for knowledge CRUD operations:
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
@@ -45,6 +48,17 @@ _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     sqlite3.Error,
 )
+
+
+@contextlib.contextmanager
+def _workflow_media_db(user_id: str) -> Iterator[Any]:
+    """Yield a per-user Media DB handle for short-lived workflow knowledge reads."""
+    with managed_media_database(
+        client_id=f"workflow_engine:{user_id}",
+        db_path=str(DatabasePaths.get_media_db_path(int(user_id))),
+        initialize=False,
+    ) as media_db:
+        yield media_db
 
 
 @registry.register(
@@ -771,11 +785,8 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
             limit = int(config.get("limit") or 50)
             offset = int(config.get("offset") or 0)
 
-            # Search claims in media database
-            from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-
-            media_db = create_media_database(user_id=int(user_id))
-            results = media_db.search_claims(query=query, limit=limit, offset=offset)
+            with _workflow_media_db(user_id) as media_db:
+                results = media_db.search_claims(query=query, limit=limit, offset=offset)
 
             claims_list = []
             for r in results:
@@ -797,14 +808,11 @@ async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, 
             offset = int(config.get("offset") or 0)
             media_id = config.get("media_id")
 
-            from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-
-            media_db = create_media_database(user_id=int(user_id))
-
-            if media_id is not None:
-                results = media_db.list_claims_for_media(media_id=int(media_id), limit=limit, offset=offset)
-            else:
-                results = media_db.list_claims(limit=limit, offset=offset)
+            with _workflow_media_db(user_id) as media_db:
+                if media_id is not None:
+                    results = media_db.list_claims_for_media(media_id=int(media_id), limit=limit, offset=offset)
+                else:
+                    results = media_db.list_claims(limit=limit, offset=offset)
 
             claims_list = []
             for r in results:

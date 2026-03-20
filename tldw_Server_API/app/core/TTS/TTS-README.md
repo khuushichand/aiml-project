@@ -9,7 +9,7 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 ## Features
 
 ### Core Capabilities
-- **Multi-Provider Support**: OpenAI, ElevenLabs, and local adapters (Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, Qwen3-TTS, IndexTTS2, NeuTTS, Supertonic, Supertonic2, EchoTTS) with a mock adapter for testing.
+- **Multi-Provider Support**: OpenAI, ElevenLabs, and local adapters (Kokoro, KittenTTS, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, Qwen3-TTS, IndexTTS2, NeuTTS, Supertonic, Supertonic2, EchoTTS) with a mock adapter for testing.
 - **Voice Cloning**: Voice reference audio accepted by PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, Qwen3-TTS, NeuTTS, IndexTTS2, and EchoTTS (ElevenLabs supports user voices via API).
 - **Streaming Audio**: Real-time chunked streaming across adapters; NeuTTS enables streaming when a quantized (GGUF) backbone is loaded; VibeVoice Realtime uses a WS backend.
 - **Format Support**: Adapter-specific coverage spanning MP3, WAV, OPUS, FLAC, PCM, AAC, and OGG via the shared `AudioFormat` enum.
@@ -26,6 +26,7 @@ Developer-oriented details (architecture, provider matrix, configuration, and te
 | **OpenAI** | Commercial API | EN* | ❌ | Industry standard, HD quality |
 | **ElevenLabs** | Commercial API | 29 | ✅ (Pro/user voices) | Premium quality, emotion control |
 | **Kokoro** | Local ONNX | EN (US/GB) | ❌ | Lightweight, CPU-friendly, offline |
+| **KittenTTS** | Local ONNX | EN | ❌ | Small local ONNX voices, first-use download, pinned HF revisions |
 | **PocketTTS** | Local ONNX | EN | ✅ (reference) | Zero-shot cloning, streaming ONNX |
 | **LuxTTS** | Local PyTorch | EN | ✅ (reference) | 48kHz voice cloning (ZipVoice) |
 | **Higgs** | Local PyTorch | 50+ | ✅ (3-10s) | Music generation, multi-lingual |
@@ -186,6 +187,33 @@ python Helper_Scripts/download_kokoro_assets.py \
   --model-path models/kokoro/onnx/model.onnx \
   --voices-dir models/kokoro/voices
 ```
+
+### KittenTTS
+
+KittenTTS is a local English-only ONNX provider that uses static preset voices and can download its model assets on first use.
+
+- Default model alias: `KittenML/kitten-tts-nano-0.8` (normalized to the canonical fp32 repo internally)
+- Supported voices: `Bella`, `Jasper`, `Luna`, `Bruno`, `Rosie`, `Hugo`, `Kiki`, `Leo`
+- Supported formats: `wav`, `mp3`, `pcm`
+- Required local deps: `onnxruntime`, `phonemizer-fork`, `espeakng_loader`, `huggingface_hub`
+- Security model: downloads are pinned to immutable Hugging Face commit hashes through `model_revision`
+
+Configuration example:
+
+```yaml
+providers:
+  kitten_tts:
+    enabled: true
+    model: "KittenML/kitten-tts-nano-0.8"
+    model_revision: "8d6d5a1851ffd13c894c40227c888302c2a86ef7"
+    device: "cpu"
+    auto_download: true
+    extra_params:
+      cache_dir: "cache/kitten_tts"
+      clean_text: false
+```
+
+If you want to prefetch assets during setup instead of waiting for first synthesis, use the setup UI advanced TTS installer and select `kitten_tts`.
 
 Configuration notes (providers.kokoro in tts_providers_config.yaml):
 - model_path: path to ONNX file
@@ -433,12 +461,12 @@ Recommended: run the installer from the repo root (downloads v1.0 ONNX + voices 
 python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
 ```
 
-Manual alternative using `huggingface-cli`:
+Manual alternative using the `hf` CLI:
 ```bash
-pip install huggingface-hub
+pip install -U "huggingface_hub"
 mkdir -p models/kokoro
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
 ```
 
 Update `tts_providers_config.yaml` if you use custom paths. For the PyTorch variant, set `use_onnx: false`, provide a `.pth` path, and point `voice_dir` to the `voices/` directory.

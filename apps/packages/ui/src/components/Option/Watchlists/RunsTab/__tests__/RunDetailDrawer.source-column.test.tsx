@@ -36,7 +36,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (...args: any[]) => mocks.translateMock(...args)
+    t: (key: string, defaultValue?: unknown, options?: Record<string, unknown>) =>
+      mocks.translateMock(key, defaultValue, options)
   })
 }))
 

@@ -80,6 +80,12 @@ export interface ACPWSPermissionRequestMessage {
   tool_name: string
   tool_arguments: Record<string, unknown>
   tier: ACPPermissionTier
+  approval_requirement?: string | null
+  governance_reason?: string | null
+  deny_reason?: string | null
+  provenance_summary?: Record<string, unknown> | null
+  runtime_narrowing_reason?: string | null
+  policy_snapshot_fingerprint?: string | null
   timeout_seconds: number
 }
 
@@ -170,6 +176,12 @@ export interface ACPSessionNewResponse {
   workspace_id?: string | null
   workspace_group_id?: string | null
   scope_snapshot_id?: string | null
+  policy_snapshot_version?: string | null
+  policy_snapshot_fingerprint?: string | null
+  policy_snapshot_refreshed_at?: string | null
+  policy_summary?: Record<string, unknown> | null
+  policy_provenance_summary?: Record<string, unknown> | null
+  policy_refresh_error?: string | null
 }
 
 export interface ACPSessionPromptRequest {
@@ -226,6 +238,12 @@ export interface ACPSessionListItem {
   workspace_id?: string | null
   workspace_group_id?: string | null
   scope_snapshot_id?: string | null
+  policy_snapshot_version?: string | null
+  policy_snapshot_fingerprint?: string | null
+  policy_snapshot_refreshed_at?: string | null
+  policy_summary?: Record<string, unknown> | null
+  policy_provenance_summary?: Record<string, unknown> | null
+  policy_refresh_error?: string | null
   forked_from?: string | null
 }
 
@@ -274,6 +292,12 @@ export interface ACPSession {
   workspaceId?: string | null
   workspaceGroupId?: string | null
   scopeSnapshotId?: string | null
+  policySnapshotVersion?: string | null
+  policySnapshotFingerprint?: string | null
+  policySnapshotRefreshedAt?: Date | null
+  policySummary?: Record<string, unknown> | null
+  policyProvenanceSummary?: Record<string, unknown> | null
+  policyRefreshError?: string | null
   state: ACPSessionState
   capabilities?: Record<string, unknown>
   sandboxSessionId?: string | null
@@ -301,6 +325,12 @@ export interface ACPPendingPermission {
   tool_name: string
   tool_arguments: Record<string, unknown>
   tier: ACPPermissionTier
+  approval_requirement?: string | null
+  governance_reason?: string | null
+  deny_reason?: string | null
+  provenance_summary?: Record<string, unknown> | null
+  runtime_narrowing_reason?: string | null
+  policy_snapshot_fingerprint?: string | null
   timeout_seconds: number
   requestedAt: Date
 }

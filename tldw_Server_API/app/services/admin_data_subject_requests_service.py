@@ -21,9 +21,10 @@ _CATEGORY_DEFS: tuple[dict[str, str], ...] = (
     {"key": "chat_messages", "label": "Chat sessions/messages"},
     {"key": "notes", "label": "Notes"},
     {"key": "audit_events", "label": "Audit log events"},
+    {"key": "embeddings", "label": "Vector embeddings"},
 )
 _SUPPORTED_CATEGORY_KEYS = {entry["key"] for entry in _CATEGORY_DEFS}
-_UNSUPPORTED_CATEGORY_KEYS = {"embeddings"}
+_UNSUPPORTED_CATEGORY_KEYS: set[str] = set()
 
 
 class DataSubjectRequestCoverageUnavailableError(RuntimeError):
@@ -184,6 +185,48 @@ async def _count_chat_messages(user_id: int) -> int:
     )
 
 
+def _get_chroma_manager_for_user(user_id: int):
+    """Create a ChromaDBManager for the given user using lazy import."""
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
+    from tldw_Server_API.app.core.config import settings as app_settings
+
+    embedding_config: dict = {}
+    user_db_base = app_settings.get("USER_DB_BASE_DIR")
+    if user_db_base:
+        embedding_config["USER_DB_BASE_DIR"] = str(user_db_base)
+    else:
+        project_root = Path(__file__).resolve().parents[3]
+        embedding_config["USER_DB_BASE_DIR"] = str(
+            project_root / "Databases" / "user_databases"
+        )
+    return ChromaDBManager(str(user_id), embedding_config)
+
+
+async def _count_embeddings(user_id: int) -> int:
+    """Count vector embeddings across all ChromaDB collections for a user."""
+
+    def _count_sync() -> int:
+        try:
+            manager = _get_chroma_manager_for_user(user_id)
+        except Exception as exc:
+            logger.debug("ChromaDB not available for user {}: {}", user_id, exc)
+            return 0
+        try:
+            collections = manager.list_collections()
+            total = 0
+            for col in collections:
+                try:
+                    total += col.count()
+                except Exception:
+                    pass
+            return total
+        except Exception as exc:
+            logger.debug("Failed to count embeddings for user {}: {}", user_id, exc)
+            return 0
+
+    return await asyncio.to_thread(_count_sync)
+
+
 async def _count_audit_events(user_id: int) -> int:
     from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import _resolve_audit_storage_mode
 
@@ -207,17 +250,19 @@ async def _build_summary_for_user(
     user_id: int,
     selected_categories: list[str],
 ) -> list[dict[str, Any]]:
-    media_records, chat_messages, notes, audit_events = await asyncio.gather(
+    media_records, chat_messages, notes, audit_events, embeddings = await asyncio.gather(
         _count_media_records(user_id),
         _count_chat_messages(user_id),
         _count_notes(user_id),
         _count_audit_events(user_id),
+        _count_embeddings(user_id),
     )
     count_map = {
         "media_records": media_records,
         "chat_messages": chat_messages,
         "notes": notes,
         "audit_events": audit_events,
+        "embeddings": embeddings,
     }
     return [
         {
@@ -231,14 +276,19 @@ async def _build_summary_for_user(
 
 
 def _coverage_metadata(*, selected_categories: list[str]) -> dict[str, Any]:
-    return {
+    result: dict[str, Any] = {
         "supported_categories": [entry["key"] for entry in _CATEGORY_DEFS],
         "selected_categories": selected_categories,
         "unsupported_categories": sorted(_UNSUPPORTED_CATEGORY_KEYS),
-        "unsupported_details": {
-            "embeddings": "Milestone 1 does not include authoritative embedding counts.",
-        },
     }
+    if _UNSUPPORTED_CATEGORY_KEYS:
+        result["unsupported_details"] = {
+            key: f"Category '{key}' is not yet supported."
+            for key in sorted(_UNSUPPORTED_CATEGORY_KEYS)
+        }
+    else:
+        result["unsupported_details"] = {}
+    return result
 
 
 async def preview_data_subject_request(
@@ -373,3 +423,197 @@ async def list_data_subject_requests(
         offset=offset,
         org_ids=org_ids,
     )
+
+
+# ---------------------------------------------------------------------------
+# DSR erasure execution helpers
+# ---------------------------------------------------------------------------
+
+def _sqlite_hard_delete_sync(path: Path, statements: list[tuple[str, tuple]]) -> int:
+    """Execute DELETE statements and return total rows affected."""
+    if not path.exists():
+        return 0
+    total = 0
+    with sqlite3.connect(path) as conn:
+        for sql, params in statements:
+            cursor = conn.execute(sql, params)
+            total += cursor.rowcount
+    return total
+
+
+async def _erase_media_records(user_id: int) -> int:
+    """Hard-delete all media records for a user."""
+    path = DatabasePaths.get_media_db_path(user_id)
+    return await asyncio.to_thread(
+        _sqlite_hard_delete_sync,
+        path,
+        [("DELETE FROM Media", ())],
+    )
+
+
+async def _erase_chat_messages(user_id: int) -> int:
+    """Hard-delete all chat conversations and messages for a user."""
+    path = DatabasePaths.get_chacha_db_path(user_id)
+    return await asyncio.to_thread(
+        _sqlite_hard_delete_sync,
+        path,
+        [
+            ("DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE client_id = ?)", (str(user_id),)),
+            ("DELETE FROM conversations WHERE client_id = ?", (str(user_id),)),
+        ],
+    )
+
+
+async def _erase_notes(user_id: int) -> int:
+    """Hard-delete all notes for a user."""
+    path = DatabasePaths.get_chacha_db_path(user_id)
+    return await asyncio.to_thread(
+        _sqlite_hard_delete_sync,
+        path,
+        [("DELETE FROM notes", ())],
+    )
+
+
+async def _erase_embeddings(user_id: int) -> int:
+    """Delete all ChromaDB collections for a user, returning total embedding count erased.
+
+    Raises ``RuntimeError`` when ChromaDB is unavailable but data might exist,
+    so the category is marked as ``error`` and the overall DSR as ``failed``.
+    Returns 0 only when there is genuinely nothing to delete.
+    """
+
+    def _erase_sync() -> int:
+        try:
+            manager = _get_chroma_manager_for_user(user_id)
+        except Exception as exc:
+            # Check whether a chroma_storage directory exists for this user.
+            # If it does, data might be present and we must not silently succeed.
+            from tldw_Server_API.app.core.config import settings as app_settings
+
+            user_db_base = app_settings.get("USER_DB_BASE_DIR")
+            if not user_db_base:
+                project_root = Path(__file__).resolve().parents[3]
+                user_db_base = str(project_root / "Databases" / "user_databases")
+            chroma_dir = Path(user_db_base) / str(user_id) / "chroma_storage"
+            if chroma_dir.exists():
+                raise RuntimeError(
+                    f"ChromaDB unavailable for user {user_id} but chroma_storage "
+                    f"directory exists — cannot confirm erasure: {exc}"
+                ) from exc
+            # No storage directory → nothing to erase
+            return 0
+
+        try:
+            collections = manager.list_collections()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to list ChromaDB collections for user {user_id}: {exc}"
+            ) from exc
+
+        total_embeddings = 0
+        for col in collections:
+            try:
+                total_embeddings += col.count()
+            except Exception:
+                pass  # count may fail; still attempt deletion
+            try:
+                manager.delete_collection(col.name)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to delete collection '{col.name}' for user {user_id}: {exc}"
+                ) from exc
+        return total_embeddings
+
+    return await asyncio.to_thread(_erase_sync)
+
+
+async def _erase_audit_events(user_id: int) -> int:
+    """Hard-delete audit events for a user."""
+    from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import _resolve_audit_storage_mode
+
+    shared_mode = _resolve_audit_storage_mode() == "shared"
+    path = (
+        DatabasePaths.get_shared_audit_db_path()
+        if shared_mode
+        else DatabasePaths.get_audit_db_path(user_id)
+    )
+    if shared_mode:
+        return await asyncio.to_thread(
+            _sqlite_hard_delete_sync,
+            path,
+            [("DELETE FROM audit_events WHERE tenant_user_id = ?", (str(user_id),))],
+        )
+    return await asyncio.to_thread(
+        _sqlite_hard_delete_sync,
+        path,
+        [("DELETE FROM audit_events", ())],
+    )
+
+
+_ERASURE_HANDLERS: dict[str, Any] = {
+    "media_records": _erase_media_records,
+    "chat_messages": _erase_chat_messages,
+    "notes": _erase_notes,
+    "embeddings": _erase_embeddings,
+    "audit_events": _erase_audit_events,
+}
+
+
+async def execute_dsr_erasure(
+    *,
+    request_id: int,
+    user_id: int,
+    selected_categories: list[str],
+    dsr_repo: AuthnzDataSubjectRequestsRepo,
+    principal: AuthPrincipal | None = None,
+) -> dict[str, Any]:
+    """Orchestrate DSR erasure across all selected categories.
+
+    Updates the DSR record status to ``executing`` before running handlers, then
+    transitions to ``completed`` or ``failed`` depending on outcome. Returns a
+    summary dict with per-category results.
+    """
+    # Mark as executing
+    await dsr_repo.update_request_status(request_id, "executing")
+
+    executed_by = (
+        getattr(principal, "principal_id", None) or getattr(principal, "user_id", None)
+        if principal is not None
+        else None
+    )
+    logger.info(
+        "DSR erasure started: request_id={} user_id={} executed_by={} categories={}",
+        request_id, user_id, executed_by, selected_categories,
+    )
+
+    results: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+
+    for category in selected_categories:
+        handler = _ERASURE_HANDLERS.get(category)
+        if handler is None:
+            errors[category] = f"No erasure handler for category '{category}'"
+            continue
+        try:
+            count = await handler(user_id)
+            results[category] = {"deleted_count": count, "status": "ok"}
+        except Exception as exc:
+            logger.error("DSR erasure failed for category '{}' user {}: {}", category, user_id, exc)
+            errors[category] = str(exc)
+            results[category] = {"deleted_count": 0, "status": "error", "error": str(exc)}
+
+    # Determine final status
+    final_status = "completed" if not errors else "failed"
+    notes_text = None
+    if errors:
+        notes_text = f"Erasure errors: {errors}"
+
+    await dsr_repo.update_request_status(request_id, final_status, notes=notes_text)
+
+    return {
+        "request_id": request_id,
+        "user_id": user_id,
+        "status": final_status,
+        "categories": results,
+        "errors": errors,
+    }

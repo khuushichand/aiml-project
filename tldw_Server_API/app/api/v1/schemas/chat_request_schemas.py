@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.testing import is_test_mode
 
 #
 # Local Imports
+from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingOverride
 
 #
 #######################################################################################################################
@@ -761,6 +762,13 @@ class ChatCompletionRequest(BaseModel):
     api_provider: Optional[SUPPORTED_API_ENDPOINTS] = Field(
         default=None,  # Default is handled server-side
         description=f"[Extension] The target LLM provider (e.g., 'openai', 'anthropic'). If omitted, defaults to the server's configured default ('{DEFAULT_LLM_PROVIDER}').",
+    )
+    routing: Optional[RoutingOverride] = Field(
+        None,
+        description=(
+            "[Extension] Optional model-router overrides when `model='auto'`, including routing "
+            "mode, objective, provider boundary, and failure handling."
+        ),
     )
 
     # --- Standard OpenAI-like Parameters ---

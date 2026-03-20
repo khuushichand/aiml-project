@@ -6,6 +6,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     resolve_provider_and_model,
     invalidate_model_alias_caches,
 )
+from tldw_Server_API.app.core.LLM_Calls.routing.models import RoutingDecision
 
 
 @pytest.mark.unit
@@ -95,3 +96,28 @@ def test_resolve_provider_and_model_keeps_explicit_provider_even_when_catalog_di
     assert selected_provider == "openai"
     assert selected_model == "deepseek-chat"
     assert debug_info["catalog_inference"]["reason"] == "explicit_provider"
+
+
+@pytest.mark.unit
+def test_resolve_provider_and_model_writes_back_canonical_routing_decision():
+    request = ChatCompletionRequest(
+        model="auto",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+
+    _, _, selected_provider, selected_model, _ = resolve_provider_and_model(
+        request_data=request,
+        metrics_default_provider="openai",
+        normalize_default_provider="openai",
+        routing_decision=RoutingDecision(
+            provider="openrouter",
+            model="anthropic/claude-4.5-sonnet",
+            canonical=True,
+            decision_source="rules_router",
+        ),
+    )
+
+    assert request.api_provider == "openrouter"
+    assert request.model == "anthropic/claude-4.5-sonnet"
+    assert selected_provider == "openrouter"
+    assert selected_model == "anthropic/claude-4.5-sonnet"

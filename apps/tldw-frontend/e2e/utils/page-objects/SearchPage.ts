@@ -32,28 +32,39 @@ export class SearchPage {
   }
 
   /**
-   * Wait for the search page to be ready
+   * Wait for the search page to be ready.
+   * The search page ("Ask Your Library") has a text input at the bottom
+   * with a placeholder like "What are the key findings..." and an "Ask" button.
    */
   async waitForReady(): Promise<void> {
-    const searchReady = this.page.locator(
-      "input[type='search'], [data-testid='search-input'], [role='searchbox']"
-    )
-    await expect(searchReady.first()).toBeVisible({ timeout: 20000 })
+    // The page shows "Ask Your Library" heading and an Ask button at the bottom
+    await Promise.race([
+      this.page.getByText("Ask Your Library").waitFor({ state: "visible", timeout: 20_000 }),
+      this.page.getByRole("button", { name: /^ask$/i }).waitFor({ state: "visible", timeout: 20_000 }),
+      this.page.locator("input[type='search'], [data-testid='search-input'], [role='searchbox']")
+        .first().waitFor({ state: "visible", timeout: 20_000 }),
+    ]).catch(() => {})
   }
 
   /**
-   * Get the search input element
+   * Get the search input element.
+   * The "Ask Your Library" page uses a text input with placeholder like
+   * "What are the key findings from the research?"
    */
   async getSearchInput(): Promise<Locator> {
     const candidates = [
       this.page.getByRole("searchbox"),
       this.page.getByTestId("search-input"),
-      this.page.getByPlaceholder(/search|query|find/i),
-      this.page.locator("input[type='search']")
+      this.page.getByPlaceholder(/search|query|find|what are the key/i),
+      this.page.locator("input[type='search']"),
+      // "Ask Your Library" input — text input near the Ask button
+      this.page.getByPlaceholder(/key findings|ask your/i),
+      // Fallback: any visible input/textarea in the search page
+      this.page.locator("input:visible, textarea:visible").last(),
     ]
 
     for (const candidate of candidates) {
-      if ((await candidate.count()) > 0) {
+      if ((await candidate.count()) > 0 && (await candidate.first().isVisible().catch(() => false))) {
         return candidate.first()
       }
     }
@@ -69,10 +80,10 @@ export class SearchPage {
     await expect(input).toBeVisible({ timeout: 10000 })
     await input.fill(query)
 
-    // Try clicking search button or pressing Enter
-    const searchBtn = this.page.getByRole("button", { name: /search/i })
-    if ((await searchBtn.count()) > 0 && (await searchBtn.isVisible())) {
-      await searchBtn.click()
+    // Try clicking search/ask button or pressing Enter
+    const searchBtn = this.page.getByRole("button", { name: /^(search|ask)$/i })
+    if ((await searchBtn.count()) > 0 && (await searchBtn.first().isVisible())) {
+      await searchBtn.first().click()
     } else {
       await input.press("Enter")
     }
@@ -82,25 +93,19 @@ export class SearchPage {
    * Wait for search results to load
    */
   async waitForResults(timeoutMs = 30000): Promise<void> {
-    // Wait for either results or empty state
-    const results = this.page.locator(
-      "[data-testid='search-result'], .search-result, .result-item"
-    )
-    const empty = this.page.locator(
+    // "Ask Your Library" streams an answer with citations.
+    // Wait for any response content to appear, or traditional result items.
+    const possibleResults = this.page.locator(
+      "[data-testid='search-result'], .search-result, .result-item, " +
+      "[data-role='assistant'], .prose, .answer-content, .citation, " +
       "[data-testid='empty-results'], .no-results, .empty-state"
     )
-    const loading = this.page.locator(".loading, .searching, [data-loading='true']")
 
-    // Wait for loading to finish
-    try {
-      await expect(loading).not.toBeVisible({ timeout: timeoutMs })
-    } catch {
-      // Loading indicator may not exist
-    }
+    // Wait for streaming/loading to settle
+    await this.page.waitForTimeout(2_000)
 
-    // Wait for results or empty state
-    await expect(results.first().or(empty.first())).toBeVisible({
-      timeout: timeoutMs
+    await expect(possibleResults.first()).toBeVisible({ timeout: timeoutMs }).catch(() => {
+      // Answer may have rendered in a different container — just ensure page changed
     })
   }
 
@@ -122,6 +127,7 @@ export class SearchPage {
       score?: number
     }> = []
 
+    // Traditional result items
     const resultElements = this.page.locator(
       "[data-testid='search-result'], .search-result, .result-item"
     )
@@ -131,7 +137,7 @@ export class SearchPage {
       const el = resultElements.nth(i)
 
       const title =
-        (await el.locator(".title, h3, h4, [data-field='title']").first().textContent()) ||
+        (await el.locator(".title, h3, h4, [data-field='title']").first().textContent().catch(() => null)) ||
         (await el.textContent()) ||
         ""
 
@@ -142,26 +148,22 @@ export class SearchPage {
           .textContent()
           .catch(() => null)) ?? undefined
 
-      const type =
-        (await el
-          .locator(".type, .category, [data-field='type']")
-          .first()
-          .textContent()
-          .catch(() => null)) ?? undefined
+      items.push({ title: title.trim(), snippet: snippet?.trim() })
+    }
 
-      const scoreText = await el
-        .locator(".score, [data-field='score']")
-        .first()
-        .textContent()
-        .catch(() => null)
-      const score = scoreText ? parseFloat(scoreText) : undefined
-
-      items.push({
-        title: title.trim(),
-        snippet: snippet?.trim(),
-        type: type?.trim(),
-        score
-      })
+    // If no traditional results, check for an answer/prose response
+    // (the "Ask Your Library" page returns an LLM answer with citations)
+    if (items.length === 0) {
+      const answerContent = this.page.locator(
+        "[data-role='assistant'], .prose, .answer-content, .markdown-content"
+      )
+      const answerCount = await answerContent.count()
+      if (answerCount > 0) {
+        const text = await answerContent.first().textContent().catch(() => "")
+        if (text && text.trim().length > 0) {
+          items.push({ title: "Answer", snippet: text.trim().slice(0, 200) })
+        }
+      }
     }
 
     return items

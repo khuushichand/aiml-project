@@ -119,6 +119,8 @@ export function SourceCard({
   const [copiedState, setCopiedState] = React.useState<"text" | "citation" | null>(null)
   const [isExpanded, setIsExpanded] = React.useState(false)
   const [askTemplate, setAskTemplate] = React.useState<SourceAskTemplate>("detail")
+  const copiedStateTimeoutRef = React.useRef<number | null>(null)
+  const latestCopyRequestIdRef = React.useRef(0)
 
   const title = result.metadata?.title || result.metadata?.source || `Source ${index}`
   const content = result.content || result.text || result.chunk || ""
@@ -139,25 +141,58 @@ export function SourceCard({
 
   const Icon = getSourceIcon(sourceType)
 
+  React.useEffect(
+    () => () => {
+      if (copiedStateTimeoutRef.current != null) {
+        window.clearTimeout(copiedStateTimeoutRef.current)
+        copiedStateTimeoutRef.current = null
+      }
+    },
+    []
+  )
+
+  const scheduleCopiedStateReset = useCallback((requestId: number) => {
+    if (copiedStateTimeoutRef.current != null) {
+      window.clearTimeout(copiedStateTimeoutRef.current)
+    }
+    copiedStateTimeoutRef.current = window.setTimeout(() => {
+      if (latestCopyRequestIdRef.current !== requestId) {
+        return
+      }
+      copiedStateTimeoutRef.current = null
+      setCopiedState(null)
+    }, 2000)
+  }, [])
+
   const handleCopyText = useCallback(async () => {
+    const requestId = latestCopyRequestIdRef.current + 1
+    latestCopyRequestIdRef.current = requestId
     try {
       await navigator.clipboard.writeText(content)
+      if (latestCopyRequestIdRef.current !== requestId) {
+        return
+      }
       setCopiedState("text")
-      setTimeout(() => setCopiedState(null), 2000)
+      scheduleCopiedStateReset(requestId)
     } catch (error) {
       console.error("Failed to copy source text:", error)
     }
-  }, [content])
+  }, [content, scheduleCopiedStateReset])
 
   const handleCopyCitation = useCallback(async () => {
+    const requestId = latestCopyRequestIdRef.current + 1
+    latestCopyRequestIdRef.current = requestId
     try {
       await navigator.clipboard.writeText(buildCitationText(result, index))
+      if (latestCopyRequestIdRef.current !== requestId) {
+        return
+      }
       setCopiedState("citation")
-      setTimeout(() => setCopiedState(null), 2000)
+      scheduleCopiedStateReset(requestId)
     } catch (error) {
       console.error("Failed to copy source citation:", error)
     }
-  }, [index, result])
+  }, [index, result, scheduleCopiedStateReset])
 
   const handleOpenExternal = useCallback(() => {
     if (url) {

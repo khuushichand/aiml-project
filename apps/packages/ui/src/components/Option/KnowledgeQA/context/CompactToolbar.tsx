@@ -1,10 +1,10 @@
 import React from "react"
 import { Layers, Globe, ChevronDown, Settings } from "lucide-react"
 import { cn } from "@/libs/utils"
-import type { RagPresetName } from "@/services/rag/unified-rag"
+import type { RagPresetName, RagSource } from "@/services/rag/unified-rag"
 
 type CompactToolbarProps = {
-  sources: string[]
+  sources: RagSource[]
   preset: RagPresetName
   webEnabled: boolean
   onToggleWeb: () => void
@@ -15,7 +15,7 @@ type CompactToolbarProps = {
 
 const ALL_SOURCES_THRESHOLD = 5
 
-const SOURCE_LABELS: Record<string, string> = {
+const SOURCE_LABELS: Record<RagSource, string> = {
   media_db: "Docs & Media",
   notes: "Notes",
   characters: "Characters",
@@ -23,7 +23,7 @@ const SOURCE_LABELS: Record<string, string> = {
   kanban: "Kanban",
 }
 
-function summarizeSources(sources: string[]): string {
+function summarizeSources(sources: RagSource[]): string {
   if (!Array.isArray(sources) || sources.length === 0) return "None"
   if (sources.length === 1) return SOURCE_LABELS[sources[0]] || sources[0]
   if (sources.length >= ALL_SOURCES_THRESHOLD) return "All sources"

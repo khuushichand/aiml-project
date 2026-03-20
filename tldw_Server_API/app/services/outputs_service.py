@@ -15,6 +15,7 @@ from jinja2 import TemplateError
 from jinja2.sandbox import SandboxedEnvironment
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     normalize_output_storage_filename,
@@ -396,10 +397,11 @@ async def _ingest_output_to_media_db(
         safe_metadata["variant_of"] = variant_of
     ingestion_date = datetime.utcnow().replace(microsecond=0).isoformat()
     loop = asyncio.get_running_loop()
+    media_repo = get_media_repository(media_db)
     try:
         media_id, _media_uuid, msg = await loop.run_in_executor(
             None,
-            lambda: media_db.add_media_with_keywords(
+            lambda: media_repo.add_media_with_keywords(
                 url=f"output://{output_id}",
                 title=title,
                 media_type=f"output_{output_type}",

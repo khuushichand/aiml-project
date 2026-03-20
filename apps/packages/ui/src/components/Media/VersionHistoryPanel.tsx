@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next'
 import { Dropdown, message, Checkbox } from 'antd'
 import type { MenuProps } from 'antd'
 import { bgRequest } from '@/services/background-proxy'
+import type { AllowedPath } from '@/services/tldw/openapi-guard'
 import { useConfirmDanger } from '@/components/Common/confirm-danger'
 
 interface VersionHistoryPanelProps {
@@ -60,6 +61,17 @@ export interface VersionMetadataDiffSummary {
   right: string[]
   changed: string[]
 }
+
+/** Response shape for a single version detail (with content). */
+interface VersionDetail extends Version {
+  raw_content?: string
+}
+
+/** Response shape for the version list endpoint (may be an array or paginated wrapper). */
+type VersionListResponse = Version[] | { items: Version[] }
+
+/** Build a typed AllowedPath from a template string known to start with '/'. */
+const apiPath = (p: `/${string}`): AllowedPath => p
 
 const VERSION_METADATA_FIELDS: Array<{ key: string; label: string; paths: string[] }> = [
   { key: 'doi', label: 'DOI', paths: ['doi', 'DOI', 'identifiers.doi', 'citation.doi'] },
@@ -208,9 +220,9 @@ export function VersionHistoryPanel({
     if (!mediaId) return
     setLoading(true)
     try {
-      const data = await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions?include_content=false&limit=50&page=1` as any,
-        method: 'GET' as any
+      const data = await bgRequest<VersionListResponse>({
+        path: apiPath(`/api/v1/media/${mediaId}/versions?include_content=false&limit=50&page=1`),
+        method: 'GET'
       })
       const arr = Array.isArray(data) ? data : (data?.items || [])
       setVersions(arr)
@@ -248,9 +260,9 @@ export function VersionHistoryPanel({
     if (vNum === undefined) return
 
     try {
-      const data = await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions/${vNum}?include_content=true` as any,
-        method: 'GET' as any
+      const data = await bgRequest<VersionDetail>({
+        path: apiPath(`/api/v1/media/${mediaId}/versions/${vNum}?include_content=true`),
+        method: 'GET'
       })
       const content = String(data?.content || data?.raw_content || '')
       const analysis = String(data?.analysis_content || data?.analysis || '')
@@ -280,9 +292,9 @@ export function VersionHistoryPanel({
     if (!ok) return
 
     try {
-      await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions/rollback` as any,
-        method: 'POST' as any,
+      await bgRequest<void>({
+        path: apiPath(`/api/v1/media/${mediaId}/versions/rollback`),
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: { version_number: vNum }
       })
@@ -312,9 +324,9 @@ export function VersionHistoryPanel({
     if (!ok) return
 
     try {
-      await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions/${vNum}` as any,
-        method: 'DELETE' as any
+      await bgRequest<void>({
+        path: apiPath(`/api/v1/media/${mediaId}/versions/${vNum}`),
+        method: 'DELETE'
       })
       message.success(t('mediaPage.versionDeleted', 'Version deleted'))
       loadVersions()
@@ -387,9 +399,9 @@ export function VersionHistoryPanel({
     }
 
     try {
-      const listData = await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions?include_content=false&limit=50&page=1` as any,
-        method: 'GET' as any
+      const listData = await bgRequest<VersionListResponse>({
+        path: apiPath(`/api/v1/media/${mediaId}/versions?include_content=false&limit=50&page=1`),
+        method: 'GET'
       })
       const arr = Array.isArray(listData) ? listData : (listData?.items || [])
 
@@ -412,9 +424,9 @@ export function VersionHistoryPanel({
           if (!content.trim()) {
             const latestNum = getVersionNumber(latest)
             if (latestNum !== undefined) {
-              const detail = await bgRequest<any>({
-                path: `/api/v1/media/${mediaId}/versions/${latestNum}?include_content=true` as any,
-                method: 'GET' as any
+              const detail = await bgRequest<VersionDetail>({
+                path: apiPath(`/api/v1/media/${mediaId}/versions/${latestNum}?include_content=true`),
+                method: 'GET'
               })
               content = String(detail?.content || detail?.raw_content || '')
               if (!prompt.trim()) {
@@ -449,9 +461,9 @@ export function VersionHistoryPanel({
         return
       }
 
-      await bgRequest<any>({
-        path: `/api/v1/media/${mediaId}/versions` as any,
-        method: 'POST' as any,
+      await bgRequest<void>({
+        path: apiPath(`/api/v1/media/${mediaId}/versions`),
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: {
           content,

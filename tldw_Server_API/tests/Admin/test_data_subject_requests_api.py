@@ -256,6 +256,7 @@ async def test_create_records_request_and_reuses_client_request_id(monkeypatch, 
         "chat_messages",
         "notes",
         "audit_events",
+        "embeddings",
     ]
 
     summary_by_key = {
@@ -267,6 +268,7 @@ async def test_create_records_request_and_reuses_client_request_id(monkeypatch, 
         "chat_messages": 4,
         "notes": 2,
         "audit_events": 5,
+        "embeddings": 0,
     }
     assert len(emitted) == 2
     assert emitted[0]["action"] == "data_subject_request.record"

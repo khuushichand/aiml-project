@@ -2,6 +2,7 @@ import { formatErrorMessage } from "@/utils/format-error-message"
 import { isPlaceholderApiKey } from "@/utils/api-key"
 import type { PathOrUrl } from "@/services/tldw/openapi-guard"
 import type { ApiSendResponse } from "@/services/api-send"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 export type TldwRequestPayload = {
   path: PathOrUrl
@@ -27,6 +28,15 @@ const ABSOLUTE_URL_BLOCK_ERROR =
 const REQUEST_LOG_PREFIX = "[tldw:request]"
 const malformedConfigServerUrlWarnings = new Set<string>()
 const malformedAllowlistEntryWarnings = new Set<string>()
+
+const toHostedProxyPath = (path: string): string => {
+  const [pathname, search = ""] = path.split("?")
+  if (pathname.startsWith("/api/v1/")) {
+    const proxiedPath = pathname.replace(/^\/api\/v1\//, "/api/proxy/")
+    return search ? `${proxiedPath}?${search}` : proxiedPath
+  }
+  return path
+}
 
 const normalizeKnownPathQuirks = (path: PathOrUrl): PathOrUrl => {
   if (typeof path !== "string") return path
@@ -217,6 +227,7 @@ export const tldwRequest = async (
   const normalizedPath = normalizeKnownPathQuirks(path)
   const fetchFn = runtime.fetchFn || fetch
   const cfg = await runtime.getConfig()
+  const hostedMode = isHostedTldwDeployment()
   const isAbsolute = typeof normalizedPath === "string" && /^https?:/i.test(normalizedPath)
   const absolutePath = isAbsolute ? String(normalizedPath) : ""
   if (isAbsolute && !isAbsoluteUrlAllowlisted(absolutePath, cfg)) {
@@ -226,7 +237,7 @@ export const tldwRequest = async (
       error: ABSOLUTE_URL_BLOCK_ERROR
     }
   }
-  if (!cfg?.serverUrl && !isAbsolute) {
+  if (!cfg?.serverUrl && !isAbsolute && !hostedMode) {
     return { ok: false, status: 400, error: "tldw server not configured" }
   }
   if (!normalizedPath) {
@@ -235,6 +246,8 @@ export const tldwRequest = async (
   const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
   const url = isAbsolute
     ? normalizedPath
+    : hostedMode
+      ? toHostedProxyPath(String(normalizedPath))
     : `${baseUrl}${normalizedPath.startsWith("/") ? "" : "/"}${normalizedPath}`
   const sameOriginAbsoluteUrl =
     isAbsolute && isSameOriginAbsoluteUrlForConfiguredServer(absolutePath, cfg)
@@ -267,33 +280,35 @@ export const tldwRequest = async (
       const kl = k.toLowerCase()
       if (kl === "x-api-key" || kl === "authorization") delete h[k]
     }
-    if (cfg?.authMode === "single-user") {
-      const key = (cfg?.apiKey || "").trim()
-      if (!key) {
-        return {
-          ok: false,
-          status: 401,
-          error:
-            "Add or update your API key in Settings -> tldw server, then try again."
+    if (!hostedMode) {
+      if (cfg?.authMode === "single-user") {
+        const key = (cfg?.apiKey || "").trim()
+        if (!key) {
+          return {
+            ok: false,
+            status: 401,
+            error:
+              "Add or update your API key in Settings -> tldw server, then try again."
+          }
         }
-      }
-      if (isPlaceholderApiKey(key)) {
-        return {
-          ok: false,
-          status: 401,
-          error:
-            "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings -> tldw server before continuing."
+        if (isPlaceholderApiKey(key)) {
+          return {
+            ok: false,
+            status: 401,
+            error:
+              "tldw server API key is still set to the default demo value. Replace it with your real API key in Settings -> tldw server before continuing."
+          }
         }
-      }
-      h["X-API-KEY"] = key
-    } else if (cfg?.authMode === "multi-user") {
-      const token = (cfg?.accessToken || "").trim()
-      if (token) h["Authorization"] = `Bearer ${token}`
-      else {
-        return {
-          ok: false,
-          status: 401,
-          error: "Not authenticated. Please login under Settings > tldw."
+        h["X-API-KEY"] = key
+      } else if (cfg?.authMode === "multi-user") {
+        const token = (cfg?.accessToken || "").trim()
+        if (token) h["Authorization"] = `Bearer ${token}`
+        else {
+          return {
+            ok: false,
+            status: 401,
+            error: "Not authenticated. Please login under Settings > tldw."
+          }
         }
       }
     }
@@ -342,14 +357,22 @@ export const tldwRequest = async (
 
     if (
       !shouldSkipAuth &&
+      !hostedMode &&
       resp.status === 401 &&
       cfg?.authMode === "multi-user" &&
       cfg?.refreshToken &&
       runtime.refreshAuth
     ) {
+      let refreshSucceeded = false
       try {
         await runtime.refreshAuth()
-      } catch {}
+        refreshSucceeded = true
+      } catch (refreshError) {
+        console.warn(
+          `${REQUEST_LOG_PREFIX} Token refresh failed — retrying with stale token`,
+          refreshError
+        )
+      }
       const updated = await runtime.getConfig()
       const retryHeaders = { ...h }
       for (const k of Object.keys(retryHeaders)) {
@@ -368,6 +391,13 @@ export const tldwRequest = async (
       if (retryTimeoutId) {
         clearTimeout(retryTimeoutId)
         retryTimeoutId = null
+      }
+      if (!refreshSucceeded && resp.status === 401) {
+        return {
+          ok: false,
+          status: 401,
+          error: "Session expired. Please log in again."
+        }
       }
     }
 
@@ -398,12 +428,26 @@ export const tldwRequest = async (
     }
 
     if (!resp.ok) {
-      const detail =
-        typeof data === "object" &&
-        data &&
-        (data.detail || data.error || data.message)
+      let detail: unknown = undefined
+      if (typeof data === "object" && data) {
+        const raw = data.detail ?? data.error ?? data.message
+        // FastAPI validation errors return detail as an array
+        if (Array.isArray(raw)) {
+          detail = raw
+            .map((item: any) =>
+              typeof item === "string"
+                ? item
+                : typeof item?.msg === "string"
+                  ? item.msg
+                  : JSON.stringify(item)
+            )
+            .join("; ")
+        } else if (raw !== undefined && raw !== null) {
+          detail = raw
+        }
+      }
       const errorMessage = formatErrorMessage(
-        typeof detail !== "undefined" && detail !== null
+        detail !== undefined && detail !== null
           ? detail
           : resp.statusText || `HTTP ${resp.status}`,
         `HTTP ${resp.status}`

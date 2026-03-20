@@ -17,4 +17,32 @@ describe('Vitest setup contract', () => {
     expect(typeof Blob.prototype.text).toBe('function');
     expect(typeof File.prototype.text).toBe('function');
   });
+
+  it('keeps the setup UI on the bundle-first audio flow', () => {
+    const setupUiPath = path.resolve(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      'tldw_Server_API',
+      'app',
+      'static',
+      'setup',
+      'js',
+      'setup.js',
+    );
+    const source = fs.readFileSync(setupUiPath, 'utf8');
+
+    expect(source).toContain('/audio/recommendations');
+    expect(source).toContain('/audio/provision');
+    expect(source).toContain('/audio/verify');
+    expect(source).toContain('Recommended audio bundle');
+    expect(source).toContain('Recommended profile');
+    expect(source).toContain('Light');
+    expect(source).toContain('Balanced');
+    expect(source).toContain('Performance');
+    expect(source).toContain('Provision recommended bundle');
+    expect(source).toContain('Run verification');
+    expect(source).toContain('Safe rerun');
+  });
 });

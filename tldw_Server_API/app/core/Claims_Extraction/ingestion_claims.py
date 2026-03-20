@@ -70,12 +70,6 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 )
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
-_CLAIMS_IMPORT_EXCEPTIONS = (
-    ImportError,
-    OSError,
-    RuntimeError,
-)
-
 _CLAIMS_COERCE_EXCEPTIONS = (TypeError, ValueError, OverflowError)
 
 _CLAIMS_TEMPLATE_FORMAT_EXCEPTIONS = (
@@ -106,13 +100,6 @@ _CLAIMS_RESPONSE_PARSE_EXCEPTIONS = (
 )
 
 _CLAIMS_STORE_EXCEPTIONS = _CLAIMS_NONCRITICAL_EXCEPTIONS + (sqlite3.Error,)
-
-try:
-    # Local import for DB helper
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-except _CLAIMS_IMPORT_EXCEPTIONS:  # pragma: no cover
-    MediaDatabase = None  # type: ignore
-
 
 _INGESTION_CLAIMS_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -594,7 +581,7 @@ def extract_claims_for_chunks(
 
 
 def store_claims(
-    db: MediaDatabase,
+    db: Any,
     *,
     media_id: int,
     chunk_texts_by_index: dict[int, str],

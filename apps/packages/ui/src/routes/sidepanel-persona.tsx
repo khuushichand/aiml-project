@@ -2,8 +2,6 @@ import React from "react"
 import { Button, Checkbox, Input, Select, Tag, Typography } from "antd"
 import { CheckCircle2, Send, XCircle } from "lucide-react"
 import {
-  UNSAFE_DataRouterContext,
-  useBlocker,
   useLocation,
   useNavigate
 } from "react-router-dom"
@@ -11,285 +9,74 @@ import { useTranslation } from "react-i18next"
 
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { PersonaPolicySummary } from "@/components/Option/MCPHub"
+import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
+import { AssistantVoiceCard } from "@/components/PersonaGarden/AssistantVoiceCard"
+import { AssistantDefaultsPanel } from "@/components/PersonaGarden/AssistantDefaultsPanel"
+import {
+  PersonaSetupHandoffCard,
+} from "@/components/PersonaGarden/PersonaSetupHandoffCard"
+import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
+import {
+  CommandsPanel,
+  type CommandDraftSource
+} from "@/components/PersonaGarden/CommandsPanel"
+import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
 import { LiveSessionPanel } from "@/components/PersonaGarden/LiveSessionPanel"
 import { PersonaGardenTabs } from "@/components/PersonaGarden/PersonaGardenTabs"
 import { PoliciesPanel } from "@/components/PersonaGarden/PoliciesPanel"
 import { ProfilePanel } from "@/components/PersonaGarden/ProfilePanel"
 import { ScopesPanel } from "@/components/PersonaGarden/ScopesPanel"
+import {
+  SetupSafetyConnectionsStep,
+} from "@/components/PersonaGarden/SetupSafetyConnectionsStep"
+import { SetupStarterCommandsStep } from "@/components/PersonaGarden/SetupStarterCommandsStep"
+import {
+  SetupTestAndFinishStep,
+  type TestLabDryRunCompletedResult,
+} from "@/components/PersonaGarden/SetupTestAndFinishStep"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
+import {
+  TestLabPanel,
+} from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
+import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import {
-  fetchCompanionConversationPrompts,
-  isCompanionConsentRequiredResponse
-} from "@/services/companion"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { buildPersonaWebSocketUrl } from "@/services/persona-stream"
 import {
   type PersonaGardenTabKey
 } from "@/utils/persona-garden-route"
 import { usePersonaGardenRouteBootstrap } from "@/hooks/usePersonaGardenRouteBootstrap"
+import {
+  usePersonaLiveVoiceController
+} from "@/hooks/usePersonaLiveVoiceController"
+import {
+  useResolvedPersonaVoiceDefaults,
+  type PersonaVoiceDefaults
+} from "@/hooks/useResolvedPersonaVoiceDefaults"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
-
-type PersonaInfo = {
-  id: string
-  name: string
-  description?: string | null
-  voice?: string | null
-}
-
-type PersonaPlanStep = {
-  idx: number
-  tool: string
-  args?: Record<string, unknown>
-  description?: string
-  why?: string
-  policy?: PersonaToolPolicy
-}
-
-type PendingPlan = {
-  planId: string
-  steps: PersonaPlanStep[]
-  memory?: PersonaMemoryUsage
-  companion?: PersonaCompanionUsage
-}
-
-type PersonaLogEntry = {
-  id: string
-  kind: "user" | "assistant" | "tool" | "notice"
-  text: string
-}
-
-type PersonaToolPolicy = {
-  allow?: boolean
-  requires_confirmation?: boolean
-  required_scope?: string | null
-  reason_code?: string | null
-  reason?: string | null
-  action?: string | null
-}
-
-type PersonaMemoryUsage = {
-  enabled?: boolean
-  requested_top_k?: number
-  applied_count?: number
-}
-
-type PersonaCompanionUsage = {
-  enabled?: boolean
-  requested_enabled?: boolean
-  applied_card_count?: number
-  applied_activity_count?: number
-}
-
-type PersonaRuntimeApprovalPayload = {
-  approval_policy_id?: number | null
-  mode?: string | null
-  tool_name?: string | null
-  context_key?: string | null
-  conversation_id?: string | null
-  scope_key?: string | null
-  reason?: string | null
-  duration_options?: string[]
-  arguments_summary?: Record<string, unknown>
-}
-
-type PersonaRuntimeApprovalDuration = "once" | "session" | "conversation"
-
-type PersonaRuntimeApprovalRequest = {
-  key: string
-  approval_policy_id?: number | null
-  mode?: string | null
-  tool_name: string
-  context_key: string
-  conversation_id?: string | null
-  scope_key: string
-  reason?: string | null
-  duration_options: PersonaRuntimeApprovalDuration[]
-  arguments_summary: Record<string, unknown>
-  selected_duration: PersonaRuntimeApprovalDuration
-  session_id?: string | null
-  plan_id?: string | null
-  step_idx?: number
-  step_type?: string | null
-  tool?: string | null
-  args?: Record<string, unknown>
-  why?: string | null
-  description?: string | null
-}
-
-type PersonaSessionSummary = {
-  session_id: string
-  persona_id?: string
-  created_at?: string
-  updated_at?: string
-  turn_count?: number
-  pending_plan_count?: number
-}
-
-type PersonaSessionPreferences = {
-  use_memory_context?: boolean
-  use_companion_context?: boolean
-  use_persona_state_context?: boolean
-  memory_top_k?: number
-}
-
-type PersonaSessionDetailResponse = {
-  preferences?: PersonaSessionPreferences
-  turns?: Array<Record<string, unknown>>
-}
-
-type PersonaProfileResponse = {
-  id?: string
-  use_persona_state_context_default?: boolean
-}
-
-type PersonaStateDocsResponse = {
-  persona_id?: string
-  soul_md?: string | null
-  identity_md?: string | null
-  heartbeat_md?: string | null
-  last_modified?: string | null
-}
-
-type PersonaStateHistoryEntry = {
-  entry_id: string
-  field: "soul_md" | "identity_md" | "heartbeat_md"
-  content: string
-  is_active?: boolean
-  created_at?: string | null
-  last_modified?: string | null
-  version?: number
-}
-
-type PersonaStateHistoryResponse = {
-  persona_id?: string
-  entries?: PersonaStateHistoryEntry[]
-}
-
-type UnsavedStateDiscardReason =
-  | "generic"
-  | "connect"
-  | "disconnect"
-  | "reload_state"
-  | "persona_switch"
-  | "session_switch"
-  | "restore_state"
-  | "route_transition"
-  | "before_unload"
-
-const formatMemoryResultsLabel = (count: number) => `Memory results: ${count}`
-const MAX_MEMORY_TOP_K = 10
-const MEMORY_TOP_K_OPTIONS = Array.from(
-  { length: MAX_MEMORY_TOP_K },
-  (_, index) => index + 1
-)
-const _normalizeMemoryTopK = (value: unknown, fallback: number): number => {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.max(1, Math.min(MAX_MEMORY_TOP_K, Math.trunc(parsed)))
-}
-const _historyEntrySortEpoch = (entry: PersonaStateHistoryEntry): number => {
-  const candidate = String(entry.created_at || entry.last_modified || "").trim()
-  if (!candidate) return 0
-  const parsed = Date.parse(candidate)
-  return Number.isFinite(parsed) ? parsed : 0
-}
-const PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY =
-  "sidepanel:persona:state-editor-expanded"
-const PERSONA_STATE_HISTORY_ORDER_PREF_KEY = "sidepanel:persona:state-history-order"
-
-const _approvalRequestKey = (
-  approval: PersonaRuntimeApprovalPayload,
-  payload: Record<string, unknown>
-): string =>
-  [
-    String(approval.conversation_id || payload.session_id || "").trim(),
-    String(approval.scope_key || "").trim(),
-    String(approval.tool_name || payload.tool || "").trim(),
-    String(payload.plan_id || "").trim(),
-    String(payload.step_idx ?? "").trim()
-  ].join("|")
-
-const _approvalDecisionPayload = (
-  decision: "approved" | "denied",
-  duration: string
-): { duration: PersonaRuntimeApprovalDuration } => {
-  const normalized = String(duration || "").trim().toLowerCase()
-  if (decision !== "approved") {
-    return { duration: "once" }
-  }
-  if (normalized === "conversation") {
-    return { duration: "conversation" }
-  }
-  if (normalized === "session") {
-    return { duration: "session" }
-  }
-  return { duration: "once" }
-}
-
-const _readBoolPreference = (key: string, fallback: boolean): boolean => {
-  if (typeof window === "undefined") return fallback
-  try {
-    const raw = window.localStorage.getItem(key)
-    if (raw == null) return fallback
-    const normalized = raw.trim().toLowerCase()
-    if (normalized === "true") return true
-    if (normalized === "false") return false
-  } catch {
-    // ignore storage access errors
-  }
-  return fallback
-}
-
-const _readHistoryOrderPreference = (): "newest" | "oldest" => {
-  if (typeof window === "undefined") return "newest"
-  try {
-    const raw = window.localStorage
-      .getItem(PERSONA_STATE_HISTORY_ORDER_PREF_KEY)
-      ?.trim()
-      .toLowerCase()
-    if (raw === "oldest") return "oldest"
-  } catch {
-    // ignore storage access errors
-  }
-  return "newest"
-}
-
-const _confirmWithBrowserPrompt = (message: string): boolean => {
-  if (typeof window === "undefined" || typeof window.confirm !== "function") return true
-  try {
-    return window.confirm(message)
-  } catch {
-      return true
-  }
-}
-
-const IDLE_ROUTE_BLOCKER: ReturnType<typeof useBlocker> = {
-  state: "unblocked",
-  proceed: () => undefined,
-  reset: () => undefined
-}
-
-const useCompatibleRouteBlocker = (
-  when: boolean
-): ReturnType<typeof useBlocker> => {
-  const dataRouterContext = React.useContext(UNSAFE_DataRouterContext)
-  if (!dataRouterContext) return IDLE_ROUTE_BLOCKER
-  return useBlocker(when)
-}
-
-type PersonaRouteMode = "persona" | "companion"
-type PersonaRouteShell = "sidepanel" | "options"
-
-type SidepanelPersonaProps = {
-  mode?: PersonaRouteMode
-  shell?: PersonaRouteShell
-}
-
-const DEFAULT_PERSONA_ID = "research_assistant"
-const DEFAULT_COMPANION_PROMPT_QUERY = "resume recent companion work"
+import { usePersonaAnalytics } from "./hooks/usePersonaAnalytics"
+import {
+  usePersonaGovernanceContext,
+  type PersonaRuntimeApprovalDuration,
+} from "./hooks/usePersonaGovernanceContext"
+import { usePersonaLiveSession } from "./hooks/usePersonaLiveSession"
+import { usePersonaIncomingPayload } from "./hooks/usePersonaIncomingPayload"
+import { usePersonaStateDocs } from "./hooks/usePersonaStateDocs"
+import { usePersonaSetupOrchestrator } from "./hooks/usePersonaSetupOrchestrator"
+import {
+  type PersonaInfo,
+  type PersonaLogEntry,
+  type PendingPlan,
+  type PersonaProfileResponse,
+  type SetupHandoffState,
+  type SetupHandoffFocusRequest,
+  type SetupLiveDetourState,
+  type SidepanelPersonaProps,
+  DEFAULT_PERSONA_ID,
+  buildTurnDetectionValuesFromSavedDefaults,
+  areTurnDetectionValuesEqual,
+} from "./personaTypes"
 
 const SidepanelPersona = ({
   mode = "persona",
@@ -299,6 +86,7 @@ const SidepanelPersona = ({
   const navigate = useNavigate()
   const location = useLocation()
   const isOnline = useServerOnline()
+  const { uxState, hasCompletedFirstRun } = useConnectionUxState()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const isCompanionMode = mode === "companion"
   const routeTitle = isCompanionMode
@@ -311,67 +99,45 @@ const SidepanelPersona = ({
 
   const wsRef = React.useRef<WebSocket | null>(null)
   const manuallyClosingRef = React.useRef(false)
+  const setupLiveDetourRef = React.useRef<SetupLiveDetourState | null>(null)
+  const setupHandoffRef = React.useRef<SetupHandoffState | null>(null)
+  const setupHandoffFocusRequestRef = React.useRef<SetupHandoffFocusRequest | null>(null)
+  const activeTabRef = React.useRef<PersonaGardenTabKey>("live")
+  const handleIncomingPayloadRef = React.useRef<(payload: any) => void>(() => {})
+  const liveVoiceControllerRef = React.useRef<any>(null)
+  const setupWizardAwaitingLiveResponseRef = React.useRef(false)
+  const setupWizardLastLiveTextRef = React.useRef("")
 
   const [catalog, setCatalog] = React.useState<PersonaInfo[]>([])
   const [selectedPersonaId, setSelectedPersonaId] =
     React.useState<string>(DEFAULT_PERSONA_ID)
-  const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
-  const [sessionId, setSessionId] = React.useState<string | null>(null)
-  const [sessionHistory, setSessionHistory] = React.useState<PersonaSessionSummary[]>([])
-  const [resumeSessionId, setResumeSessionId] = React.useState<string>("")
-  const [memoryEnabled, setMemoryEnabled] = React.useState(true)
-  const [memoryTopK, setMemoryTopK] = React.useState<number>(3)
-  const [companionContextEnabled, setCompanionContextEnabled] = React.useState(true)
-  const [personaStateContextEnabled, setPersonaStateContextEnabled] =
-    React.useState(!isCompanionMode)
-  const [personaStateContextProfileDefault, setPersonaStateContextProfileDefault] =
-    React.useState(!isCompanionMode)
-  const [updatingPersonaStateContextDefault, setUpdatingPersonaStateContextDefault] =
-    React.useState(false)
-  const [soulMd, setSoulMd] = React.useState("")
-  const [identityMd, setIdentityMd] = React.useState("")
-  const [heartbeatMd, setHeartbeatMd] = React.useState("")
-  const [savedSoulMd, setSavedSoulMd] = React.useState("")
-  const [savedIdentityMd, setSavedIdentityMd] = React.useState("")
-  const [savedHeartbeatMd, setSavedHeartbeatMd] = React.useState("")
-  const [stateLastModified, setStateLastModified] = React.useState<string | null>(null)
-  const [personaStateLoading, setPersonaStateLoading] = React.useState(false)
-  const [personaStateSaving, setPersonaStateSaving] = React.useState(false)
-  const [personaStateHistoryLoading, setPersonaStateHistoryLoading] =
-    React.useState(false)
-  const [personaStateHistoryLoaded, setPersonaStateHistoryLoaded] =
-    React.useState(false)
-  const [personaStateHistoryOrder, setPersonaStateHistoryOrder] =
-    React.useState<"newest" | "oldest">(_readHistoryOrderPreference)
-  const [personaStateEditorExpanded, setPersonaStateEditorExpanded] =
-    React.useState(() =>
-      _readBoolPreference(PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY, true)
-    )
-  const [personaStateHistory, setPersonaStateHistory] = React.useState<
-    PersonaStateHistoryEntry[]
-  >([])
-  const [restoringStateEntryId, setRestoringStateEntryId] = React.useState<
-    string | null
+  const [savedPersonaVoiceDefaults, setSavedPersonaVoiceDefaults] =
+    React.useState<PersonaVoiceDefaults | null>(null)
+  const [savedPersonaSetup, setSavedPersonaSetup] =
+    React.useState<any>(null)
+  const [savedPersonaProfileVersion, setSavedPersonaProfileVersion] = React.useState<
+    number | null
   >(null)
+  const [personaProfileLoading, setPersonaProfileLoading] = React.useState(false)
+  const [liveSessionVoiceDefaultsBaseline, setLiveSessionVoiceDefaultsBaseline] =
+    React.useState<PersonaVoiceDefaults | null>(null)
+  const [activeTab, setActiveTab] = React.useState<PersonaGardenTabKey>("live")
+  const [openCommandId, setOpenCommandId] = React.useState<string | null>(null)
+  const [draftCommandPhrase, setDraftCommandPhrase] = React.useState<string | null>(null)
+  const [draftCommandSource, setDraftCommandSource] =
+    React.useState<CommandDraftSource | null>(null)
+  const [rerunAfterSaveCommandId, setRerunAfterSaveCommandId] =
+    React.useState<string | null>(null)
+  const [lastTestLabPhrase, setLastTestLabPhrase] = React.useState("")
+  const [testLabRerunToken, setTestLabRerunToken] = React.useState(0)
+  const [savingLiveVoiceDefaults, setSavingLiveVoiceDefaults] = React.useState(false)
+  const [sessionId, setSessionId] = React.useState<string | null>(null)
   const [connected, setConnected] = React.useState(false)
   const [connecting, setConnecting] = React.useState(false)
-  const [savingCompanionCheckIn, setSavingCompanionCheckIn] = React.useState(false)
-  const [companionPrompts, setCompanionPrompts] = React.useState<
-    Array<{ prompt_id: string; label: string; prompt_text: string }>
-  >([])
   const [error, setError] = React.useState<string | null>(null)
   const [input, setInput] = React.useState("")
   const [logs, setLogs] = React.useState<PersonaLogEntry[]>([])
   const [pendingPlan, setPendingPlan] = React.useState<PendingPlan | null>(null)
-  const [pendingApprovals, setPendingApprovals] = React.useState<
-    PersonaRuntimeApprovalRequest[]
-  >([])
-  const [approvedStepMap, setApprovedStepMap] = React.useState<
-    Record<number, boolean>
-  >({})
-  const [submittingApprovalKey, setSubmittingApprovalKey] = React.useState<string | null>(
-    null
-  )
   const [activeSessionPersonaId, setActiveSessionPersonaId] = React.useState<string | null>(
     null
   )
@@ -382,156 +148,59 @@ const SidepanelPersona = ({
   })
 
   React.useEffect(() => {
-    if (!isCompanionMode) return
-    setCompanionContextEnabled(true)
-    setPersonaStateContextEnabled(false)
-    setPersonaStateContextProfileDefault(false)
-  }, [isCompanionMode])
+    activeTabRef.current = activeTab
+  }, [activeTab])
 
+  // ── Profile fetch ──
   React.useEffect(() => {
-    if (!isCompanionMode || capsLoading || !capabilities?.hasPersonalization) {
-      setCompanionPrompts([])
+    const normalizedPersonaId = String(selectedPersonaId || "").trim()
+    if (!normalizedPersonaId || isCompanionMode) {
+      setSavedPersonaVoiceDefaults(null)
+      setSavedPersonaSetup(null)
+      setSavedPersonaProfileVersion(null)
+      setPersonaProfileLoading(false)
+      if (!connected) {
+        setLiveSessionVoiceDefaultsBaseline(null)
+      }
       return
     }
 
-    const promptQuery = input.trim() || DEFAULT_COMPANION_PROMPT_QUERY
     let cancelled = false
-    const timeoutId = window.setTimeout(() => {
-      fetchCompanionConversationPrompts(promptQuery)
-        .then((payload) => {
-          if (cancelled) return
-          setCompanionPrompts(
-            Array.isArray(payload.prompts)
-              ? payload.prompts
-                  .filter(
-                    (item) =>
-                      item &&
-                      typeof item.prompt_text === "string" &&
-                      item.prompt_text.trim().length > 0
-                  )
-                  .slice(0, 3)
-                  .map((item) => ({
-                    prompt_id: item.prompt_id,
-                    label: item.label,
-                    prompt_text: item.prompt_text
-                  }))
-              : []
+    setPersonaProfileLoading(true)
+    ;(async () => {
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/persona/profiles/${encodeURIComponent(normalizedPersonaId)}` as any,
+          { method: "GET" }
+        )
+        if (!response.ok) {
+          throw new Error(response.error || "Failed to load persona profile")
+        }
+        const payload = (await response.json()) as PersonaProfileResponse
+        if (!cancelled) {
+          setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
+          setSavedPersonaSetup(payload?.setup || null)
+          setSavedPersonaProfileVersion(
+            typeof payload?.version === "number" ? payload.version : null
           )
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setCompanionPrompts([])
-          }
-        })
-    }, input.trim() ? 200 : 0)
+        }
+      } catch {
+        if (!cancelled) {
+          setSavedPersonaVoiceDefaults(null)
+          setSavedPersonaSetup(null)
+          setSavedPersonaProfileVersion(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setPersonaProfileLoading(false)
+        }
+      }
+    })()
 
     return () => {
       cancelled = true
-      window.clearTimeout(timeoutId)
     }
-  }, [
-    capabilities?.hasPersonalization,
-    capsLoading,
-    input,
-    isCompanionMode
-  ])
-
-  const applySessionPreferences = React.useCallback(
-    (preferences?: PersonaSessionPreferences | null) => {
-      if (!preferences || typeof preferences !== "object") return
-      if (typeof preferences.use_memory_context === "boolean") {
-        setMemoryEnabled(preferences.use_memory_context)
-      }
-      if (typeof preferences.memory_top_k !== "undefined") {
-        setMemoryTopK((current) =>
-          _normalizeMemoryTopK(preferences.memory_top_k, current)
-        )
-      }
-      if (!isCompanionMode && typeof preferences.use_companion_context === "boolean") {
-        setCompanionContextEnabled(preferences.use_companion_context)
-      }
-      if (
-        !isCompanionMode &&
-        typeof preferences.use_persona_state_context === "boolean"
-      ) {
-        setPersonaStateContextEnabled(preferences.use_persona_state_context)
-      }
-    },
-    [isCompanionMode]
-  )
-
-  const getUnsavedStateDiscardPrompt = React.useCallback(
-    (reason: UnsavedStateDiscardReason): string => {
-      switch (reason) {
-        case "connect":
-          return t(
-            "sidepanel:persona.unsavedStateDiscardPromptConnect",
-            "You have unsaved state-doc changes. Connect and discard local drafts?"
-          )
-        case "disconnect":
-          return t(
-            "sidepanel:persona.unsavedStateDiscardPromptDisconnect",
-            "You have unsaved state-doc changes. Disconnect and discard local drafts?"
-          )
-        case "reload_state":
-          return t(
-            "sidepanel:persona.unsavedStateDiscardPromptReloadState",
-            "You have unsaved state-doc changes. Load state and discard local drafts?"
-          )
-        case "persona_switch":
-          return t(
-            "sidepanel:persona.unsavedStateDiscardPromptPersonaSwitch",
-            "You have unsaved state-doc changes. Switch persona and discard local drafts?"
-          )
-        case "session_switch":
-          return t(
-            "sidepanel:persona.unsavedStateDiscardPromptSessionSwitch",
-            "You have unsaved state-doc changes. Switch session and discard local drafts?"
-          )
-        case "restore_state":
-          return t(
-            "sidepanel:persona.unsavedStateDiscardPromptRestoreState",
-            "You have unsaved state-doc changes. Restore this state version and discard local drafts?"
-          )
-        case "route_transition":
-          return t(
-            "sidepanel:persona.unsavedStateDiscardPromptRouteTransition",
-            "You have unsaved state-doc changes. Leave this page and discard local drafts?"
-          )
-        case "before_unload":
-          return t(
-            "sidepanel:persona.unsavedStateBeforeUnloadPrompt",
-            "You have unsaved state-doc changes. Leave this page without saving?"
-          )
-        case "generic":
-        default:
-          return t(
-            "sidepanel:persona.unsavedStateDiscardPrompt",
-            "You have unsaved state-doc changes. Discard local drafts?"
-          )
-      }
-    },
-    [t]
-  )
-
-  const confirmDiscardUnsavedStateDrafts = React.useCallback((reason: UnsavedStateDiscardReason = "generic"): boolean => {
-    if (
-      soulMd === savedSoulMd &&
-      identityMd === savedIdentityMd &&
-      heartbeatMd === savedHeartbeatMd
-    ) {
-      return true
-    }
-    return _confirmWithBrowserPrompt(getUnsavedStateDiscardPrompt(reason))
-  }, [
-    getUnsavedStateDiscardPrompt,
-    heartbeatMd,
-    identityMd,
-    savedHeartbeatMd,
-    savedIdentityMd,
-    savedSoulMd,
-    soulMd,
-  ])
+  }, [connected, isCompanionMode, selectedPersonaId])
 
   const appendLog = React.useCallback(
     (kind: PersonaLogEntry["kind"], text: string) => {
@@ -549,930 +218,506 @@ const SidepanelPersona = ({
     []
   )
 
-  const disconnect = React.useCallback((options?: { force?: boolean }) => {
-    if (!options?.force && !confirmDiscardUnsavedStateDrafts("disconnect")) {
-      return false
-    }
-    const ws = wsRef.current
-    if (!ws) return
-    manuallyClosingRef.current = true
-    try {
-      ws.close()
-    } catch {
-      // ignore close errors
-    }
-    wsRef.current = null
-    setConnected(false)
-    setActiveSessionPersonaId(null)
-    setPersonaStateHistory([])
-    setPersonaStateHistoryLoaded(false)
-    setPendingApprovals([])
-    return true
-  }, [confirmDiscardUnsavedStateDrafts])
-
-  const handleIncomingPayload = React.useCallback(
-    (payload: any) => {
-      const eventType = String(payload?.event || payload?.type || "").toLowerCase()
-      if (!eventType) return
-
-      if (eventType === "tool_plan") {
-        const planId = String(payload?.plan_id || "")
-        const stepsRaw = Array.isArray(payload?.steps) ? payload.steps : []
-        const steps: PersonaPlanStep[] = stepsRaw
-          .map((step: any, idx: number) => ({
-            idx:
-              typeof step?.idx === "number"
-                ? step.idx
-                : Number.parseInt(String(step?.idx ?? idx), 10),
-            tool: String(step?.tool || "unknown_tool"),
-            args:
-              step?.args && typeof step.args === "object"
-                ? (step.args as Record<string, unknown>)
-                : {},
-            description: step?.description ? String(step.description) : undefined,
-            why: step?.why ? String(step.why) : undefined,
-            policy:
-              step?.policy && typeof step.policy === "object"
-                ? (step.policy as PersonaToolPolicy)
-                : undefined
-          }))
-          .filter((step) => Number.isFinite(step.idx))
-
-        const nextMap: Record<number, boolean> = {}
-        for (const step of steps) {
-          nextMap[step.idx] = step.policy?.allow !== false
-        }
-        setApprovedStepMap(nextMap)
-        const memoryPayload =
-          payload?.memory && typeof payload.memory === "object"
-            ? (payload.memory as PersonaMemoryUsage)
-            : undefined
-        const companionPayload =
-          payload?.companion && typeof payload.companion === "object"
-            ? (payload.companion as PersonaCompanionUsage)
-            : undefined
-        setPendingPlan({
-          planId,
-          steps,
-          memory: memoryPayload,
-          companion: companionPayload
-        })
-        appendLog("tool", `Plan proposed (${steps.length} step${steps.length === 1 ? "" : "s"})`)
-        return
-      }
-
-      if (eventType === "assistant_delta") {
-        appendLog("assistant", String(payload?.text_delta || ""))
-        return
-      }
-
-      if (eventType === "partial_transcript") {
-        appendLog("user", String(payload?.text_delta || ""))
-        return
-      }
-
-      if (eventType === "tool_call") {
-        appendLog(
-          "tool",
-          `Calling ${String(payload?.tool || "tool")} (step ${String(payload?.step_idx ?? "?")})`
-        )
-        return
-      }
-
-      if (eventType === "tool_result") {
-        const approvalPayload =
-          payload?.approval && typeof payload.approval === "object"
-            ? (payload.approval as PersonaRuntimeApprovalPayload)
-            : null
-        if (approvalPayload) {
-          const durationOptions = Array.isArray(approvalPayload.duration_options)
-            ? approvalPayload.duration_options
-                .map((entry) => String(entry || "").trim())
-                .filter(
-                  (entry): entry is PersonaRuntimeApprovalDuration =>
-                    entry === "once" || entry === "session" || entry === "conversation"
-                )
-            : []
-          const request: PersonaRuntimeApprovalRequest = {
-            key: _approvalRequestKey(
-              approvalPayload,
-              payload as Record<string, unknown>
-            ),
-            approval_policy_id:
-              typeof approvalPayload.approval_policy_id === "number"
-                ? approvalPayload.approval_policy_id
-                : null,
-            mode: approvalPayload.mode ? String(approvalPayload.mode) : null,
-            tool_name: String(
-              approvalPayload.tool_name || payload?.tool || "tool"
-            ),
-            context_key: String(approvalPayload.context_key || ""),
-            conversation_id: approvalPayload.conversation_id
-              ? String(approvalPayload.conversation_id)
-              : null,
-            scope_key: String(approvalPayload.scope_key || ""),
-            reason: approvalPayload.reason ? String(approvalPayload.reason) : null,
-            duration_options: durationOptions.length ? durationOptions : ["once"],
-            selected_duration: durationOptions[0] || "once",
-            arguments_summary:
-              approvalPayload.arguments_summary &&
-              typeof approvalPayload.arguments_summary === "object"
-                ? (approvalPayload.arguments_summary as Record<string, unknown>)
-                : {},
-            session_id: payload?.session_id ? String(payload.session_id) : sessionId,
-            plan_id: payload?.plan_id ? String(payload.plan_id) : null,
-            step_idx:
-              typeof payload?.step_idx === "number"
-                ? payload.step_idx
-                : Number.parseInt(String(payload?.step_idx ?? ""), 10),
-            step_type: payload?.step_type ? String(payload.step_type) : "mcp_tool",
-            tool: payload?.tool ? String(payload.tool) : null,
-            args:
-              payload?.args && typeof payload.args === "object"
-                ? (payload.args as Record<string, unknown>)
-                : {},
-            why: payload?.why ? String(payload.why) : null,
-            description: payload?.description ? String(payload.description) : null
-          }
-          setPendingApprovals((prev) => {
-            const next = prev.filter((entry) => entry.key !== request.key)
-            return [...next, request]
-          })
-          appendLog("notice", `Runtime approval required for ${request.tool_name}`)
-          return
-        }
-        const output = payload?.output ?? payload?.result
-        const message =
-          output == null
-            ? JSON.stringify(payload)
-            : typeof output === "string"
-              ? output
-              : JSON.stringify(output)
-        appendLog("tool", `Result step ${String(payload?.step_idx ?? "?")}: ${message}`)
-        return
-      }
-
-      if (eventType === "notice") {
-        appendLog("notice", String(payload?.message || "notice"))
-        return
-      }
-
-      if (eventType === "tts_audio") {
-        appendLog("notice", "Received persona TTS audio chunk")
-      }
+  // ── State docs hook ──
+  const stateDocsGetTargetPersonaId = React.useCallback(
+    (override?: string) => {
+      const personaId = String(override || activeSessionPersonaId || selectedPersonaId || "").trim()
+      return personaId || null
     },
-    [appendLog, sessionId]
+    [activeSessionPersonaId, selectedPersonaId]
   )
-
-  const applyPersonaStatePayload = React.useCallback((payload: PersonaStateDocsResponse) => {
-    const nextSoulMd = String(payload?.soul_md ?? "")
-    const nextIdentityMd = String(payload?.identity_md ?? "")
-    const nextHeartbeatMd = String(payload?.heartbeat_md ?? "")
-    setSoulMd(nextSoulMd)
-    setIdentityMd(nextIdentityMd)
-    setHeartbeatMd(nextHeartbeatMd)
-    setSavedSoulMd(nextSoulMd)
-    setSavedIdentityMd(nextIdentityMd)
-    setSavedHeartbeatMd(nextHeartbeatMd)
-    setStateLastModified(payload?.last_modified ? String(payload.last_modified) : null)
-  }, [])
-
-  const getTargetPersonaId = React.useCallback(
-    (override?: string): string =>
-      String(override || (connected ? activeSessionPersonaId : selectedPersonaId) || "").trim(),
-    [activeSessionPersonaId, connected, selectedPersonaId]
-  )
-
-  const loadPersonaStateDocs = React.useCallback(
-    async (personaIdOverride?: string, options?: { silent?: boolean }) => {
-      const personaId = getTargetPersonaId(personaIdOverride)
-      if (!personaId) return false
-      const silent = options?.silent === true
-      if (!silent && !confirmDiscardUnsavedStateDrafts("reload_state")) {
-        return false
-      }
-      setPersonaStateLoading(true)
-      if (!silent) {
-        setError(null)
-      }
-      try {
-        const stateResp = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/state` as any,
-          { method: "GET" }
-        )
-        if (!stateResp.ok) {
-          if (!silent) {
-            throw new Error(stateResp.error || "Failed to load persona state docs")
-          }
-          return false
-        }
-        const statePayload = (await stateResp.json()) as PersonaStateDocsResponse
-        applyPersonaStatePayload(statePayload)
-        return true
-      } catch (err: any) {
-        if (!silent) {
-          setError(String(err?.message || "Failed to load persona state docs"))
-        }
-        return false
-      } finally {
-        setPersonaStateLoading(false)
-      }
-    },
-    [applyPersonaStatePayload, confirmDiscardUnsavedStateDrafts, getTargetPersonaId]
-  )
-
-  const loadPersonaStateHistory = React.useCallback(
-    async (personaIdOverride?: string) => {
-      const personaId = getTargetPersonaId(personaIdOverride)
-      if (!personaId) return false
-      setPersonaStateHistoryLoading(true)
-      setError(null)
-      try {
-        const historyResp = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/state/history?include_archived=true&limit=30` as any,
-          { method: "GET" }
-        )
-        if (!historyResp.ok) {
-          throw new Error(historyResp.error || "Failed to load persona state history")
-        }
-        const historyPayload = (await historyResp.json()) as PersonaStateHistoryResponse
-        const entries = Array.isArray(historyPayload?.entries)
-          ? historyPayload.entries
-          : []
-        setPersonaStateHistory(entries)
-        setPersonaStateHistoryLoaded(true)
-        return true
-      } catch (err: any) {
-        setError(String(err?.message || "Failed to load persona state history"))
-        return false
-      } finally {
-        setPersonaStateHistoryLoading(false)
-      }
-    },
-    [getTargetPersonaId]
-  )
-
-  const savePersonaStateDocs = React.useCallback(async () => {
-    const personaId = getTargetPersonaId()
-    if (!personaId || personaStateSaving) return
-    if (
-      soulMd === savedSoulMd &&
-      identityMd === savedIdentityMd &&
-      heartbeatMd === savedHeartbeatMd
-    ) {
-      return true
-    }
-    setPersonaStateSaving(true)
-    setError(null)
-    try {
-      const toNullable = (value: string): string | null =>
-        String(value || "").trim().length > 0 ? value : null
-      const saveResp = await tldwClient.fetchWithAuth(
-        `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/state` as any,
-        {
-          method: "PUT",
-          body: {
-            soul_md: toNullable(soulMd),
-            identity_md: toNullable(identityMd),
-            heartbeat_md: toNullable(heartbeatMd)
-          }
-        }
-      )
-      if (!saveResp.ok) {
-        throw new Error(saveResp.error || "Failed to save persona state docs")
-      }
-      const savePayload = (await saveResp.json()) as PersonaStateDocsResponse
-      applyPersonaStatePayload(savePayload)
-      if (personaStateHistoryLoaded) {
-        void loadPersonaStateHistory(personaId)
-      }
-      appendLog("notice", "Saved persona state docs")
-      return true
-    } catch (err: any) {
-      setError(String(err?.message || "Failed to save persona state docs"))
-      return false
-    } finally {
-      setPersonaStateSaving(false)
-    }
-  }, [
+  const stateDocs = usePersonaStateDocs({
+    getTargetPersonaId: stateDocsGetTargetPersonaId,
     appendLog,
-    applyPersonaStatePayload,
-    heartbeatMd,
-    identityMd,
-    getTargetPersonaId,
-    loadPersonaStateHistory,
-    personaStateHistoryLoaded,
-    personaStateSaving,
-    savedHeartbeatMd,
-    savedIdentityMd,
-    savedSoulMd,
-    soulMd
-  ])
+    setError,
+  })
 
-  const restorePersonaStateHistoryEntry = React.useCallback(
-    async (entryId: string) => {
-      const personaId = getTargetPersonaId()
-      const trimmedEntryId = String(entryId || "").trim()
-      if (!personaId || !trimmedEntryId || restoringStateEntryId) return false
-      if (!confirmDiscardUnsavedStateDrafts("restore_state")) {
-        return false
-      }
-      setRestoringStateEntryId(trimmedEntryId)
-      setError(null)
-      try {
-        const restoreResp = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}/state/restore` as any,
-          {
-            method: "POST",
-            body: { entry_id: trimmedEntryId }
-          }
-        )
-        if (!restoreResp.ok) {
-          throw new Error(restoreResp.error || "Failed to restore persona state version")
-        }
-        const restorePayload = (await restoreResp.json()) as PersonaStateDocsResponse
-        applyPersonaStatePayload(restorePayload)
-        await loadPersonaStateHistory(personaId)
-        appendLog("notice", "Restored persona state version")
-        return true
-      } catch (err: any) {
-        setError(String(err?.message || "Failed to restore persona state version"))
-        return false
-      } finally {
-        setRestoringStateEntryId(null)
-      }
-    },
-    [
-      appendLog,
-      applyPersonaStatePayload,
-      confirmDiscardUnsavedStateDrafts,
-      getTargetPersonaId,
-      loadPersonaStateHistory,
-      restoringStateEntryId,
-    ]
+  // ── Refs for late-bound deps (break circular init order) ──
+  const emitSetupAnalyticsEventRef = React.useRef<(event: Record<string, any>) => void>(() => {})
+  const confirmDiscardUnsavedStateDraftsRef = React.useRef<(reason?: string) => boolean>(
+    () => true
   )
+  const triggerRecoveryReconnectRef = React.useRef<() => void>(() => {})
 
-  const connect = React.useCallback(async () => {
-    if (connecting || connected) return
-    if (!confirmDiscardUnsavedStateDrafts("connect")) return
-    setConnecting(true)
-    setError(null)
+  // Keep refs in sync
+  confirmDiscardUnsavedStateDraftsRef.current = stateDocs.confirmDiscardUnsavedStateDrafts
 
-    try {
-      disconnect({ force: true })
-      setActiveSessionPersonaId(null)
-      setPendingPlan(null)
-      setApprovedStepMap({})
-      setPersonaStateHistory([])
-      setPersonaStateHistoryLoaded(false)
-
-      const config = await tldwClient.getConfig()
-      if (!config) {
-        throw new Error("tldw server not configured")
-      }
-
-      const catalogResp = await tldwClient.fetchWithAuth("/api/v1/persona/catalog" as any, {
-        method: "GET"
-      })
-      if (!catalogResp.ok) {
-        throw new Error(catalogResp.error || "Failed to load persona catalog")
-      }
-      const catalogPayload = await catalogResp.json()
-      const personas = Array.isArray(catalogPayload)
-        ? (catalogPayload as PersonaInfo[])
-        : []
-      setCatalog(personas)
-
-      const preferredPersonaId = isCompanionMode
-        ? DEFAULT_PERSONA_ID
-        : routeBootstrap.personaId || selectedPersonaId
-      const selectedPersonaIsValid = personas.some(
-        (persona) => String(persona.id || "") === preferredPersonaId
-      )
-      const resolvedPersonaId =
-        (selectedPersonaIsValid ? preferredPersonaId : personas[0]?.id) ||
-        preferredPersonaId ||
-        DEFAULT_PERSONA_ID
-      if (resolvedPersonaId && resolvedPersonaId !== selectedPersonaId) {
-        setSelectedPersonaId(resolvedPersonaId)
-      }
-      if (isCompanionMode) {
-        setCompanionContextEnabled(true)
-        setPersonaStateContextEnabled(false)
-        setPersonaStateContextProfileDefault(false)
-      } else {
-        setPersonaStateContextEnabled(true)
-        setPersonaStateContextProfileDefault(true)
-        try {
-          const profileResp = await tldwClient.fetchWithAuth(
-            `/api/v1/persona/profiles/${encodeURIComponent(resolvedPersonaId)}` as any,
-            { method: "GET" }
-          )
-          if (profileResp.ok) {
-            const profilePayload = (await profileResp.json()) as PersonaProfileResponse
-            const stateContextDefault =
-              profilePayload?.use_persona_state_context_default !== false
-            setPersonaStateContextEnabled(stateContextDefault)
-            setPersonaStateContextProfileDefault(stateContextDefault)
-          }
-        } catch {
-          // profile fetch is optional for route initialization
-        }
-        void loadPersonaStateDocs(resolvedPersonaId, { silent: true })
-      }
-
-      const sessionsResp = await tldwClient.fetchWithAuth(
-        `/api/v1/persona/sessions?persona_id=${encodeURIComponent(resolvedPersonaId)}${
-          isCompanionMode
-            ? `&surface=${encodeURIComponent("companion.conversation")}`
-            : ""
-        }&limit=50` as any,
-        {
-          method: "GET"
-        }
-      )
-      let sessionsPayload: PersonaSessionSummary[] = []
-      if (sessionsResp.ok) {
-        const sessionsJson = await sessionsResp.json()
-        sessionsPayload = Array.isArray(sessionsJson)
-          ? (sessionsJson as PersonaSessionSummary[])
-          : []
-      }
-      setSessionHistory(sessionsPayload)
-
-      const sessionResp = await tldwClient.fetchWithAuth("/api/v1/persona/session" as any, {
-        method: "POST",
-        body: {
-          persona_id: resolvedPersonaId,
-          resume_session_id: resumeSessionId || undefined,
-          surface: isCompanionMode ? "companion.conversation" : undefined
-        }
-      })
-      if (!sessionResp.ok) {
-        throw new Error(sessionResp.error || "Failed to create persona session")
-      }
-      const sessionPayload = await sessionResp.json()
-      const nextSessionId = String(sessionPayload?.session_id || "").trim()
-      if (!nextSessionId) {
-        throw new Error("Persona session response missing session_id")
-      }
-      const connectedPersonaId =
-        String(sessionPayload?.persona?.id || resolvedPersonaId || "").trim() ||
-        resolvedPersonaId
-      setActiveSessionPersonaId(connectedPersonaId)
-      if (connectedPersonaId && connectedPersonaId !== selectedPersonaId) {
-        setSelectedPersonaId(connectedPersonaId)
-      }
-      setSessionId(nextSessionId)
-      setResumeSessionId(nextSessionId)
-      try {
-        const sessionDetailResp = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/sessions/${encodeURIComponent(nextSessionId)}?limit_turns=0` as any,
-          { method: "GET" }
-        )
-        if (sessionDetailResp.ok) {
-          const sessionDetailPayload =
-            (await sessionDetailResp.json()) as PersonaSessionDetailResponse
-          applySessionPreferences(sessionDetailPayload?.preferences)
-        }
-      } catch {
-        // session detail hydration is best-effort during connect
-      }
-      if (!sessionsPayload.some((item) => item.session_id === nextSessionId)) {
-        setSessionHistory((prev) => [{ session_id: nextSessionId }, ...prev])
-      }
-
-      const ws = new WebSocket(buildPersonaWebSocketUrl(config))
-      ws.binaryType = "arraybuffer"
-      wsRef.current = ws
-      manuallyClosingRef.current = false
-
-      ws.onopen = () => {
-        setConnected(true)
-        appendLog("notice", "Persona stream connected")
-      }
-
-      ws.onmessage = (event) => {
-        if (typeof event.data !== "string") {
-          appendLog("notice", "Received binary persona stream payload")
-          return
-        }
-        try {
-          const payload = JSON.parse(event.data)
-          handleIncomingPayload(payload)
-        } catch {
-          appendLog("notice", event.data)
-        }
-      }
-
-      ws.onerror = () => {
-        setError("Persona stream error")
-      }
-
-      ws.onclose = () => {
-        wsRef.current = null
-        setConnected(false)
-        const manual = manuallyClosingRef.current
-        manuallyClosingRef.current = false
-        if (!manual) {
-          appendLog("notice", "Persona stream disconnected")
-        }
-      }
-    } catch (err: any) {
-      const message = String(err?.message || "Failed to connect persona stream")
-      setError(message)
-      appendLog("notice", message)
-    } finally {
-      setConnecting(false)
-    }
-  }, [
-    appendLog,
-    confirmDiscardUnsavedStateDrafts,
+  // ── Setup orchestrator hook ──
+  const setupOrch = usePersonaSetupOrchestrator({
+    selectedPersonaId,
+    setSelectedPersonaId,
+    isCompanionMode,
+    activeTab,
+    setActiveTab,
     connected,
     connecting,
-    disconnect,
-    handleIncomingPayload,
+    catalog,
+    setCatalog,
+    personaProfileLoading,
+    savedPersonaSetup,
+    setSavedPersonaSetup,
+    savedPersonaVoiceDefaults,
+    setSavedPersonaVoiceDefaults,
+    savedPersonaProfileVersion,
+    setSavedPersonaProfileVersion,
+    emitSetupAnalyticsEventRef,
+    confirmDiscardUnsavedStateDraftsRef,
+    triggerRecoveryReconnectRef,
+    setupLiveDetourRef,
+    setupHandoffRef,
+    setupHandoffFocusRequestRef,
+    activeTabRef,
+    setupWizardAwaitingLiveResponseRef,
+    setupWizardLastLiveTextRef,
+  })
+
+  // ── Analytics hook ──
+  const analytics = usePersonaAnalytics({
+    selectedPersonaId,
+    activeTab,
+    currentSetupRunId: setupOrch.currentSetupRunId,
+  })
+  const {
+    voiceAnalytics,
+    voiceAnalyticsLoading,
+    setupAnalytics,
+    setupAnalyticsLoading,
+    liveVoiceAnalyticsSnapshotRef,
+    emitSetupAnalyticsEvent,
+    flushLiveVoiceSessionAnalytics,
+  } = analytics
+
+  // Wire emitSetupAnalyticsEvent into setupOrch via the ref
+  emitSetupAnalyticsEventRef.current = emitSetupAnalyticsEvent
+
+  // ── Governance hook ──
+  const governance = usePersonaGovernanceContext({
+    connected,
+    sessionId,
+    wsRef,
+    appendLog,
+    setError
+  })
+  const {
+    pendingApprovals, setPendingApprovals,
+    activeApprovalKey, setActiveApprovalKey,
+    approvalHighlightPhase, approvalHighlightSequence,
+    resolvedApprovalSnapshot, setResolvedApprovalSnapshot,
+    approvedStepMap, setApprovedStepMap,
+    submittingApprovalKey,
+    runtimeApprovalCardRef, runtimeApprovalRowRefs,
+    activePendingApproval, pendingApprovalSummary,
+    clearResolvedApprovalFadeTimer, resetApprovalHighlightMotion,
+    triggerApprovalHighlightPhase,
+    updateApprovalDuration, submitApprovalDecision,
+    registerRuntimeApprovalRow, handleJumpToRuntimeApproval,
+  } = governance
+
+  // ── Live session hook ──
+  const liveSession = usePersonaLiveSession({
     isCompanionMode,
-    loadPersonaStateDocs,
-    applySessionPreferences,
+    selectedPersonaId,
+    setSelectedPersonaId,
+    catalog,
+    setCatalog,
+    connected,
+    setConnected,
+    connecting,
+    setConnecting,
+    sessionId,
+    setSessionId,
+    error,
+    setError,
+    input,
+    setInput,
+    logs,
+    setLogs,
+    appendLog,
+    activeSessionPersonaId,
+    setActiveSessionPersonaId,
+    wsRef,
+    manuallyClosingRef,
+    handleIncomingPayloadRef,
+    liveVoiceControllerRef,
+    liveVoiceAnalyticsSnapshotRef,
+    setPendingApprovals,
+    setActiveApprovalKey,
+    setResolvedApprovalSnapshot,
+    setApprovedStepMap,
+    runtimeApprovalRowRefs,
+    resetApprovalHighlightMotion,
+    clearResolvedApprovalFadeTimer,
+    savedPersonaVoiceDefaults,
+    setSavedPersonaVoiceDefaults,
+    setSavedPersonaProfileVersion,
+    setLiveSessionVoiceDefaultsBaseline,
+    setPersonaStateHistory: stateDocs.setPersonaStateHistory,
+    setPersonaStateHistoryLoaded: stateDocs.setPersonaStateHistoryLoaded,
+    confirmDiscardUnsavedStateDrafts: stateDocs.confirmDiscardUnsavedStateDrafts,
+    flushLiveVoiceSessionAnalytics,
+    loadPersonaStateDocs: stateDocs.loadPersonaStateDocs,
+    personaSetupWizardCurrentStep: setupOrch.personaSetupWizard.currentStep,
+    personaSetupWizardIsSetupRequired: setupOrch.personaSetupWizard.isSetupRequired,
+    setSetupTestOutcome: setupOrch.setSetupTestOutcome,
+    setupLiveDetour: setupOrch.setupLiveDetour,
+    setupWizardAwaitingLiveResponseRef,
+    setupWizardLastLiveTextRef,
+    clearSetupStepError: setupOrch.clearSetupStepError,
+    setPendingPlan,
+    pendingPlan,
+    capabilities,
+    capsLoading,
+    routeBootstrapPersonaId: routeBootstrap.personaId,
+  })
+  const {
+    sessionHistory,
     resumeSessionId,
-    routeBootstrap.personaId,
-    selectedPersonaId
-  ])
+    memoryEnabled, setMemoryEnabled,
+    memoryTopK, setMemoryTopK,
+    companionContextEnabled, setCompanionContextEnabled,
+    personaStateContextEnabled, setPersonaStateContextEnabled,
+    personaStateContextProfileDefault,
+    updatingPersonaStateContextDefault,
+    savingCompanionCheckIn,
+    companionPrompts,
+    canSend,
+    canSaveCompanionCheckIn,
+    MEMORY_TOP_K_OPTIONS,
+    formatMemoryResultsLabel,
+    connect,
+    disconnect,
+    sendUserMessage,
+    sendSetupLiveTestMessage,
+    loadSessionHistory,
+    confirmPlanWithMap,
+    cancelPlan,
+    handleResumeSessionSelectionChange,
+    handlePersonaSelectionChange,
+    triggerRecoveryReconnect,
+    saveCompanionCheckIn,
+    updatePersonaStateContextDefault,
+    getTargetPersonaId,
+  } = liveSession
 
-  React.useEffect(() => {
-    return () => {
-      const ws = wsRef.current
-      if (!ws) return
-      manuallyClosingRef.current = true
-      try {
-        ws.close()
-      } catch {
-        // ignore close errors
-      }
-      wsRef.current = null
-    }
-  }, [])
+  // Wire triggerRecoveryReconnect into setupOrch via the ref
+  triggerRecoveryReconnectRef.current = triggerRecoveryReconnect
 
-  const canSend = connected && Boolean(sessionId) && Boolean(input.trim())
-  const canSaveCompanionCheckIn =
-    Boolean(input.trim()) &&
-    Boolean(capabilities?.hasPersonalization) &&
-    !savingCompanionCheckIn
-  const hasUnsavedPersonaStateChanges =
-    soulMd !== savedSoulMd ||
-    identityMd !== savedIdentityMd ||
-    heartbeatMd !== savedHeartbeatMd
-  const routeNavigationBlocker = useCompatibleRouteBlocker(
-    hasUnsavedPersonaStateChanges
+  const confirmPlan = React.useCallback(() => {
+    confirmPlanWithMap(approvedStepMap)
+  }, [approvedStepMap, confirmPlanWithMap])
+
+  // ── Voice controller ──
+  const resolvedLivePersonaVoiceDefaults = useResolvedPersonaVoiceDefaults(
+    connected ? liveSessionVoiceDefaultsBaseline : savedPersonaVoiceDefaults
   )
-  const stateDirtyLabel = hasUnsavedPersonaStateChanges
-    ? t("sidepanel:persona.stateDirty", "unsaved")
-    : t("sidepanel:persona.stateSaved", "saved")
-  const stateEditorToggleLabel = personaStateEditorExpanded
-    ? t("sidepanel:persona.stateEditorHide", "Hide editor")
-    : t("sidepanel:persona.stateEditorShow", "Show editor")
-  const orderedPersonaStateHistory = React.useMemo(() => {
-    const sorted = [...personaStateHistory].sort(
-      (left, right) => _historyEntrySortEpoch(left) - _historyEntrySortEpoch(right)
-    )
-    if (personaStateHistoryOrder === "newest") {
-      sorted.reverse()
-    }
-    return sorted
-  }, [personaStateHistory, personaStateHistoryOrder])
-
-  const revertPersonaStateDraft = React.useCallback(() => {
-    setSoulMd(savedSoulMd)
-    setIdentityMd(savedIdentityMd)
-    setHeartbeatMd(savedHeartbeatMd)
-  }, [savedHeartbeatMd, savedIdentityMd, savedSoulMd])
+  const livePersonaId = connected ? activeSessionPersonaId || selectedPersonaId : selectedPersonaId
+  const liveVoiceController = usePersonaLiveVoiceController({
+    ws: wsRef.current,
+    connected,
+    sessionId: sessionId || "",
+    personaId: String(livePersonaId || "").trim(),
+    resolvedDefaults: resolvedLivePersonaVoiceDefaults,
+    canUseServerStt: Boolean(capabilities?.hasAudio)
+  })
+  liveVoiceControllerRef.current = liveVoiceController
 
   React.useEffect(() => {
-    if (routeNavigationBlocker.state !== "blocked") return
-    if (confirmDiscardUnsavedStateDrafts("route_transition")) {
-      routeNavigationBlocker.proceed()
-    } else {
-      routeNavigationBlocker.reset()
-    }
-  }, [confirmDiscardUnsavedStateDrafts, routeNavigationBlocker])
-
-  React.useEffect(() => {
-    if (typeof window === "undefined" || !hasUnsavedPersonaStateChanges) return
-    const promptMessage = getUnsavedStateDiscardPrompt("before_unload")
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault()
-      event.returnValue = promptMessage
-      return promptMessage
-    }
-    window.addEventListener("beforeunload", handleBeforeUnload)
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload)
-    }
-  }, [getUnsavedStateDiscardPrompt, hasUnsavedPersonaStateChanges])
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    try {
-      window.localStorage.setItem(
-        PERSONA_STATE_EDITOR_EXPANDED_PREF_KEY,
-        personaStateEditorExpanded ? "true" : "false"
-      )
-    } catch {
-      // ignore storage access errors
-    }
-  }, [personaStateEditorExpanded])
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    try {
-      window.localStorage.setItem(
-        PERSONA_STATE_HISTORY_ORDER_PREF_KEY,
-        personaStateHistoryOrder
-      )
-    } catch {
-      // ignore storage access errors
-    }
-  }, [personaStateHistoryOrder])
-
-  const updatePersonaStateContextDefault = React.useCallback(
-    async (nextDefault: boolean) => {
-      const personaId = getTargetPersonaId()
-      if (!personaId || updatingPersonaStateContextDefault || !connected) return
-      const previousDefault = personaStateContextProfileDefault
-      const previousEnabled = personaStateContextEnabled
-      setPersonaStateContextProfileDefault(nextDefault)
-      setPersonaStateContextEnabled(nextDefault)
-      setUpdatingPersonaStateContextDefault(true)
-      setError(null)
-
-      try {
-        const updateResp = await tldwClient.fetchWithAuth(
-          `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
-          {
-            method: "PATCH",
-            body: { use_persona_state_context_default: nextDefault }
-          }
-        )
-        if (!updateResp.ok) {
-          throw new Error(
-            updateResp.error || "Failed to update persona state context default"
-          )
-        }
-        const profilePayload = (await updateResp.json()) as PersonaProfileResponse
-        const persistedDefault =
-          profilePayload?.use_persona_state_context_default !== false
-        setPersonaStateContextProfileDefault(persistedDefault)
-        setPersonaStateContextEnabled(persistedDefault)
-      } catch (err: any) {
-        setPersonaStateContextProfileDefault(previousDefault)
-        setPersonaStateContextEnabled(previousEnabled)
-        setError(String(err?.message || "Failed to update persona state context default"))
-      } finally {
-        setUpdatingPersonaStateContextDefault(false)
-      }
-    },
-    [
-      connected,
-      getTargetPersonaId,
-      personaStateContextEnabled,
-      personaStateContextProfileDefault,
-      updatingPersonaStateContextDefault
-    ]
-  )
-
-  const handlePersonaSelectionChange = React.useCallback(
-    (value: string) => {
-      const nextPersonaId = String(value || "").trim()
-      if (!nextPersonaId || nextPersonaId === selectedPersonaId) return
-      if (!confirmDiscardUnsavedStateDrafts("persona_switch")) return
-      setSelectedPersonaId(nextPersonaId)
-    },
-    [confirmDiscardUnsavedStateDrafts, selectedPersonaId]
-  )
-
-  const handleResumeSessionSelectionChange = React.useCallback(
-    (value: string) => {
-      const nextResumeSessionId = value === "__new__" ? "" : String(value)
-      if (nextResumeSessionId === resumeSessionId) return
-      if (!confirmDiscardUnsavedStateDrafts("session_switch")) return
-      setResumeSessionId(nextResumeSessionId)
-    },
-    [confirmDiscardUnsavedStateDrafts, resumeSessionId]
-  )
-
-  const sendUserMessage = React.useCallback(() => {
-    if (!canSend || !sessionId || !wsRef.current) return
-    const trimmed = input.trim()
-    try {
-      wsRef.current.send(
-        JSON.stringify({
-          type: "user_message",
-          session_id: sessionId,
-          text: trimmed,
-          use_memory_context: memoryEnabled,
-          use_companion_context: companionContextEnabled,
-          use_persona_state_context: personaStateContextEnabled,
-          memory_top_k: memoryTopK
-        })
-      )
-      appendLog("user", trimmed)
-      setInput("")
-    } catch (err: any) {
-      setError(String(err?.message || "Failed to send message"))
+    liveVoiceAnalyticsSnapshotRef.current = {
+      personaId: String(livePersonaId || "").trim(),
+      sessionId: String(sessionId || "").trim(),
+      listeningRecoveryCount: liveVoiceController.listeningRecoveryCount,
+      thinkingRecoveryCount: liveVoiceController.thinkingRecoveryCount
     }
   }, [
-    appendLog,
-    canSend,
-    companionContextEnabled,
-    input,
-    memoryEnabled,
-    memoryTopK,
-    personaStateContextEnabled,
+    livePersonaId,
+    liveVoiceAnalyticsSnapshotRef,
+    liveVoiceController.listeningRecoveryCount,
+    liveVoiceController.thinkingRecoveryCount,
     sessionId
   ])
 
-  const saveCompanionCheckIn = React.useCallback(async () => {
-    const trimmed = input.trim()
-    if (!trimmed || savingCompanionCheckIn || !capabilities?.hasPersonalization) return
-    setSavingCompanionCheckIn(true)
+  // ── Incoming payload handler ──
+  const handleIncomingPayload = usePersonaIncomingPayload({
+    appendLog,
+    clearResolvedApprovalFadeTimer,
+    consumeSetupHandoffAction: setupOrch.consumeSetupHandoffAction,
+    emitSetupAnalyticsEvent,
+    liveVoiceController,
+    personaSetupWizardCurrentStep: setupOrch.personaSetupWizard.currentStep,
+    personaSetupWizardIsSetupRequired: setupOrch.personaSetupWizard.isSetupRequired,
+    resolvedApprovalSnapshot,
+    sessionId,
+    setApprovedStepMap,
+    setPendingApprovals,
+    setPendingPlan,
+    setResolvedApprovalSnapshot,
+    setSetupTestOutcome: setupOrch.setSetupTestOutcome,
+    setSetupLiveDetour: setupOrch.setSetupLiveDetour,
+    setSetupTestResumeNote: setupOrch.setSetupTestResumeNote,
+    setupLiveDetourRef,
+    setupHandoffRef,
+    activeTabRef,
+    setupWizardAwaitingLiveResponseRef,
+    setupWizardLastLiveTextRef,
+  })
+  handleIncomingPayloadRef.current = handleIncomingPayload
+
+  // ── Command / test-lab navigation helpers ──
+
+  const handleOpenCommandFromTestLab = React.useCallback((
+    commandId: string,
+    heardText: string
+  ) => {
+    const normalizedCommandId = String(commandId || "").trim()
+    const normalizedHeardText = String(heardText || "").trim()
+    if (!normalizedCommandId) return
+    setDraftCommandPhrase(null)
+    setDraftCommandSource(null)
+    setOpenCommandId(normalizedCommandId)
+    setRerunAfterSaveCommandId(normalizedCommandId)
+    setLastTestLabPhrase(normalizedHeardText)
+    setActiveTab("commands")
+  }, [setActiveTab])
+
+  const handleCreateCommandFromTestLab = React.useCallback((heardText: string) => {
+    const normalizedHeardText = String(heardText || "").trim()
+    if (!normalizedHeardText) return
+    setOpenCommandId(null)
+    setRerunAfterSaveCommandId(null)
+    setDraftCommandPhrase(normalizedHeardText)
+    setDraftCommandSource("test_lab")
+    setLastTestLabPhrase(normalizedHeardText)
+    setActiveTab("commands")
+  }, [setActiveTab])
+
+  const handleCreateCommandFromSetupNoMatch = React.useCallback((heardText: string) => {
+    const normalizedHeardText = String(heardText || "").trim()
+    if (!normalizedHeardText) return
+    setOpenCommandId(null)
+    setRerunAfterSaveCommandId(null)
+    setDraftCommandPhrase(normalizedHeardText)
+    setDraftCommandSource("setup_no_match")
+    setupOrch.handleCreateCommandFromSetupNoMatch(normalizedHeardText)
+    setActiveTab("commands")
+  }, [setActiveTab, setupOrch])
+
+  const handleOpenCommandHandled = React.useCallback((commandId: string) => {
+    const normalizedCommandId = String(commandId || "").trim()
+    if (!normalizedCommandId) return
+    setOpenCommandId((current) =>
+      current === normalizedCommandId ? null : current
+    )
+  }, [])
+
+  const handleDraftCommandPhraseHandled = React.useCallback((heardText: string) => {
+    const normalizedHeardText = String(heardText || "").trim()
+    if (!normalizedHeardText) return
+    setDraftCommandPhrase((current) =>
+      current === normalizedHeardText ? null : current
+    )
+    setDraftCommandSource(null)
+  }, [])
+
+  const handleRerunAfterCommandSave = React.useCallback((commandId: string) => {
+    const normalizedCommandId = String(commandId || "").trim()
+    if (!normalizedCommandId) return
+    if (rerunAfterSaveCommandId !== normalizedCommandId) return
+    if (String(lastTestLabPhrase || "").trim()) {
+      setActiveTab("test-lab")
+      setTestLabRerunToken((previous) => previous + 1)
+    }
+    setRerunAfterSaveCommandId(null)
+  }, [lastTestLabPhrase, rerunAfterSaveCommandId, setActiveTab])
+
+  const handleCommandSaved = React.useCallback(
+    (commandId: string, context: { fromDraft: boolean }) => {
+      const consumed = setupOrch.handleSetupDetourCommandSaved(commandId, context)
+      if (consumed) {
+        setDraftCommandPhrase(null)
+        setDraftCommandSource(null)
+        setOpenCommandId(null)
+        setRerunAfterSaveCommandId(null)
+      }
+      setupOrch.consumeSetupHandoffAction("command_saved")
+    },
+    [setupOrch]
+  )
+
+  const handleCopyLastVoiceCommandToComposer = React.useCallback(() => {
+    const nextValue = String(liveVoiceController.lastCommittedText || "").trim()
+    if (!nextValue) return
+    setInput(nextValue)
+  }, [liveVoiceController.lastCommittedText, setInput])
+
+  const handleReconnectPersonaSessionFromRecovery = React.useCallback(() => {
+    if (connecting) return
+    liveVoiceController.resetTurn()
+    triggerRecoveryReconnect()
+    disconnect({ force: true })
+  }, [connecting, disconnect, liveVoiceController, triggerRecoveryReconnect])
+
+  // ── Live voice defaults save ──
+  const savedTurnDetectionValues = React.useMemo(
+    () => buildTurnDetectionValuesFromSavedDefaults(savedPersonaVoiceDefaults),
+    [savedPersonaVoiceDefaults]
+  )
+  const liveTurnDetectionValues = React.useMemo<PersonaTurnDetectionValues>(
+    () => ({
+      autoCommitEnabled: liveVoiceController.autoCommitEnabled,
+      vadThreshold: liveVoiceController.vadThreshold,
+      minSilenceMs: liveVoiceController.minSilenceMs,
+      turnStopSecs: liveVoiceController.turnStopSecs,
+      minUtteranceSecs: liveVoiceController.minUtteranceSecs
+    }),
+    [
+      liveVoiceController.autoCommitEnabled,
+      liveVoiceController.minSilenceMs,
+      liveVoiceController.minUtteranceSecs,
+      liveVoiceController.turnStopSecs,
+      liveVoiceController.vadThreshold
+    ]
+  )
+  const showSaveCurrentSettingsAsDefaults =
+    connected &&
+    !isCompanionMode &&
+    (!savedTurnDetectionValues ||
+      !areTurnDetectionValuesEqual(savedTurnDetectionValues, liveTurnDetectionValues))
+
+  const handleSaveCurrentLiveTurnDetectionDefaults = React.useCallback(async () => {
+    const personaId = getTargetPersonaId()
+    if (!personaId || savingLiveVoiceDefaults) return
+    setSavingLiveVoiceDefaults(true)
     setError(null)
     try {
-      const response = await tldwClient.fetchWithAuth("/api/v1/companion/check-ins" as any, {
-        method: "POST",
-        body: {
-          summary: trimmed,
-          surface: isCompanionMode ? "companion.conversation" : "persona.sidepanel"
-        }
-      })
-      if (!response.ok) {
-        if (isCompanionConsentRequiredResponse(response)) {
-          throw new Error("Enable personalization before saving to companion.")
-        }
-        throw new Error(response.error || "Failed to save companion check-in")
+      const mergedVoiceDefaults: PersonaVoiceDefaults = {
+        ...(savedPersonaVoiceDefaults || {}),
+        auto_commit_enabled: liveVoiceController.autoCommitEnabled,
+        vad_threshold: liveVoiceController.vadThreshold,
+        min_silence_ms: liveVoiceController.minSilenceMs,
+        turn_stop_secs: liveVoiceController.turnStopSecs,
+        min_utterance_secs: liveVoiceController.minUtteranceSecs
       }
-      appendLog("notice", "Saved draft to companion")
+      const response = await tldwClient.fetchWithAuth(
+        `/api/v1/persona/profiles/${encodeURIComponent(personaId)}` as any,
+        {
+          method: "PATCH",
+          body: {
+            voice_defaults: mergedVoiceDefaults
+          }
+        }
+      )
+      if (!response.ok) {
+        throw new Error(response.error || "Failed to save current live settings as defaults")
+      }
+      const payload = (await response.json()) as PersonaProfileResponse
+      setSavedPersonaVoiceDefaults(payload?.voice_defaults || mergedVoiceDefaults)
+      appendLog("notice", "Saved current live turn detection defaults")
     } catch (err: any) {
-      setError(String(err?.message || "Failed to save companion check-in"))
+      setError(String(err?.message || "Failed to save current live settings as defaults"))
     } finally {
-      setSavingCompanionCheckIn(false)
+      setSavingLiveVoiceDefaults(false)
     }
   }, [
     appendLog,
-    capabilities?.hasPersonalization,
-    input,
-    isCompanionMode,
-    savingCompanionCheckIn
+    getTargetPersonaId,
+    liveVoiceController.autoCommitEnabled,
+    liveVoiceController.minSilenceMs,
+    liveVoiceController.minUtteranceSecs,
+    liveVoiceController.turnStopSecs,
+    liveVoiceController.vadThreshold,
+    savedPersonaVoiceDefaults,
+    savingLiveVoiceDefaults
   ])
 
-  const loadSessionHistory = React.useCallback(async () => {
-    if (!sessionId) return
-    const resp = await tldwClient.fetchWithAuth(
-      `/api/v1/persona/sessions/${encodeURIComponent(sessionId)}?limit_turns=100` as any,
-      { method: "GET" }
-    )
-    if (!resp.ok) {
-      setError(resp.error || "Failed to load session history")
-      return
-    }
-    const payload = await resp.json()
-    const turns = Array.isArray(payload?.turns) ? payload.turns : []
-    const historyLogs: PersonaLogEntry[] = turns.map((turn: any, idx: number) => {
-      const role = String(turn?.role || "notice").toLowerCase()
-      const kind: PersonaLogEntry["kind"] =
-        role === "user" || role === "assistant" || role === "tool" ? role : "notice"
-      return {
-        id: String(turn?.turn_id || `${Date.now()}-${idx}`),
-        kind,
-        text: String(turn?.content || "")
-      }
-    })
-    setLogs(historyLogs)
-  }, [sessionId])
+  // ── Handoff callbacks ──
+  const handleProfileDefaultsSaved = React.useCallback(() => {
+    setupOrch.consumeSetupHandoffAction("voice_defaults_saved")
+  }, [setupOrch])
 
-  const confirmPlan = React.useCallback(() => {
-    if (!pendingPlan || !sessionId || !wsRef.current || !connected) return
-    const approvedSteps = pendingPlan.steps
-      .filter((step) => approvedStepMap[step.idx] !== false)
-      .map((step) => step.idx)
-    try {
-      wsRef.current.send(
-        JSON.stringify({
-          type: "confirm_plan",
-          session_id: sessionId,
-          plan_id: pendingPlan.planId,
-          approved_steps: approvedSteps
-        })
-      )
-      appendLog(
-        "notice",
-        `Confirmed ${approvedSteps.length} step${approvedSteps.length === 1 ? "" : "s"}`
-      )
-      setPendingPlan(null)
-    } catch (err: any) {
-      setError(String(err?.message || "Failed to confirm plan"))
-    }
-  }, [appendLog, approvedStepMap, connected, pendingPlan, sessionId])
+  const handleConnectionSaved = React.useCallback(() => {
+    setupOrch.consumeSetupHandoffAction("connection_saved")
+  }, [setupOrch])
 
-  const cancelPlan = React.useCallback(() => {
-    if (!sessionId || !wsRef.current || !connected) return
-    try {
-      wsRef.current.send(
-        JSON.stringify({
-          type: "cancel",
-          session_id: sessionId,
-          reason: "user_cancelled"
-        })
-      )
-      setPendingPlan(null)
-      appendLog("notice", "Cancelled pending plan")
-    } catch (err: any) {
-      setError(String(err?.message || "Failed to cancel plan"))
-    }
-  }, [appendLog, connected, sessionId])
+  const handleConnectionTestSucceeded = React.useCallback(() => {
+    setupOrch.consumeSetupHandoffAction("connection_test_succeeded")
+  }, [setupOrch])
 
-  const updateApprovalDuration = React.useCallback(
-    (approvalKey: string, duration: PersonaRuntimeApprovalDuration) => {
-    setPendingApprovals((prev) =>
-      prev.map((approval) =>
-        approval.key === approvalKey
-          ? { ...approval, selected_duration: duration }
-          : approval
-      )
-    )
-    },
-    []
-  )
+  const handleTestLabDryRunCompleted = React.useCallback((result: TestLabDryRunCompletedResult) => {
+    if (!result.matched) return
+    setupOrch.consumeSetupHandoffAction("dry_run_match")
+  }, [setupOrch])
 
-  const submitApprovalDecision = React.useCallback(
-    async (
-      approval: PersonaRuntimeApprovalRequest,
-      decision: "approved" | "denied"
-    ) => {
-      const approvalDecision = _approvalDecisionPayload(decision, approval.selected_duration)
-      setSubmittingApprovalKey(approval.key)
-      setError(null)
-      try {
-        const response = await tldwClient.fetchWithAuth(
-          "/api/v1/mcp/hub/approval-decisions" as any,
-          {
-            method: "POST",
-            body: {
-              approval_policy_id: approval.approval_policy_id,
-              context_key: approval.context_key,
-              conversation_id: approval.conversation_id,
-              tool_name: approval.tool_name,
-              scope_key: approval.scope_key,
-              decision,
-              duration: approvalDecision.duration
-            }
+  const renderSetupHandoffCard = React.useCallback(
+    (tab: PersonaGardenTabKey) => {
+      if (!setupOrch.setupHandoff || setupOrch.setupHandoff.targetTab !== tab) return null
+      return (
+        <PersonaSetupHandoffCard
+          targetTab={setupOrch.setupHandoff.targetTab}
+          completionType={setupOrch.setupHandoff.completionType}
+          reviewSummary={setupOrch.setupHandoff.reviewSummary}
+          recommendedAction={setupOrch.setupHandoff.recommendedAction}
+          compact={setupOrch.setupHandoff.compact}
+          onDismiss={setupOrch.dismissSetupHandoff}
+          onAddCommand={() =>
+            setupOrch.openSetupHandoffTarget({ tab: "commands", section: "command_form" })
           }
-        )
-        if (!response.ok) {
-          throw new Error(response.error || "Failed to submit approval decision")
-        }
-        await response.json()
-        setPendingApprovals((prev) => prev.filter((entry) => entry.key !== approval.key))
-        appendLog(
-          "notice",
-          decision === "approved"
-            ? `Approved ${approval.tool_name} and retrying`
-            : `Denied ${approval.tool_name}`
-        )
-        if (
-          decision === "approved" &&
-          connected &&
-          wsRef.current &&
-          approval.step_type &&
-          approval.tool
-        ) {
-          wsRef.current.send(
-            JSON.stringify({
-              type: "retry_tool_call",
-              session_id: approval.session_id || sessionId,
-              plan_id: approval.plan_id,
-              step_idx: approval.step_idx,
-              step_type: approval.step_type,
-              tool: approval.tool,
-              args: approval.args || {},
-              why: approval.why,
-              description: approval.description
+          onOpenCommands={() =>
+            setupOrch.openSetupHandoffTarget({ tab: "commands", section: "command_list" })
+          }
+          onOpenTestLab={() =>
+            setupOrch.openSetupHandoffTarget({ tab: "test-lab", section: "dry_run_form" })
+          }
+          onOpenLive={() => setupOrch.openSetupHandoffTarget({ tab: "live" })}
+          onOpenProfiles={() =>
+            setupOrch.openSetupHandoffTarget({
+              tab: "profiles",
+              section: "confirmation_mode"
             })
-          )
-        }
-      } catch (err: any) {
-        setError(String(err?.message || "Failed to submit approval decision"))
-      } finally {
-        setSubmittingApprovalKey(null)
-      }
+          }
+          onOpenConnections={() =>
+            setupOrch.setupHandoff!.reviewSummary.connection.mode === "skipped"
+              ? setupOrch.openSetupHandoffTarget({
+                  tab: "connections",
+                  section: "connection_form"
+                })
+              : setupOrch.openSetupHandoffTarget({
+                  tab: "connections",
+                  section: "saved_connections",
+                  connectionName:
+                    setupOrch.setupHandoff!.reviewSummary.connection.mode === "created" ||
+                    setupOrch.setupHandoff!.reviewSummary.connection.mode === "available"
+                      ? setupOrch.setupHandoff!.reviewSummary.connection.name
+                      : null
+                })
+          }
+        />
+      )
     },
-    [appendLog, connected, sessionId]
+    [setupOrch]
   )
+
+  const withSetupHandoff = React.useCallback(
+    (tab: PersonaGardenTabKey, content: React.ReactNode) => (
+      <div className="space-y-3">
+        {renderSetupHandoffCard(tab)}
+        {content}
+      </div>
+    ),
+    [renderSetupHandoffCard]
+  )
+
+  // ── Persona unsupported check ──
   const personaUnsupported =
     !capsLoading &&
     capabilities &&
     (!capabilities.hasPersona ||
       (isCompanionMode && !capabilities.hasPersonalization))
+
+  const selectedPersonaName =
+    catalog.find((persona) => String(persona.id || "") === selectedPersonaId)?.name ||
+    selectedPersonaId
+
+  // ── Route header ──
   const routeHeader =
     shell === "sidepanel" ? (
       <div className="sticky bg-surface top-0 z-10">
@@ -1488,10 +733,22 @@ const SidepanelPersona = ({
         </Typography.Text>
       </div>
     )
-  const selectedPersonaName =
-    catalog.find((persona) => String(persona.id || "") === selectedPersonaId)?.name ||
-    selectedPersonaId
+  const settingsRoute = shell === "options" ? "/settings/tldw" : "/settings"
+  const diagnosticsRoute = shell === "options" ? "/settings/health" : settingsRoute
+  const settingsLabel = t("sidepanel:header.settingsShortLabel", "Settings")
+  const setupActionLabel =
+    shell === "options" && !hasCompletedFirstRun ? "Finish Setup" : settingsLabel
+  const openSettings = () => navigate(settingsRoute)
+  const openDiagnostics = () => navigate(diagnosticsRoute)
+  const openSetup = () => {
+    if (shell === "options" && !hasCompletedFirstRun) {
+      navigate("/")
+      return
+    }
+    openSettings()
+  }
 
+  // ── JSX: live session controls ──
   const liveSessionControls = (
     <div className="flex flex-wrap items-center gap-2">
       {!isCompanionMode ? (
@@ -1589,7 +846,9 @@ const SidepanelPersona = ({
           {t("sidepanel:persona.connect", "Connect")}
         </Button>
       ) : (
-        <Button size="small" onClick={disconnect}>
+        <Button size="small" onClick={() => {
+          disconnect()
+        }}>
           {t("sidepanel:persona.disconnect", "Disconnect")}
         </Button>
       )}
@@ -1608,24 +867,137 @@ const SidepanelPersona = ({
     </div>
   ) : null
 
-  const runtimeApprovalCard = pendingApprovals.length ? (
-    <div className="rounded-lg border border-warning/40 bg-warning/5 p-3">
+  const assistantVoiceCard = (
+    <AssistantVoiceCard
+      resolvedDefaults={resolvedLivePersonaVoiceDefaults}
+      connected={connected}
+      state={liveVoiceController.state}
+      speechAvailable={liveVoiceController.speechAvailable}
+      isListening={liveVoiceController.isListening}
+      heardText={liveVoiceController.heardText}
+      lastCommittedText={liveVoiceController.lastCommittedText}
+      activeToolStatus={liveVoiceController.activeToolStatus}
+      pendingApprovalSummary={pendingApprovalSummary}
+      warning={liveVoiceController.warning}
+      recoveryMode={liveVoiceController.recoveryMode}
+      manualModeRequired={liveVoiceController.manualModeRequired}
+      canSendNow={liveVoiceController.canSendNow}
+      textOnlyDueToTtsFailure={liveVoiceController.textOnlyDueToTtsFailure}
+      showSaveCurrentSettingsAsDefaults={showSaveCurrentSettingsAsDefaults}
+      savingCurrentSettingsAsDefaults={savingLiveVoiceDefaults}
+      sessionAutoResume={liveVoiceController.sessionAutoResume}
+      sessionBargeIn={liveVoiceController.sessionBargeIn}
+      autoCommitEnabled={liveVoiceController.autoCommitEnabled}
+      vadPreset={liveVoiceController.vadPreset}
+      vadThreshold={liveVoiceController.vadThreshold}
+      minSilenceMs={liveVoiceController.minSilenceMs}
+      turnStopSecs={liveVoiceController.turnStopSecs}
+      minUtteranceSecs={liveVoiceController.minUtteranceSecs}
+      onToggleListening={liveVoiceController.toggleListening}
+      onSendNow={liveVoiceController.sendCurrentTranscriptNow}
+      onSessionAutoResumeChange={liveVoiceController.setSessionAutoResume}
+      onSessionBargeInChange={liveVoiceController.setSessionBargeIn}
+      onAutoCommitEnabledChange={liveVoiceController.setAutoCommitEnabled}
+      onVadPresetChange={liveVoiceController.setVadPreset}
+      onVadThresholdChange={liveVoiceController.setVadThreshold}
+      onMinSilenceMsChange={liveVoiceController.setMinSilenceMs}
+      onTurnStopSecsChange={liveVoiceController.setTurnStopSecs}
+      onMinUtteranceSecsChange={liveVoiceController.setMinUtteranceSecs}
+      onKeepListening={liveVoiceController.keepListening}
+      onResetTurn={liveVoiceController.resetTurn}
+      onWaitOnRecovery={liveVoiceController.waitOnRecovery}
+      onCopyLastCommandToComposer={handleCopyLastVoiceCommandToComposer}
+      onJumpToApproval={handleJumpToRuntimeApproval}
+      onSaveCurrentSettingsAsDefaults={handleSaveCurrentLiveTurnDetectionDefaults}
+      onReconnectPersonaSession={handleReconnectPersonaSessionFromRecovery}
+    />
+  )
+
+  const runtimeApprovalCard = pendingApprovals.length || resolvedApprovalSnapshot ? (
+    <div
+      ref={runtimeApprovalCardRef}
+      data-testid="persona-runtime-approval-card"
+      className="rounded-lg border border-warning/40 bg-warning/5 p-3"
+    >
       <Typography.Text strong>
         {t("sidepanel:persona.runtimeApproval", "Runtime approval required")}
       </Typography.Text>
+      {resolvedApprovalSnapshot && !pendingApprovals.length ? (
+        <div
+          data-testid="persona-runtime-approval-answered"
+          className="mt-2 rounded-md border border-success/30 bg-success/10 p-2 text-xs text-success"
+        >
+          {`Answered: ${resolvedApprovalSnapshot.toolName}`}
+        </div>
+      ) : null}
       <div className="mt-2 space-y-3">
         {pendingApprovals.map((approval) => {
           const isSubmitting = submittingApprovalKey === approval.key
+          const isHighlighted = approval.key === activeApprovalKey
+          const highlightPhase = isHighlighted ? approvalHighlightPhase : "none"
           return (
             <div
               key={approval.key}
-              className="rounded-md border border-warning/30 bg-surface p-3"
+              ref={(node) => {
+                registerRuntimeApprovalRow(approval.key, node)
+              }}
+              data-testid={`persona-runtime-approval-row-${approval.key}`}
+              data-approval-key={approval.key}
+              data-highlighted={isHighlighted ? "true" : "false"}
+              data-highlight-phase={highlightPhase}
+              data-highlight-seq={isHighlighted ? String(approvalHighlightSequence) : "0"}
+              className={`rounded-md border p-3 ${
+                isHighlighted
+                  ? "persona-runtime-approval-row border-warning/60 bg-warning/10"
+                  : "persona-runtime-approval-row border-warning/30 bg-surface"
+              }`}
             >
               <div className="flex flex-wrap items-center gap-2">
                 <Tag color="gold">{approval.tool_name}</Tag>
+                {isHighlighted ? (
+                  <Tag color="orange">Needs your approval</Tag>
+                ) : null}
                 {approval.mode ? <Tag color="blue">{approval.mode}</Tag> : null}
                 {approval.reason ? <Tag color="red">{approval.reason}</Tag> : null}
               </div>
+              {approval.scope_context?.server_name ||
+              approval.scope_context?.server_id ||
+              approval.scope_context?.workspace_id ||
+              approval.scope_context?.workspace_bundle_ids?.length ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                  {approval.scope_context?.server_name || approval.scope_context?.server_id ? (
+                    <Tag color="cyan">
+                      {approval.scope_context.server_name || approval.scope_context.server_id}
+                    </Tag>
+                  ) : null}
+                  {approval.scope_context?.workspace_id ? (
+                    <Tag color="cyan">{approval.scope_context.workspace_id}</Tag>
+                  ) : null}
+                  {(approval.scope_context?.workspace_bundle_ids || []).map((workspaceId) => (
+                    <Tag
+                      key={`${approval.key}-workspace-bundle-${workspaceId}`}
+                      color="purple"
+                    >
+                      {workspaceId}
+                    </Tag>
+                  ))}
+                  {approval.scope_context?.selected_workspace_trust_source ? (
+                    <Tag color="blue">
+                      {approval.scope_context.selected_workspace_trust_source}
+                    </Tag>
+                  ) : null}
+                  {(approval.scope_context.requested_slots || []).map((slotName) => (
+                    <Tag key={`${approval.key}-${slotName}`} color="geekblue">
+                      {slotName}
+                    </Tag>
+                  ))}
+                  {(approval.scope_context.normalized_paths || []).map((pathValue) => (
+                    <Tag key={`${approval.key}-path-${pathValue}`} color="magenta">
+                      {pathValue}
+                    </Tag>
+                  ))}
+                </div>
+              ) : null}
               {Object.keys(approval.arguments_summary).length ? (
                 <pre className="mt-2 overflow-auto rounded bg-bg p-2 text-[11px] text-text">
                   {JSON.stringify(approval.arguments_summary, null, 2)}
@@ -1685,6 +1057,18 @@ const SidepanelPersona = ({
 
   const liveSessionStatusPanels = (
     <>
+      {setupOrch.setupLiveDetour ? (
+        <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-sm text-sky-100">
+          <div>Finish this live test, then return to setup.</div>
+          <button
+            type="button"
+            className="mt-2 rounded-md border border-sky-500/40 px-3 py-2 text-sm font-medium text-sky-100"
+            onClick={setupOrch.handleReturnToSetupFromLiveDetour}
+          >
+            Return to setup
+          </button>
+        </div>
+      ) : null}
       {errorBanner}
       {!isCompanionMode ? (
         <PersonaPolicySummary personaId={selectedPersonaId || null} />
@@ -1800,48 +1184,48 @@ const SidepanelPersona = ({
         <div className="flex flex-wrap items-center gap-1">
           <Tag
             data-testid="persona-state-dirty-tag"
-            color={hasUnsavedPersonaStateChanges ? "gold" : "green"}
+            color={stateDocs.hasUnsavedPersonaStateChanges ? "gold" : "green"}
           >
-            {stateDirtyLabel}
+            {stateDocs.stateDirtyLabel}
           </Tag>
-          {stateLastModified ? (
+          {stateDocs.stateLastModified ? (
             <Typography.Text type="secondary" className="text-xs">
-              {`${t("sidepanel:persona.stateUpdatedPrefix", "updated")} ${stateLastModified}`}
+              {`${t("sidepanel:persona.stateUpdatedPrefix", "updated")} ${stateDocs.stateLastModified}`}
             </Typography.Text>
           ) : null}
           <Button
             data-testid="persona-state-editor-toggle-button"
             size="small"
             onClick={() => {
-              setPersonaStateEditorExpanded((prev) => !prev)
+              stateDocs.setPersonaStateEditorExpanded((prev) => !prev)
             }}
           >
-            {stateEditorToggleLabel}
+            {stateDocs.stateEditorToggleLabel}
           </Button>
         </div>
       </div>
-      {personaStateEditorExpanded ? (
+      {stateDocs.personaStateEditorExpanded ? (
         <>
           <div className="mt-2 grid gap-2">
             <Input.TextArea
               data-testid="persona-state-soul-input"
-              value={soulMd}
+              value={stateDocs.soulMd}
               autoSize={{ minRows: 2, maxRows: 4 }}
-              onChange={(event) => setSoulMd(event.target.value)}
+              onChange={(event) => stateDocs.setSoulMd(event.target.value)}
               placeholder={t("sidepanel:persona.stateSoulPlaceholder", "soul.md")}
             />
             <Input.TextArea
               data-testid="persona-state-identity-input"
-              value={identityMd}
+              value={stateDocs.identityMd}
               autoSize={{ minRows: 2, maxRows: 4 }}
-              onChange={(event) => setIdentityMd(event.target.value)}
+              onChange={(event) => stateDocs.setIdentityMd(event.target.value)}
               placeholder={t("sidepanel:persona.stateIdentityPlaceholder", "identity.md")}
             />
             <Input.TextArea
               data-testid="persona-state-heartbeat-input"
-              value={heartbeatMd}
+              value={stateDocs.heartbeatMd}
               autoSize={{ minRows: 2, maxRows: 4 }}
-              onChange={(event) => setHeartbeatMd(event.target.value)}
+              onChange={(event) => stateDocs.setHeartbeatMd(event.target.value)}
               placeholder={t("sidepanel:persona.stateHeartbeatPlaceholder", "heartbeat.md")}
             />
           </div>
@@ -1849,10 +1233,10 @@ const SidepanelPersona = ({
             <Button
               data-testid="persona-state-load-button"
               size="small"
-              loading={personaStateLoading}
-              disabled={!connected || personaStateSaving}
+              loading={stateDocs.personaStateLoading}
+              disabled={!connected || stateDocs.personaStateSaving}
               onClick={() => {
-                void loadPersonaStateDocs()
+                void stateDocs.loadPersonaStateDocs()
               }}
             >
               {t("sidepanel:persona.stateLoad", "Load state")}
@@ -1861,10 +1245,10 @@ const SidepanelPersona = ({
               data-testid="persona-state-save-button"
               size="small"
               type="primary"
-              loading={personaStateSaving}
-              disabled={!connected || !hasUnsavedPersonaStateChanges}
+              loading={stateDocs.personaStateSaving}
+              disabled={!connected || !stateDocs.hasUnsavedPersonaStateChanges}
               onClick={() => {
-                void savePersonaStateDocs()
+                void stateDocs.savePersonaStateDocs()
               }}
             >
               {t("sidepanel:persona.stateSave", "Save state")}
@@ -1872,26 +1256,26 @@ const SidepanelPersona = ({
             <Button
               data-testid="persona-state-revert-button"
               size="small"
-              disabled={!hasUnsavedPersonaStateChanges || personaStateSaving}
-              onClick={revertPersonaStateDraft}
+              disabled={!stateDocs.hasUnsavedPersonaStateChanges || stateDocs.personaStateSaving}
+              onClick={stateDocs.revertPersonaStateDraft}
             >
               {t("sidepanel:persona.stateRevert", "Revert")}
             </Button>
             <Button
               data-testid="persona-state-history-button"
               size="small"
-              loading={personaStateHistoryLoading}
+              loading={stateDocs.personaStateHistoryLoading}
               disabled={!connected}
               onClick={() => {
-                void loadPersonaStateHistory()
+                void stateDocs.loadPersonaStateHistory()
               }}
             >
               {t("sidepanel:persona.stateHistory", "Load history")}
             </Button>
           </div>
-          {personaStateHistory.length > 0 ? (
+          {stateDocs.personaStateHistory.length > 0 ? (
             <div className="mt-3 space-y-2">
-              {personaStateHistory.length > 1 ? (
+              {stateDocs.personaStateHistory.length > 1 ? (
                 <div className="mb-1 flex items-center gap-2 text-xs">
                   <Typography.Text type="secondary" className="text-xs">
                     {t("sidepanel:persona.stateHistoryOrderLabel", "Order")}
@@ -1899,9 +1283,9 @@ const SidepanelPersona = ({
                   <Button
                     data-testid="persona-state-history-order-newest-button"
                     size="small"
-                    type={personaStateHistoryOrder === "newest" ? "primary" : "default"}
+                    type={stateDocs.personaStateHistoryOrder === "newest" ? "primary" : "default"}
                     onClick={() => {
-                      setPersonaStateHistoryOrder("newest")
+                      stateDocs.setPersonaStateHistoryOrder("newest")
                     }}
                   >
                     {t("sidepanel:persona.stateHistoryOrderNewest", "Newest")}
@@ -1909,16 +1293,16 @@ const SidepanelPersona = ({
                   <Button
                     data-testid="persona-state-history-order-oldest-button"
                     size="small"
-                    type={personaStateHistoryOrder === "oldest" ? "primary" : "default"}
+                    type={stateDocs.personaStateHistoryOrder === "oldest" ? "primary" : "default"}
                     onClick={() => {
-                      setPersonaStateHistoryOrder("oldest")
+                      stateDocs.setPersonaStateHistoryOrder("oldest")
                     }}
                   >
                     {t("sidepanel:persona.stateHistoryOrderOldest", "Oldest")}
                   </Button>
                 </div>
               ) : null}
-              {orderedPersonaStateHistory.map((entry) => (
+              {stateDocs.orderedPersonaStateHistory.map((entry) => (
                 <div
                   data-testid={`persona-state-history-entry-${entry.entry_id}`}
                   key={entry.entry_id}
@@ -1938,9 +1322,9 @@ const SidepanelPersona = ({
                       data-testid={`persona-state-restore-${entry.entry_id}`}
                       size="small"
                       disabled={entry.is_active === true}
-                      loading={restoringStateEntryId === entry.entry_id}
+                      loading={stateDocs.restoringStateEntryId === entry.entry_id}
                       onClick={() => {
-                        void restorePersonaStateHistoryEntry(entry.entry_id)
+                        void stateDocs.restorePersonaStateHistoryEntry(entry.entry_id)
                       }}
                     >
                       {t("sidepanel:persona.stateRestore", "Restore")}
@@ -1970,7 +1354,7 @@ const SidepanelPersona = ({
                 </div>
               ))}
             </div>
-          ) : personaStateHistoryLoaded ? (
+          ) : stateDocs.personaStateHistoryLoaded ? (
             <Typography.Text
               data-testid="persona-state-history-empty"
               type="secondary"
@@ -2079,11 +1463,71 @@ const SidepanelPersona = ({
 
   const tabItems = [
     {
+      key: "commands",
+      label: t("sidepanel:persona.tabCommands", "Commands"),
+      content: withSetupHandoff(
+        "commands",
+        <CommandsPanel
+          selectedPersonaId={selectedPersonaId}
+          selectedPersonaName={selectedPersonaName}
+          isActive={activeTab === "commands"}
+          analytics={voiceAnalytics}
+          analyticsLoading={voiceAnalyticsLoading}
+          handoffFocusRequest={
+            setupOrch.setupHandoffFocusRequest?.tab === "commands"
+              ? {
+                  section: setupOrch.setupHandoffFocusRequest.section as "command_form" | "command_list",
+                  token: setupOrch.setupHandoffFocusRequest.token
+                }
+              : null
+          }
+          onSetupHandoffFocusConsumed={setupOrch.handleSetupHandoffFocusConsumed}
+          openCommandId={openCommandId}
+          onOpenCommandHandled={handleOpenCommandHandled}
+          draftCommandPhrase={draftCommandPhrase}
+          draftCommandSource={draftCommandSource}
+          onDraftCommandPhraseHandled={handleDraftCommandPhraseHandled}
+          rerunAfterSaveCommandId={rerunAfterSaveCommandId}
+          onRerunAfterSave={handleRerunAfterCommandSave}
+          onCommandSaved={handleCommandSaved}
+        />
+      )
+    },
+    {
+      key: "test-lab",
+      label: t("sidepanel:persona.tabTestLab", "Test Lab"),
+      content: withSetupHandoff(
+        "test-lab",
+        <TestLabPanel
+          selectedPersonaId={selectedPersonaId}
+          selectedPersonaName={selectedPersonaName}
+          isActive={activeTab === "test-lab"}
+          analytics={voiceAnalytics}
+          handoffFocusRequest={
+            setupOrch.setupHandoffFocusRequest?.tab === "test-lab"
+              ? {
+                  section: setupOrch.setupHandoffFocusRequest.section as "dry_run_form",
+                  token: setupOrch.setupHandoffFocusRequest.token
+                }
+              : null
+          }
+          onSetupHandoffFocusConsumed={setupOrch.handleSetupHandoffFocusConsumed}
+          initialHeardText={lastTestLabPhrase}
+          rerunRequestToken={testLabRerunToken}
+          onOpenCommand={handleOpenCommandFromTestLab}
+          onCreateCommandDraft={handleCreateCommandFromTestLab}
+          onDryRunCompleted={handleTestLabDryRunCompleted}
+        />
+      )
+    },
+    {
       key: "live",
       label: t("sidepanel:persona.tabLive", "Live Session"),
-      content: (
+      content: withSetupHandoff(
+        "live",
         <LiveSessionPanel
           controls={liveSessionControls}
+          assistantVoice={assistantVoiceCard}
           error={liveSessionStatusPanels}
           pendingPlan={pendingPlanCard}
           transcript={transcriptPanel}
@@ -2094,13 +1538,36 @@ const SidepanelPersona = ({
     {
       key: "profiles",
       label: t("sidepanel:persona.tabProfiles", "Profiles"),
-      content: (
+      content: withSetupHandoff(
+        "profiles",
         <ProfilePanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           personaCount={catalog.length}
           connected={connected}
           sessionId={sessionId}
+          setup={savedPersonaSetup}
+          onStartSetup={setupOrch.handleStartSetup}
+          onResumeSetup={setupOrch.handleResumeSetup}
+          onResetSetup={setupOrch.handleResetSetup}
+          onRerunSetup={setupOrch.handleRerunSetup}
+          onDefaultsSaved={handleProfileDefaultsSaved}
+          isActive={activeTab === "profiles"}
+          setupAnalytics={setupAnalytics}
+          setupAnalyticsLoading={setupAnalyticsLoading}
+          analytics={voiceAnalytics}
+          analyticsLoading={voiceAnalyticsLoading}
+          handoffFocusRequest={
+            setupOrch.setupHandoffFocusRequest?.tab === "profiles"
+              ? {
+                  section: setupOrch.setupHandoffFocusRequest.section as
+                    | "assistant_defaults"
+                    | "confirmation_mode",
+                  token: setupOrch.setupHandoffFocusRequest.token
+                }
+              : null
+          }
+          onSetupHandoffFocusConsumed={setupOrch.handleSetupHandoffFocusConsumed}
         />
       )
     },
@@ -2112,6 +1579,33 @@ const SidepanelPersona = ({
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "voice"}
+        />
+      )
+    },
+    {
+      key: "connections",
+      label: t("sidepanel:persona.tabConnections", "Connections"),
+      content: withSetupHandoff(
+        "connections",
+        <ConnectionsPanel
+          selectedPersonaId={selectedPersonaId}
+          selectedPersonaName={selectedPersonaName}
+          isActive={activeTab === "connections"}
+          onConnectionSaved={handleConnectionSaved}
+          onConnectionTestSucceeded={handleConnectionTestSucceeded}
+          handoffFocusRequest={
+            setupOrch.setupHandoffFocusRequest?.tab === "connections"
+              ? {
+                  section: setupOrch.setupHandoffFocusRequest.section as
+                    | "connection_form"
+                    | "saved_connections",
+                  token: setupOrch.setupHandoffFocusRequest.token,
+                  connectionId: setupOrch.setupHandoffFocusRequest.connectionId ?? null,
+                  connectionName: setupOrch.setupHandoffFocusRequest.connectionName ?? null
+                }
+              : null
+          }
+          onSetupHandoffFocusConsumed={setupOrch.handleSetupHandoffFocusConsumed}
         />
       )
     },
@@ -2131,12 +1625,91 @@ const SidepanelPersona = ({
       content: <PoliciesPanel hasPendingPlan={Boolean(pendingPlan)} />
     }
   ]
+
+  // ── Early-return gates ──
+  if (uxState === "error_auth" || uxState === "configuring_auth") {
+    return (
+      <div data-testid="persona-route-root" className={routeRootClassName}>
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title={
+              isCompanionMode
+                ? "Add your credentials to use Companion"
+                : "Add your credentials to use Persona"
+            }
+            description={
+              isCompanionMode
+                ? "Companion conversation needs a reachable tldw server plus valid credentials before a session can start."
+                : "Persona streaming needs a reachable tldw server plus valid credentials before a session can start."
+            }
+            primaryActionLabel={settingsLabel}
+            onPrimaryAction={openSettings}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (uxState === "unconfigured" || uxState === "configuring_url") {
+    return (
+      <div data-testid="persona-route-root" className={routeRootClassName}>
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title={
+              isCompanionMode
+                ? "Finish setup to use Companion"
+                : "Finish setup to use Persona"
+            }
+            description={
+              isCompanionMode
+                ? "Companion conversation depends on a configured tldw server before you can start a session."
+                : "Persona streaming depends on a configured tldw server before you can start a session."
+            }
+            primaryActionLabel={setupActionLabel}
+            onPrimaryAction={openSetup}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (uxState === "error_unreachable") {
+    return (
+      <div data-testid="persona-route-root" className={routeRootClassName}>
+        {routeHeader}
+        <div className="p-4">
+          <FeatureEmptyState
+            title="Can't reach your tldw server right now"
+            description={
+              isCompanionMode
+                ? "Companion conversation depends on a reachable tldw server. Review your server status and URL before trying again."
+                : "Persona streaming depends on a reachable tldw server. Review your server status and URL before trying again."
+            }
+            primaryActionLabel={
+              shell === "options"
+                ? "Health & diagnostics"
+                : settingsLabel
+            }
+            onPrimaryAction={
+              shell === "options" ? openDiagnostics : openSettings
+            }
+            secondaryActionLabel={
+              shell === "options" ? settingsLabel : undefined
+            }
+            onSecondaryAction={
+              shell === "options" ? openSettings : undefined
+            }
+          />
+        </div>
+      </div>
+    )
+  }
+
   if (!isOnline) {
     return (
-      <div
-        data-testid="persona-route-root"
-        className={routeRootClassName}
-      >
+      <div data-testid="persona-route-root" className={routeRootClassName}>
         {routeHeader}
         <div className="p-4">
           <FeatureEmptyState
@@ -2153,8 +1726,8 @@ const SidepanelPersona = ({
                     "Persona streaming runs on your tldw server. Connect to a server to start a session."
                   )
             }
-            primaryActionLabel={t("sidepanel:header.settingsShortLabel", "Settings")}
-            onPrimaryAction={() => navigate("/settings")}
+            primaryActionLabel={settingsLabel}
+            onPrimaryAction={openSettings}
           />
         </div>
       </div>
@@ -2163,10 +1736,7 @@ const SidepanelPersona = ({
 
   if (personaUnsupported) {
     return (
-      <div
-        data-testid="persona-route-root"
-        className={routeRootClassName}
-      >
+      <div data-testid="persona-route-root" className={routeRootClassName}>
         {routeHeader}
         <div className="p-4">
           <FeatureEmptyState
@@ -2207,11 +1777,113 @@ const SidepanelPersona = ({
         </div>
       ) : (
         <div className="flex flex-1 flex-col p-3">
-          <PersonaGardenTabs
-            activeKey={activeTab}
-            onChange={(key) => setActiveTab(key as PersonaGardenTabKey)}
-            items={tabItems}
-          />
+          {setupOrch.personaSetupWizard.isSetupRequired && !setupOrch.setupCommandDetour && !setupOrch.setupLiveDetour ? (
+            <AssistantSetupWizard
+              catalog={catalog.map((persona) => ({
+                id: String(persona.id || ""),
+                name: String(persona.name || persona.id || "")
+              }))}
+              selectedPersonaId={selectedPersonaId}
+              currentStep={setupOrch.personaSetupWizard.currentStep}
+              postSetupTargetTab={setupOrch.setupIntentTargetTab || activeTab}
+              progressItems={setupOrch.assistantSetupProgressItems}
+              onResetSetup={setupOrch.handleResetSetup}
+              voiceStepContent={
+                setupOrch.personaSetupWizard.currentStep === "voice" ? (
+                  <AssistantDefaultsPanel
+                    selectedPersonaId={selectedPersonaId}
+                    selectedPersonaName={selectedPersonaName}
+                    isActive
+                    analytics={null}
+                    analyticsLoading={false}
+                    onSaved={() => {
+                      void setupOrch.handleSetupVoiceDefaultsSaved()
+                    }}
+                  />
+                ) : undefined
+              }
+              commandsStepContent={
+                setupOrch.personaSetupWizard.currentStep === "commands" ? (
+                  <SetupStarterCommandsStep
+                    saving={setupOrch.setupWizardSaving}
+                    error={setupOrch.setupStepErrors.commands || null}
+                    onCreateFromTemplate={(templateKey) => {
+                      void setupOrch.handleCreateStarterCommandFromTemplate(templateKey)
+                    }}
+                    onCreateMcpStarter={(toolName, phrase) => {
+                      void setupOrch.handleCreateMcpStarterCommand(toolName, phrase)
+                    }}
+                    onSkip={() => {
+                      setupOrch.setSetupReviewSummaryDraft((current) => ({
+                        ...current,
+                        starterCommands: { mode: "skipped" }
+                      }))
+                      void setupOrch.advancePersonaSetupStep(
+                        "safety",
+                        "Failed to advance assistant setup",
+                        undefined,
+                        "commands"
+                      )
+                    }}
+                  />
+                ) : undefined
+              }
+              safetyStepContent={
+                setupOrch.personaSetupWizard.currentStep === "safety" ? (
+                  <SetupSafetyConnectionsStep
+                    saving={setupOrch.setupWizardSaving}
+                    error={setupOrch.setupStepErrors.safety || null}
+                    currentConfirmationMode={
+                      savedPersonaVoiceDefaults?.confirmation_mode || "destructive_only"
+                    }
+                    onContinue={(payload) => {
+                      void setupOrch.handleSetupSafetyStepContinue(payload)
+                    }}
+                  />
+                ) : undefined
+              }
+              testStepContent={
+                setupOrch.personaSetupWizard.currentStep === "test" ? (
+                  <SetupTestAndFinishStep
+                    saving={setupOrch.setupWizardSaving}
+                    dryRunLoading={setupOrch.setupWizardDryRunLoading}
+                    liveConnected={connected}
+                    error={setupOrch.setupStepErrors.test || null}
+                    initialHeardText={setupOrch.setupNoMatchPhrase}
+                    notice={setupOrch.setupTestResumeNote}
+                    outcome={setupOrch.setupTestOutcome}
+                    onRunDryRun={(heardText) => {
+                      void setupOrch.handleRunSetupDryRun(heardText)
+                    }}
+                    onCreateCommandFromPhrase={handleCreateCommandFromSetupNoMatch}
+                    onConnectLive={() => {
+                      void connect()
+                    }}
+                    onRecoverInLiveSession={setupOrch.handleRecoverSetupInLiveSession}
+                    onSendLive={(text) => {
+                      sendSetupLiveTestMessage(text)
+                    }}
+                    onFinishWithDryRun={() => {
+                      void setupOrch.completePersonaSetup("dry_run")
+                    }}
+                    onFinishWithLiveSession={() => {
+                      void setupOrch.completePersonaSetup("live_session")
+                    }}
+                  />
+                ) : undefined
+              }
+              saving={setupOrch.setupWizardSaving}
+              error={setupOrch.currentSetupWizardError}
+              onUsePersona={setupOrch.handleUsePersonaForSetup}
+              onCreatePersona={setupOrch.handleCreatePersonaForSetup}
+            />
+          ) : (
+            <PersonaGardenTabs
+              activeKey={activeTab}
+              onChange={(key) => setActiveTab(key as PersonaGardenTabKey)}
+              items={tabItems}
+            />
+          )}
         </div>
       )}
     </div>

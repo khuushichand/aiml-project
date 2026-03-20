@@ -173,8 +173,7 @@ export default function NotificationsPage() {
   const unreadLabel = useMemo(() => `Unread: ${unreadCount}`, [unreadCount]);
 
   return (
-    <div className="min-h-screen bg-bg">
-      <main className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
         <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
           <header className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -243,7 +242,6 @@ export default function NotificationsPage() {
             </ul>
           )}
         </section>
-      </main>
     </div>
   );
 }

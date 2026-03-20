@@ -188,6 +188,80 @@ export interface BackupScheduleMutationResponse {
   item: BackupScheduleItem;
 }
 
+export interface MaintenanceRotationRunItem {
+  id: string;
+  mode: 'dry_run' | 'execute';
+  status: 'queued' | 'running' | 'complete' | 'failed';
+  domain?: string | null;
+  queue?: string | null;
+  job_type?: string | null;
+  fields_json: string;
+  limit?: number | null;
+  affected_count?: number | null;
+  requested_by_user_id?: number | null;
+  requested_by_label?: string | null;
+  confirmation_recorded: boolean;
+  job_id?: string | null;
+  scope_summary: string;
+  key_source: string;
+  error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface MaintenanceRotationRunListResponse {
+  items: MaintenanceRotationRunItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface MaintenanceRotationRunCreateRequest {
+  mode: 'dry_run' | 'execute';
+  domain?: string;
+  queue?: string;
+  job_type?: string;
+  fields: string[];
+  limit: number;
+  confirmed: boolean;
+}
+
+export interface MaintenanceRotationRunCreateResponse {
+  item: MaintenanceRotationRunItem;
+}
+
+export interface ByokValidationRunItem {
+  id: string;
+  status: 'queued' | 'running' | 'complete' | 'failed';
+  org_id?: number | null;
+  provider?: string | null;
+  keys_checked?: number | null;
+  valid_count?: number | null;
+  invalid_count?: number | null;
+  error_count?: number | null;
+  requested_by_user_id?: number | null;
+  requested_by_label?: string | null;
+  job_id?: string | null;
+  scope_summary: string;
+  error_message?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface ByokValidationRunListResponse {
+  items: ByokValidationRunItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ByokValidationRunCreateRequest {
+  org_id?: number;
+  provider?: string;
+}
+
 export interface RetentionPolicy {
   key: string;
   days?: number | null;
@@ -196,6 +270,21 @@ export interface RetentionPolicy {
 
 export interface RetentionPoliciesResponse {
   policies: RetentionPolicy[];
+}
+
+export interface RetentionPolicyPreviewCounts {
+  audit_log_entries: number;
+  job_records: number;
+  backup_files: number;
+}
+
+export interface RetentionPolicyPreviewResponse {
+  key: string;
+  current_days: number;
+  new_days: number;
+  counts: RetentionPolicyPreviewCounts;
+  preview_signature: string;
+  notes: string[];
 }
 
 export interface ProviderSecret {

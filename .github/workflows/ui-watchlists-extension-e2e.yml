@@ -56,6 +56,7 @@ jobs:
       TLDW_E2E_API_KEY: watchlists-e2e-key-12345
       TLDW_E2E_EXTENSION_LAUNCH_TIMEOUT_MS: "90000"
       TLDW_E2E_EXTENSION_TARGET_WAIT_MS: "90000"
+      TLDW_E2E_EXTENSION_HEADLESS: "0"
 
     steps:
       - name: Checkout
@@ -76,6 +77,10 @@ jobs:
       - name: Install workspace dependencies
         working-directory: apps
         run: bun install --frozen-lockfile
+
+      - name: Build Chrome extension
+        working-directory: apps/extension
+        run: bun run build:chrome
 
       - name: Install Playwright Chromium
         working-directory: apps/extension
@@ -110,7 +115,7 @@ jobs:
       - name: Run Watchlists extension Playwright spec (strict no-skip gate)
         working-directory: apps/extension
         run: |
-          bun run test:e2e:watchlists:strict
+          xvfb-run -a bun run test:e2e:watchlists:strict
 
       - name: Upload watchlists e2e artifacts
         if: always()

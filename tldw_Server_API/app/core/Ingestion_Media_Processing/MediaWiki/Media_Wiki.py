@@ -27,7 +27,8 @@ import yaml
 from loguru import logger as _base_logger
 
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_repository
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 
 #
 # Local Imports
@@ -696,7 +697,8 @@ def process_single_item(
         store_to_db: bool = True,
         store_to_vector_db: bool = True,
         api_name_vector_db: Optional[str] = None,
-        api_key_vector_db: Optional[str] = None
+        api_key_vector_db: Optional[str] = None,
+        media_writer: Any | None = None,
 ) -> dict[str, Any]:
     try:
         logging.debug(
@@ -742,20 +744,33 @@ def process_single_item(
             # Ensure ingestion_date is a string in 'YYYY-MM-DD' format
             ingestion_date_str = timestamp_dt.strftime('%Y-%m-%d')
 
-            # Create a DB instance and persist
-            db_instance = create_media_database(client_id="mediawiki_import")
-            result = db_instance.add_media_with_keywords(
-                url=url,
-                title=title,
-                media_type="mediawiki_page",  # Adjusted type
-                content=content,
-                keywords=["mediawiki", wiki_name, "page"],
-                prompt="",
-                analysis_content="",  # Analysis/summary would be separate
-                transcription_model="N/A",
-                author="MediaWiki",  # Or parse from page if possible
-                ingestion_date=ingestion_date_str
-            )
+            if media_writer is None:
+                with managed_media_database(client_id="mediawiki_import") as db_instance:
+                    result = get_media_repository(db_instance).add_media_with_keywords(
+                        url=url,
+                        title=title,
+                        media_type="mediawiki_page",  # Adjusted type
+                        content=content,
+                        keywords=["mediawiki", wiki_name, "page"],
+                        prompt="",
+                        analysis_content="",  # Analysis/summary would be separate
+                        transcription_model="N/A",
+                        author="MediaWiki",  # Or parse from page if possible
+                        ingestion_date=ingestion_date_str
+                    )
+            else:
+                result = media_writer.add_media_with_keywords(
+                    url=url,
+                    title=title,
+                    media_type="mediawiki_page",  # Adjusted type
+                    content=content,
+                    keywords=["mediawiki", wiki_name, "page"],
+                    prompt="",
+                    analysis_content="",  # Analysis/summary would be separate
+                    transcription_model="N/A",
+                    author="MediaWiki",  # Or parse from page if possible
+                    ingestion_date=ingestion_date_str
+                )
             # Assuming add_media_with_keywords returns (media_id, message)
             # If it returns the full DB record or just ID, adapt here.
             # Let's assume it's (media_id, message) as per your original code.
@@ -953,49 +968,58 @@ def import_mediawiki_dump(
         yield {"type": "progress_total", "total_pages": total_pages,
                "message": f"Found {total_pages} pages to process for '{wiki_name}'."}
 
-        for item_dict in parse_mediawiki_dump(
-            safe_file_path,
-            namespaces,
-            skip_redirects,
-            allowed_dir=resolved_allowed_dir,
-            prevalidated_path=safe_file_path,
-        ):
-            current_page_id = item_dict.get('page_id', 0)
-            current_title = item_dict.get('title', 'Unknown Title')
+        with contextlib.ExitStack() as stack:
+            shared_media_writer = None
+            if store_to_db:
+                db_instance = stack.enter_context(
+                    managed_media_database(client_id="mediawiki_import")
+                )
+                shared_media_writer = get_media_repository(db_instance)
 
-            if store_to_db and current_page_id <= last_processed_id:
+            for item_dict in parse_mediawiki_dump(
+                safe_file_path,
+                namespaces,
+                skip_redirects,
+                allowed_dir=resolved_allowed_dir,
+                prevalidated_path=safe_file_path,
+            ):
+                current_page_id = item_dict.get('page_id', 0)
+                current_title = item_dict.get('title', 'Unknown Title')
+
+                if store_to_db and current_page_id <= last_processed_id:
+                    processed_pages_count += 1
+                    if progress_callback:
+                        progress_callback(processed_pages_count / total_pages if total_pages > 0 else 0,
+                                          f"Skipped (checkpoint): {current_title}")
+                    yield {"type": "progress_item", "status": "skipped_checkpoint", "title": current_title,
+                           "page_id": current_page_id,
+                           "progress_percent": processed_pages_count / total_pages if total_pages > 0 else 0}
+                    continue
+
+                processed_item_details = process_single_item(
+                    content=item_dict['content'],
+                    title=current_title,
+                    wiki_name=wiki_name,
+                    chunk_options=final_chunk_options,
+                    item=item_dict,  # Pass the full dict from parse_mediawiki_dump
+                    store_to_db=store_to_db,
+                    store_to_vector_db=store_to_vector_db,
+                    api_name_vector_db=api_name_vector_db,
+                    api_key_vector_db=api_key_vector_db,
+                    media_writer=shared_media_writer,
+                )
+
+                if store_to_db and processed_item_details.get("status") == "Success" and processed_item_details.get(
+                        "media_id") is not None:
+                    save_checkpoint(str(checkpoint_file), current_page_id)
+
                 processed_pages_count += 1
+                current_progress_percent = processed_pages_count / total_pages if total_pages > 0 else 0
                 if progress_callback:
-                    progress_callback(processed_pages_count / total_pages if total_pages > 0 else 0,
-                                      f"Skipped (checkpoint): {current_title}")
-                yield {"type": "progress_item", "status": "skipped_checkpoint", "title": current_title,
-                       "page_id": current_page_id,
-                       "progress_percent": processed_pages_count / total_pages if total_pages > 0 else 0}
-                continue
+                    progress_callback(current_progress_percent, f"Processed page: {current_title}")
 
-            processed_item_details = process_single_item(
-                content=item_dict['content'],
-                title=current_title,
-                wiki_name=wiki_name,
-                chunk_options=final_chunk_options,
-                item=item_dict,  # Pass the full dict from parse_mediawiki_dump
-                store_to_db=store_to_db,
-                store_to_vector_db=store_to_vector_db,
-                api_name_vector_db=api_name_vector_db,
-                api_key_vector_db=api_key_vector_db
-            )
-
-            if store_to_db and processed_item_details.get("status") == "Success" and processed_item_details.get(
-                    "media_id") is not None:
-                save_checkpoint(str(checkpoint_file), current_page_id)
-
-            processed_pages_count += 1
-            current_progress_percent = processed_pages_count / total_pages if total_pages > 0 else 0
-            if progress_callback:
-                progress_callback(current_progress_percent, f"Processed page: {current_title}")
-
-            # Yield detailed result for each page, including its processing status
-            yield {"type": "item_result", "data": processed_item_details, "progress_percent": current_progress_percent}
+                # Yield detailed result for each page, including its processing status
+                yield {"type": "item_result", "data": processed_item_details, "progress_percent": current_progress_percent}
 
         if store_to_db and checkpoint_file.exists():
             try:

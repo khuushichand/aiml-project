@@ -7,6 +7,7 @@ const {
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
+  mockListVisualStyles,
   mockAddArtifact,
   mockUpdateArtifactStatus,
   mockRemoveArtifact,
@@ -35,6 +36,7 @@ const {
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
+  const listVisualStyles = vi.fn()
   const addArtifact = vi.fn()
   const updateArtifactStatus = vi.fn()
   const removeArtifact = vi.fn()
@@ -151,6 +153,7 @@ const {
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
+    mockListVisualStyles: listVisualStyles,
     mockAddArtifact: addArtifact,
     mockUpdateArtifactStatus: updateArtifactStatus,
     mockRemoveArtifact: removeArtifact,
@@ -238,6 +241,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: mockRagSearch,
     synthesizeSpeech: mockSynthesizeSpeech,
     generateSlidesFromMedia: mockGenerateSlidesFromMedia,
+    listVisualStyles: mockListVisualStyles,
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }
@@ -401,6 +405,30 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
       version: 1,
       created_at: "2026-02-18T00:00:00.000Z"
     })
+    mockListVisualStyles.mockResolvedValue([
+      {
+        id: "minimal-academic",
+        name: "Minimal Academic",
+        scope: "builtin",
+        description: "Structured, restrained, study-first slides.",
+        generation_rules: {},
+        artifact_preferences: [],
+        appearance_defaults: { theme: "white" },
+        fallback_policy: {},
+        version: 1
+      },
+      {
+        id: "timeline",
+        name: "Timeline",
+        scope: "builtin",
+        description: "Chronology-forward deck structure.",
+        generation_rules: {},
+        artifact_preferences: ["timeline"],
+        appearance_defaults: { theme: "beige" },
+        fallback_policy: {},
+        version: 1
+      }
+    ])
   })
 
   it("groups output buttons by category and surfaces description tooltips", async () => {
@@ -427,6 +455,27 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     fireEvent.mouseEnter(screen.getByRole("button", { name: "Audio Summary" }))
 
     expect(await screen.findByText("TTS Provider")).toBeInTheDocument()
+  })
+
+  it("passes the selected visual style into slides generation", async () => {
+    renderExpandedStudioPane()
+
+    const styleSelect = await screen.findByLabelText("Slides visual style")
+    fireEvent.change(styleSelect, {
+      target: { value: "builtin::timeline" }
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Slides" }))
+
+    await waitFor(() => {
+      expect(mockGenerateSlidesFromMedia).toHaveBeenCalledWith(
+        101,
+        expect.objectContaining({
+          visualStyleId: "timeline",
+          visualStyleScope: "builtin"
+        })
+      )
+    })
   })
 
   it("shows dynamic ETA text while generation is running", async () => {
@@ -641,6 +690,59 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     )
 
     expect(container.querySelector("[data-testid='studio-options-accordion']")).toBeTruthy()
+  })
+
+  it("disables retrieval-oriented RAG controls when summary is the active output type", async () => {
+    renderExpandedStudioPane()
+
+    await waitFor(() => {
+      expect(mockGetChatModels).toHaveBeenCalled()
+    })
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Summary" }))
+
+    expect(
+      screen.getByText(
+        "Summary uses the workspace summary prompt and selected source content directly. Retrieval settings below do not apply."
+      )
+    ).toBeInTheDocument()
+
+    const searchModeLabel = screen.getByText("Search Mode")
+    const searchModeInput = searchModeLabel.parentElement?.querySelector(
+      "input[role='combobox']"
+    ) as HTMLInputElement | null
+    expect(searchModeInput).toBeTruthy()
+    if (!searchModeInput) {
+      throw new Error("Expected Search Mode combobox to be rendered")
+    }
+    expect(searchModeInput).toBeDisabled()
+
+    const enableGenerationRow = screen.getByText("Enable generation").closest("div")
+    const generationSwitch = enableGenerationRow?.querySelector(
+      "button[role='switch']"
+    ) as HTMLButtonElement | null
+    expect(generationSwitch).toBeTruthy()
+    expect(generationSwitch).toBeDisabled()
+
+    const enableCitationsRow = screen.getByText("Enable citations").closest("div")
+    const citationsSwitch = enableCitationsRow?.querySelector(
+      "button[role='switch']"
+    ) as HTMLButtonElement | null
+    expect(citationsSwitch).toBeTruthy()
+    expect(citationsSwitch).toBeDisabled()
+
+    const rerankingRow = screen.getByText("Enable reranking").closest("div")
+    const rerankingSwitch = rerankingRow?.querySelector(
+      "button[role='switch']"
+    ) as HTMLButtonElement | null
+    expect(rerankingSwitch).toBeTruthy()
+    expect(rerankingSwitch).toBeDisabled()
+
+    fireEvent.click(searchModeInput)
+    expect(mockSetRagSearchMode).not.toHaveBeenCalled()
+    expect(mockSetRagEnableGeneration).not.toHaveBeenCalled()
+    expect(mockSetRagEnableCitations).not.toHaveBeenCalled()
+    expect(mockSetRagAdvancedOptions).not.toHaveBeenCalled()
   })
 
   it("ensures icon-only action buttons include aria-labels", () => {

@@ -16,6 +16,9 @@ from tldw_Server_API.app.core.MCP_unified.external_servers.config_schema import 
 from tldw_Server_API.app.core.MCP_unified.external_servers.transports.websocket_adapter import (
     WebSocketExternalMCPAdapter,
 )
+from tldw_Server_API.app.core.MCP_unified.external_servers.transports.base import (
+    BrokeredExternalCredential,
+)
 
 
 class _FakeWebSocket:
@@ -242,5 +245,112 @@ async def test_websocket_adapter_correlates_out_of_order_responses() -> None:
         assert tools[0].name == "docs.search"
         assert call_result.is_error is False
         assert call_result.content == [{"type": "text", "text": "ok"}]
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_adapter_uses_ephemeral_runtime_headers_without_mutating_base_session() -> None:
+    cfg = _server_config()
+    base_ws = _FakeWebSocket()
+    runtime_ws = _FakeWebSocket()
+    base_ws.enqueue({"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "base"}}})
+    runtime_ws.enqueue({"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "runtime"}}})
+    seen_headers: list[dict[str, str]] = []
+    connect_count = 0
+
+    async def _connector(*, url: str, subprotocols: list[str], headers: dict[str, str], connect_timeout: float):
+        nonlocal connect_count
+        del url, subprotocols, connect_timeout
+        seen_headers.append(dict(headers))
+        connect_count += 1
+        if connect_count == 1:
+            return base_ws
+        return runtime_ws
+
+    adapter = WebSocketExternalMCPAdapter(cfg, ws_connector=_connector)
+    try:
+        await adapter.connect()
+
+        call_task = asyncio.create_task(
+            adapter.call_tool(
+                "docs.search",
+                {"q": "runtime"},
+                runtime_auth=BrokeredExternalCredential(
+                    headers={"Authorization": "Bearer ephemeral-token"},
+                ),
+            )
+        )
+        await _wait_for_sent(runtime_ws, expected_count=2)
+        runtime_request_id = runtime_ws.sent_messages[1]["id"]
+        runtime_ws.enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": runtime_request_id,
+                "result": {"content": [{"type": "text", "text": "ok"}]},
+            }
+        )
+        result = await call_task
+
+        assert result.is_error is False
+        assert connect_count == 2
+        assert seen_headers[0] == {"x-client": "tldw"}
+        assert seen_headers[1]["x-client"] == "tldw"
+        assert seen_headers[1]["Authorization"] == "Bearer ephemeral-token"
+        assert cfg.websocket is not None
+        assert cfg.websocket.headers == {"x-client": "tldw"}
+        assert adapter._ws is base_ws
+        assert base_ws.sent_messages == [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "clientInfo": {"name": "tldw_external_federation", "version": "0.1.0"}}}]
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_websocket_adapter_prefers_runtime_authorization_header_over_static_auth(monkeypatch) -> None:
+    monkeypatch.setenv("EXTERNAL_DOCS_TOKEN", "static-token")
+    cfg = _server_config(
+        auth=ExternalAuthConfig(mode=ExternalAuthMode.BEARER_ENV, token_env="EXTERNAL_DOCS_TOKEN")
+    )
+    base_ws = _FakeWebSocket()
+    runtime_ws = _FakeWebSocket()
+    base_ws.enqueue({"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "base"}}})
+    runtime_ws.enqueue({"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "runtime"}}})
+    seen_headers: list[dict[str, str]] = []
+    connect_count = 0
+
+    async def _connector(*, url: str, subprotocols: list[str], headers: dict[str, str], connect_timeout: float):
+        nonlocal connect_count
+        del url, subprotocols, connect_timeout
+        connect_count += 1
+        seen_headers.append(dict(headers))
+        return base_ws if connect_count == 1 else runtime_ws
+
+    adapter = WebSocketExternalMCPAdapter(cfg, ws_connector=_connector)
+    try:
+        await adapter.connect()
+
+        call_task = asyncio.create_task(
+            adapter.call_tool(
+                "docs.search",
+                {"q": "runtime"},
+                runtime_auth=BrokeredExternalCredential(
+                    headers={"Authorization": "Bearer runtime-token"},
+                ),
+            )
+        )
+        await _wait_for_sent(runtime_ws, expected_count=2)
+        runtime_request_id = runtime_ws.sent_messages[1]["id"]
+        runtime_ws.enqueue(
+            {
+                "jsonrpc": "2.0",
+                "id": runtime_request_id,
+                "result": {"content": [{"type": "text", "text": "ok"}]},
+            }
+        )
+        result = await call_task
+
+        assert result.is_error is False
+        assert seen_headers[0]["Authorization"] == "Bearer static-token"
+        assert seen_headers[1]["Authorization"] == "Bearer runtime-token"
     finally:
         await adapter.close()

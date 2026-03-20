@@ -10,6 +10,7 @@ import "property-information"
 import React from "react"
 import { CodeBlock } from "./CodeBlock"
 import { TableBlock } from "./TableBlock"
+import { ManagedMarkdownImage } from "./ManagedMarkdownImage"
 import { preprocessLaTeX } from "@/utils/latex"
 import { useStorage } from "@plasmohq/storage/hook"
 import { highlightText } from "@/utils/text-highlight"
@@ -30,6 +31,37 @@ import {
 
 const RICH_TEXT_ELEMENT_STYLE_CLASS =
   "[&_em]:[color:var(--rt-italic-color)] [&_em]:[font-family:var(--rt-italic-font)] [&_strong]:[color:var(--rt-bold-color)] [&_strong]:[font-family:var(--rt-bold-font)] [&_blockquote]:[color:var(--rt-quote-text-color)] [&_blockquote]:[font-family:var(--rt-quote-font)] [&_blockquote]:[border-left-color:var(--rt-quote-border-color)] [&_blockquote]:[background-color:var(--rt-quote-bg-color)] [&_blockquote]:border-l-4 [&_blockquote]:rounded-md [&_blockquote]:px-3 [&_blockquote]:py-2"
+
+const MANAGED_ASSET_MARKER = "flashcard-asset://"
+const SAFE_URL_PROTOCOL = /^(https?:|mailto:|tel:|blob:)/i
+const DATA_IMAGE_URL_PROTOCOL = /^data:image\//i
+
+const isManagedAssetReference = (url: string): boolean =>
+  String(url || "").startsWith(MANAGED_ASSET_MARKER)
+
+const parseManagedAssetReference = (url: string): string | null => {
+  if (!isManagedAssetReference(url)) return null
+  const assetUuid = String(url || "").slice(MANAGED_ASSET_MARKER.length).trim()
+  return assetUuid || null
+}
+
+const transformMarkdownUrl = (url: string): string => {
+  const normalizedUrl = String(url || "").trim()
+  if (!normalizedUrl) return ""
+  if (isManagedAssetReference(normalizedUrl)) return normalizedUrl
+  if (DATA_IMAGE_URL_PROTOCOL.test(normalizedUrl)) return normalizedUrl
+  if (
+    normalizedUrl.startsWith("#") ||
+    normalizedUrl.startsWith("/") ||
+    normalizedUrl.startsWith("./") ||
+    normalizedUrl.startsWith("../")
+  ) {
+    return normalizedUrl
+  }
+  if (SAFE_URL_PROTOCOL.test(normalizedUrl)) return normalizedUrl
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(normalizedUrl)) return normalizedUrl
+  return ""
+}
 
 export function Markdown({
   message,
@@ -194,12 +226,18 @@ export function Markdown({
       resolvedAllowExternalImages
     )
   }, [processedMessage, resolvedAllowExternalImages, richTextMode])
+  const hasManagedAssetImages = React.useMemo(
+    () => processedMessage.includes(MANAGED_ASSET_MARKER),
+    [processedMessage]
+  )
 
-  if (richTextMode === "st_compat") {
+  if (richTextMode === "st_compat" && !hasManagedAssetImages) {
     return (
       <div
         className={`${resolvedClassName} ${RICH_TEXT_ELEMENT_STYLE_CLASS} [&_.st-inline-spoiler]:rounded-sm [&_.st-inline-spoiler]:bg-surface2 [&_.st-inline-spoiler]:px-1 [&_.st-inline-spoiler]:py-0.5 [&_.st-inline-spoiler]:font-medium [&_.st-spoiler]:my-2 [&_.st-spoiler]:rounded-md [&_.st-spoiler]:border [&_.st-spoiler]:border-border [&_.st-spoiler]:bg-surface2/70 [&_.st-spoiler]:px-3 [&_.st-spoiler]:py-2 [&_.st-spoiler_>summary]:cursor-pointer [&_.st-spoiler_>summary]:font-medium [&_.st-external-image-blocked]:inline-flex [&_.st-external-image-blocked]:items-center [&_.st-external-image-blocked]:gap-2 [&_.st-external-image-blocked]:rounded-md [&_.st-external-image-blocked]:border [&_.st-external-image-blocked]:border-border [&_.st-external-image-blocked]:bg-surface2 [&_.st-external-image-blocked]:px-2 [&_.st-external-image-blocked]:py-1 [&_.st-external-image-blocked]:text-[11px] [&_.st-external-image-blocked]:text-text-muted`}
         style={richTextStyleVars as React.CSSProperties}
+        role="region"
+        aria-label="Message content"
         dangerouslySetInnerHTML={{ __html: stCompatHtml }}
       />
     )
@@ -213,6 +251,7 @@ export function Markdown({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
+        urlTransform={transformMarkdownUrl}
         components={{
           pre({ children, ...props }) {
             const childArray = React.Children.toArray(children)
@@ -322,9 +361,13 @@ export function Markdown({
           },
           img({ src, alt }) {
             const resolvedSrc = typeof src === "string" ? src : ""
+            const managedAssetUuid = parseManagedAssetReference(resolvedSrc)
             const isExternal = /^https?:\/\//i.test(resolvedSrc) || /^\/\/[^/]/.test(resolvedSrc)
             const isAllowed = !isExternal || resolvedAllowExternalImages
             if (!resolvedSrc) return null
+            if (managedAssetUuid) {
+              return <ManagedMarkdownImage assetUuid={managedAssetUuid} alt={alt || ""} />
+            }
             if (!isAllowed) {
               return (
                 <span className="inline-flex items-center gap-2 rounded-md border border-border bg-surface2 px-2 py-1 text-[11px] text-text-muted">

@@ -167,7 +167,8 @@ Quick Chat `Browse Guides` now surfaces tutorials on the current route:
 ## Current P0/P1 Tutorial Coverage
 
 Design rationale and release scope reference:
-`Tutorial_Per_Page_Coverage.md` design note (`/chat → playground-basics`, `/workspace-playground → workspace-playground-basics`, `/media → media-basics`, and full P0/P1 map).
+[`../Design/Tutorial_Per_Page_Coverage.md`](../Design/Tutorial_Per_Page_Coverage.md)
+(`/chat → playground-basics`, `/workspace-playground → workspace-playground-basics`, `/media → media-basics`, and full P0/P1 map).
 
 | Route | Basics Tutorial ID |
 |------|---------|

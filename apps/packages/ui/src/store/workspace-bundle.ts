@@ -226,6 +226,17 @@ const readFileAsArrayBuffer = async (file: File): Promise<ArrayBuffer> => {
   throw new Error("invalid-zip-bundle")
 }
 
+/**
+ * Strip serverChatId from an imported chat session to prevent
+ * accidental reconnection to a server chat from a different scope.
+ */
+export const sanitizeImportedChatSession = <T extends Record<string, any>>(
+  session: T
+): Omit<T, "serverChatId"> & { serverChatId: null } => ({
+  ...session,
+  serverChatId: null,
+})
+
 export const parseWorkspaceImportFile = async (
   file: File
 ): Promise<WorkspaceExportBundle> => {

@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 from tldw_Server_API.app.core.Setup import install_manager
+from tldw_Server_API.app.core.Setup.install_schema import InstallPlan, TTSInstall
 
 
 @pytest.fixture(autouse=True)
@@ -90,3 +91,49 @@ def test_dependencies_trigger_pip_install(monkeypatch):
         pip_cmd = commands[0]
         assert pip_cmd[:4] == [install_manager.sys.executable, '-m', 'pip', 'install']
         assert any('faster-whisper' in part for part in pip_cmd)
+
+
+def test_install_plan_accepts_kitten_tts():
+    plan = InstallPlan(tts=[TTSInstall(engine='kitten_tts', variants=['nano'])])
+
+    assert plan.tts[0].engine == 'kitten_tts'
+    assert plan.tts[0].variants == ['nano']
+
+
+def test_kitten_tts_dependencies_trigger_pip_install(monkeypatch):
+
+    plan = {
+        'stt': [],
+        'tts': [{'engine': 'kitten_tts', 'variants': ['nano']}],
+        'embeddings': {'huggingface': [], 'custom': [], 'onnx': []},
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        monkeypatch.setenv('TLDW_INSTALL_STATE_DIR', tmpdir)
+        monkeypatch.delenv('TLDW_SETUP_SKIP_PIP', raising=False)
+        monkeypatch.setenv('TLDW_SETUP_SKIP_DOWNLOADS', '1')
+
+        commands = []
+
+        original_find_spec = importlib.util.find_spec
+
+        def fake_find_spec(name):
+            if name in {'phonemizer', 'espeakng_loader', 'huggingface_hub'}:
+                return None
+            return original_find_spec(name)
+
+        monkeypatch.setattr(importlib.util, 'find_spec', fake_find_spec)
+        monkeypatch.setattr(install_manager, '_install_kitten_tts', lambda _variants: None, raising=False)
+
+        def fake_subprocess(cmd, check=False, capture_output=True, text=True):  # noqa: ARG001
+            commands.append(cmd)
+            return
+
+        monkeypatch.setattr(install_manager, '_run_subprocess', fake_subprocess)
+
+        install_manager.execute_install_plan(plan)
+
+        assert commands, "Expected pip install commands for KittenTTS dependencies"
+        flattened = ' '.join(' '.join(cmd) for cmd in commands)
+        assert 'phonemizer-fork' in flattened
+        assert 'espeakng_loader' in flattened

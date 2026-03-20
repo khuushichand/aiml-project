@@ -43,7 +43,6 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Claims_Extraction import claims_service
 from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 router = APIRouter(prefix="/claims", tags=["claims"])
 
@@ -70,7 +69,7 @@ def list_all_claims(
     include_deleted: bool = Query(False),
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[dict[str, Any]]:
     """List claims across accessible media for the current user."""
     return claims_service.list_all_claims(
@@ -101,7 +100,7 @@ def list_claim_notifications(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[dict[str, Any]]:
     """List claim notifications visible to the caller."""
     return claims_service.list_claim_notifications(
@@ -135,7 +134,7 @@ def claim_notifications_digest(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Return aggregated counts and optional items for claim notifications."""
     return claims_service.claim_notifications_digest(
@@ -162,7 +161,7 @@ def claim_notifications_ack(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Mark claim notifications as delivered."""
     return claims_service.mark_claim_notifications_delivered(
@@ -179,7 +178,7 @@ def evaluate_watchlist_notifications(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Evaluate watchlist cluster subscriptions and emit notifications."""
     return claims_service.evaluate_watchlist_cluster_notifications(
@@ -215,7 +214,7 @@ def update_claims_settings(
 def get_claims_monitoring_config(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> ClaimsMonitoringSettingsResponse:
     """Return claims monitoring configuration (admin only)."""
     return claims_service.get_claims_monitoring_config(
@@ -230,7 +229,7 @@ def update_claims_monitoring_config(
     payload: ClaimsMonitoringSettingsUpdate,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> ClaimsMonitoringSettingsResponse:
     """Update claims monitoring configuration (optionally persisted)."""
     return claims_service.update_claims_monitoring_config(
@@ -246,7 +245,7 @@ def list_claims_alerts(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[ClaimsAlertConfigResponse]:
     """List claims alert configs for the current user (admin can override user_id)."""
     return claims_service.list_claims_alerts(
@@ -263,7 +262,7 @@ def create_claims_alert(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> ClaimsAlertConfigResponse:
     """Create a claims alert config."""
     return claims_service.create_claims_alert(
@@ -281,7 +280,7 @@ def update_claims_alert(
     payload: ClaimsAlertConfigUpdate,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> ClaimsAlertConfigResponse:
     """Update a claims alert config."""
     return claims_service.update_claims_alert(
@@ -298,7 +297,7 @@ def delete_claims_alert(
     config_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Delete a claims alert config."""
     return claims_service.delete_claims_alert(
@@ -316,7 +315,7 @@ def evaluate_claims_alerts(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Evaluate claims alert ratios and optionally dispatch notifications."""
     return claims_service.evaluate_claims_alerts(
@@ -350,7 +349,7 @@ def get_review_queue(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[dict[str, Any]]:
     """Return claims queued for review."""
     return claims_service.get_review_queue(
@@ -377,7 +376,7 @@ async def review_claim(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Update claim review status and notes."""
     return await claims_service.review_claim(
@@ -397,7 +396,7 @@ def get_claim_review_history(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[dict[str, Any]]:
     """Return review history for a claim."""
     return claims_service.get_claim_review_history(
@@ -416,7 +415,7 @@ def bulk_review_claims(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Bulk review update (admin only)."""
     return claims_service.bulk_review_claims(
@@ -435,7 +434,7 @@ def list_review_rules(
     active_only: bool = Query(False),
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[dict[str, Any]]:
     """List claim review rules."""
     return claims_service.list_review_rules(
@@ -453,7 +452,7 @@ def create_review_rule(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Create a claim review rule."""
     return claims_service.create_review_rule(
@@ -471,7 +470,7 @@ def update_review_rule(
     payload: ClaimReviewRuleUpdate,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Update a claim review rule."""
     return claims_service.update_review_rule(
@@ -488,7 +487,7 @@ def delete_review_rule(
     rule_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Delete a claim review rule."""
     return claims_service.delete_review_rule(
@@ -502,7 +501,7 @@ def delete_review_rule(
 @router.get("/review/analytics")
 def review_analytics(
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Return summary review analytics."""
     return claims_service.review_analytics(principal, db)
@@ -527,7 +526,7 @@ def list_review_metrics(
     offset: int = Query(0, ge=0, le=100000),
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Return daily review metrics grouped by extractor."""
     return claims_service.list_claims_review_metrics(
@@ -550,7 +549,7 @@ def claims_dashboard_analytics(
     window_sec: int = Query(3600, ge=60, le=604800),
     baseline_sec: int = Query(86400, ge=60, le=2592000),
     principal: AuthPrincipal = Depends(get_auth_principal),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Return dashboard-ready claims analytics."""
     return claims_service.claims_dashboard_analytics(
@@ -567,7 +566,7 @@ def export_claims_analytics(
     payload: ClaimsAnalyticsExportRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> Any:
     """Export claims analytics in JSON or CSV."""
     return claims_service.export_claims_analytics(
@@ -587,7 +586,7 @@ def list_claims_analytics_exports(
     workspace_id: Optional[str] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """List available claims analytics exports."""
     return claims_service.list_claims_analytics_exports(
@@ -607,7 +606,7 @@ def download_claims_analytics_export(
     export_id: str,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> Any:
     """Download a prepared claims analytics export."""
     result = claims_service.get_claims_analytics_export(
@@ -632,7 +631,7 @@ def list_claim_clusters(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[dict[str, Any]]:
     """List cluster summaries, optionally filtered by timeframe or keyword."""
     return claims_service.list_claim_clusters(
@@ -657,7 +656,7 @@ def rebuild_claim_clusters(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Rebuild claim clusters using stored embeddings."""
     return claims_service.rebuild_claim_clusters(
@@ -676,7 +675,7 @@ def get_claim_cluster(
     cluster_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Return a cluster summary."""
     return claims_service.get_claim_cluster(
@@ -693,7 +692,7 @@ def list_claim_cluster_links(
     direction: str = Query("both", pattern="^(both|inbound|outbound|parent|child)$"),
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[dict[str, Any]]:
     """List cluster relationships."""
     return claims_service.list_claim_cluster_links(
@@ -711,7 +710,7 @@ def create_claim_cluster_link(
     payload: ClaimsClusterLinkCreate,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Create a cluster relationship."""
     return claims_service.create_claim_cluster_link(
@@ -729,7 +728,7 @@ def delete_claim_cluster_link(
     child_cluster_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Delete a cluster relationship."""
     return claims_service.delete_claim_cluster_link(
@@ -748,7 +747,7 @@ def list_claim_cluster_members(
     offset: int = Query(0, ge=0, le=100000),
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> list[dict[str, Any]]:
     """Return cluster members."""
     return claims_service.list_claim_cluster_members(
@@ -768,7 +767,7 @@ def claim_cluster_timeline(
     offset: int = Query(0, ge=0, le=100000),
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Return aggregated cluster timeline."""
     return claims_service.claim_cluster_timeline(
@@ -788,7 +787,7 @@ def claim_cluster_evidence(
     offset: int = Query(0, ge=0, le=100000),
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Return aggregated evidence for a cluster."""
     return claims_service.claim_cluster_evidence(
@@ -809,7 +808,7 @@ def search_claims(
     group_by_cluster: bool = Query(False),
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Search claims using the FTS index."""
     return claims_service.search_claims(
@@ -833,7 +832,7 @@ def list_claims(
     absolute_links: bool = Query(False),
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> Any:
     """List claims for a media item."""
     return claims_service.list_claims_by_media(
@@ -855,7 +854,7 @@ def get_claim_item(
     include_deleted: bool = Query(False),
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Fetch a single claim by id."""
     return claims_service.get_claim_item(
@@ -874,7 +873,7 @@ async def update_claim_item(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Update a claim entry."""
     return await claims_service.update_claim_item(
@@ -892,7 +891,7 @@ def rebuild_claims(
     media_id: int,
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Enqueue a claims rebuild for a media item."""
     return claims_service.rebuild_claims(
@@ -909,7 +908,7 @@ def rebuild_all_media(
     policy: str = "missing",
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Enqueue rebuild tasks for all media based on policy."""
     return claims_service.rebuild_all_media(
@@ -925,7 +924,7 @@ def rebuild_all_media(
 def rebuild_claims_fts(
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """Rebuild the claims FTS table."""
     return claims_service.rebuild_claims_fts(
@@ -946,7 +945,7 @@ async def verify_claims_fva(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    db: Any = Depends(get_media_db_for_user),
 ) -> dict[str, Any]:
     """
     Verify claims using the FVA (Falsification-Verification Alignment) pipeline.

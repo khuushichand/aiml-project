@@ -1,6 +1,9 @@
 import type { JobOutputPrefs, JobScope, WatchlistFilter } from "@/types/watchlists"
 
-type Translator = (...args: any[]) => string
+type Translator = (...args: any[]) => unknown
+
+const toText = (value: unknown): string =>
+  typeof value === "string" ? value : String(value)
 
 export interface ScopeNameCatalog {
   sources: Record<number, string>
@@ -68,20 +71,20 @@ const extractFilterValueSummary = (filter: WatchlistFilter): string | null => {
 
 const filterTypeLabel = (type: WatchlistFilter["type"], t: Translator): string => {
   const map: Record<WatchlistFilter["type"], string> = {
-    keyword: t("watchlists:jobs.filters.type.keyword", "keyword"),
-    author: t("watchlists:jobs.filters.type.author", "author"),
-    date_range: t("watchlists:jobs.filters.type.dateRange", "date range"),
-    regex: t("watchlists:jobs.filters.type.regex", "regex"),
-    all: t("watchlists:jobs.filters.type.all", "all")
+    keyword: toText(t("watchlists:jobs.filters.type.keyword", "keyword")),
+    author: toText(t("watchlists:jobs.filters.type.author", "author")),
+    date_range: toText(t("watchlists:jobs.filters.type.dateRange", "date range")),
+    regex: toText(t("watchlists:jobs.filters.type.regex", "regex")),
+    all: toText(t("watchlists:jobs.filters.type.all", "all"))
   }
   return map[type]
 }
 
 const filterActionLabel = (action: WatchlistFilter["action"], t: Translator): string => {
   const map: Record<WatchlistFilter["action"], string> = {
-    include: t("watchlists:jobs.filters.action.include", "Include"),
-    exclude: t("watchlists:jobs.filters.action.exclude", "Exclude"),
-    flag: t("watchlists:jobs.filters.action.flag", "Flag")
+    include: toText(t("watchlists:jobs.filters.action.include", "Include")),
+    exclude: toText(t("watchlists:jobs.filters.action.exclude", "Exclude")),
+    flag: toText(t("watchlists:jobs.filters.action.flag", "Flag"))
   }
   return map[action]
 }
@@ -101,7 +104,7 @@ export const summarizeScopeCounts = (scope: JobScope, t: Translator): string => 
     parts.push(
       pluralize(
         scope.sources.length,
-        t("watchlists:jobs.scope.summary.feed", "feed")
+        toText(t("watchlists:jobs.scope.summary.feed", "feed"))
       )
     )
   }
@@ -109,16 +112,21 @@ export const summarizeScopeCounts = (scope: JobScope, t: Translator): string => 
     parts.push(
       pluralize(
         scope.groups.length,
-        t("watchlists:jobs.scope.summary.group", "group")
+        toText(t("watchlists:jobs.scope.summary.group", "group"))
       )
     )
   }
   if (scope.tags?.length) {
     parts.push(
-      pluralize(scope.tags.length, t("watchlists:jobs.scope.summary.tag", "tag"))
+      pluralize(
+        scope.tags.length,
+        toText(t("watchlists:jobs.scope.summary.tag", "tag"))
+      )
     )
   }
-  return parts.length > 0 ? parts.join(", ") : t("watchlists:jobs.noFeeds", "No feeds selected")
+  return parts.length > 0
+    ? parts.join(", ")
+    : toText(t("watchlists:jobs.noFeeds", "No feeds selected"))
 }
 
 export const summarizeOverflowList = (
@@ -140,19 +148,19 @@ export const buildScopeTooltipLines = (
 
   if (sourceNames.length > 0) {
     const summary = summarizeOverflowList(sourceNames, maxVisiblePerSection)
-    lines.push(`${t("watchlists:jobs.scope.sources", "Feeds")}: ${summary.text}`)
+    lines.push(`${toText(t("watchlists:jobs.scope.sources", "Feeds"))}: ${summary.text}`)
   }
   if (groupNames.length > 0) {
     const summary = summarizeOverflowList(groupNames, maxVisiblePerSection)
-    lines.push(`${t("watchlists:jobs.scope.groups", "Groups")}: ${summary.text}`)
+    lines.push(`${toText(t("watchlists:jobs.scope.groups", "Groups"))}: ${summary.text}`)
   }
   if (tagNames.length > 0) {
     const summary = summarizeOverflowList(tagNames, maxVisiblePerSection)
-    lines.push(`${t("watchlists:jobs.scope.tags", "Tags")}: ${summary.text}`)
+    lines.push(`${toText(t("watchlists:jobs.scope.tags", "Tags"))}: ${summary.text}`)
   }
 
   if (lines.length === 0) {
-    lines.push(t("watchlists:jobs.noFeeds", "No feeds selected"))
+    lines.push(toText(t("watchlists:jobs.noFeeds", "No feeds selected")))
   }
 
   return lines
@@ -212,14 +220,18 @@ export const summarizeOutputLinkage = (
 ): string => {
   const templateName = resolveTemplateName(outputPrefs)
   const templateSummary = templateName
-    ? t("watchlists:jobs.outputLinkage.templateNamed", "Template: {{name}}", {
-        name: templateName
-      })
-    : t("watchlists:jobs.outputLinkage.templateDefault", "Template: default")
+    ? toText(
+        t("watchlists:jobs.outputLinkage.templateNamed", "Template: {{name}}", {
+          name: templateName
+        })
+      )
+    : toText(
+        t("watchlists:jobs.outputLinkage.templateDefault", "Template: default")
+      )
 
   const audioSummary = outputPrefs?.generate_audio
-    ? t("watchlists:jobs.outputLinkage.audioEnabled", "Audio: enabled")
-    : t("watchlists:jobs.outputLinkage.audioDisabled", "Audio: text only")
+    ? toText(t("watchlists:jobs.outputLinkage.audioEnabled", "Audio: enabled"))
+    : toText(t("watchlists:jobs.outputLinkage.audioDisabled", "Audio: text only"))
 
   return `${templateSummary} • ${audioSummary}`
 }

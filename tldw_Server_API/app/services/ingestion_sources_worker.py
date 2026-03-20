@@ -3,16 +3,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-from typing import Any
+from typing import Any, Protocol
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
 from tldw_Server_API.app.core.Ingestion_Sources.archive_snapshot import (
     build_archive_snapshot_from_bytes_with_failures,
     load_archive_artifact_bytes,
     prune_archive_source_retention,
 )
 from tldw_Server_API.app.core.Ingestion_Sources.diffing import diff_snapshots
+from tldw_Server_API.app.core.Ingestion_Sources.git_repository import (
+    build_git_repository_snapshot_with_failures,
+)
 from tldw_Server_API.app.core.Ingestion_Sources.jobs import DOMAIN, ingestion_sources_queue
 from tldw_Server_API.app.core.Ingestion_Sources.local_directory import (
     build_local_directory_snapshot_with_failures,
@@ -41,6 +45,13 @@ except ImportError:  # pragma: no cover - optional
     get_db_pool = None  # type: ignore
 
 try:
+    from tldw_Server_API.app.core.External_Sources.connectors_service import (
+        get_account_tokens,
+    )
+except ImportError:  # pragma: no cover - optional
+    get_account_tokens = None  # type: ignore
+
+try:
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
         CharactersRAGDBError as NotesDatabaseError,
     )
@@ -48,7 +59,7 @@ except ImportError:  # pragma: no cover - optional
     NotesDatabaseError = None  # type: ignore
 
 try:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    from tldw_Server_API.app.core.DB_Management.media_db.errors import (
         DatabaseError as MediaDatabaseError,
     )
 except ImportError:  # pragma: no cover - optional
@@ -76,6 +87,13 @@ _SINK_ITEM_EXCEPTIONS = tuple(
     )
     if exc is not None
 ) + _NONCRITICAL_EXCEPTIONS
+
+
+class _AccountTokenPool(Protocol):
+    """Minimal pool interface required for linked-account token lookups."""
+
+    def transaction(self) -> Any:
+        ...
 
 
 def _previous_snapshot_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, str | None]]:
@@ -167,11 +185,9 @@ def _create_sink_db(*, sink_type: str, user_id: int):
             client_id=str(user_id),
         )
 
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-    return MediaDatabase(
-        db_path=str(DatabasePaths.get_media_db_path(user_id)),
+    return create_media_database(
         client_id=str(user_id),
+        db_path=str(DatabasePaths.get_media_db_path(user_id)),
     )
 
 
@@ -229,12 +245,49 @@ def _load_archive_snapshot_data(
     )
 
 
+def _load_git_repository_snapshot_data(
+    *,
+    config: dict[str, Any],
+    sink_type: str,
+    access_token: str | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    return build_git_repository_snapshot_with_failures(
+        config,
+        sink_type=sink_type,
+        access_token=access_token,
+    )
+
+
+async def _resolve_git_repository_access_token(
+    *,
+    pool: _AccountTokenPool,
+    source: dict[str, Any],
+    user_id: int,
+) -> str | None:
+    if get_account_tokens is None:
+        return None
+    config = source.get("config") or {}
+    mode = str(config.get("mode") or "").strip().lower()
+    if mode != "remote_github_repo":
+        return None
+    account_id = config.get("account_id")
+    if account_id in (None, ""):
+        return None
+    async with pool.transaction() as db:
+        tokens = await get_account_tokens(db, user_id=user_id, account_id=int(account_id))
+    if not tokens:
+        return None
+    token = str(tokens.get("access_token") or "").strip()
+    return token or None
+
+
 async def _load_current_source_snapshot(
     *,
     pool,
     source: dict[str, Any],
     source_id: int,
     sink_type: str,
+    user_id: int,
 ) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
@@ -247,6 +300,20 @@ async def _load_current_source_snapshot(
             _load_local_directory_snapshot_data,
             config=source.get("config") or {},
             sink_type=sink_type,
+        )
+        return current_items, extraction_failures, None, None
+
+    if source_type == "git_repository":
+        access_token = await _resolve_git_repository_access_token(
+            pool=pool,
+            source=source,
+            user_id=user_id,
+        )
+        current_items, extraction_failures = await asyncio.to_thread(
+            _load_git_repository_snapshot_data,
+            config=source.get("config") or {},
+            sink_type=sink_type,
+            access_token=access_token,
         )
         return current_items, extraction_failures, None, None
 
@@ -341,6 +408,7 @@ async def _apply_snapshot_changes(
     for event_type, raw_change in _iter_changes(diff_result):
         change = dict(raw_change)
         change["event_type"] = event_type
+        change["source_id"] = source_id
         relative_path = str(change.get("relative_path") or "").strip()
         existing_row = all_rows_map.get(relative_path)
         existing_binding = (
@@ -504,6 +572,7 @@ async def _process_sync_job(
             source=source,
             source_id=source_id,
             sink_type=sink_type,
+            user_id=user_id,
         )
         sink_db = _create_sink_db(sink_type=sink_type, user_id=user_id)
 
@@ -536,7 +605,7 @@ async def _process_sync_job(
                 snapshot = await create_source_snapshot(
                     db,
                     source_id=source_id,
-                    snapshot_kind="local_directory",
+                    snapshot_kind=str(source.get("source_type") or "local_directory"),
                     status="success",
                     summary=result_summary,
                 )

@@ -2,6 +2,19 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+const connectionState = {
+  online: true,
+  uxState: "connected_ok" as
+    | "connected_ok"
+    | "testing"
+    | "configuring_url"
+    | "configuring_auth"
+    | "error_auth"
+    | "error_unreachable"
+    | "unconfigured",
+  navigate: vi.fn()
+}
+
 const mockBlocklist = {
   rawText: "",
   setRawText: vi.fn(),
@@ -31,8 +44,23 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (_k: string, fb?: string) => fb || _k })
 }))
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>(
+    "react-router-dom"
+  )
+  return {
+    ...actual,
+    useNavigate: () => connectionState.navigate
+  }
+})
 vi.mock("@/hooks/useServerOnline", () => ({
-  useServerOnline: () => true
+  useServerOnline: () => connectionState.online
+}))
+vi.mock("@/hooks/useConnectionState", () => ({
+  useConnectionUxState: () => ({
+    uxState: connectionState.uxState,
+    hasCompletedFirstRun: true
+  })
 }))
 vi.mock("@/services/moderation", () => ({
   getModerationSettings: vi.fn(),
@@ -52,6 +80,8 @@ describe("ModerationPlaygroundShell", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.setItem("moderation-playground-onboarded", "true")
+    connectionState.online = true
+    connectionState.uxState = "connected_ok"
     mockBlocklist.isDirtyRaw = false
   })
 

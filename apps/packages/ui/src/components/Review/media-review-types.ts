@@ -195,7 +195,7 @@ export interface MediaReviewState {
   setCopiedIds: React.Dispatch<React.SetStateAction<Set<string>>>
 
   // Refs
-  searchInputRef: React.RefObject<HTMLInputElement | null>
+  searchInputRef: React.MutableRefObject<HTMLInputElement | null>
   listParentRef: React.RefObject<HTMLDivElement | null>
   viewerRef: React.RefObject<HTMLDivElement | null>
   viewerParentRef: React.RefObject<HTMLDivElement | null>

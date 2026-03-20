@@ -50,7 +50,6 @@ const renderHeader = () =>
       isDirty={false}
       onOpenLinkedConversation={() => undefined}
       onOpenSourceLink={() => undefined}
-      onNewNote={() => undefined}
       onChangeEditorMode={() => undefined}
       onCopy={() => undefined}
       onGenerateFlashcards={() => undefined}

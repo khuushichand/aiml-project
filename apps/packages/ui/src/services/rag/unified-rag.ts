@@ -62,7 +62,7 @@ export type RagSettings = {
   adaptive_cache: boolean
   keyword_filter: string
   include_media_ids: number[]
-  include_note_ids: number[]
+  include_note_ids: string[]
   enable_security_filter: boolean
   detect_pii: boolean
   redact_pii: boolean

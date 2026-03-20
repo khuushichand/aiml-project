@@ -28,6 +28,9 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
+    configure_sqlite_connection_async,
+)
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
@@ -890,11 +893,14 @@ async def migrate_to_shared_audit_db(
     async with aiosqlite.connect(shared_path) as shared_db:
         shared_db.row_factory = aiosqlite.Row
         try:
-            await shared_db.execute("PRAGMA journal_mode=WAL;")
-            await shared_db.execute("PRAGMA synchronous=NORMAL;")
-            await shared_db.execute("PRAGMA temp_store=MEMORY;")
-            await shared_db.execute("PRAGMA foreign_keys=ON;")
-            await shared_db.execute("PRAGMA busy_timeout=5000;")
+            await configure_sqlite_connection_async(
+                shared_db,
+                use_wal=True,
+                synchronous="NORMAL",
+                busy_timeout_ms=5000,
+                foreign_keys=True,
+                temp_store="MEMORY",
+            )
         except _AUDIT_DB_EXCEPTIONS:
             pass
         await _ensure_checkpoint_table(shared_db)

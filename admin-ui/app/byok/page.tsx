@@ -11,13 +11,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useToast } from '@/components/ui/toast';
 import { ApiError, api } from '@/lib/api-client';
-import type { AuditLog } from '@/types';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { KeyRound, RefreshCw, Plus, Trash2, Send, Server, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
+import type { AuditLog, ByokValidationRunItem } from '@/types';
 
 type SharedProviderKey = {
   scope_type: 'org' | 'team';
@@ -73,6 +73,8 @@ type OpenAIOAuthStatus = {
   expires_at?: string | null;
   scope?: string | null;
 };
+
+const VALIDATION_POLL_INTERVAL_MS = 2_000;
 
 const SOURCE_LABELS: Record<string, string> = {
   user: 'User',
@@ -151,6 +153,22 @@ const formatUsd = (value: number) => new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
 }).format(value);
 
+const sortValidationRuns = (runs: ByokValidationRunItem[]) =>
+  [...runs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+const isActiveValidationRun = (run: ByokValidationRunItem) =>
+  run.status === 'queued' || run.status === 'running';
+
+const formatValidationStatus = (status: ByokValidationRunItem['status']) =>
+  status.charAt(0).toUpperCase() + status.slice(1);
+
+const formatValidationCounts = (run: ByokValidationRunItem) => {
+  if (run.keys_checked === null || run.keys_checked === undefined) {
+    return 'Awaiting validation results.';
+  }
+  return `${formatCount(run.keys_checked)} checked • ${formatCount(run.valid_count ?? 0)} valid • ${formatCount(run.invalid_count ?? 0)} invalid • ${formatCount(run.error_count ?? 0)} errors`;
+};
+
 const PROVIDER_OPTIONS = [
   'openai',
   'anthropic',
@@ -175,17 +193,21 @@ export default function ByokDashboardPage() {
   const [resolutionBySource, setResolutionBySource] = useState<Record<string, number>>({});
   const [resolutionByProvider, setResolutionByProvider] = useState<Record<string, number>>({});
   const [missingByProvider, setMissingByProvider] = useState<Record<string, number>>({});
-  const [missingByOperation, setMissingByOperation] = useState<Record<string, number>>({});
   const [auditEntries, setAuditEntries] = useState<AuditLog[]>([]);
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
   const [byokUsageRows, setByokUsageRows] = useState<ByokUserUsageRow[]>([]);
   const [byokUsageLoading, setByokUsageLoading] = useState(false);
   const [byokUsageError, setByokUsageError] = useState<string | null>(null);
+  const [validationRuns, setValidationRuns] = useState<ByokValidationRunItem[]>([]);
+  const [validationLoading, setValidationLoading] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationCreating, setValidationCreating] = useState(false);
   const [openAIOAuthStatus, setOpenAIOAuthStatus] = useState<OpenAIOAuthStatus | null>(null);
   const [openAIOAuthLoading, setOpenAIOAuthLoading] = useState(false);
   const [openAIOAuthError, setOpenAIOAuthError] = useState<string | null>(null);
   const [openAIOAuthAction, setOpenAIOAuthAction] = useState<string | null>(null);
+  const validationToastRunIdRef = useRef<string | null>(null);
 
   // Shared Provider Keys
   const [sharedKeys, setSharedKeys] = useState<SharedProviderKey[]>([]);
@@ -223,18 +245,14 @@ export default function ByokDashboardPage() {
       });
 
       const missingProviderTotals: Record<string, number> = {};
-      const missingOperationTotals: Record<string, number> = {};
       missingSamples.forEach((sample) => {
         const provider = sample.labels.provider || 'unknown';
-        const operation = sample.labels.operation || 'unknown';
         missingProviderTotals[provider] = (missingProviderTotals[provider] || 0) + sample.value;
-        missingOperationTotals[operation] = (missingOperationTotals[operation] || 0) + sample.value;
       });
 
       setResolutionBySource(sourceTotals);
       setResolutionByProvider(providerTotals);
       setMissingByProvider(missingProviderTotals);
-      setMissingByOperation(missingOperationTotals);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load metrics.';
       setMetricsError(message);
@@ -400,6 +418,66 @@ export default function ByokDashboardPage() {
       setByokUsageLoading(false);
     }
   }, [selectedOrg?.id]);
+
+  const loadValidationRuns = useCallback(async () => {
+    setValidationLoading(true);
+    setValidationError(null);
+    try {
+      const response = await api.getByokValidationRuns({ limit: 10, offset: 0 });
+      setValidationRuns(sortValidationRuns(Array.isArray(response.items) ? response.items : []));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load BYOK validation history.';
+      setValidationError(message);
+    } finally {
+      setValidationLoading(false);
+    }
+  }, []);
+
+  const pollValidationRun = useCallback(async (runId: string) => {
+    try {
+      const run = await api.getByokValidationRun(runId);
+      setValidationRuns((current) => sortValidationRuns([
+        run,
+        ...current.filter((item) => item.id !== run.id),
+      ]));
+      if (!isActiveValidationRun(run) && validationToastRunIdRef.current === runId) {
+        validationToastRunIdRef.current = null;
+        if (run.status === 'complete') {
+          toastSuccess('Validation sweep complete', 'BYOK validation sweep finished successfully.');
+        } else {
+          showError('Validation sweep failed', run.error_message || 'BYOK validation sweep failed.');
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to refresh BYOK validation run.';
+      setValidationError(message);
+      if (validationToastRunIdRef.current === runId) {
+        validationToastRunIdRef.current = null;
+        showError('Validation sweep failed', message);
+      }
+    }
+  }, [showError, toastSuccess]);
+
+  const handleRunValidationSweep = useCallback(async () => {
+    setValidationCreating(true);
+    setValidationError(null);
+    try {
+      const run = await api.createByokValidationRun(
+        selectedOrg?.id ? { org_id: selectedOrg.id } : {}
+      );
+      validationToastRunIdRef.current = run.id;
+      setValidationRuns((current) => sortValidationRuns([
+        run,
+        ...current.filter((item) => item.id !== run.id),
+      ]));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start BYOK validation sweep.';
+      setValidationError(message);
+      showError('Validation sweep failed', message);
+    } finally {
+      setValidationCreating(false);
+    }
+  }, [selectedOrg?.id, showError]);
 
   const loadSharedKeys = useCallback(async () => {
     const requestId = sharedKeysRequestIdRef.current + 1;
@@ -619,8 +697,9 @@ export default function ByokDashboardPage() {
     loadAudit();
     loadSharedKeys();
     loadByokUsage();
+    loadValidationRuns();
     loadOpenAIOAuthStatus();
-  }, [loadMetrics, loadAudit, loadSharedKeys, loadByokUsage, loadOpenAIOAuthStatus]);
+  }, [loadMetrics, loadAudit, loadSharedKeys, loadByokUsage, loadValidationRuns, loadOpenAIOAuthStatus]);
 
   const summaryCards = useMemo(() => {
     const byokTotal = sumValues(
@@ -663,11 +742,15 @@ export default function ByokDashboardPage() {
       .slice(0, 5);
   }, [missingByProvider]);
 
-  const missingTopOperations = useMemo(() => {
-    return Object.entries(missingByOperation)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
-  }, [missingByOperation]);
+  const latestValidationRun = useMemo(
+    () => validationRuns[0] ?? null,
+    [validationRuns]
+  );
+
+  const activeValidationRun = useMemo(
+    () => validationRuns.find((run) => isActiveValidationRun(run)) ?? null,
+    [validationRuns]
+  );
 
   const openAIOAuthStatusLabel = useMemo(() => {
     if (!openAIOAuthStatus) return 'Not connected';
@@ -676,6 +759,18 @@ export default function ByokDashboardPage() {
     if (openAIOAuthStatus.connected) return 'Connected';
     return 'Not connected';
   }, [openAIOAuthStatus]);
+
+  useEffect(() => {
+    if (!activeValidationRun) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      void pollValidationRun(activeValidationRun.id);
+    }, VALIDATION_POLL_INTERVAL_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [activeValidationRun, pollValidationRun]);
 
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
@@ -688,7 +783,7 @@ export default function ByokDashboardPage() {
                 <h1 className="text-2xl font-semibold">BYOK Dashboards</h1>
               </div>
               <p className="text-sm text-muted-foreground">
-                Placeholder telemetry views for BYOK adoption, resolution mix, and key activity.
+                Operational dashboards for BYOK adoption, validation sweeps, and recent admin key activity.
               </p>
               {selectedOrg && (
                 <div className="mt-1 text-xs text-muted-foreground">
@@ -822,23 +917,68 @@ export default function ByokDashboardPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Key Validation</CardTitle>
-                <CardDescription>Recent validation results and errors.</CardDescription>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base">Key Validation</CardTitle>
+                    <CardDescription>Run an authoritative validation sweep and review recent validation history.</CardDescription>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={loadValidationRuns}
+                      disabled={validationLoading || validationCreating}
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      {validationLoading ? 'Refreshing…' : 'Refresh history'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleRunValidationSweep}
+                      disabled={validationLoading || validationCreating}
+                    >
+                      <Send className="mr-2 h-4 w-4" />
+                      {validationCreating ? 'Starting…' : 'Run validation sweep'}
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-muted-foreground">
-                {missingTopOperations.length === 0 ? (
-                  <div className="rounded-md border px-3 py-2">No validation events yet.</div>
-                ) : (
-                  missingTopOperations.map(([operation, count]) => (
-                    <div key={operation} className="flex items-center justify-between rounded-md border px-3 py-2">
-                      <span>{operation}</span>
-                      <span>{formatCount(count)}</span>
-                    </div>
-                  ))
+                {validationError && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{validationError}</AlertDescription>
+                  </Alert>
                 )}
-                <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
-                  Validation sweep control is hidden until backend batch validation support is available.
-                </div>
+                {latestValidationRun ? (
+                  <div className="rounded-md border px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-medium text-foreground">{latestValidationRun.scope_summary}</div>
+                      <Badge variant={latestValidationRun.status === 'complete' ? 'default' : 'outline'}>
+                        {formatValidationStatus(latestValidationRun.status)}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {formatValidationCounts(latestValidationRun)}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Requested by {latestValidationRun.requested_by_label || 'Unknown'} • {new Date(latestValidationRun.created_at).toLocaleString()}
+                    </div>
+                    {latestValidationRun.error_message && (
+                      <div className="mt-1 text-xs text-red-600">{latestValidationRun.error_message}</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-md border px-3 py-2">No validation runs yet.</div>
+                )}
+                {validationRuns.slice(1, 4).map((run) => (
+                  <div key={run.id} className="rounded-md border px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-foreground">{run.scope_summary}</span>
+                      <Badge variant="outline">{formatValidationStatus(run.status)}</Badge>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">{formatValidationCounts(run)}</div>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </div>
@@ -1092,8 +1232,8 @@ export default function ByokDashboardPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Key Activity (Placeholder)</CardTitle>
-              <CardDescription>Audit events matching BYOK-related actions (when emitted).</CardDescription>
+              <CardTitle className="text-base">BYOK Audit Activity</CardTitle>
+              <CardDescription>Recent BYOK-related audit events captured by the backend.</CardDescription>
             </CardHeader>
             <CardContent>
               {auditError && (

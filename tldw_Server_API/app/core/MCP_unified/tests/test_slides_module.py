@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import json
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ class FakeRow:
     marp_theme: str | None
     template_id: str | None
     settings: str | None
+    studio_data: str | None
     slides: str
     slides_text: str
     source_type: str | None
@@ -37,7 +39,7 @@ class FakeSlidesDB:
         self.rows: Dict[str, FakeRow] = {}
         self._counter = 0
 
-    def create_presentation(self, presentation_id, title, description, theme, marp_theme, template_id, settings, slides, slides_text, source_type, source_ref, source_query, custom_css):
+    def create_presentation(self, presentation_id, title, description, theme, marp_theme, template_id, settings, studio_data, slides, slides_text, source_type, source_ref, source_query, custom_css):
         self._counter += 1
         pid = presentation_id or f"pres-{self._counter}"
         row = FakeRow(
@@ -48,6 +50,7 @@ class FakeSlidesDB:
             marp_theme=marp_theme,
             template_id=template_id,
             settings=settings,
+            studio_data=studio_data,
             slides=slides,
             slides_text=slides_text,
             source_type=source_type,
@@ -109,6 +112,44 @@ class FakeSlidesDB:
 class FakeGenerator:
     def generate_from_text(self, source_text, title_hint=None, provider=None, model=None, api_key=None, temperature=0.7, max_tokens=4000, max_source_tokens=None, max_source_chars=None, enable_chunking=True, chunk_size_tokens=1000, summary_tokens=200):
         return {"title": title_hint or "Generated", "slides": [{"order": 0, "title": "Slide", "content": "Content"}]}
+
+
+def test_slides_module_get_media_content_uses_managed_media_database(monkeypatch, tmp_path):
+    mod = SlidesModule(ModuleConfig(name="slides"))
+    events = []
+
+    class _FakeDb:
+        def get_media_by_id(self, media_id):
+            events.append(("get_media_by_id", media_id))
+            return {"content": "slide source"}
+
+    @contextlib.contextmanager
+    def _fake_managed_media_database(client_id, **kwargs):
+        events.append(("open", client_id, kwargs))
+        yield _FakeDb()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.modules.implementations.slides_module.MediaDatabase",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("slides_module should not construct MediaDatabase directly")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.modules.implementations.slides_module.managed_media_database",
+        _fake_managed_media_database,
+        raising=False,
+    )
+
+    context = SimpleNamespace(db_paths={"media": str(tmp_path / "media.db")})
+
+    result = mod._get_media_content(context, 23)
+
+    assert result == "slide source"
+    assert events == [
+        ("open", "mcp_slides_gen", {"db_path": str(tmp_path / "media.db"), "initialize": False}),
+        ("get_media_by_id", 23),
+    ]
 
 
 @pytest.mark.asyncio

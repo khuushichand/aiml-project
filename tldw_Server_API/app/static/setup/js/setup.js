@@ -11,6 +11,13 @@
     'change-me-in-production',
   ]);
   const TEXTAREA_KEY_PATTERN = /(description|prompt|instructions|notes|template|path|url|uri)/i;
+  const DEFAULT_AUDIO_RESOURCE_PROFILE = 'balanced';
+  const AUDIO_RESOURCE_PROFILE_ORDER = ['light', 'balanced', 'performance'];
+  const AUDIO_RESOURCE_PROFILE_LABELS = {
+    light: 'Light',
+    balanced: 'Balanced',
+    performance: 'Performance',
+  };
   function humaniseKey(value) {
     if (!value) {
       return '';
@@ -159,6 +166,18 @@
         variants: [
           { id: 'onnx', label: 'ONNX runtime assets', default: true },
           { id: 'voices', label: 'Voice embeddings' },
+        ],
+      },
+      {
+        id: 'kitten_tts',
+        label: 'KittenTTS',
+        hint: 'Small English ONNX voices with first-use Hugging Face downloads. Requires espeak-ng plus phonemizer-fork/espeakng_loader.',
+        variantsLabel: 'Model variants',
+        variants: [
+          { id: 'nano', label: 'Nano 0.8', default: true },
+          { id: 'nano-int8', label: 'Nano 0.8 INT8' },
+          { id: 'micro', label: 'Micro 0.8' },
+          { id: 'mini', label: 'Mini 0.8' },
         ],
       },
       {
@@ -371,11 +390,12 @@
           title: 'Pick TTS backends you will run',
           description: 'Decide which voice provider(s) to enable so you avoid installing everything at once.',
           points: [
-            'Set default_tts_provider to the engine you plan to run (e.g. kokoro, openai, elevenlabs).',
-            'Update provider-specific defaults (voice, model) to match installed assets.',
+            'Set default_tts_provider to the engine you plan to run (e.g. kokoro, kitten_tts, openai, elevenlabs).',
+            'Update default_tts_voice and any provider-specific model settings to match the assets you installed.',
           ],
           focus: [
             { section: 'TTS-Settings', key: 'default_tts_provider' },
+            { section: 'TTS-Settings', key: 'default_tts_voice' },
             { section: 'TTS-Settings', key: 'default_openai_tts_model' },
             { section: 'TTS-Settings', key: 'default_kokoro_tts_model' },
           ],
@@ -447,8 +467,8 @@
       id: 'backend_config',
       type: 'module',
       optional: true,
-      title: 'Pick installable modules',
-      description: 'Select the engines and models to install once setup finishes. Leave everything unchecked to skip installation.',
+      title: 'Choose your audio bundle and installable modules',
+      description: 'Start with the recommended curated audio bundle, then open advanced mode only if you need individual engine control.',
     },
     {
       id: 'datastore',
@@ -543,8 +563,60 @@
       polling: false,
       redirectOnComplete: false,
     },
+    audio: createAudioSetupState(),
   };
   state.walkthroughCompleted = new Set();
+
+  function createAudioSetupState(overrides = {}) {
+    return {
+      loading: false,
+      loaded: false,
+      error: '',
+      machineProfile: null,
+      recommendations: [],
+      excluded: [],
+      catalog: {},
+      selectedBundleId: null,
+      selectedResourceProfile: DEFAULT_AUDIO_RESOURCE_PROFILE,
+      showAlternatives: false,
+      showAdvancedInstaller: false,
+      showReadiness: false,
+      provisioning: false,
+      verifying: false,
+      readinessLoading: false,
+      readinessLoaded: false,
+      readiness: null,
+      lastProvisionResult: null,
+      lastVerificationResult: null,
+      ...overrides,
+    };
+  }
+
+  function resetAudioSetupState(options = {}) {
+    const { preserveReadiness = false } = options;
+    const readiness = preserveReadiness ? state.audio?.readiness || null : null;
+    const readinessLoaded = preserveReadiness ? Boolean(state.audio?.readinessLoaded) : false;
+    const selectedBundleId = preserveReadiness
+      ? state.audio?.selectedBundleId || readiness?.selected_bundle_id || null
+      : null;
+    const selectedResourceProfile = preserveReadiness
+      ? state.audio?.selectedResourceProfile || readiness?.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE
+      : DEFAULT_AUDIO_RESOURCE_PROFILE;
+
+    state.audio = createAudioSetupState({
+      readiness,
+      readinessLoaded,
+      selectedBundleId,
+      selectedResourceProfile,
+      showReadiness: preserveReadiness && Boolean(readiness),
+    });
+  }
+
+  function ensureAudioSetupState() {
+    if (!state.audio) {
+      resetAudioSetupState();
+    }
+  }
 
   function resetInstallSelections() {
     state.install = {
@@ -799,6 +871,413 @@
     return plan;
   }
 
+  function isAudioBundleStepActive() {
+    return WIZARD_STEPS[state.wizard.currentStep]?.id === 'backend_config';
+  }
+
+  function audioBundleRequested() {
+    const selectedBackends = new Set(state.wizard.answers.backends || []);
+    const selectedFeatures = new Set(state.wizard.answers.features || []);
+    return selectedBackends.has('stt') || selectedBackends.has('tts') || selectedFeatures.has('audio');
+  }
+
+  function summarizeAudioPlanEntries(category, entries, variantKey) {
+    return (entries || []).map((entry) => {
+      const label = getInstallOptionLabel(category, entry.engine);
+      const variants = Array.isArray(entry[variantKey]) ? entry[variantKey] : [];
+      if (!variants.length) {
+        return label;
+      }
+      const variantLabels = variants.map((variantId) => getVariantLabel(category, entry.engine, variantId));
+      return `${label} [${variantLabels.join(', ')}]`;
+    });
+  }
+
+  function buildAudioCatalogMap(entries) {
+    return (entries || []).reduce((catalog, entry) => {
+      if (entry && entry.bundle_id) {
+        catalog[entry.bundle_id] = entry;
+      }
+      return catalog;
+    }, {});
+  }
+
+  function getAudioCatalogEntry(bundleId) {
+    ensureAudioSetupState();
+    return state.audio.catalog?.[bundleId] || null;
+  }
+
+  function getAudioBundleResourceProfiles(bundle) {
+    if (!bundle?.resource_profiles) {
+      return [];
+    }
+
+    return Object.values(bundle.resource_profiles).sort((left, right) => {
+      const leftOrder = AUDIO_RESOURCE_PROFILE_ORDER.indexOf(left.profile_id);
+      const rightOrder = AUDIO_RESOURCE_PROFILE_ORDER.indexOf(right.profile_id);
+      const leftRank = leftOrder === -1 ? Number.MAX_SAFE_INTEGER : leftOrder;
+      const rightRank = rightOrder === -1 ? Number.MAX_SAFE_INTEGER : rightOrder;
+      return leftRank - rightRank;
+    });
+  }
+
+  function getAudioProfileLabel(profileId, fallbackLabel = '') {
+    return AUDIO_RESOURCE_PROFILE_LABELS[profileId] || fallbackLabel || humaniseKey(profileId);
+  }
+
+  function getAudioRecommendation(bundleId, resourceProfile) {
+    ensureAudioSetupState();
+    if (!bundleId) {
+      return null;
+    }
+
+    if (resourceProfile) {
+      const exactMatch = state.audio.recommendations.find(
+        (entry) => entry.bundle_id === bundleId && entry.resource_profile === resourceProfile,
+      );
+      if (exactMatch) {
+        return exactMatch;
+      }
+    }
+
+    return state.audio.recommendations.find((entry) => entry.bundle_id === bundleId) || null;
+  }
+
+  function getRecommendedAudioRecommendation() {
+    ensureAudioSetupState();
+    return state.audio.recommendations[0] || null;
+  }
+
+  function getSelectedAudioRecommendation() {
+    ensureAudioSetupState();
+    return (
+      getAudioRecommendation(state.audio.selectedBundleId, state.audio.selectedResourceProfile)
+      || getRecommendedAudioRecommendation()
+      || null
+    );
+  }
+
+  function getSelectedAudioBundle() {
+    ensureAudioSetupState();
+    const recommendation = getSelectedAudioRecommendation();
+    const bundleId = state.audio.selectedBundleId || recommendation?.bundle_id;
+    if (!bundleId) {
+      return recommendation?.bundle || null;
+    }
+    return getAudioCatalogEntry(bundleId) || recommendation?.bundle || null;
+  }
+
+  function getSelectedAudioProfile() {
+    const recommendation = getSelectedAudioRecommendation();
+    const bundle = getSelectedAudioBundle();
+    const profileId = state.audio.selectedResourceProfile
+      || recommendation?.resource_profile
+      || bundle?.default_resource_profile
+      || DEFAULT_AUDIO_RESOURCE_PROFILE;
+    const bundleProfiles = bundle?.resource_profiles || {};
+    return (
+      bundleProfiles[profileId]
+      || recommendation?.profile
+      || bundleProfiles[bundle?.default_resource_profile]
+      || getAudioBundleResourceProfiles(bundle)[0]
+      || null
+    );
+  }
+
+  function syncSelectedAudioSelection() {
+    ensureAudioSetupState();
+
+    const readinessBundleId = state.audio.readiness?.selected_bundle_id || null;
+    const readinessProfile = state.audio.readiness?.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+    const exact = getAudioRecommendation(state.audio.selectedBundleId, state.audio.selectedResourceProfile);
+    if (exact) {
+      state.audio.selectedBundleId = exact.bundle_id;
+      state.audio.selectedResourceProfile = exact.resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      return;
+    }
+
+    const readinessExact = getAudioRecommendation(readinessBundleId, readinessProfile);
+    if (readinessExact) {
+      state.audio.selectedBundleId = readinessExact.bundle_id;
+      state.audio.selectedResourceProfile = readinessExact.resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      return;
+    }
+
+    const bundleFallback = getAudioRecommendation(state.audio.selectedBundleId);
+    if (bundleFallback) {
+      state.audio.selectedBundleId = bundleFallback.bundle_id;
+      state.audio.selectedResourceProfile = bundleFallback.resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      return;
+    }
+
+    const recommended = getRecommendedAudioRecommendation();
+    if (recommended) {
+      state.audio.selectedBundleId = recommended.bundle_id;
+      state.audio.selectedResourceProfile = recommended.resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      return;
+    }
+
+    if (!state.audio.selectedBundleId) {
+      state.audio.selectedResourceProfile = DEFAULT_AUDIO_RESOURCE_PROFILE;
+    }
+  }
+
+  function getSelectedAudioReadiness() {
+    ensureAudioSetupState();
+    const readiness = state.audio.readiness;
+    if (!readiness) {
+      return null;
+    }
+    if (!state.audio.selectedBundleId || !readiness.selected_bundle_id) {
+      return readiness;
+    }
+    if (readiness.selected_bundle_id !== state.audio.selectedBundleId) {
+      return null;
+    }
+    if (
+      state.audio.selectedResourceProfile
+      && readiness.selected_resource_profile
+      && readiness.selected_resource_profile !== state.audio.selectedResourceProfile
+    ) {
+      return null;
+    }
+    return readiness;
+  }
+
+  function getAudioPrerequisiteHint(step) {
+    if (!step) {
+      return '';
+    }
+
+    const platform = state.audio?.machineProfile?.platform;
+    if (platform === 'darwin' && step.macos_hint) {
+      return step.macos_hint;
+    }
+    if (platform === 'windows' && step.windows_hint) {
+      return step.windows_hint;
+    }
+    if (platform === 'linux' && step.linux_hint) {
+      return step.linux_hint;
+    }
+    return step.detail || step.macos_hint || step.linux_hint || step.windows_hint || '';
+  }
+
+  async function loadAudioRecommendations(options = {}) {
+    const { force = false } = options;
+    ensureAudioSetupState();
+
+    if (state.audio.loading) {
+      return state.audio.recommendations;
+    }
+    if (!force && state.audio.loaded) {
+      return state.audio.recommendations;
+    }
+
+    state.audio.loading = true;
+    state.audio.error = '';
+
+    try {
+      const response = await fetchJson(`${API_BASE}/audio/recommendations`);
+      state.audio.machineProfile = response.machine_profile || null;
+      state.audio.recommendations = Array.isArray(response.recommendations) ? response.recommendations : [];
+      state.audio.excluded = Array.isArray(response.excluded) ? response.excluded : [];
+      state.audio.catalog = buildAudioCatalogMap(response.catalog);
+      syncSelectedAudioSelection();
+      state.audio.loaded = true;
+      return state.audio.recommendations;
+    } catch (error) {
+      console.warn('Failed to load audio setup bundle recommendations', error);
+      state.audio.error = error.message || String(error);
+      state.audio.loaded = false;
+      return null;
+    } finally {
+      state.audio.loading = false;
+      if (isAudioBundleStepActive()) {
+        renderWizardStep();
+      }
+    }
+  }
+
+  async function loadAudioReadiness(options = {}) {
+    const { force = false, silent = false } = options;
+    ensureAudioSetupState();
+
+    if (state.audio.readinessLoading) {
+      return state.audio.readiness;
+    }
+    if (!force && state.audio.readinessLoaded) {
+      return state.audio.readiness;
+    }
+
+    state.audio.readinessLoading = true;
+
+    try {
+      const readiness = await fetchJson(`${API_BASE}/audio/readiness`);
+      state.audio.readiness = readiness;
+      state.audio.readinessLoaded = true;
+      if (readiness?.selected_bundle_id) {
+        state.audio.selectedBundleId = readiness.selected_bundle_id;
+        state.audio.selectedResourceProfile = readiness.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+      }
+      syncSelectedAudioSelection();
+      return readiness;
+    } catch (error) {
+      if (!silent) {
+        console.warn('Failed to load setup audio readiness', error);
+      }
+      return state.audio.readiness;
+    } finally {
+      state.audio.readinessLoading = false;
+      if (isAudioBundleStepActive()) {
+        renderWizardStep();
+      }
+    }
+  }
+
+  function setSelectedAudioBundle(bundleId, resourceProfile = null) {
+    ensureAudioSetupState();
+    state.audio.selectedBundleId = bundleId;
+    state.audio.selectedResourceProfile = resourceProfile
+      || getAudioRecommendation(bundleId)?.resource_profile
+      || getAudioCatalogEntry(bundleId)?.default_resource_profile
+      || DEFAULT_AUDIO_RESOURCE_PROFILE;
+    state.audio.showAlternatives = false;
+    if (isAudioBundleStepActive()) {
+      renderWizardStep();
+    }
+  }
+
+  function setSelectedAudioResourceProfile(resourceProfile) {
+    ensureAudioSetupState();
+    if (!state.audio.selectedBundleId) {
+      return;
+    }
+    state.audio.selectedResourceProfile = resourceProfile || DEFAULT_AUDIO_RESOURCE_PROFILE;
+    if (isAudioBundleStepActive()) {
+      renderWizardStep();
+    }
+  }
+
+  function toggleAudioAlternativeBundles() {
+    ensureAudioSetupState();
+    state.audio.showAlternatives = !state.audio.showAlternatives;
+    renderWizardStep();
+  }
+
+  function toggleAdvancedAudioInstaller() {
+    ensureAudioSetupState();
+    state.audio.showAdvancedInstaller = !state.audio.showAdvancedInstaller;
+    renderWizardStep();
+  }
+
+  function toggleAudioReadinessReport() {
+    ensureAudioSetupState();
+    state.audio.showReadiness = !state.audio.showReadiness;
+    renderWizardStep();
+  }
+
+  async function handleAudioBundleProvision(options = {}) {
+    const { safeRerun = false } = options;
+    ensureAudioSetupState();
+
+    if (!state.audio.selectedBundleId) {
+      setMessage('error', 'Select an audio bundle before provisioning.');
+      return;
+    }
+
+    state.audio.provisioning = true;
+    state.audio.showReadiness = true;
+    updateSaveState();
+    renderWizardStep();
+    setMessage(
+      'info',
+      safeRerun
+        ? 'Rechecking the selected audio bundle and skipping already satisfied steps where possible…'
+        : 'Provisioning the selected audio bundle. This may take a while if model downloads are needed.',
+    );
+
+    try {
+      const response = await fetchJson(`${API_BASE}/audio/provision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bundle_id: state.audio.selectedBundleId,
+          resource_profile: state.audio.selectedResourceProfile || DEFAULT_AUDIO_RESOURCE_PROFILE,
+          safe_rerun: safeRerun,
+        }),
+        timeoutMs: 120000,
+      });
+      state.audio.lastProvisionResult = response;
+      applyInstallStatusSnapshot({
+        status: response.status || 'completed',
+        steps: Array.isArray(response.steps) ? response.steps : [],
+        errors: Array.isArray(response.errors) ? response.errors : [],
+      });
+      await loadAudioReadiness({ force: true, silent: true });
+
+      if (response.status === 'failed') {
+        setMessage('error', 'Audio provisioning failed. Review the bundle steps and remediation report below.');
+      } else if (response.status === 'partial') {
+        setMessage('info', 'Audio provisioning finished with follow-up actions. Run verification after guided prerequisites are complete.');
+      } else {
+        setMessage('success', 'Audio bundle provisioning completed. Run verification to confirm readiness.');
+      }
+    } catch (error) {
+      console.error('Failed to provision audio bundle', error);
+      setMessage('error', `Unable to provision audio bundle: ${error.message || error}`);
+    } finally {
+      state.audio.provisioning = false;
+      updateSaveState();
+      renderWizardStep();
+    }
+  }
+
+  async function handleAudioBundleVerification() {
+    ensureAudioSetupState();
+
+    if (!state.audio.selectedBundleId) {
+      setMessage('error', 'Select an audio bundle before running verification.');
+      return;
+    }
+
+    state.audio.verifying = true;
+    state.audio.showReadiness = true;
+    updateSaveState();
+    renderWizardStep();
+    setMessage('info', 'Running audio verification against the selected bundle…');
+
+    try {
+      const response = await fetchJson(`${API_BASE}/audio/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bundle_id: state.audio.selectedBundleId,
+          resource_profile: state.audio.selectedResourceProfile || DEFAULT_AUDIO_RESOURCE_PROFILE,
+        }),
+        timeoutMs: 120000,
+      });
+      state.audio.lastVerificationResult = response;
+      await loadAudioReadiness({ force: true, silent: true });
+
+      if (response.status === 'ready') {
+        setMessage('success', 'Audio verification passed. Primary STT and TTS paths are ready.');
+      } else if (response.status === 'ready_with_warnings') {
+        setMessage('info', 'Audio verification passed with warnings. Review the readiness report for advisory items.');
+      } else if (response.status === 'partial') {
+        setMessage('info', 'Audio verification found a partial setup. Review the remediation items before relying on speech features.');
+      } else {
+        setMessage('error', 'Audio verification failed. Review the remediation items before continuing.');
+      }
+    } catch (error) {
+      console.error('Failed to verify audio bundle', error);
+      setMessage('error', `Unable to verify audio bundle: ${error.message || error}`);
+    } finally {
+      state.audio.verifying = false;
+      updateSaveState();
+      renderWizardStep();
+    }
+  }
+
   function describeInstallPlan(plan) {
     if (!plan) {
       return [];
@@ -977,8 +1456,12 @@
 
   function formatInstallStatusBadge(status) {
     switch (status) {
+      case 'ready':
       case 'completed':
         return { label: 'Completed', className: 'badge-success' };
+      case 'ready_with_warnings':
+      case 'partial':
+        return { label: 'Needs follow-up', className: 'badge-warning' };
       case 'failed':
         return { label: 'Failed', className: 'badge-failure' };
       case 'in_progress':
@@ -989,8 +1472,11 @@
   }
 
   function buildInstallStatusMessage(status, data, awaiting) {
-    if (status === 'completed') {
+    if (status === 'ready' || status === 'completed') {
       return 'All requested modules were installed successfully.';
+    }
+    if (status === 'ready_with_warnings' || status === 'partial') {
+      return 'Provisioning finished with guided prerequisites or verification follow-up still needed.';
     }
     if (status === 'failed') {
       const count = data?.errors?.length || 0;
@@ -1086,7 +1572,18 @@
       return 'Installer';
     }
 
-    const [category, identifier] = stepName.split(':');
+    const parts = stepName.split(':');
+    const [category, identifier, variant] = parts;
+    if (category === 'system') {
+      return `System prerequisite - ${humaniseKey(identifier)}`;
+    }
+    if (category === 'deps' && (identifier === 'stt' || identifier === 'tts')) {
+      const label = getInstallOptionLabel(identifier, variant) || variant;
+      return `${identifier.toUpperCase()} dependencies - ${label}`;
+    }
+    if (category === 'deps' && identifier === 'embeddings') {
+      return `Embeddings dependencies - ${humaniseKey(variant)}`;
+    }
     if (category === 'stt' || category === 'tts') {
       const label = getInstallOptionLabel(category, identifier) || identifier;
       return `${category.toUpperCase()} - ${label}`;
@@ -1112,6 +1609,8 @@
         return 'Completed';
       case 'failed':
         return 'Failed';
+      case 'guided_action_required':
+        return 'Needs action';
       case 'skipped':
         return 'Skipped';
       case 'in_progress':
@@ -1171,6 +1670,7 @@
       }
 
       renderStatus(status);
+      await loadAudioReadiness({ silent: true });
       initialiseWizard();
       await bootstrapInstallStatus();
     } catch (error) {
@@ -1432,6 +1932,26 @@
         highlights.push(`Supports: ${getWizardOptionLabel('features', feature)}`);
       }
     });
+    const selectedAudioBundle = getSelectedAudioBundle();
+    if (selectedAudioBundle && sectionName === 'STT-Settings' && Array.isArray(selectedAudioBundle.stt_plan)) {
+      const sttEngines = summarizeAudioPlanEntries('stt', selectedAudioBundle.stt_plan, 'models');
+      if (sttEngines.length) {
+        highlights.push(`Audio bundle default STT: ${sttEngines.join(', ')}`);
+      }
+    }
+    if (selectedAudioBundle && sectionName === 'TTS-Settings' && Array.isArray(selectedAudioBundle.tts_plan)) {
+      const ttsEngines = summarizeAudioPlanEntries('tts', selectedAudioBundle.tts_plan, 'variants');
+      if (ttsEngines.length) {
+        highlights.push(`Audio bundle default TTS: ${ttsEngines.join(', ')}`);
+      }
+    }
+    if (selectedAudioBundle && sectionName === 'Processing') {
+      const readiness = getSelectedAudioReadiness();
+      highlights.push(`Selected audio bundle: ${selectedAudioBundle.label}`);
+      if (readiness?.status) {
+        highlights.push(`Audio readiness: ${humaniseKey(readiness.status)}`);
+      }
+    }
     const installPlan = buildInstallPlan();
     if (installPlan?.stt?.length && sectionName === 'STT-Settings') {
       const engines = installPlan.stt.map((entry) => getInstallOptionLabel('stt', entry.engine));
@@ -1486,6 +2006,7 @@
     state.recommendedSections = new Set();
 
     resetInstallSelections();
+    resetAudioSetupState({ preserveReadiness: true });
 
     elements.wizardSection.hidden = false;
     elements.wizardSkip.hidden = false;
@@ -1578,6 +2099,7 @@
 
 function renderBackendConfigStep(step) {
   ensureInstallState();
+  ensureAudioSetupState();
 
   const fragment = document.createDocumentFragment();
   const title = document.createElement('h3');
@@ -1601,16 +2123,28 @@ function renderBackendConfigStep(step) {
   fragment.appendChild(container);
 
   const selectedBackends = new Set(state.wizard.answers.backends || []);
+  const shouldShowAudioBundles = audioBundleRequested();
   pruneInstallSelectionsForBackends(selectedBackends);
 
-  if (!selectedBackends.size) {
+  if (!selectedBackends.size && !shouldShowAudioBundles) {
     const empty = document.createElement('p');
     empty.className = 'install-empty';
     empty.textContent = 'Select a backend module on the previous step to see installation options.';
     container.appendChild(empty);
   } else {
+    if (shouldShowAudioBundles) {
+      container.appendChild(renderAudioBundleSection());
+    }
+
     ['stt', 'tts', 'embeddings'].forEach((category) => {
       if (!selectedBackends.has(category)) {
+        return;
+      }
+      if (
+        shouldShowAudioBundles
+        && (category === 'stt' || category === 'tts')
+        && !state.audio.showAdvancedInstaller
+      ) {
         return;
       }
       const catalog = INSTALL_TARGETS[category];
@@ -1632,7 +2166,13 @@ function renderBackendConfigStep(step) {
       if (catalog.description) {
         const blurb = document.createElement('p');
         blurb.className = 'install-section-description';
-        blurb.textContent = catalog.description;
+        blurb.textContent = (
+          shouldShowAudioBundles
+          && (category === 'stt' || category === 'tts')
+          && state.audio.showAdvancedInstaller
+        )
+          ? `${catalog.description} Advanced fallback only; the curated bundle above is the default path.`
+          : catalog.description;
         section.appendChild(blurb);
       }
 
@@ -1867,6 +2407,676 @@ function renderEmbeddingInstallOptions() {
   return wrapper;
 }
 
+function renderAudioBundleSection() {
+  ensureAudioSetupState();
+
+  if (!state.audio.loaded && !state.audio.loading) {
+    loadAudioRecommendations().catch(() => {});
+  }
+  if (!state.audio.readinessLoaded && !state.audio.readinessLoading) {
+    loadAudioReadiness({ silent: true }).catch(() => {});
+  }
+
+  const section = document.createElement('section');
+  section.className = 'install-section audio-bundle-stage';
+
+  const header = document.createElement('div');
+  header.className = 'install-section-header';
+
+  const heading = document.createElement('h4');
+  heading.textContent = 'Recommended audio bundle';
+  header.appendChild(heading);
+
+  const selectedReadiness = getSelectedAudioReadiness();
+  if (selectedReadiness?.status) {
+    const badge = document.createElement('span');
+    const statusMeta = formatAudioReadinessBadge(selectedReadiness.status);
+    badge.className = `status-badge ${statusMeta.className}`;
+    badge.textContent = statusMeta.label;
+    header.appendChild(badge);
+  }
+
+  section.appendChild(header);
+
+  const intro = document.createElement('p');
+  intro.className = 'install-section-description';
+  intro.textContent = 'Use the curated bundle path for first-run speech setup. Advanced engine picking remains available below as a fallback.';
+  section.appendChild(intro);
+
+  if (state.audio.machineProfile) {
+    section.appendChild(renderAudioMachineProfile(state.audio.machineProfile));
+  }
+
+  const selectedRecommendation = getSelectedAudioRecommendation();
+  const recommendedRecommendation = getRecommendedAudioRecommendation();
+  const selectedBundle = getSelectedAudioBundle();
+  const selectedProfile = getSelectedAudioProfile();
+
+  if (state.audio.loading && !selectedRecommendation) {
+    const note = document.createElement('p');
+    note.className = 'audio-stage-note';
+    note.textContent = 'Checking local hardware and ranking curated audio bundles…';
+    section.appendChild(note);
+  } else if (state.audio.error && !selectedRecommendation) {
+    const note = document.createElement('div');
+    note.className = 'status-notice';
+    note.textContent = `Unable to load audio bundle recommendations: ${state.audio.error}`;
+
+    const retryButton = document.createElement('button');
+    retryButton.type = 'button';
+    retryButton.className = 'btn subtle';
+    retryButton.textContent = 'Retry recommendations';
+    retryButton.addEventListener('click', () => {
+      loadAudioRecommendations({ force: true }).catch(() => {});
+    });
+    note.appendChild(document.createTextNode(' '));
+    note.appendChild(retryButton);
+    section.appendChild(note);
+  } else if (selectedRecommendation) {
+    const card = renderAudioBundleCard(selectedRecommendation, {
+      selected: true,
+      recommended: selectedRecommendation.selection_key === recommendedRecommendation?.selection_key,
+    });
+    section.appendChild(card);
+
+    if (selectedBundle) {
+      section.appendChild(renderAudioProfileSelector(selectedBundle, {
+        selectedProfileId: selectedProfile?.profile_id || state.audio.selectedResourceProfile,
+        recommendedProfileId: recommendedRecommendation?.bundle_id === selectedBundle.bundle_id
+          ? recommendedRecommendation?.resource_profile
+          : selectedBundle.default_resource_profile,
+      }));
+    }
+  } else {
+    const note = document.createElement('p');
+    note.className = 'audio-stage-note';
+    note.textContent = 'No compatible audio bundles were ranked for this machine yet. You can still use the advanced engine picker.';
+    section.appendChild(note);
+  }
+
+  if (state.audio.showAlternatives) {
+    const seenBundles = new Set();
+    const alternatives = state.audio.recommendations.filter((entry) => {
+      if (entry.bundle_id === selectedRecommendation?.bundle_id) {
+        return false;
+      }
+      if (seenBundles.has(entry.bundle_id)) {
+        return false;
+      }
+      seenBundles.add(entry.bundle_id);
+      return true;
+    });
+    if (alternatives.length) {
+      const altHeading = document.createElement('p');
+      altHeading.className = 'audio-stage-note';
+      altHeading.textContent = 'Alternative bundles';
+      section.appendChild(altHeading);
+
+      const grid = document.createElement('div');
+      grid.className = 'audio-bundle-alt-grid';
+      alternatives.forEach((entry) => {
+        grid.appendChild(renderAudioBundleCard(entry, {
+          compact: true,
+          recommended: entry.selection_key === recommendedRecommendation?.selection_key,
+        }));
+      });
+      section.appendChild(grid);
+    }
+  }
+
+  if (state.audio.excluded.length) {
+    const excluded = document.createElement('p');
+    excluded.className = 'audio-stage-note';
+    excluded.textContent = `Unavailable bundles: ${state.audio.excluded.map((entry) => entry.bundle?.label || entry.bundle_id).join(', ')}`;
+    section.appendChild(excluded);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'audio-bundle-actions';
+
+  const provisionButton = document.createElement('button');
+  provisionButton.type = 'button';
+  provisionButton.className = 'btn primary';
+  provisionButton.disabled = !selectedRecommendation || state.audio.provisioning || state.audio.verifying;
+  provisionButton.textContent = state.audio.provisioning
+    ? 'Provisioning bundle…'
+    : (selectedRecommendation?.bundle_id === recommendedRecommendation?.bundle_id
+      ? 'Provision recommended bundle'
+      : 'Provision selected bundle');
+  provisionButton.addEventListener('click', () => {
+    handleAudioBundleProvision().catch(() => {});
+  });
+  actions.appendChild(provisionButton);
+
+  const chooseButton = document.createElement('button');
+  chooseButton.type = 'button';
+  chooseButton.className = 'btn subtle';
+  chooseButton.disabled = state.audio.loading || state.audio.provisioning;
+  chooseButton.textContent = state.audio.showAlternatives ? 'Hide alternatives' : 'Choose different bundle';
+  chooseButton.addEventListener('click', toggleAudioAlternativeBundles);
+  actions.appendChild(chooseButton);
+
+  const verifyButton = document.createElement('button');
+  verifyButton.type = 'button';
+  verifyButton.className = 'btn subtle';
+  verifyButton.disabled = !selectedRecommendation || state.audio.verifying || state.audio.provisioning;
+  verifyButton.textContent = state.audio.verifying ? 'Running verification…' : 'Run verification';
+  verifyButton.addEventListener('click', () => {
+    handleAudioBundleVerification().catch(() => {});
+  });
+  actions.appendChild(verifyButton);
+
+  const rerunButton = document.createElement('button');
+  rerunButton.type = 'button';
+  rerunButton.className = 'btn subtle';
+  rerunButton.disabled = !selectedRecommendation || state.audio.provisioning || state.audio.verifying;
+  rerunButton.textContent = 'Safe rerun';
+  rerunButton.addEventListener('click', () => {
+    handleAudioBundleProvision({ safeRerun: true }).catch(() => {});
+  });
+  actions.appendChild(rerunButton);
+
+  const readinessButton = document.createElement('button');
+  readinessButton.type = 'button';
+  readinessButton.className = 'btn subtle';
+  readinessButton.textContent = state.audio.showReadiness ? 'Hide readiness report' : 'View readiness report';
+  readinessButton.addEventListener('click', toggleAudioReadinessReport);
+  actions.appendChild(readinessButton);
+
+  const advancedButton = document.createElement('button');
+  advancedButton.type = 'button';
+  advancedButton.className = 'btn subtle';
+  advancedButton.textContent = state.audio.showAdvancedInstaller
+    ? 'Hide advanced engine picker'
+    : 'Show advanced engine picker';
+  advancedButton.addEventListener('click', toggleAdvancedAudioInstaller);
+  actions.appendChild(advancedButton);
+
+  section.appendChild(actions);
+
+  if (state.audio.showAdvancedInstaller) {
+    const advancedNote = document.createElement('p');
+    advancedNote.className = 'audio-stage-note';
+    advancedNote.textContent = 'Advanced mode is open below. Use it only if the curated bundle does not fit this machine.';
+    section.appendChild(advancedNote);
+  }
+
+  if (state.audio.showReadiness) {
+    section.appendChild(renderAudioReadinessReport());
+  }
+
+  return section;
+}
+
+function renderAudioMachineProfile(profile) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'audio-profile-summary';
+
+  const title = document.createElement('p');
+  title.className = 'audio-profile-title';
+  title.textContent = 'Detected machine profile';
+  wrapper.appendChild(title);
+
+  const chips = document.createElement('div');
+  chips.className = 'audio-profile-chips';
+  chips.appendChild(createAudioProfileChip(`${humaniseKey(profile.platform)} / ${profile.arch}`));
+  chips.appendChild(createAudioProfileChip(profile.cuda_available ? 'CUDA detected' : 'CPU only'));
+  chips.appendChild(createAudioProfileChip(profile.apple_silicon ? 'Apple Silicon' : 'Non-Apple Silicon'));
+  chips.appendChild(createAudioProfileChip(profile.ffmpeg_available ? 'FFmpeg present' : 'FFmpeg needed'));
+  chips.appendChild(createAudioProfileChip(profile.espeak_available ? 'eSpeak present' : 'eSpeak needed'));
+  chips.appendChild(createAudioProfileChip(`Free disk ${profile.free_disk_gb} GB`));
+  chips.appendChild(createAudioProfileChip(
+    profile.network_available_for_downloads ? 'Downloads available' : 'Offline downloads disabled',
+  ));
+  wrapper.appendChild(chips);
+  return wrapper;
+}
+
+function createAudioProfileChip(label) {
+  const chip = document.createElement('span');
+  chip.className = 'audio-profile-chip';
+  chip.textContent = label;
+  return chip;
+}
+
+function renderAudioProfileSelector(bundle, options = {}) {
+  const {
+    selectedProfileId = bundle?.default_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE,
+    recommendedProfileId = bundle?.default_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE,
+  } = options;
+
+  const profiles = getAudioBundleResourceProfiles(bundle);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'audio-resource-profile-panel';
+
+  const header = document.createElement('div');
+  header.className = 'audio-resource-profile-header';
+
+  const heading = document.createElement('p');
+  heading.className = 'audio-resource-profile-title';
+  heading.textContent = 'Recommended profile';
+  header.appendChild(heading);
+
+  const note = document.createElement('span');
+  note.className = 'audio-resource-profile-note';
+  note.textContent = 'Choose the speech footprint that fits this machine.';
+  header.appendChild(note);
+  wrapper.appendChild(header);
+
+  const grid = document.createElement('div');
+  grid.className = 'audio-resource-profile-grid';
+
+  profiles.forEach((profile) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'audio-resource-profile-card';
+    if (profile.profile_id === selectedProfileId) {
+      card.classList.add('selected');
+    }
+    if (profile.profile_id === recommendedProfileId) {
+      card.classList.add('recommended');
+    }
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'audio-resource-profile-card-header';
+
+    const title = document.createElement('span');
+    title.className = 'audio-resource-profile-card-title';
+    title.textContent = getAudioProfileLabel(profile.profile_id, profile.label);
+    titleRow.appendChild(title);
+
+    if (profile.profile_id === recommendedProfileId) {
+      const badge = document.createElement('span');
+      badge.className = 'status-badge badge-success';
+      badge.textContent = 'Recommended';
+      titleRow.appendChild(badge);
+    }
+
+    card.appendChild(titleRow);
+
+    const description = document.createElement('p');
+    description.className = 'audio-resource-profile-card-description';
+    description.textContent = profile.description || 'Curated speech profile.';
+    card.appendChild(description);
+
+    const meta = document.createElement('div');
+    meta.className = 'audio-resource-profile-meta';
+    if (profile.resource_class) {
+      meta.appendChild(createAudioProfileChip(`Class ${humaniseKey(profile.resource_class)}`));
+    }
+    if (profile.estimated_disk_gb) {
+      meta.appendChild(createAudioProfileChip(`~${profile.estimated_disk_gb} GB`));
+    }
+    card.appendChild(meta);
+
+    card.addEventListener('click', () => {
+      setSelectedAudioResourceProfile(profile.profile_id);
+    });
+    grid.appendChild(card);
+  });
+
+  wrapper.appendChild(grid);
+  return wrapper;
+}
+
+function renderAudioBundleCard(recommendation, options = {}) {
+  const {
+    selected = false,
+    recommended = false,
+    compact = false,
+  } = options;
+  const bundle = getAudioCatalogEntry(recommendation.bundle_id) || recommendation.bundle || {};
+  const profile = (
+    recommendation.profile
+    || bundle.resource_profiles?.[recommendation.resource_profile]
+    || bundle.resource_profiles?.[bundle.default_resource_profile]
+    || null
+  );
+  const card = document.createElement('article');
+  card.className = 'audio-bundle-card';
+  if (selected) {
+    card.classList.add('selected');
+  }
+  if (recommended) {
+    card.classList.add('recommended');
+  }
+  if (compact) {
+    card.classList.add('compact');
+  }
+
+  const header = document.createElement('div');
+  header.className = 'audio-bundle-card-header';
+
+  const titleBlock = document.createElement('div');
+  const title = document.createElement('h5');
+  title.className = 'audio-bundle-card-title';
+  title.textContent = bundle.label || recommendation.label || recommendation.bundle_id;
+  titleBlock.appendChild(title);
+
+  const description = document.createElement('p');
+  description.className = 'audio-bundle-card-description';
+  description.textContent = bundle.description || 'Curated audio setup bundle.';
+  titleBlock.appendChild(description);
+
+  if (profile) {
+    const profileLine = document.createElement('p');
+    profileLine.className = 'audio-bundle-card-profile';
+    profileLine.textContent = `${getAudioProfileLabel(profile.profile_id, profile.label)} profile`;
+    titleBlock.appendChild(profileLine);
+  }
+  header.appendChild(titleBlock);
+
+  const badges = document.createElement('div');
+  badges.className = 'audio-bundle-card-badges';
+  if (recommended) {
+    const recommendedBadge = document.createElement('span');
+    recommendedBadge.className = 'status-badge badge-success';
+    recommendedBadge.textContent = 'Recommended';
+    badges.appendChild(recommendedBadge);
+  }
+  if (selected) {
+    const selectedBadge = document.createElement('span');
+    selectedBadge.className = 'status-badge badge-info';
+    selectedBadge.textContent = 'Selected';
+    badges.appendChild(selectedBadge);
+  }
+  const offlineBadge = document.createElement('span');
+  offlineBadge.className = `status-badge ${bundle.offline_runtime_supported ? 'badge-success' : 'badge-warning'}`;
+  offlineBadge.textContent = bundle.offline_runtime_supported ? 'Offline runtime ready' : 'Hosted fallback capable';
+  badges.appendChild(offlineBadge);
+  header.appendChild(badges);
+  card.appendChild(header);
+
+  if (Array.isArray(recommendation.reasons) && recommendation.reasons.length) {
+    const reasons = document.createElement('ul');
+    reasons.className = 'audio-bundle-reasons';
+    recommendation.reasons.forEach((reason) => {
+      const item = document.createElement('li');
+      item.textContent = reason;
+      reasons.appendChild(item);
+    });
+    card.appendChild(reasons);
+  }
+
+  const planSummary = buildAudioBundlePlanSummary(bundle, profile);
+  if (planSummary.length) {
+    const summary = document.createElement('div');
+    summary.className = 'audio-bundle-meta';
+    planSummary.forEach((entry) => {
+      const item = document.createElement('span');
+      item.className = 'audio-bundle-meta-item';
+      item.textContent = entry;
+      summary.appendChild(item);
+    });
+    card.appendChild(summary);
+  }
+
+  if (!compact) {
+    const automaticSteps = [
+      ...(bundle.system_prerequisites || []).filter((step) => step.automation_tier === 'automatic'),
+      ...(bundle.python_dependencies || []),
+      ...(bundle.model_assets || []),
+    ];
+    const guidedSteps = [
+      ...(bundle.system_prerequisites || []).filter((step) => step.automation_tier !== 'automatic'),
+    ];
+
+    appendAudioAutomationGroup(card, 'Automatic steps', automaticSteps);
+    appendAudioAutomationGroup(card, 'Guided prerequisites', guidedSteps);
+  }
+
+  if (compact) {
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'btn subtle';
+    action.textContent = 'Use this bundle';
+    action.addEventListener('click', () => {
+      setSelectedAudioBundle(recommendation.bundle_id, recommendation.resource_profile);
+    });
+    card.appendChild(action);
+  }
+
+  return card;
+}
+
+function buildAudioBundlePlanSummary(bundle, profile = null) {
+  if (!bundle) {
+    return [];
+  }
+
+  const selectedProfile = profile
+    || bundle.resource_profiles?.[bundle.default_resource_profile]
+    || null;
+  const summary = [];
+  const stt = summarizeAudioPlanEntries('stt', selectedProfile?.stt_plan || bundle.stt_plan, 'models');
+  const tts = summarizeAudioPlanEntries('tts', selectedProfile?.tts_plan || bundle.tts_plan, 'variants');
+  if (stt.length) {
+    summary.push(`STT: ${stt.join('; ')}`);
+  }
+  if (tts.length) {
+    summary.push(`TTS: ${tts.join('; ')}`);
+  }
+
+  const embeddingSummary = [];
+  const embeddingsPlan = selectedProfile?.embeddings_plan || bundle.embeddings_plan;
+  if (embeddingsPlan?.huggingface?.length) {
+    embeddingSummary.push(`HF ${embeddingsPlan.huggingface.join(', ')}`);
+  }
+  if (embeddingsPlan?.custom?.length) {
+    embeddingSummary.push(`Custom ${embeddingsPlan.custom.join(', ')}`);
+  }
+  if (embeddingSummary.length) {
+    summary.push(`Embeddings: ${embeddingSummary.join(' | ')}`);
+  }
+
+  if (selectedProfile?.estimated_disk_gb) {
+    summary.push(`Disk: ~${selectedProfile.estimated_disk_gb} GB`);
+  }
+  if (selectedProfile?.resource_class) {
+    summary.push(`Tier: ${humaniseKey(selectedProfile.resource_class)}`);
+  }
+
+  return summary;
+}
+
+function appendAudioAutomationGroup(container, label, steps) {
+  if (!Array.isArray(steps) || !steps.length) {
+    return;
+  }
+
+  const group = document.createElement('div');
+  group.className = 'audio-bundle-tier-group';
+
+  const heading = document.createElement('p');
+  heading.className = 'audio-bundle-tier-title';
+  heading.textContent = label;
+  group.appendChild(heading);
+
+  const list = document.createElement('ul');
+  list.className = 'audio-bundle-tier-list';
+
+  steps.forEach((step) => {
+    const item = document.createElement('li');
+    item.className = 'audio-bundle-tier-item';
+
+    const copy = document.createElement('div');
+    copy.className = 'audio-bundle-tier-copy';
+
+    const row = document.createElement('div');
+    row.className = 'audio-bundle-tier-row';
+
+    const title = document.createElement('span');
+    title.className = 'audio-bundle-tier-label';
+    title.textContent = step.label;
+    row.appendChild(title);
+
+    const badge = document.createElement('span');
+    const tierText = String(step.automation_tier || 'guided').replace(/_/g, ' ');
+    const tierClass = step.automation_tier === 'automatic'
+      ? 'badge-success'
+      : (step.automation_tier === 'manual_blocked' ? 'badge-alert' : 'badge-warning');
+    badge.className = `status-badge ${tierClass}`;
+    badge.textContent = humaniseKey(tierText);
+    row.appendChild(badge);
+
+    copy.appendChild(row);
+
+    const hintText = getAudioPrerequisiteHint(step);
+    if (hintText) {
+      const hint = document.createElement('p');
+      hint.className = 'audio-bundle-tier-hint';
+      hint.textContent = hintText;
+      copy.appendChild(hint);
+    }
+
+    item.appendChild(copy);
+    list.appendChild(item);
+  });
+
+  group.appendChild(list);
+  container.appendChild(group);
+}
+
+function renderAudioReadinessReport() {
+  const panel = document.createElement('div');
+  panel.className = 'audio-readiness-panel';
+
+  const header = document.createElement('div');
+  header.className = 'audio-readiness-header';
+
+  const heading = document.createElement('h5');
+  heading.textContent = 'Audio readiness report';
+  header.appendChild(heading);
+
+  const readiness = getSelectedAudioReadiness() || state.audio.readiness;
+  const statusMeta = formatAudioReadinessBadge(readiness?.status || 'not_started');
+  const badge = document.createElement('span');
+  badge.className = `status-badge ${statusMeta.className}`;
+  badge.textContent = statusMeta.label;
+  header.appendChild(badge);
+  panel.appendChild(header);
+
+  if (state.audio.readinessLoading && !readiness) {
+    const loading = document.createElement('p');
+    loading.className = 'audio-stage-note';
+    loading.textContent = 'Loading readiness report…';
+    panel.appendChild(loading);
+    return panel;
+  }
+
+  if (!readiness) {
+    const empty = document.createElement('p');
+    empty.className = 'audio-readiness-empty';
+    empty.textContent = 'No readiness snapshot recorded yet. Provision and verify a bundle to populate this report.';
+    panel.appendChild(empty);
+    return panel;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'audio-readiness-list';
+  appendAudioReadinessItem(list, 'Selected bundle', getAudioCatalogEntry(readiness.selected_bundle_id)?.label || readiness.selected_bundle_id || 'Not selected');
+  appendAudioReadinessItem(
+    list,
+    'Selected profile',
+    getAudioProfileLabel(readiness.selected_resource_profile || DEFAULT_AUDIO_RESOURCE_PROFILE),
+  );
+  appendAudioReadinessItem(list, 'Updated', formatFriendlyTimestamp(readiness.updated_at));
+  appendAudioReadinessItem(list, 'Last verification', formatFriendlyTimestamp(readiness.last_verification?.verified_at));
+  appendAudioReadinessItem(
+    list,
+    'FFmpeg',
+    readiness.machine_profile?.ffmpeg_available === undefined
+      ? 'Unknown'
+      : (readiness.machine_profile.ffmpeg_available ? 'Detected' : 'Missing'),
+  );
+  appendAudioReadinessItem(
+    list,
+    'eSpeak',
+    readiness.machine_profile?.espeak_available === undefined
+      ? 'Unknown'
+      : (readiness.machine_profile.espeak_available ? 'Detected' : 'Missing'),
+  );
+  appendAudioReadinessItem(
+    list,
+    'STT usable',
+    readiness.last_verification?.stt_health?.usable === undefined
+      ? 'Unknown'
+      : (readiness.last_verification.stt_health.usable ? 'Yes' : 'No'),
+  );
+  appendAudioReadinessItem(list, 'TTS status', readiness.last_verification?.tts_health?.status || 'Unknown');
+  panel.appendChild(list);
+
+  if (Array.isArray(readiness.remediation_items) && readiness.remediation_items.length) {
+    const issues = document.createElement('div');
+    issues.className = 'install-status-errors';
+
+    const headingLabel = document.createElement('strong');
+    headingLabel.textContent = 'Remediation items';
+    issues.appendChild(headingLabel);
+
+    const issueList = document.createElement('ul');
+    readiness.remediation_items.forEach((item) => {
+      const entry = document.createElement('li');
+      if (typeof item === 'string') {
+        entry.textContent = item;
+      } else {
+        const action = item.action ? ` (${humaniseKey(item.action)})` : '';
+        entry.textContent = `${item.message || item.code || 'Issue detected'}${action}`;
+      }
+      issueList.appendChild(entry);
+    });
+    issues.appendChild(issueList);
+    panel.appendChild(issues);
+  }
+
+  return panel;
+}
+
+function appendAudioReadinessItem(container, label, value) {
+  const row = document.createElement('div');
+  row.className = 'audio-readiness-item';
+
+  const title = document.createElement('span');
+  title.className = 'audio-readiness-label';
+  title.textContent = label;
+  row.appendChild(title);
+
+  const copy = document.createElement('span');
+  copy.className = 'audio-readiness-value';
+  copy.textContent = value || 'Not available';
+  row.appendChild(copy);
+
+  container.appendChild(row);
+}
+
+function formatAudioReadinessBadge(status) {
+  switch (status) {
+    case 'ready':
+      return { label: 'Ready', className: 'badge-success' };
+    case 'ready_with_warnings':
+      return { label: 'Ready with warnings', className: 'badge-warning' };
+    case 'partial':
+      return { label: 'Partial', className: 'badge-warning' };
+    case 'failed':
+      return { label: 'Failed', className: 'badge-failure' };
+    case 'provisioning':
+      return { label: 'Provisioning', className: 'badge-info' };
+    default:
+      return { label: 'Not started', className: 'badge-info' };
+  }
+}
+
+function formatFriendlyTimestamp(value) {
+  if (!value) {
+    return 'Not available';
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
 function renderWizardSummary() {
     const summaryContainer = document.createElement('div');
     summaryContainer.className = 'wizard-content-summary';
@@ -1885,6 +3095,9 @@ function renderWizardSummary() {
     }
     const recommended = recommendedNames.map((name) => escapeHtml(getSectionLabelByName(name)));
     const featureSelections = Array.from(state.wizard.answers.features || []).map((value) => escapeHtml(getWizardOptionLabel('features', value)));
+    const selectedAudioBundle = getSelectedAudioBundle();
+    const selectedAudioProfile = getSelectedAudioProfile();
+    const audioReadiness = getSelectedAudioReadiness();
     const installPlan = buildInstallPlan();
     const installSummaries = describeInstallPlan(installPlan);
     const datastoreChoice = state.wizard.answers.datastore ? escapeHtml(getWizardOptionLabel('datastore', state.wizard.answers.datastore)) : null;
@@ -1895,6 +3108,13 @@ function renderWizardSummary() {
     }
     if (featureSelections.length) {
       lines.push(`Selected capabilities: ${featureSelections.join(', ')}`);
+    }
+    if (selectedAudioBundle) {
+      const readinessLabel = audioReadiness?.status ? ` (${escapeHtml(humaniseKey(audioReadiness.status))})` : '';
+      const profileLabel = selectedAudioProfile
+        ? ` / ${escapeHtml(getAudioProfileLabel(selectedAudioProfile.profile_id, selectedAudioProfile.label))}`
+        : '';
+      lines.push(`Audio bundle: <strong>${escapeHtml(selectedAudioBundle.label)}</strong>${profileLabel}${readinessLabel}`);
     }
     if (installSummaries.length) {
       const installSummaryText = installSummaries.map((entry) => escapeHtml(entry)).join(' · ');
@@ -3044,13 +4264,15 @@ function renderWizardSummary() {
 
   function updateSaveState() {
     const hasChanges = hasPendingChanges();
+    const audioBusy = state.audio?.provisioning || state.audio?.verifying;
+    const actionBusy = state.saving || audioBusy;
 
     if (elements.saveButton) {
-      elements.saveButton.disabled = !hasChanges || state.saving;
+      elements.saveButton.disabled = !hasChanges || actionBusy;
     }
 
     if (elements.completeButton) {
-      elements.completeButton.disabled = hasChanges || state.saving;
+      elements.completeButton.disabled = hasChanges || actionBusy;
     }
   }
 

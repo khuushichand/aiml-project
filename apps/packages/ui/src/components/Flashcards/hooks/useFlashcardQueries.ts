@@ -3,14 +3,21 @@ import {
   listDecks,
   listFlashcards,
   createFlashcard,
+  createFlashcardsBulk,
+  updateFlashcardsBulk,
   createDeck,
+  updateDeck,
   updateFlashcard,
   deleteFlashcard,
   resetFlashcardScheduling,
   reviewFlashcard,
+  getNextReviewCard,
+  getFlashcardAssistant,
+  respondFlashcardAssistant,
   generateFlashcards,
   getFlashcard,
   importFlashcards,
+  previewStructuredQaImport,
   importFlashcardsJson,
   importFlashcardsApkg,
   getFlashcardsAnalyticsSummary,
@@ -18,13 +25,18 @@ import {
   exportFlashcardsFile,
   getFlashcardsImportLimits,
   type Deck,
+  type DeckUpdate,
   type Flashcard,
+  type StudyAssistantContextResponse,
+  type StudyAssistantRespondRequest,
+  type FlashcardBulkUpdateItem,
+  type FlashcardBulkUpdateResponse,
   type FlashcardCreate,
   type FlashcardUpdate
 } from "@/services/flashcards"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import { isTutorialResidueCard, pickFirstReviewableCard } from "../utils/review-card-hygiene"
+import { isTutorialResidueCard } from "../utils/review-card-hygiene"
 
 export type DueStatus = "new" | "learning" | "due" | "all"
 
@@ -48,6 +60,7 @@ const invalidateFlashcardsQueries = (qc: ReturnType<typeof useQueryClient>) =>
   })
 
 const getListTotal = (res: { total?: number | null; count?: number }) => (res.total ?? res.count ?? 0)
+const STUDY_ASSISTANT_ACTIONS = ["explain", "mnemonic", "follow_up", "fact_check", "freeform"] as const
 
 async function fetchDueCounts(deckId?: number | null): Promise<DueCounts> {
   const [due, newCards, learning] = await Promise.all([
@@ -85,41 +98,27 @@ export function useDecksQuery(options?: UseFlashcardQueriesOptions) {
  */
 export function useReviewQuery(deckId: number | null | undefined, options?: UseFlashcardQueriesOptions) {
   const { flashcardsEnabled } = useFlashcardsEnabled()
-  const REVIEW_SCAN_LIMIT = 25
 
   return useQuery({
     queryKey: ["flashcards:review:next", deckId],
     queryFn: async (): Promise<Flashcard | null> => {
-      const dueRes = await listFlashcards({
-        deck_id: deckId ?? undefined,
-        due_status: "due",
-        order_by: "due_at",
-        limit: REVIEW_SCAN_LIMIT,
-        offset: 0
-      })
-      const dueCard = pickFirstReviewableCard(dueRes.items)
-      if (dueCard) return dueCard
-
-      const newRes = await listFlashcards({
-        deck_id: deckId ?? undefined,
-        due_status: "new",
-        order_by: "created_at",
-        limit: REVIEW_SCAN_LIMIT,
-        offset: 0
-      })
-      const newCard = pickFirstReviewableCard(newRes.items)
-      if (newCard) return newCard
-
-      const learningRes = await listFlashcards({
-        deck_id: deckId ?? undefined,
-        due_status: "learning",
-        order_by: "due_at",
-        limit: REVIEW_SCAN_LIMIT,
-        offset: 0
-      })
-      return pickFirstReviewableCard(learningRes.items)
+      const response = await getNextReviewCard(deckId ?? undefined)
+      return response.card ?? null
     },
     enabled: options?.enabled ?? flashcardsEnabled
+  })
+}
+
+export function useFlashcardAssistantQuery(
+  cardUuid: string | null | undefined,
+  options?: UseFlashcardQueriesOptions
+) {
+  const { flashcardsEnabled } = useFlashcardsEnabled()
+
+  return useQuery({
+    queryKey: ["flashcards:assistant", cardUuid ?? null],
+    queryFn: ({ signal }) => getFlashcardAssistant(cardUuid!, { signal }),
+    enabled: (options?.enabled ?? flashcardsEnabled) && !!cardUuid
   })
 }
 
@@ -430,6 +429,24 @@ export function useCreateFlashcardMutation() {
 }
 
 /**
+ * Hook for creating multiple flashcards in a single batch.
+ */
+export function useCreateFlashcardsBulkMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:create:bulk"],
+    mutationFn: (payload: FlashcardCreate[]) => createFlashcardsBulk(payload),
+    onSuccess: () => {
+      invalidateFlashcardsQueries(qc)
+    },
+    onError: (error) => {
+      console.error("Failed to bulk create flashcards:", error)
+    }
+  })
+}
+
+/**
  * Hook for creating a deck
  */
 export function useCreateDeckMutation() {
@@ -437,13 +454,45 @@ export function useCreateDeckMutation() {
 
   return useMutation({
     mutationKey: ["flashcards:deck:create"],
-    mutationFn: (params: { name: string; description?: string }) =>
-      createDeck({ name: params.name.trim(), description: params.description?.trim() || undefined }),
+    mutationFn: (params: {
+      name: string
+      description?: string
+      scheduler_type?: Deck["scheduler_type"]
+      scheduler_settings?: Deck["scheduler_settings"]
+    }) =>
+      createDeck({
+        name: params.name.trim(),
+        description: params.description?.trim() || undefined,
+        scheduler_type: params.scheduler_type,
+        scheduler_settings: params.scheduler_settings
+      }),
     onSuccess: () => {
       invalidateFlashcardsQueries(qc)
     },
     onError: (error) => {
       console.error("Failed to create deck:", error)
+    }
+  })
+}
+
+/**
+ * Hook for updating a deck, including scheduler settings.
+ */
+export function useUpdateDeckMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:deck:update"],
+    mutationFn: (params: { deckId: number; update: DeckUpdate }) =>
+      updateDeck(params.deckId, params.update),
+    onSuccess: (deck) => {
+      qc.setQueryData<Deck[]>(["flashcards:decks"], (current) => {
+        if (!current) return current
+        return current.map((item) => (item.id === deck.id ? deck : item))
+      })
+    },
+    onError: (error) => {
+      console.error("Failed to update flashcard deck:", error)
     }
   })
 }
@@ -463,6 +512,19 @@ export function useUpdateFlashcardMutation() {
     },
     onError: (error) => {
       console.error("Failed to update flashcard:", error)
+    }
+  })
+}
+
+/**
+ * Hook for updating multiple flashcards in one request without automatic global invalidation.
+ */
+export function useUpdateFlashcardsBulkMutation() {
+  return useMutation<FlashcardBulkUpdateResponse, Error, FlashcardBulkUpdateItem[]>({
+    mutationKey: ["flashcards:update:bulk"],
+    mutationFn: (payload) => updateFlashcardsBulk(payload),
+    onError: (error) => {
+      console.error("Failed to bulk update flashcards:", error)
     }
   })
 }
@@ -530,6 +592,54 @@ export function useReviewFlashcardMutation() {
   })
 }
 
+export function useFlashcardAssistantRespondMutation() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationKey: ["flashcards:assistant:respond"],
+    mutationFn: (params: {
+      cardUuid: string
+      request: StudyAssistantRespondRequest
+      signal?: AbortSignal
+    }) => {
+      const cached = qc.getQueryData<StudyAssistantContextResponse>([
+        "flashcards:assistant",
+        params.cardUuid
+      ])
+      const request = params.request.expected_thread_version != null
+        ? params.request
+        : cached?.thread?.version != null
+          ? {
+              ...params.request,
+              expected_thread_version: cached.thread.version
+            }
+          : params.request
+
+      return respondFlashcardAssistant(
+        params.cardUuid,
+        request,
+        params.signal ? { signal: params.signal } : undefined
+      )
+    },
+    onSuccess: (response, variables) => {
+      qc.setQueryData<StudyAssistantContextResponse>(
+        ["flashcards:assistant", variables.cardUuid],
+        (current) => ({
+          thread: response.thread,
+          messages: current
+            ? [...current.messages, response.user_message, response.assistant_message]
+            : [response.user_message, response.assistant_message],
+          context_snapshot: response.context_snapshot,
+          available_actions: current?.available_actions ?? [...STUDY_ASSISTANT_ACTIONS]
+        })
+      )
+    },
+    onError: (error) => {
+      console.error("Failed to respond with flashcard assistant:", error)
+    }
+  })
+}
+
 /**
  * Hook for generating flashcards from free text via LLM adapter.
  */
@@ -579,6 +689,34 @@ export function useImportFlashcardsMutation() {
     },
     onError: (error) => {
       console.error("Failed to import flashcards:", error)
+    }
+  })
+}
+
+/**
+ * Hook for previewing deterministic structured Q&A imports without saving.
+ */
+export function usePreviewStructuredQaImportMutation() {
+  return useMutation({
+    mutationKey: ["flashcards:import:structured:preview"],
+    mutationFn: (params: {
+      content: string
+      maxLines?: number
+      maxLineLength?: number
+      maxFieldLength?: number
+    }) =>
+      previewStructuredQaImport(
+        {
+          content: params.content
+        },
+        {
+          max_lines: params.maxLines,
+          max_line_length: params.maxLineLength,
+          max_field_length: params.maxFieldLength
+        }
+      ),
+    onError: (error) => {
+      console.error("Failed to preview structured Q&A import:", error)
     }
   })
 }

@@ -165,7 +165,7 @@ describe("WorldBooksManager attachment stage-2 toggle feedback", () => {
     }
 
     tldwClientMock.attachWorldBookToCharacter.mockImplementation(
-      async (characterId: number, worldBookId: number) => {
+      (async (characterId: number, worldBookId: number) => {
         const row = currentAttachmentsByBook[worldBookId] || []
         if (!row.some((character) => character.id === characterId)) {
           const character =
@@ -175,16 +175,16 @@ describe("WorldBooksManager attachment stage-2 toggle feedback", () => {
             }
           currentAttachmentsByBook[worldBookId] = [...row, character]
         }
-      }
+      }) as any
     )
 
     tldwClientMock.detachWorldBookFromCharacter.mockImplementation(
-      async (characterId: number, worldBookId: number) => {
+      (async (characterId: number, worldBookId: number) => {
         const row = currentAttachmentsByBook[worldBookId] || []
         currentAttachmentsByBook[worldBookId] = row.filter(
           (character) => character.id !== characterId
         )
-      }
+      }) as any
     )
 
     useQueryClientMock.mockReturnValue({

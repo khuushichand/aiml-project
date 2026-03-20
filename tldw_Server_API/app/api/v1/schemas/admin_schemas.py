@@ -9,13 +9,26 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, SecretStr, field_validator
 
 
 def _blank_string_to_none(value: Any) -> Any:
+    if isinstance(value, SecretStr):
+        value = value.get_secret_value()
     if isinstance(value, str) and not value.strip():
         return None
     return value
+
+
+def unwrap_optional_secret(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, SecretStr):
+        raw_value = value.get_secret_value()
+    else:
+        raw_value = str(value)
+    normalized = raw_value.strip()
+    return normalized or None
 
 #######################################################################################################################
 #
@@ -30,9 +43,10 @@ class UserUpdateRequest(BaseModel):
     is_locked: bool | None = None
     storage_quota_mb: int | None = Field(None, ge=100)
     reason: str | None = Field(default=None, min_length=8, max_length=500)
-    admin_password: str | None = Field(default=None, max_length=128)
+    admin_password: SecretStr | None = Field(default=None, max_length=128, repr=False)
+    admin_reauth_token: SecretStr | None = Field(default=None, max_length=4096, repr=False)
 
-    @field_validator("admin_password", mode="before")
+    @field_validator("admin_password", "admin_reauth_token", mode="before")
     @classmethod
     def normalize_blank_admin_password(cls, value: Any) -> Any:
         return _blank_string_to_none(value)
@@ -44,9 +58,10 @@ class AdminPrivilegedActionRequest(BaseModel):
     """Request payload for privileged admin actions."""
 
     reason: str = Field(..., min_length=8, max_length=500)
-    admin_password: str | None = Field(default=None, max_length=128)
+    admin_password: SecretStr | None = Field(default=None, max_length=128, repr=False)
+    admin_reauth_token: SecretStr | None = Field(default=None, max_length=4096, repr=False)
 
-    @field_validator("admin_password", mode="before")
+    @field_validator("admin_password", "admin_reauth_token", mode="before")
     @classmethod
     def normalize_blank_admin_password(cls, value: Any) -> Any:
         return _blank_string_to_none(value)
@@ -561,6 +576,91 @@ class BackupRestoreResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MaintenanceRotationRunItem(BaseModel):
+    """Authoritative maintenance rotation run record."""
+
+    id: str
+    mode: Literal["dry_run", "execute"]
+    status: Literal["queued", "running", "complete", "failed"]
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    fields_json: str
+    limit: int | None = Field(default=None, ge=1, le=100000)
+    affected_count: int | None = None
+    requested_by_user_id: int | None = None
+    requested_by_label: str | None = None
+    confirmation_recorded: bool = False
+    job_id: str | None = None
+    scope_summary: str
+    key_source: str
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceRotationRunListResponse(BaseModel):
+    """Response for maintenance rotation run listing."""
+
+    items: list[MaintenanceRotationRunItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceRotationRunCreateRequest(BaseModel):
+    """Request to create an authoritative maintenance rotation run."""
+
+    mode: Literal["dry_run", "execute"]
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    fields: list[str] = Field(default_factory=lambda: ["payload", "result"])
+    limit: int = Field(default=1000, ge=1, le=100000)
+    confirmed: bool = False
+
+    @field_validator("domain", "queue", "job_type", mode="before")
+    @classmethod
+    def normalize_optional_scope_text(cls, value: Any) -> Any:
+        return _blank_string_to_none(value)
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def normalize_fields(cls, value: Any) -> Any:
+        if value is None:
+            return ["payload", "result"]
+        if not isinstance(value, list):
+            raise ValueError("fields must be a list")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("fields must contain strings")
+            item = entry.strip().lower()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        if not normalized:
+            raise ValueError("fields must contain at least one value")
+        return normalized
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceRotationRunCreateResponse(BaseModel):
+    """Response for maintenance rotation run creation."""
+
+    item: MaintenanceRotationRunItem
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RetentionPolicy(BaseModel):
     """Retention policy descriptor."""
     key: str
@@ -580,6 +680,39 @@ class RetentionPoliciesResponse(BaseModel):
 class RetentionPolicyUpdateRequest(BaseModel):
     """Request to update a retention policy."""
     days: int = Field(..., ge=1, le=3650)
+    preview_signature: str | None = Field(default=None, min_length=1, max_length=2048)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewRequest(BaseModel):
+    """Request to preview the impact of a retention policy change."""
+
+    current_days: int = Field(..., ge=1, le=3650)
+    days: int = Field(..., ge=1, le=3650)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewCounts(BaseModel):
+    """Authoritative count summary for a retention policy preview."""
+
+    audit_log_entries: NonNegativeInt = 0
+    job_records: NonNegativeInt = 0
+    backup_files: NonNegativeInt = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyPreviewResponse(BaseModel):
+    """Response for an authoritative retention policy preview."""
+
+    key: str
+    current_days: int = Field(..., ge=1, le=3650)
+    new_days: int = Field(..., ge=1, le=3650)
+    counts: RetentionPolicyPreviewCounts
+    preview_signature: str = Field(..., min_length=1, max_length=2048)
+    notes: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1007,6 +1140,15 @@ class IncidentEvent(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class IncidentActionItem(BaseModel):
+    """Structured incident action item."""
+    id: str
+    text: str
+    done: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class IncidentItem(BaseModel):
     """Incident summary with timeline."""
     id: str
@@ -1021,6 +1163,11 @@ class IncidentItem(BaseModel):
     created_by: str | None = None
     updated_by: str | None = None
     timeline: list[IncidentEvent] = []
+    assigned_to_user_id: int | None = None
+    assigned_to_label: str | None = None
+    root_cause: str | None = None
+    impact: str | None = None
+    action_items: list[IncidentActionItem] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1047,12 +1194,24 @@ class IncidentCreateRequest(BaseModel):
 
 
 class IncidentUpdateRequest(BaseModel):
-    """Request to update an incident."""
+    """Request to update an incident.
+
+    Partial-update contract for workflow fields:
+    - omitted means unchanged
+    - explicit ``null`` means clear
+
+    Callers must preserve that distinction via ``model_fields_set`` or
+    ``model_dump(exclude_unset=True)`` when invoking the service layer.
+    """
     title: str | None = None
     status: Literal["open", "investigating", "mitigating", "resolved"] | None = None
     severity: Literal["low", "medium", "high", "critical"] | None = None
     summary: str | None = None
     tags: list[str] | None = None
+    assigned_to_user_id: int | None = None
+    root_cause: str | None = None
+    impact: str | None = None
+    action_items: list[IncidentActionItem] | None = None
     update_message: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

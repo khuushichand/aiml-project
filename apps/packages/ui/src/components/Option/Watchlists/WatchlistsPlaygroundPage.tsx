@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react"
-import { Alert, Button, Drawer, Empty, Modal, Select, Switch, Tabs, Tooltip } from "antd"
+import { Alert, Button, Drawer, Modal, Select, Switch, Tabs, Tooltip } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
 import {
@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { PageShell } from "@/components/Common/PageShell"
+import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { fetchWatchlistRuns, triggerWatchlistRun } from "@/services/watchlists"
 import { useWatchlistsStore } from "@/store/watchlists"
 import type { WatchlistRun } from "@/types/watchlists"
@@ -856,6 +857,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       }
     },
     onNewEntity: () => {
+      navigateToTab("sources")
       openSourceForm()
     },
     onRefresh: triggerRefresh,
@@ -1401,21 +1403,16 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
     }
   }, [activeTab, iaExperimentVariant])
 
-  if (!isOnline) {
-    return (
-      <PageShell className="py-6" maxWidthClassName="max-w-[1920px]">
-        <Empty
-          description={t(
-            "watchlists:offline",
-            "Server is offline. Please connect to use Watchlists."
-          )}
-        />
-      </PageShell>
-    )
-  }
-
   return (
-    <PageShell className="py-6" maxWidthClassName="max-w-[1920px]">
+    <WorkspaceConnectionGate
+      featureName={t("watchlists:title", "Watchlists")}
+      setupDescription={t(
+        "watchlists:setupRequired",
+        "Watchlists depends on your connected tldw server to monitor feeds, run scheduled jobs, and save outputs."
+      )}
+      maxWidthClassName="max-w-[1920px]"
+    >
+      <PageShell className="py-6" maxWidthClassName="max-w-[1920px]">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-text">
           {t("watchlists:title", "Watchlists")}
@@ -1780,6 +1777,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           ))}
         </div>
       </Modal>
-    </PageShell>
+      </PageShell>
+    </WorkspaceConnectionGate>
   )
 }

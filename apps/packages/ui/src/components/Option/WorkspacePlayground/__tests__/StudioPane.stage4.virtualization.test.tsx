@@ -153,6 +153,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     ragSearch: vi.fn(),
     synthesizeSpeech: vi.fn(),
     generateSlidesFromMedia: vi.fn(),
+    listVisualStyles: vi.fn().mockResolvedValue([]),
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }
@@ -276,7 +277,7 @@ describe("StudioPane Stage 4 outputs virtualization", () => {
       expect(screen.getByText("Artifact 30")).toBeInTheDocument()
     })
 
-    const row = screen.getByText("Artifact 30").closest("div.group")
+    const row = screen.getByText("Artifact 30").closest("div.group") as HTMLElement | null
     expect(row).toBeTruthy()
     if (row) {
       expect(

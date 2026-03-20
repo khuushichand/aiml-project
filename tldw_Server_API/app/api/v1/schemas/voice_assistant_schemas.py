@@ -249,6 +249,7 @@ class WSWorkflowCompleteMessage(BaseModel):
 class VoiceCommandRequest(BaseModel):
     """Request for processing a voice command via REST."""
     text: str = Field(..., description="Transcribed text to process")
+    persona_id: Optional[str] = Field(default=None, description="Optional persona identifier for scoped commands")
     session_id: Optional[str] = Field(default=None, description="Session ID for context")
     include_tts: bool = Field(default=True, description="Whether to generate TTS audio")
     tts_provider: Optional[str] = Field(default=None, description="TTS provider override")
@@ -270,6 +271,8 @@ class VoiceCommandResponse(BaseModel):
 
 class VoiceCommandDefinition(BaseModel):
     """Definition for creating/updating a voice command."""
+    persona_id: Optional[str] = Field(default=None, description="Persona owner ID")
+    connection_id: Optional[str] = Field(default=None, description="Reusable connection reference")
     name: str = Field(..., description="Human-readable command name")
     phrases: list[str] = Field(..., min_length=1, description="Trigger phrases")
     action_type: VoiceActionType = Field(..., description="Action type")
@@ -287,6 +290,16 @@ class VoiceCommandInfo(BaseModel):
     """Information about a registered voice command."""
     id: str = Field(..., description="Command ID")
     user_id: int = Field(..., description="Owner user ID (0 for system)")
+    persona_id: Optional[str] = Field(default=None, description="Persona owner ID")
+    connection_id: Optional[str] = Field(default=None, description="Reusable connection reference")
+    connection_status: Optional[Literal["ok", "missing"]] = Field(
+        default=None,
+        description="Whether the referenced reusable connection currently resolves"
+    )
+    connection_name: Optional[str] = Field(
+        default=None,
+        description="Resolved connection name when available"
+    )
     name: str = Field(..., description="Command name")
     phrases: list[str] = Field(..., description="Trigger phrases")
     action_type: VoiceActionType = Field(..., description="Action type")

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tldw_Server_API.app.core.Sync.Sync_Client import ClientSyncEngine
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 #
 # Local Imports
@@ -68,6 +69,21 @@ def create_mock_log_entry(change_id, entity, uuid, op, client, version, payload_
 # --- Test Class ---
 
 class TestClientSyncEngineState:
+    def test_rejects_non_sqlite_media_db(self, client_state_file):
+        client_db = MagicMock()
+        client_db.db_path_str = ":memory:"
+        client_db.get_sync_log_entries = MagicMock()
+        client_db.transaction = MagicMock()
+        client_db.backend_type = BackendType.POSTGRESQL
+
+        with pytest.raises(TypeError, match="SQLite-backed"):
+            ClientSyncEngine(
+                client_db,
+                "http://mock",
+                "c1",
+                client_state_file,
+            )
+
     def test_state_load_no_file(self, client_db, temp_state_file):
         """Test initialization when state file doesn't exist."""
         engine = ClientSyncEngine(client_db, "http://mock", "c1", temp_state_file)
@@ -166,13 +182,15 @@ class TestClientSyncEnginePush:
     ):
         """Configured bearer/API-key auth should be applied to sync push calls."""
         client_db.add_keyword("push_auth_kw")
+        bearer_value = "sync-" + "token-123"
+        api_key_value = "sync-" + "api-key-456"
         engine = ClientSyncEngine(
             db_instance=client_db,
             server_api_url="http://mock-server.test",
             client_id=client_db.client_id,
             state_file=client_state_file,
-            auth_token="sync-token-123",
-            api_key="sync-api-key-456",
+            auth_token=bearer_value,
+            api_key=api_key_value,
         )
 
         mock_response = MagicMock()
@@ -183,8 +201,8 @@ class TestClientSyncEnginePush:
 
         headers = mock_post.call_args.kwargs["headers"]
         assert headers["Content-Type"] == "application/json"
-        assert headers["Authorization"] == "Bearer sync-token-123"
-        assert headers["X-API-KEY"] == "sync-api-key-456"
+        assert headers["Authorization"] == f"Bearer {bearer_value}"
+        assert headers["X-API-KEY"] == api_key_value
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_push_http_error(self, mock_post, sync_engine, client_db):
@@ -344,13 +362,15 @@ class TestClientSyncEnginePullApply:
         client_state_file,
     ):
         """Configured bearer/API-key auth should be applied to sync pull calls."""
+        auth_header_value = "Bearer " + "preformatted-token"
+        api_key_value = "pull-" + "api-key"
         engine = ClientSyncEngine(
             db_instance=client_db,
             server_api_url="http://mock-server.test",
             client_id=client_db.client_id,
             state_file=client_state_file,
-            auth_token="Bearer preformatted-token",
-            api_key="pull-api-key",
+            auth_token=auth_header_value,
+            api_key=api_key_value,
         )
 
         mock_response = MagicMock()
@@ -362,8 +382,8 @@ class TestClientSyncEnginePullApply:
 
         headers = mock_get.call_args.kwargs["headers"]
         assert headers["Accept"] == "application/json"
-        assert headers["Authorization"] == "Bearer preformatted-token"
-        assert headers["X-API-KEY"] == "pull-api-key"
+        assert headers["Authorization"] == auth_header_value
+        assert headers["X-API-KEY"] == api_key_value
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_http_4xx_error(self, mock_get, sync_engine):

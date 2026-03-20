@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib.util
+import inspect
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - setup provisioning intentionally invokes vetted command lists without a shell
 import sys
 import tempfile
 from collections.abc import Iterable
@@ -20,8 +22,19 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_health
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Setup import audio_profile_service
+from tldw_Server_API.app.core.Setup import audio_readiness_store
 from tldw_Server_API.app.core.Setup import setup_manager
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
+    AUDIO_BUNDLE_CATALOG_VERSION,
+    AudioBundleStep,
+    AutomationTier,
+    DEFAULT_AUDIO_RESOURCE_PROFILE,
+    build_audio_selection_key,
+    get_audio_bundle_catalog,
+)
 from tldw_Server_API.app.core.Setup.install_schema import DEFAULT_WHISPER_MODELS, InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
@@ -179,7 +192,7 @@ def _ensure_requirement(requirement: PipRequirement) -> None:
     # Prefer python -m pip when available; fall back to `uv pip` if pip isn't available
     def _pip_available() -> bool:
         try:
-            probe = subprocess.run(
+            probe = subprocess.run(  # nosec B603 - static interpreter/pip probe with fixed argv
                 [sys.executable, '-m', 'pip', '--version'],
                 check=False,
                 capture_output=True,
@@ -251,7 +264,7 @@ def _cuda_available() -> bool:
       1. Environment overrides:
          - TLDW_SETUP_FORCE_GPU=1 -> force GPU packages
          - TLDW_SETUP_FORCE_CPU=1 -> force CPU-only packages
-      2. Automatic detection via torch.cuda.is_available()
+      2. Conservative environment/tool detection (safe default: CPU)
     """
 
     def _truthy(value: str | None) -> bool:
@@ -265,12 +278,89 @@ def _cuda_available() -> bool:
     if _truthy(os.getenv("TLDW_SETUP_FORCE_GPU")):
         return True
 
-    try:
-        import torch
-
-        return bool(torch.cuda.is_available())
-    except Exception:
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
         return False
+
+    try:
+        probe = subprocess.run(  # nosec B603 - vetted command list, no shell
+            [nvidia_smi, "-L"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("CUDA probe via nvidia-smi failed", exc_info=True)
+        return False
+
+    if probe.returncode != 0:
+        logger.debug(
+            "CUDA probe via nvidia-smi returned non-zero exit code {}",
+            probe.returncode,
+        )
+        return False
+
+    stdout = (probe.stdout or "").strip()
+    if not stdout or "GPU" not in stdout:
+        logger.debug("CUDA probe via nvidia-smi did not report any GPUs")
+        return False
+    return True
+
+
+def _resolve_primary_stt_target(selected_profile: Any) -> tuple[str | None, str | None]:
+    primary_stt_engine = None
+    primary_stt_target = None
+    if selected_profile.stt_plan and isinstance(selected_profile.stt_plan[0], dict):
+        primary_stt_engine = selected_profile.stt_plan[0].get("engine")
+        primary_stt_target = ((selected_profile.stt_plan[0].get("models") or [None])[0]) or primary_stt_engine
+    return primary_stt_engine, primary_stt_target
+
+
+def _extract_tts_provider_details(tts_health: dict[str, Any] | None, provider_name: str | None) -> dict[str, Any]:
+    if not provider_name or not isinstance(tts_health, dict):
+        return {}
+
+    providers = tts_health.get("providers", {})
+    if not isinstance(providers, dict):
+        return {}
+
+    details = providers.get("details", {})
+    if isinstance(details, dict):
+        provider_details = details.get(provider_name)
+        if isinstance(provider_details, dict):
+            return provider_details
+
+    fallback_details = providers.get(provider_name)
+    if isinstance(fallback_details, dict):
+        return fallback_details
+    return {}
+
+
+def _tts_provider_usable(
+    provider_name: str | None,
+    provider_details: dict[str, Any],
+    tts_health: dict[str, Any] | None,
+) -> bool:
+    if not provider_name:
+        return False
+
+    status = str(provider_details.get("status") or provider_details.get("availability") or "").strip().lower()
+    if status in {"healthy", "enabled", "available", "ready", "ok"}:
+        return True
+    if status in {"failed", "disabled", "unavailable", "error", "unhealthy"}:
+        return False
+
+    if isinstance(provider_details.get("failed"), bool):
+        return not provider_details["failed"]
+    if isinstance(provider_details.get("initialized"), bool) and provider_details["initialized"]:
+        return True
+
+    if provider_name == "kokoro":
+        providers = (tts_health or {}).get("providers", {})
+        kokoro_info = providers.get("kokoro") if isinstance(providers, dict) else None
+        return isinstance(kokoro_info, dict)
+    return False
 
 class InstallationStatus:
     """Persist installation progress to a status file."""
@@ -364,6 +454,18 @@ def _record_latest_status(data: dict[str, Any]) -> None:
     _LATEST_STATUS_DATA = json.loads(json.dumps(data))
 
 
+def _persist_install_status_snapshot(data: dict[str, Any]) -> None:
+    """Persist an install status snapshot with the same shape used by InstallationStatus."""
+
+    path = _resolve_status_file()
+    if path:
+        try:
+            path.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        except Exception:  # noqa: BLE001
+            logger.warning('Failed to persist qualified setup install status to {}', path, exc_info=True)
+    _record_latest_status(data)
+
+
 # --- HTTPX network error detection -------------------------------------------
 def _is_httpx_network_error(exc: Exception) -> bool:
     """Return True if the exception is an httpx HTTP/network error.
@@ -428,6 +530,13 @@ def execute_install_plan(plan_payload: dict[str, Any]) -> None:
         logger.info("Install plan empty; nothing to install.")
         return
 
+    readiness = audio_readiness_store.get_audio_readiness_store()
+    readiness.update(
+        status='provisioning',
+        remediation_items=[],
+        last_verification=None,
+    )
+
     status = InstallationStatus(plan)
     errors: list[str] = []
 
@@ -442,8 +551,385 @@ def execute_install_plan(plan_payload: dict[str, Any]) -> None:
 
     if errors:
         status.fail('; '.join(errors))
+        readiness.update(
+            status='failed',
+            remediation_items=errors,
+        )
     else:
         status.complete()
+        readiness.update(
+            status='partial',
+            remediation_items=['Run audio verification to confirm readiness.'],
+        )
+    return json.loads(json.dumps(status.data))
+
+
+def build_install_plan_from_bundle(
+    bundle_id: str,
+    resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+) -> InstallPlan:
+    """Expand a curated bundle into the existing installer plan schema."""
+
+    bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    selected_profile = bundle.profile_by_id(resource_profile)
+    return InstallPlan.model_validate(
+        {
+            "stt": selected_profile.stt_plan,
+            "tts": selected_profile.tts_plan,
+            "embeddings": selected_profile.embeddings_plan,
+        }
+    )
+
+
+def _entry_suffix(entry: Any, attribute: str, default: str = "default") -> str:
+    values = getattr(entry, attribute, None) or []
+    normalized = [str(value).strip().replace(" ", "_") for value in values if str(value).strip()]
+    return "-".join(normalized) if normalized else default
+
+
+def _plan_step_names(
+    plan: InstallPlan,
+    *,
+    bundle_id: str,
+    resource_profile: str,
+    catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
+) -> set[str]:
+    step_names: set[str] = set()
+    selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
+
+    for entry in plan.stt:
+        step_names.add(f"{selection_key}:deps:stt:{entry.engine}")
+        step_names.add(f"{selection_key}:stt:{entry.engine}:{_entry_suffix(entry, 'models')}")
+    if plan.stt:
+        step_names.add(f"{selection_key}:stt:silero_vad")
+
+    for entry in plan.tts:
+        step_names.add(f"{selection_key}:deps:tts:{entry.engine}")
+        step_names.add(f"{selection_key}:tts:{entry.engine}:{_entry_suffix(entry, 'variants')}")
+
+    if plan.embeddings.huggingface:
+        step_names.add(f"{selection_key}:deps:embeddings:huggingface")
+        step_names.add(f"{selection_key}:embeddings:huggingface")
+    if plan.embeddings.custom:
+        step_names.add(f"{selection_key}:deps:embeddings:custom")
+        step_names.add(f"{selection_key}:embeddings:custom")
+    if plan.embeddings.onnx:
+        step_names.add(f"{selection_key}:deps:embeddings:onnx")
+        step_names.add(f"{selection_key}:embeddings:onnx")
+
+    return step_names
+
+
+def _completed_step_names(snapshot: dict[str, Any] | None) -> set[str]:
+    if not snapshot:
+        return set()
+    completed: set[str] = set()
+    for step in snapshot.get("steps", []):
+        if step.get("status") == "completed" and step.get("name"):
+            completed.add(str(step["name"]))
+    return completed
+
+
+def _system_prerequisite_status(
+    bundle_step: AudioBundleStep,
+    machine_profile: audio_profile_service.MachineProfile,
+) -> tuple[str, str | None]:
+    if bundle_step.step_id == "ffmpeg" and machine_profile.ffmpeg_available:
+        return "completed", "FFmpeg already available."
+    if bundle_step.step_id == "espeak_ng" and machine_profile.espeak_available:
+        return "completed", "eSpeak already available."
+    if bundle_step.automation_tier == AutomationTier.GUIDED:
+        return "guided_action_required", bundle_step.detail
+    if bundle_step.automation_tier == AutomationTier.MANUAL_BLOCKED:
+        return "failed", bundle_step.detail
+    return "pending", bundle_step.detail
+
+
+def _qualify_install_step_name(
+    name: str,
+    plan: InstallPlan,
+    *,
+    bundle_id: str,
+    resource_profile: str,
+    catalog_version: str,
+) -> str:
+    selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
+    if name.startswith("deps:") or name.startswith("embeddings:") or name == "stt:silero_vad":
+        return f"{selection_key}:{name}"
+    if name.startswith("stt:"):
+        engine = name.split(":", 1)[1]
+        entry = next((candidate for candidate in plan.stt if candidate.engine == engine), None)
+        return f"{selection_key}:stt:{engine}:{_entry_suffix(entry, 'models') if entry else 'default'}"
+    if name.startswith("tts:"):
+        engine = name.split(":", 1)[1]
+        entry = next((candidate for candidate in plan.tts if candidate.engine == engine), None)
+        return f"{selection_key}:tts:{engine}:{_entry_suffix(entry, 'variants') if entry else 'default'}"
+    return f"{selection_key}:{name}"
+
+
+def _qualify_install_result(
+    install_result: dict[str, Any],
+    plan: InstallPlan,
+    *,
+    bundle_id: str,
+    resource_profile: str,
+    catalog_version: str,
+) -> dict[str, Any]:
+    qualified = json.loads(json.dumps(install_result))
+    qualified["steps"] = [
+        {
+            **step,
+            "name": _qualify_install_step_name(
+                step.get("name", ""),
+                plan,
+                bundle_id=bundle_id,
+                resource_profile=resource_profile,
+                catalog_version=catalog_version,
+            ),
+        }
+        for step in install_result.get("steps", [])
+    ]
+    return qualified
+
+
+def execute_audio_bundle(
+    bundle_id: str,
+    *,
+    resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    safe_rerun: bool = False,
+) -> dict[str, Any]:
+    """Provision a curated audio bundle using the existing installer substrate."""
+
+    bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    plan = build_install_plan_from_bundle(bundle_id, resource_profile=resource_profile)
+    plan_payload = model_dump_compat(plan)
+    machine_profile = audio_profile_service.detect_machine_profile()
+    readiness = audio_readiness_store.get_audio_readiness_store()
+    selection_key = build_audio_selection_key(bundle_id, resource_profile, bundle.catalog_version)
+    readiness.update(
+        status="provisioning",
+        selected_bundle_id=bundle_id,
+        selected_resource_profile=resource_profile,
+        catalog_version=bundle.catalog_version,
+        selection_key=selection_key,
+        machine_profile=machine_profile.model_dump(),
+        remediation_items=[],
+        last_verification=None,
+    )
+
+    result_steps: list[dict[str, Any]] = []
+    for prerequisite in bundle.system_prerequisites:
+        status_value, detail = _system_prerequisite_status(prerequisite, machine_profile)
+        result_steps.append(
+            {
+                "name": f"{selection_key}:system:{prerequisite.step_id}",
+                "status": status_value,
+                "detail": detail,
+            }
+        )
+
+    expected_steps = _plan_step_names(
+        plan,
+        bundle_id=bundle_id,
+        resource_profile=resource_profile,
+        catalog_version=bundle.catalog_version,
+    )
+    completed_steps = _completed_step_names(get_install_status_snapshot()) if safe_rerun else set()
+    if safe_rerun and expected_steps and expected_steps.issubset(completed_steps):
+        for step_name in sorted(expected_steps):
+            result_steps.append(
+                {
+                    "name": step_name,
+                    "status": "skipped",
+                    "detail": "Already satisfied by a previous successful install run.",
+                }
+            )
+        readiness.update(
+            status="partial",
+            remediation_items=["Run audio verification to confirm readiness."],
+        )
+        return {
+            "bundle_id": bundle_id,
+            "resource_profile": resource_profile,
+            "selection_key": selection_key,
+            "safe_rerun": True,
+            "install_plan": plan_payload,
+            "steps": result_steps,
+            "status": "partial",
+        }
+
+    install_result = execute_install_plan(plan_payload) or {"steps": [], "status": "failed", "errors": []}
+    qualified_install_result = _qualify_install_result(
+        install_result,
+        plan,
+        bundle_id=bundle_id,
+        resource_profile=resource_profile,
+        catalog_version=bundle.catalog_version,
+    )
+    if qualified_install_result:
+        qualified_install_result["plan"] = plan_payload
+        _persist_install_status_snapshot(qualified_install_result)
+    result_steps.extend(qualified_install_result.get("steps", []))
+    return {
+        "bundle_id": bundle_id,
+        "resource_profile": resource_profile,
+        "selection_key": selection_key,
+        "safe_rerun": safe_rerun,
+        "install_plan": plan_payload,
+        "steps": result_steps,
+        "status": qualified_install_result.get("status"),
+    }
+
+
+async def _resolve_health_call(result: Any) -> Any:
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _remediation_item(code: str, message: str, *, action: str = "safe_rerun") -> dict[str, str]:
+    return {
+        "code": code,
+        "message": message,
+        "action": action,
+    }
+
+
+async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: Any) -> dict[str, Any]:
+    """Verify the primary STT/TTS paths for a selected bundle profile."""
+
+    bundle_id = bundle.bundle_id
+    resource_profile = selected_profile.profile_id
+    machine_profile = audio_profile_service.detect_machine_profile()
+    selection_key = build_audio_selection_key(bundle_id, resource_profile, bundle.catalog_version)
+    primary_stt_engine, primary_stt_target = _resolve_primary_stt_target(selected_profile)
+    stt_health = await _resolve_health_call(audio_health.collect_setup_stt_health(model=primary_stt_target))
+    tts_health = await _resolve_health_call(audio_health.collect_setup_tts_health())
+
+    primary_tts_engine = selected_profile.tts_plan[0]["engine"] if selected_profile.tts_plan else None
+    remediation_items: list[dict[str, str]] = []
+    warning_items: list[dict[str, str]] = []
+
+    stt_usable = bool((stt_health or {}).get("usable", False))
+    primary_tts_details = _extract_tts_provider_details(tts_health, primary_tts_engine)
+    tts_usable = _tts_provider_usable(primary_tts_engine, primary_tts_details, tts_health)
+
+    if not machine_profile.ffmpeg_available:
+        remediation_items.append(
+            _remediation_item(
+                "FFMPEG_MISSING",
+                "Install FFmpeg and rerun verification.",
+            )
+        )
+
+    providers = (tts_health or {}).get("providers", {})
+    kokoro_info = providers.get("kokoro") if isinstance(providers, dict) else None
+    if primary_tts_engine == "kokoro" and not bool((kokoro_info or {}).get("espeak_lib_exists", False)):
+        remediation_items.append(
+            _remediation_item(
+                "KOKORO_ESPEAK_MISSING",
+                "Install espeak-ng and rerun verification.",
+            )
+        )
+        tts_usable = False
+
+    if not stt_usable:
+        remediation_items.append(
+            _remediation_item(
+                "STT_UNUSABLE",
+                (
+                    f"Primary STT path ({primary_stt_engine}) is not usable. "
+                    "Rerun provisioning or inspect model downloads."
+                ),
+            )
+        )
+    if not tts_usable:
+        remediation_items.append(
+            _remediation_item(
+                "TTS_UNHEALTHY",
+                (
+                    f"Primary TTS path ({primary_tts_engine}) is not healthy. "
+                    "Rerun provisioning or inspect TTS logs."
+                ),
+            )
+        )
+
+    provider_details = providers.get("details", {}) if isinstance(providers, dict) else {}
+    if isinstance(provider_details, dict):
+        for provider_name, details in provider_details.items():
+            if provider_name == primary_tts_engine or not isinstance(details, dict):
+                continue
+            if str(details.get("status", details.get("availability", ""))).lower() == "failed":
+                warning_items.append(
+                    _remediation_item(
+                        "SECONDARY_PROVIDER_FAILED",
+                        f"Secondary TTS provider {provider_name} is unavailable.",
+                        action="advisory",
+                    )
+                )
+
+    if remediation_items:
+        status = "partial" if (stt_usable or tts_usable) else "failed"
+    elif warning_items:
+        status = "ready_with_warnings"
+    else:
+        status = "ready"
+
+    verified_at = _utc_now()
+    result = {
+        "bundle_id": bundle_id,
+        "selected_resource_profile": resource_profile,
+        "selection_key": selection_key,
+        "targets_checked": list(selected_profile.verification_targets),
+        "status": status,
+        "machine_profile": machine_profile.model_dump(),
+        "stt_health": stt_health,
+        "tts_health": tts_health,
+        "remediation_items": remediation_items + warning_items,
+        "verified_at": verified_at,
+    }
+
+    audio_readiness_store.get_audio_readiness_store().update(
+        status=status,
+        selected_bundle_id=bundle_id,
+        selected_resource_profile=resource_profile,
+        catalog_version=bundle.catalog_version,
+        selection_key=selection_key,
+        machine_profile=machine_profile.model_dump(),
+        last_verification={
+            "bundle_id": bundle_id,
+            "selected_resource_profile": resource_profile,
+            "selection_key": selection_key,
+            "targets_checked": list(selected_profile.verification_targets),
+            "verified_at": verified_at,
+            "stt_health": stt_health,
+            "tts_health": tts_health,
+        },
+        remediation_items=result["remediation_items"],
+    )
+    return result
+
+
+async def verify_audio_bundle_async(
+    bundle_id: str,
+    *,
+    resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+) -> dict[str, Any]:
+    """Verify the primary STT/TTS paths for a curated audio bundle."""
+
+    bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
+    selected_profile = bundle.profile_by_id(resource_profile)
+    return await verify_audio_bundle_async_for_profile(bundle, selected_profile)
+
+
+def verify_audio_bundle(
+    bundle_id: str,
+    *,
+    resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+) -> dict[str, Any]:
+    """Synchronous wrapper for setup verification tests and scripts."""
+
+    return asyncio.run(verify_audio_bundle_async(bundle_id, resource_profile=resource_profile))
 
 def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     any_stt = False
@@ -496,6 +982,8 @@ def _install_tts(plan: InstallPlan, status: InstallationStatus, errors: list[str
         try:
             if entry.engine == 'kokoro':
                 _install_kokoro(entry.variants)
+            elif entry.engine == 'kitten_tts':
+                _install_kitten_tts(entry.variants)
             elif entry.engine == 'dia':
                 _install_dia()
             elif entry.engine == 'higgs':
@@ -663,6 +1151,33 @@ def _install_kokoro(variants: list[str]) -> None:
         _download_hf_dir(onnx_repo, 'voices', voices_dir)
 
 
+def _install_kitten_tts(variants: list[str]) -> None:
+    _ensure_downloads_allowed('KittenTTS model assets')
+    try:
+        from tldw_Server_API.app.core.TTS.vendors.kittentts_compat import download_model_assets
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError('KittenTTS compatibility runtime is required for asset downloads.') from exc
+
+    variant_to_repo = {
+        'nano': 'KittenML/kitten-tts-nano-0.8',
+        'nano-int8': 'KittenML/kitten-tts-nano-0.8-int8',
+        'micro': 'KittenML/kitten-tts-micro-0.8',
+        'mini': 'KittenML/kitten-tts-mini-0.8',
+    }
+    selected = variants or ['nano']
+    for variant in selected:
+        repo_id = variant_to_repo.get(str(variant).strip().lower(), str(variant).strip())
+        if not repo_id:
+            continue
+        logger.info('Prefetching KittenTTS assets for {}', repo_id)
+        try:
+            download_model_assets(repo_id, auto_download=True)
+        except Exception as exc:  # noqa: BLE001
+            if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
+                raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
+            raise
+
+
 def _install_dia() -> None:
     logger.info('Downloading Dia dialogue TTS model (nari-labs/dia)')
     _snapshot_repo('nari-labs/dia')
@@ -828,7 +1343,12 @@ def _snapshot_repo(repo_id: str) -> None:
 
 def _run_subprocess(command: list[str]) -> None:
     logger.info('Running command: {}', ' '.join(command))
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    result = subprocess.run(  # nosec B603 - command argv is assembled from trusted setup requirement mappings
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f'Command failed with exit code {result.returncode}')
     if result.stdout:
@@ -883,6 +1403,12 @@ TTS_DEPENDENCIES: dict[str, list[PipRequirement]] = {
         PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
         PipRequirement(package='phonemizer>=3.2.1', import_name='phonemizer'),
         PipRequirement(package='espeak-phonemizer>=1.0.1', import_name='espeak_phonemizer'),
+        PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
+    ],
+    'kitten_tts': [
+        PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
+        PipRequirement(package='phonemizer-fork~=3.3.2', import_name='phonemizer'),
+        PipRequirement(package='espeakng_loader', import_name='espeakng_loader'),
         PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],
     'dia': [

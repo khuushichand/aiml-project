@@ -37,7 +37,10 @@ import { createSafeStorage } from "@/utils/safe-storage"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectionProblemBanner from "@/components/Common/ConnectionProblemBanner"
-import { useConnectionActions } from "@/hooks/useConnectionState"
+import {
+  useConnectionActions,
+  useConnectionUxState
+} from "@/hooks/useConnectionState"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useDemoMode } from "@/context/demo-mode"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
@@ -1433,6 +1436,7 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
   }, [displayedResults, selected])
 
   const { demoEnabled } = useDemoMode()
+  const { uxState } = useConnectionUxState()
   const [previewExpanded, setPreviewExpanded] = React.useState<{
     content: boolean
     analysis: boolean
@@ -1444,7 +1448,132 @@ export const ReviewPage: React.FC<ReviewPageProps> = ({
   const { checkOnce } = useConnectionActions()
 
   if (!isOnline) {
-    const baseEmpty = demoEnabled ? (
+    const isAuthState = uxState === "error_auth" || uxState === "configuring_auth"
+    const isSetupState = uxState === "unconfigured" || uxState === "configuring_url"
+    const isUnreachableState = uxState === "error_unreachable"
+    const pageLabel = isViewMediaMode
+      ? t("review:mediaEmpty.pageLabel", { defaultValue: "Media" })
+      : t("review:empty.pageLabel", { defaultValue: "Review" })
+    const connectionTitle =
+      !forceOffline && uxState !== "testing"
+        ? isAuthState
+          ? t("review:reviewPage.authTitle", {
+              defaultValue: `Add your credentials to use ${pageLabel}`
+            })
+          : isSetupState
+            ? t("review:reviewPage.setupTitle", {
+                defaultValue: `Finish setup to use ${pageLabel}`
+              })
+            : isUnreachableState
+              ? t("review:reviewPage.unreachableTitle", {
+                  defaultValue: "Can't reach your tldw server right now"
+                })
+              : null
+        : null
+
+    const baseEmpty = connectionTitle ? demoEnabled ? (
+      <FeatureEmptyState
+        title={
+          <span className="inline-flex items-center gap-2">
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primaryStrong">
+              {t("review:reviewPage.demoBadge", { defaultValue: "Demo" })}
+            </span>
+            <span>{connectionTitle}</span>
+          </span>
+        }
+        description={
+          isAuthState
+            ? t("review:reviewPage.authDescription", {
+                defaultValue:
+                  "Demo stays available, but you'll need valid credentials before this workspace can load your own data."
+              })
+            : isSetupState
+              ? t("review:reviewPage.setupDescription", {
+                  defaultValue:
+                    "Demo stays available while you finish the tldw server setup flow."
+                })
+              : t("review:reviewPage.unreachableDescription", {
+                  defaultValue:
+                    "Demo stays available, but your configured tldw server cannot be reached right now."
+                })
+        }
+        primaryActionLabel={
+          isSetupState
+            ? t("settings:tldw.finishSetup", "Finish Setup")
+            : isUnreachableState
+              ? t("option:buttonRetry", "Retry connection")
+              : t("settings:tldw.openSettings", "Open Settings")
+        }
+        onPrimaryAction={() => {
+          if (isSetupState) {
+            navigate("/")
+            return
+          }
+          if (isUnreachableState) {
+            void checkOnce()
+            return
+          }
+          navigate("/settings/tldw")
+        }}
+        secondaryActionLabel={t(
+          "settings:healthSummary.diagnostics",
+          "Health & diagnostics"
+        )}
+        onSecondaryAction={() => navigate("/settings/health")}
+      />
+    ) : (
+      <ConnectionProblemBanner
+        badgeLabel={t("review:reviewPage.notConnectedBadge", {
+          defaultValue: "Not connected"
+        })}
+        title={connectionTitle}
+        description={
+          isAuthState
+            ? t("review:reviewPage.authDescription", {
+                defaultValue:
+                  "Your server is reachable, but this workspace needs valid credentials before it can load your data."
+              })
+            : isSetupState
+              ? t("review:reviewPage.setupDescription", {
+                  defaultValue:
+                    "Finish the tldw server setup flow, then return here to review your own media and notes."
+                })
+              : t("review:reviewPage.unreachableDescription", {
+                  defaultValue:
+                    "Your server settings are saved, but this workspace cannot reach the tldw server right now."
+                })
+        }
+        primaryActionLabel={
+          isSetupState
+            ? t("settings:tldw.finishSetup", "Finish Setup")
+            : t("settings:tldw.openSettings", "Open Settings")
+        }
+        onPrimaryAction={() => {
+          if (isSetupState) {
+            navigate("/")
+            return
+          }
+          navigate("/settings/tldw")
+        }}
+        retryActionLabel={
+          isUnreachableState
+            ? t("option:buttonRetry", "Retry connection")
+            : undefined
+        }
+        onRetry={
+          isUnreachableState
+            ? () => {
+                void checkOnce()
+              }
+            : undefined
+        }
+        secondaryActionLabel={t(
+          "settings:healthSummary.diagnostics",
+          "Health & diagnostics"
+        )}
+        onSecondaryAction={() => navigate("/settings/health")}
+      />
+    ) : demoEnabled ? (
       <FeatureEmptyState
         title={
           <span className="inline-flex items-center gap-2">

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 from fastapi import HTTPException
 
@@ -194,6 +196,14 @@ class _FakeDB:
 async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch, tmp_path):
     _force_fallback(monkeypatch)
     fake_db = _FakeDB()
+    fake_repo = _FakeDB()
+
+    @contextmanager
+    def _fake_managed_media_database(*args, **kwargs):  # noqa: ARG001
+        try:
+            yield fake_db
+        finally:
+            fake_db.close_connection()
 
     async def fake_scrape_and_summarize_multiple(**kwargs):
         return [
@@ -215,15 +225,27 @@ async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch, tmp
     )
     monkeypatch.setattr(
         ws_service,
+        "managed_media_database",
+        _fake_managed_media_database,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ws_service,
         "create_media_database",
-        lambda **kwargs: fake_db,
-        raising=True,
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
     )
     monkeypatch.setattr(
         ws_service,
         "get_user_media_db_path",
         lambda _user_id: str(tmp_path / "fallback-media.db"),
         raising=True,
+    )
+    monkeypatch.setattr(
+        ws_service,
+        "get_media_repository",
+        lambda db: fake_repo,
+        raising=False,
     )
 
     result = await ws_service.process_web_scraping_task(
@@ -240,9 +262,104 @@ async def test_fallback_persist_smoke_includes_rollout_metadata(monkeypatch, tmp
     assert result["total_articles"] == 1
     assert result["media_ids"] == [1]
     assert fake_db.closed is True
+    assert len(fake_repo.calls) == 1
     fallback_context = result["fallback_context"]
     assert fallback_context["enabled"] is True
     assert fallback_context["trigger_error_type"] == "RuntimeError"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fallback_persist_uses_media_repository_api(monkeypatch, tmp_path):
+    _force_fallback(monkeypatch)
+
+    class _FakeDbNoLegacyInsert:
+        def __init__(self):
+            self.closed = False
+
+        def close_connection(self):
+            self.closed = True
+
+    class _FakeRepo:
+        def __init__(self):
+            self.calls = []
+
+        def add_media_with_keywords(self, **kwargs):
+            self.calls.append(kwargs)
+            return 71, "repo-71", "stored"
+
+    fake_db = _FakeDbNoLegacyInsert()
+    fake_repo = _FakeRepo()
+
+    @contextmanager
+    def _fake_managed_media_database(*args, **kwargs):  # noqa: ARG001
+        try:
+            yield fake_db
+        finally:
+            fake_db.close_connection()
+
+    async def fake_scrape_and_summarize_multiple(**kwargs):
+        return [
+            {
+                "url": "https://example.com/repo",
+                "title": "Repo Title",
+                "author": "Author",
+                "content": "content",
+                "summary": "summary",
+                "extraction_successful": True,
+            }
+        ]
+
+    monkeypatch.setattr(
+        ws_service,
+        "scrape_and_summarize_multiple",
+        fake_scrape_and_summarize_multiple,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        ws_service,
+        "managed_media_database",
+        _fake_managed_media_database,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ws_service,
+        "create_media_database",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ws_service,
+        "get_user_media_db_path",
+        lambda _user_id: str(tmp_path / "fallback-media.db"),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        ws_service,
+        "get_media_repository",
+        lambda db: fake_repo,
+        raising=False,
+    )
+
+    result = await ws_service.process_web_scraping_task(
+        **_base_kwargs(
+            scrape_method="Individual URLs",
+            url_input="https://example.com/repo",
+            mode="persist",
+            user_id=1,
+        )
+    )
+
+    assert result["status"] == "persist-ok"
+    assert result["media_ids"] == [71]
+    assert fake_db.closed is True
+    assert len(fake_repo.calls) == 1
+    assert fake_repo.calls[0]["url"] == "https://example.com/repo"
+    assert fake_repo.calls[0]["title"] == "Repo Title"
+    assert fake_repo.calls[0]["media_type"] == "web_document"
+    assert fake_repo.calls[0]["content"] == "content"
+    assert fake_repo.calls[0]["analysis_content"] == "summary"
+    assert fake_repo.calls[0]["transcription_model"] == "web-scraping-import"
 
 
 @pytest.mark.unit

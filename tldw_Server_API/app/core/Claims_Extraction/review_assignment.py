@@ -4,9 +4,6 @@ import json
 from typing import Any
 from urllib.parse import urlparse
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-
-
 def _normalize_predicate_values(value: Any) -> list[str]:
     """Normalize predicate values into a lowercased list of strings."""
     if value is None:
@@ -36,7 +33,7 @@ def _extract_domain(url: str | None) -> str:
 
 
 def _get_media_review_context(
-    db: MediaDatabase, media_id: int, extractor: str | None
+    db: Any, media_id: int, extractor: str | None
 ) -> dict[str, Any] | None:
     """Return media metadata used for claim review rule evaluation."""
     row = db.execute_query(
@@ -119,7 +116,7 @@ def _claim_review_rule_matches(predicate: dict[str, Any], context: dict[str, Any
 
 def resolve_claim_review_assignment(
     *,
-    db: MediaDatabase,
+    db: Any,
     media_id: int,
     extractor: str | None,
 ) -> tuple[int | None, str | None]:
@@ -157,7 +154,7 @@ def resolve_claim_review_assignment(
 
 def apply_review_rules(
     *,
-    db: MediaDatabase,
+    db: Any,
     claims: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Apply review rules to a list of claims in-place."""
@@ -167,7 +164,7 @@ def apply_review_rules(
     for claim in claims:
         try:
             media_id = int(claim.get("media_id"))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         extractor = str(claim.get("extractor") or "heuristic")
         cache_key = (media_id, extractor)

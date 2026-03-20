@@ -35,6 +35,7 @@ import {
 } from "lucide-react"
 import type { HeaderShortcutId } from "@/services/settings/ui-settings"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 export type HeaderShortcutItem = {
   id: HeaderShortcutId
@@ -53,7 +54,7 @@ export type HeaderShortcutGroup = {
   items: HeaderShortcutItem[]
 }
 
-export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
+const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
   {
     id: "chat-persona",
     titleKey: "option:header.groupChatPersona",
@@ -188,13 +189,6 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelDefault: "Multi-Item Review"
       },
       {
-        id: "content-review",
-        to: "/content-review",
-        icon: FileText,
-        labelKey: "option:header.contentReview",
-        labelDefault: "Content Review"
-      },
-      {
         id: "collections",
         to: "/collections",
         icon: Library,
@@ -256,6 +250,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Headphones,
         labelKey: "option:header.audiobookStudio",
         labelDefault: "Audiobook Studio"
+      },
+      {
+        id: "presentation-studio",
+        to: "/presentation-studio",
+        icon: FileText,
+        labelKey: "option:header.presentationStudio",
+        labelDefault: "Presentation Studio"
       }
     ]
   },
@@ -386,6 +387,49 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
     ]
   }
 ]
+
+const HOSTED_VISIBLE_SHORTCUT_PATHS = new Set([
+  "/chat",
+  "/knowledge",
+  "/media",
+  "/collections"
+])
+
+const getHostedHeaderShortcutGroups = (): HeaderShortcutGroup[] => {
+  const filteredGroups = BASE_HEADER_SHORTCUT_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => HOSTED_VISIBLE_SHORTCUT_PATHS.has(item.to))
+  })).filter((group) => group.items.length > 0)
+
+  filteredGroups.push({
+    id: "account-help",
+    titleKey: "option:header.groupAccountHelp",
+    titleDefault: "Account & Billing",
+    items: [
+      {
+        id: "settings",
+        to: "/account",
+        icon: UserCircle2,
+        labelKey: "option:header.account",
+        labelDefault: "Account"
+      },
+      {
+        id: "documentation",
+        to: "/billing",
+        icon: ClipboardList,
+        labelKey: "option:header.billing",
+        labelDefault: "Billing"
+      }
+    ]
+  })
+
+  return filteredGroups
+}
+
+export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] =
+  isHostedTldwDeployment()
+    ? getHostedHeaderShortcutGroups()
+    : BASE_HEADER_SHORTCUT_GROUPS
 
 export const HEADER_SHORTCUT_ITEMS: HeaderShortcutItem[] =
   HEADER_SHORTCUT_GROUPS.flatMap((group) => group.items)

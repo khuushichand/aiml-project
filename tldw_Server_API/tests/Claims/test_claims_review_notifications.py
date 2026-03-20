@@ -2,7 +2,9 @@ import json
 import os
 import tempfile
 import time
+from contextlib import contextmanager
 
+from tldw_Server_API.app.core.Claims_Extraction import claims_notifications
 from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import dispatch_claim_review_notifications
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
@@ -110,3 +112,91 @@ def test_claims_review_notifications_deliver_email(monkeypatch):
         assert fake_service.sent
     finally:
         db.close_connection()
+
+
+def test_dispatch_claim_review_notifications_uses_managed_media_database(monkeypatch):
+    class _FakeDb:
+        def __init__(self) -> None:
+            self.closed = False
+            self.marked_ids: list[int] = []
+
+        def get_claims_monitoring_settings(self, user_id):
+            assert user_id == "1"
+            return {
+                "enabled": True,
+                "slack_webhook_url": None,
+                "webhook_url": None,
+                "email_recipients": json.dumps(["review@example.com"]),
+            }
+
+        def get_claim_notifications_by_ids(self, notification_ids):
+            assert notification_ids == [7]
+            return [
+                {
+                    "id": 7,
+                    "kind": "review_update",
+                    "payload_json": json.dumps({"claim_text": "A.", "new_status": "approved"}),
+                    "created_at": "2026-03-16T00:00:00Z",
+                }
+            ]
+
+        def mark_claim_notifications_delivered(self, notification_ids):
+            self.marked_ids.extend(notification_ids)
+
+        def close_connection(self) -> None:
+            self.closed = True
+
+    class _ImmediateThread:
+        def __init__(self, *, target, daemon):
+            self._target = target
+            self.daemon = daemon
+
+        def start(self) -> None:
+            self._target()
+
+    fake_db = _FakeDb()
+    managed_calls: list[dict[str, object]] = []
+
+    @contextmanager
+    def _fake_managed_media_database(client_id, *, initialize=True, **kwargs):
+        managed_calls.append(
+            {
+                "client_id": client_id,
+                "initialize": initialize,
+                "kwargs": kwargs,
+            }
+        )
+        try:
+            yield fake_db
+        finally:
+            fake_db.close_connection()
+
+    monkeypatch.setattr(claims_notifications, "managed_media_database", _fake_managed_media_database, raising=False)
+    monkeypatch.setattr(
+        claims_notifications,
+        "create_media_database",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        raising=False,
+    )
+    monkeypatch.setattr(claims_notifications.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(claims_notifications, "_deliver_review_email_sync", lambda **kwargs: True, raising=False)
+
+    dispatch_claim_review_notifications(
+        db_path="/tmp/claims-review.db",
+        owner_user_id="1",
+        notification_ids=[7],
+    )
+
+    assert fake_db.closed is True
+    assert fake_db.marked_ids == [7]
+    assert managed_calls == [
+        {
+            "client_id": claims_notifications.settings.get("SERVER_CLIENT_ID", "SERVER_API_V1"),
+            "initialize": True,
+            "kwargs": {
+                "db_path": "/tmp/claims-review.db",
+                "suppress_init_exceptions": claims_notifications._CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS,
+                "suppress_close_exceptions": claims_notifications._CLAIMS_NOTIFICATION_NONCRITICAL_EXCEPTIONS,
+            },
+        }
+    ]

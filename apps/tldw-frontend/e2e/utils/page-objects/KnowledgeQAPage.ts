@@ -6,9 +6,13 @@ import { waitForConnection } from "../helpers"
 
 export class KnowledgeQAPage {
   readonly page: Page
+  readonly searchShell: Locator
+  readonly resultsShell: Locator
 
   constructor(page: Page) {
     this.page = page
+    this.searchShell = page.getByTestId("knowledge-search-shell")
+    this.resultsShell = page.getByTestId("knowledge-results-shell")
   }
 
   // ── Navigation ──────────────────────────────────────────────────────
@@ -20,43 +24,47 @@ export class KnowledgeQAPage {
 
   async waitForReady(): Promise<void> {
     await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
-    // Wait for search bar or main container
-    const container = this.page.locator(
-      "input[type='search'], input[type='text'], [data-testid*='search'], [placeholder*='search' i], [placeholder*='question' i], [placeholder*='ask' i]"
-    )
-    await container.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {})
+    await this.searchShell.waitFor({ state: "visible", timeout: 20_000 })
+    await expect(this.page.locator("#knowledge-search-input")).toBeVisible({
+      timeout: 20_000
+    })
   }
 
   // ── API Intercept ───────────────────────────────────────────────────
 
-  async waitForRagSearch(): Promise<{ status: number; body: any }> {
+  async waitForRagSearch(): Promise<{
+    status: number
+    body: any
+    requestBody: any
+  }> {
     const response = await this.page.waitForResponse(
-      (res) => res.url().includes("/rag/search") && res.request().method() === "POST",
+      (res) =>
+        res.request().method() === "POST" &&
+        /\/api\/v1\/rag\/search(?:\?|$)/i.test(res.url()),
       { timeout: 30_000 }
     )
     const body = await response.json().catch(() => null)
-    return { status: response.status(), body }
+    let requestBody: any = null
+    try {
+      requestBody = response.request().postDataJSON()
+    } catch {
+      requestBody = null
+    }
+
+    return { status: response.status(), body, requestBody }
   }
 
   // ── Search Bar ──────────────────────────────────────────────────────
 
   async getSearchInput(): Promise<Locator> {
-    const candidates = [
-      this.page.locator("[data-testid*='search-input']"),
-      this.page.locator("[placeholder*='search' i]"),
-      this.page.locator("[placeholder*='question' i]"),
-      this.page.locator("[placeholder*='ask' i]"),
-      this.page.locator("input[type='search']"),
-      this.page.locator("input[type='text']").first()
-    ]
-
-    for (const candidate of candidates) {
-      if ((await candidate.count()) > 0 && (await candidate.first().isVisible().catch(() => false))) {
-        return candidate.first()
-      }
+    const exactInput = this.page.locator("#knowledge-search-input")
+    if (await exactInput.isVisible().catch(() => false)) {
+      return exactInput
     }
 
-    return this.page.locator("input").first()
+    const shellInput = this.searchShell.locator("input").first()
+    await shellInput.waitFor({ state: "visible", timeout: 10_000 })
+    return shellInput
   }
 
   async search(query: string): Promise<void> {
@@ -73,71 +81,107 @@ export class KnowledgeQAPage {
   // ── Results ─────────────────────────────────────────────────────────
 
   async waitForResults(timeoutMs = 30_000): Promise<void> {
-    // Wait for answer panel, source list, or no-results state
-    const resultIndicator = this.page.locator(
-      "[data-testid*='answer'], [data-testid*='source'], .answer-panel, .source-list, .ant-empty, [data-testid*='no-results']"
-    )
-    await resultIndicator.first().waitFor({ state: "visible", timeout: timeoutMs }).catch(() => {})
+    await this.resultsShell.waitFor({ state: "visible", timeout: timeoutMs })
+    await expect
+      .poll(
+        async () => {
+          const stopVisible = await this.page
+            .getByRole("button", { name: /^Stop$/i })
+            .isVisible()
+            .catch(() => false)
+          const hasAnswer = await this.page
+            .getByTestId("knowledge-answer-content")
+            .isVisible()
+            .catch(() => false)
+          const hasNoResults = await this.hasNoResults()
+          const hasError = (await this.getErrorMessage()) !== null
+          const hasSourceOnlyState = await this.hasSourceOnlyState()
+
+          return !stopVisible && (hasAnswer || hasNoResults || hasError || hasSourceOnlyState)
+        },
+        { timeout: timeoutMs }
+      )
+      .toBe(true)
   }
 
   async getAnswerText(): Promise<string> {
-    const answer = this.page.locator(
-      "[data-testid*='answer'], .answer-panel, .answer-content"
-    )
-    if (await answer.first().isVisible().catch(() => false)) {
-      return (await answer.first().textContent()) ?? ""
+    const answer = this.page.getByTestId("knowledge-answer-content")
+    if (!(await answer.isVisible().catch(() => false))) {
+      return ""
     }
-    return ""
+    return ((await answer.textContent()) ?? "").trim()
   }
 
   async getSourceCount(): Promise<number> {
-    const sources = this.page.locator(
-      "[data-testid*='source-card'], .source-card, .source-item"
-    )
-    return sources.count()
+    const sources = this.getEvidencePanel().getByRole("listitem")
+    return sources.count().catch(() => 0)
   }
 
   async clickCitation(index: number): Promise<void> {
-    const citation = this.page.locator(
-      `[data-testid*='citation'], .citation-badge, .citation-ref`
-    ).nth(index)
+    const citation = this.getCitationButtons().nth(index)
     await citation.click()
   }
 
   async hasNoResults(): Promise<boolean> {
-    const empty = this.page.locator(
-      ".ant-empty, [data-testid*='no-results'], [data-testid*='empty']"
-    )
-    return (await empty.count()) > 0 && (await empty.first().isVisible().catch(() => false))
+    const recovery = this.page.getByRole("button", {
+      name: /Broaden scope|Enable web|Show nearest matches/i
+    })
+    return recovery.first().isVisible().catch(() => false)
+  }
+
+  async hasSourceOnlyState(): Promise<boolean> {
+    return this.page
+      .getByText(/Found \d+ relevant source/i)
+      .first()
+      .isVisible()
+      .catch(() => false)
   }
 
   // ── Settings Panel ──────────────────────────────────────────────────
 
   async openSettings(): Promise<void> {
-    const settingsBtn = this.page.getByRole("button", { name: /settings|gear|configure/i }).or(
-      this.page.locator("[data-testid*='settings-toggle'], [aria-label*='settings' i]")
-    )
-    await settingsBtn.first().click()
+    if (await this.getSettingsDialog().isVisible().catch(() => false)) {
+      return
+    }
+
+    const searchShellSettings = this.searchShell.getByRole("button", {
+      name: "Open settings"
+    })
+    if (await searchShellSettings.isVisible().catch(() => false)) {
+      await searchShellSettings.click()
+      return
+    }
+
+    const enableInSettings = this.page.getByRole("button", {
+      name: /Enable in Settings/i
+    })
+    if (await enableInSettings.isVisible().catch(() => false)) {
+      await enableInSettings.click()
+      return
+    }
+
+    const fallbackSettings = this.page.getByRole("button", {
+      name: "Open settings"
+    })
+    await fallbackSettings.last().click()
   }
 
   async selectPreset(preset: "fast" | "balanced" | "thorough"): Promise<void> {
-    const presetBtn = this.page.getByRole("button", { name: new RegExp(preset, "i") }).or(
-      this.page.locator(`[data-testid*='preset-${preset}']`).or(
-        this.page.getByText(new RegExp(`^${preset}$`, "i"))
-      )
-    )
-    await presetBtn.first().click()
+    const presetRadio = this.getSettingsDialog().getByRole("radio", {
+      name: new RegExp(`^${preset}\\b`, "i")
+    })
+    await presetRadio.click()
   }
 
   async toggleExpertMode(): Promise<void> {
-    const toggle = this.page.getByText(/expert/i).or(
-      this.page.locator("[data-testid*='expert']")
-    )
-    await toggle.first().click()
+    const toggle = this.getExpertModeToggle()
+    await toggle.click()
   }
 
   async setSearchMode(mode: "fts" | "vector" | "hybrid"): Promise<void> {
-    const select = this.page.locator("[data-testid*='search-mode'], [id*='search_mode']")
+    const select = this.getSettingsDialog().locator(
+      "[data-testid*='search-mode'], [id*='search_mode'], select"
+    )
     if (await select.first().isVisible().catch(() => false)) {
       await select.first().click()
       await this.page.locator(`.ant-select-item:has-text("${mode}")`).click()
@@ -147,8 +191,13 @@ export class KnowledgeQAPage {
   // ── Follow-Up Questions ─────────────────────────────────────────────
 
   async getFollowUpInput(): Promise<Locator> {
+    const stickyInput = this.page.getByTestId("knowledge-followup-sticky")
+    if (await stickyInput.isVisible().catch(() => false)) {
+      return stickyInput
+    }
+
     return this.page.locator(
-      "[data-testid*='follow-up'], [placeholder*='follow' i], [placeholder*='elaborate' i]"
+      "input[placeholder*='follow-up' i], textarea[placeholder*='follow-up' i]"
     ).first()
   }
 
@@ -166,15 +215,29 @@ export class KnowledgeQAPage {
   // ── History Sidebar ─────────────────────────────────────────────────
 
   async toggleHistorySidebar(): Promise<void> {
-    const toggle = this.page.getByRole("button", { name: /history/i }).or(
-      this.page.locator("[data-testid*='history-toggle']")
-    )
-    await toggle.first().click()
+    await this.ensureResearchLayout()
+
+    if (await this.getHistorySidebar().isVisible().catch(() => false)) {
+      return
+    }
+
+    const desktopExpand = this.page.getByRole("button", {
+      name: /Expand history sidebar/i
+    })
+    if (await desktopExpand.isVisible().catch(() => false)) {
+      await desktopExpand.click()
+      return
+    }
+
+    const mobileOpen = this.page.getByTestId("knowledge-history-mobile-open")
+    if (await mobileOpen.isVisible().catch(() => false)) {
+      await mobileOpen.click()
+    }
   }
 
   async getHistoryItems(): Promise<Locator> {
-    return this.page.locator(
-      "[data-testid*='history-item'], .history-item, .search-history-item"
+    return this.getHistorySidebar().locator(
+      "[data-testid*='history-item'], [aria-current], button"
     )
   }
 
@@ -197,18 +260,51 @@ export class KnowledgeQAPage {
 
   async isLoading(): Promise<boolean> {
     const loading = this.page.locator(
-      ".ant-spin-spinning, [data-testid*='loading'], .searching"
+      "[data-testid='knowledge-search-loading-indicator'], .ant-spin-spinning, .searching"
     )
     return (await loading.count()) > 0 && (await loading.first().isVisible().catch(() => false))
   }
 
   async getErrorMessage(): Promise<string | null> {
-    const error = this.page.locator(
-      ".ant-alert-error, [data-testid*='error'], .error-message"
+    const error = this.resultsShell.getByText(
+      /Search failed|Search timed out|Cannot reach server|No relevant documents found/i
     )
     if (await error.first().isVisible().catch(() => false)) {
       return (await error.first().textContent()) ?? null
     }
     return null
+  }
+
+  getSettingsDialog(): Locator {
+    return this.page.getByRole("dialog", { name: /RAG Settings/i })
+  }
+
+  getHistorySidebar(): Locator {
+    return this.page.locator(
+      "[data-testid='knowledge-history-desktop-open'], [data-testid='knowledge-history-mobile-overlay']"
+    )
+  }
+
+  getEvidencePanel(): Locator {
+    return this.page.getByRole("complementary", { name: /Evidence panel/i })
+  }
+
+  getCitationButtons(): Locator {
+    return this.page.locator("[data-knowledge-citation-index]")
+  }
+
+  getExpertModeToggle(): Locator {
+    return this.getSettingsDialog().getByRole("switch", {
+      name: /Expert Mode|Basic Mode/i
+    })
+  }
+
+  async ensureResearchLayout(): Promise<void> {
+    const openWorkspaceView = this.page.getByRole("button", {
+      name: /Open workspace view/i
+    })
+    if (await openWorkspaceView.isVisible().catch(() => false)) {
+      await openWorkspaceView.click()
+    }
   }
 }

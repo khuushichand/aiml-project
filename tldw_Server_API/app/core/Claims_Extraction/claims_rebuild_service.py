@@ -21,8 +21,8 @@ from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_rebuild_metrics,
 )
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 
 _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AssertionError,
@@ -134,41 +134,35 @@ class ClaimsRebuildService:
         except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Claims rebuild health persistence skipped: {}", exc)
             return
+        should_initialize = not self._health_db_initialized
         try:
-            db = create_media_database(
+            with managed_media_database(
                 client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
                 db_path=db_path,
-            )
-        except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Claims rebuild health persistence DB init failed: {}", exc)
-            return
-        try:
-            if not self._health_db_initialized:
-                try:
-                    db.initialize_db()
+                initialize=should_initialize,
+                suppress_close_exceptions=_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS,
+            ) as db:
+                if should_initialize:
                     self._health_db_initialized = True
-                except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
-                    logger.debug("Claims rebuild health persistence DB setup failed: {}", exc)
-                    return
-            last_failure_reason = None
-            last_failure_at = None
-            if self._last_failure:
-                last_failure_reason = self._last_failure.get("error")
-                last_failure_at = _format_timestamp(self._last_failure.get("timestamp"))
-            db.upsert_claims_monitoring_health(
-                user_id=str(user_id),
-                queue_size=queue_size,
-                worker_count=self.get_worker_count(),
-                last_worker_heartbeat=_format_timestamp(self._last_heartbeat_ts),
-                last_processed_at=_format_timestamp(self._last_processed_ts) if self._last_processed_ts else None,
-                last_failure_at=last_failure_at,
-                last_failure_reason=last_failure_reason,
-            )
+                last_failure_reason = None
+                last_failure_at = None
+                if self._last_failure:
+                    last_failure_reason = self._last_failure.get("error")
+                    last_failure_at = _format_timestamp(self._last_failure.get("timestamp"))
+                db.upsert_claims_monitoring_health(
+                    user_id=str(user_id),
+                    queue_size=queue_size,
+                    worker_count=self.get_worker_count(),
+                    last_worker_heartbeat=_format_timestamp(self._last_heartbeat_ts),
+                    last_processed_at=_format_timestamp(self._last_processed_ts) if self._last_processed_ts else None,
+                    last_failure_at=last_failure_at,
+                    last_failure_reason=last_failure_reason,
+                )
         except _CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("Claims rebuild health persistence failed: {}", exc)
-        finally:
-            with contextlib.suppress(_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS):
-                db.close_connection()
+            if should_initialize and not self._health_db_initialized:
+                logger.debug("Claims rebuild health persistence DB setup failed: {}", exc)
+            else:
+                logger.debug("Claims rebuild health persistence failed: {}", exc)
 
     def _worker_loop(self) -> None:
         while not self._stop.is_set():
@@ -217,11 +211,12 @@ class ClaimsRebuildService:
                 self._queue.task_done()
 
     def _process_task(self, task: ClaimsRebuildTask) -> None:
-        db = create_media_database(
+        with managed_media_database(
             client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
             db_path=task.db_path,
-        )
-        try:
+            initialize=False,
+            suppress_close_exceptions=_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS,
+        ) as db:
             media = db.get_media_by_id(task.media_id, include_deleted=False, include_trash=False)
             if not media:
                 logger.warning(f"Claims rebuild: media_id={task.media_id} not found")
@@ -253,9 +248,6 @@ class ClaimsRebuildService:
             deleted = db.soft_delete_claims_for_media(task.media_id)
             inserted = store_claims(db, media_id=task.media_id, chunk_texts_by_index=chunk_text_map, claims=claims)
             logger.info(f"Claims rebuild: media_id={task.media_id} deleted={deleted} inserted={inserted}")
-        finally:
-            with contextlib.suppress(_CLAIMS_REBUILD_NONCRITICAL_EXCEPTIONS):
-                db.close_connection()
 
     def get_stats(self) -> dict[str, int]:
         with self._stats_lock:

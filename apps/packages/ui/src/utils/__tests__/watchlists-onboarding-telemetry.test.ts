@@ -4,11 +4,13 @@ const STORAGE_KEY = "tldw:watchlists:onboarding:telemetry"
 
 describe("watchlists-onboarding-telemetry", () => {
   let storageMap: Map<string, unknown>
-  let recordOnboardingTelemetryMock: ReturnType<typeof vi.fn>
+  let recordOnboardingTelemetryMock: (
+    ...args: unknown[]
+  ) => Promise<{ accepted: boolean }>
 
   beforeEach(() => {
     storageMap = new Map<string, unknown>()
-    recordOnboardingTelemetryMock = vi.fn().mockResolvedValue({ accepted: true })
+    recordOnboardingTelemetryMock = vi.fn(async () => ({ accepted: true }))
     vi.resetModules()
     vi.doMock("@/utils/safe-storage", () => ({
       createSafeStorage: () => ({

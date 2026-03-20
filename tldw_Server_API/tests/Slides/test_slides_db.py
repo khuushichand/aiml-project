@@ -13,6 +13,35 @@ def _sample_slides() -> str:
     return json.dumps(slides)
 
 
+def _sample_studio_data() -> str:
+    return json.dumps(
+        {
+            "origin": "blank",
+            "default_voice": {
+                "provider": "openai",
+                "voice": "alloy",
+            },
+            "publish_formats": ["mp4", "webm"],
+        }
+    )
+
+
+def _sample_visual_style_snapshot() -> str:
+    return json.dumps(
+        {
+            "id": "timeline",
+            "scope": "builtin",
+            "name": "Timeline",
+            "version": 1,
+            "description": "Chronology-first slides",
+            "generation_rules": {"chronology_bias": "high"},
+            "artifact_preferences": ["timeline", "stat_group"],
+            "appearance_defaults": {"theme": "beige"},
+            "fallback_policy": {"mode": "ordered-bullets"},
+        }
+    )
+
+
 def test_slides_db_create_and_get(tmp_path):
     db_path = tmp_path / "Slides.db"
     db = SlidesDatabase(db_path=db_path, client_id="tester")
@@ -23,6 +52,7 @@ def test_slides_db_create_and_get(tmp_path):
         theme="black",
         marp_theme="gaia",
         settings=None,
+        studio_data=_sample_studio_data(),
         slides=_sample_slides(),
         slides_text="Deck Intro A B",
         source_type="manual",
@@ -34,6 +64,7 @@ def test_slides_db_create_and_get(tmp_path):
     assert fetched.id == row.id
     assert fetched.title == "Deck"
     assert fetched.marp_theme == "gaia"
+    assert json.loads(fetched.studio_data) == json.loads(_sample_studio_data())
     db.close_connection()
 
 
@@ -47,6 +78,7 @@ def test_slides_db_template_id(tmp_path):
         theme="black",
         marp_theme=None,
         settings=None,
+        studio_data=None,
         template_id="clean-dark",
         slides=_sample_slides(),
         slides_text="Deck Intro A B",
@@ -60,6 +92,38 @@ def test_slides_db_template_id(tmp_path):
     db.close_connection()
 
 
+def test_slides_db_visual_style_snapshot_round_trip(tmp_path):
+    db_path = tmp_path / "Slides.db"
+    db = SlidesDatabase(db_path=db_path, client_id="tester")
+    row = db.create_presentation(
+        presentation_id=None,
+        title="History Deck",
+        description=None,
+        theme="black",
+        marp_theme=None,
+        settings=None,
+        studio_data=None,
+        slides=_sample_slides(),
+        slides_text="Deck Intro A B",
+        source_type="manual",
+        source_ref=None,
+        source_query=None,
+        custom_css=None,
+        visual_style_id="timeline",
+        visual_style_scope="builtin",
+        visual_style_name="Timeline",
+        visual_style_version=1,
+        visual_style_snapshot=_sample_visual_style_snapshot(),
+    )
+    fetched = db.get_presentation_by_id(row.id)
+    assert fetched.visual_style_id == "timeline"
+    assert fetched.visual_style_scope == "builtin"
+    assert fetched.visual_style_name == "Timeline"
+    assert fetched.visual_style_version == 1
+    assert json.loads(fetched.visual_style_snapshot)["id"] == "timeline"
+    db.close_connection()
+
+
 def test_slides_db_update_conflict(tmp_path):
     db_path = tmp_path / "Slides.db"
     db = SlidesDatabase(db_path=db_path, client_id="tester")
@@ -70,6 +134,7 @@ def test_slides_db_update_conflict(tmp_path):
         theme="black",
         marp_theme=None,
         settings=None,
+        studio_data=_sample_studio_data(),
         slides=_sample_slides(),
         slides_text="Deck Intro A B",
         source_type="manual",
@@ -79,10 +144,11 @@ def test_slides_db_update_conflict(tmp_path):
     )
     updated = db.update_presentation(
         presentation_id=row.id,
-        update_fields={"title": "Updated"},
+        update_fields={"title": "Updated", "studio_data": json.dumps({"origin": "extension_capture"})},
         expected_version=row.version,
     )
     assert updated.version == row.version + 1
+    assert json.loads(updated.studio_data) == {"origin": "extension_capture"}
     with pytest.raises(ConflictError):
         db.update_presentation(
             presentation_id=row.id,
@@ -102,6 +168,7 @@ def test_slides_db_search(tmp_path):
         theme="black",
         marp_theme=None,
         settings=None,
+        studio_data=None,
         slides=_sample_slides(),
         slides_text="alpha beta gamma",
         source_type="manual",
@@ -125,6 +192,7 @@ def test_slides_db_soft_delete_restore(tmp_path):
         theme="black",
         marp_theme=None,
         settings=None,
+        studio_data=None,
         slides=_sample_slides(),
         slides_text="Deck Intro A B",
         source_type="manual",
@@ -151,24 +219,80 @@ def test_slides_db_version_snapshots(tmp_path):
         theme="black",
         marp_theme=None,
         settings=None,
+        studio_data=_sample_studio_data(),
         slides=_sample_slides(),
         slides_text="Deck Intro A B",
         source_type="manual",
         source_ref=None,
         source_query=None,
         custom_css=None,
+        visual_style_id="timeline",
+        visual_style_scope="builtin",
+        visual_style_name="Timeline",
+        visual_style_version=1,
+        visual_style_snapshot=_sample_visual_style_snapshot(),
     )
     versions, total = db.list_presentation_versions(presentation_id=row.id, limit=10, offset=0)
     assert total == 1
     payload = json.loads(versions[0].payload_json)
     assert payload["title"] == "Deck"
+    assert json.loads(payload["studio_data"]) == json.loads(_sample_studio_data())
+    assert payload["visual_style_id"] == "timeline"
+    assert json.loads(payload["visual_style_snapshot"])["id"] == "timeline"
 
     updated = db.update_presentation(
         presentation_id=row.id,
-        update_fields={"title": "Updated"},
+        update_fields={
+            "title": "Updated",
+            "studio_data": json.dumps({"origin": "workspace_playground"}),
+            "visual_style_id": "exam-focused-bullet",
+            "visual_style_scope": "builtin",
+            "visual_style_name": "Exam-Focused Bullet",
+            "visual_style_version": 1,
+            "visual_style_snapshot": json.dumps(
+                {
+                    "id": "exam-focused-bullet",
+                    "scope": "builtin",
+                    "name": "Exam-Focused Bullet",
+                    "version": 1,
+                }
+            ),
+        },
         expected_version=row.version,
     )
     versions, total = db.list_presentation_versions(presentation_id=row.id, limit=10, offset=0)
     assert total == 2
     assert versions[0].version == updated.version
+    latest_payload = json.loads(versions[0].payload_json)
+    assert json.loads(latest_payload["studio_data"]) == {"origin": "workspace_playground"}
+    assert latest_payload["visual_style_id"] == "exam-focused-bullet"
+    assert json.loads(latest_payload["visual_style_snapshot"])["id"] == "exam-focused-bullet"
     db.close_connection()
+
+
+def test_slides_db_runtime_connections_use_full_shared_policy_after_schema_init(tmp_path):
+    db_path = tmp_path / "Slides.db"
+
+    first = SlidesDatabase(db_path=db_path, client_id="first")
+    first.close_connection()
+
+    second = SlidesDatabase(db_path=db_path, client_id="second")
+    try:
+        conn = second.get_connection()
+        pragmas = {
+            "journal_mode": str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower(),
+            "synchronous": int(conn.execute("PRAGMA synchronous").fetchone()[0]),
+            "foreign_keys": int(conn.execute("PRAGMA foreign_keys").fetchone()[0]),
+            "busy_timeout": int(conn.execute("PRAGMA busy_timeout").fetchone()[0]),
+            "temp_store": int(conn.execute("PRAGMA temp_store").fetchone()[0]),
+        }
+    finally:
+        second.close_connection()
+
+    assert pragmas == {
+        "journal_mode": "wal",
+        "synchronous": 1,
+        "foreign_keys": 1,
+        "busy_timeout": 5000,
+        "temp_store": 2,
+    }

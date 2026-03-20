@@ -22,10 +22,36 @@ _OCR_NONCRITICAL_EXCEPTIONS = (
 )
 
 
+def _describe_mineru_backend() -> dict[str, Any]:
+    """Describe MinerU without importing the adapter until discovery needs it."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.mineru_adapter import (
+        describe_mineru_backend,
+    )
+
+    return describe_mineru_backend()
+
+
+def _describe_mineru_backend_error(exc: Exception) -> dict[str, Any]:
+    """Return a conservative MinerU capability stub when adapter discovery fails."""
+    return {
+        "available": False,
+        "pdf_only": True,
+        "document_level": True,
+        "opt_in_only": True,
+        "supports_per_page_metrics": False,
+        "mode": "cli",
+        "error": str(exc),
+    }
+
+
 @router.get("/backends")
 def list_ocr_backends() -> dict[str, Any]:
     """List available OCR backends with lightweight health information."""
     out = _list_backends()
+    try:
+        out["mineru"] = _describe_mineru_backend()
+    except _OCR_NONCRITICAL_EXCEPTIONS as exc:
+        out["mineru"] = _describe_mineru_backend_error(exc)
 
     # Enrich with backend-specific details without heavy loading
     try:

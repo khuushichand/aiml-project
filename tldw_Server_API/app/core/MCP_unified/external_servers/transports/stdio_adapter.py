@@ -13,7 +13,13 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import (
 )
 
 from ..config_schema import ExternalMCPServerConfig
-from .base import ExternalMCPTransportAdapter, ExternalToolCallResult, ExternalToolDefinition
+from .base import (
+    BrokeredExternalCredential,
+    ExternalMCPTransportAdapter,
+    ExternalToolCallResult,
+    ExternalToolDefinition,
+    call_tool_with_ephemeral_adapter,
+)
 
 _MCP_PROTOCOL_VERSION = "2024-11-05"
 _CLIENT_INFO = {"name": "tldw_external_federation", "version": "0.1.0"}
@@ -133,8 +139,15 @@ class StdioExternalMCPAdapter(ExternalMCPTransportAdapter):
         tool_name: str,
         arguments: dict[str, Any],
         context: Optional[Any] = None,
+        runtime_auth: BrokeredExternalCredential | None = None,
     ) -> ExternalToolCallResult:
         del context  # Reserved for future policy hooks
+        if runtime_auth is not None and runtime_auth.env:
+            return await self._call_tool_with_ephemeral_env(
+                tool_name=tool_name,
+                arguments=arguments,
+                runtime_auth=runtime_auth,
+            )
         await self._ensure_connected()
         try:
             response = await self._request(
@@ -205,3 +218,29 @@ class StdioExternalMCPAdapter(ExternalMCPTransportAdapter):
             "result": getattr(message, "result", None),
             "error": getattr(message, "error", None),
         }
+
+    async def _call_tool_with_ephemeral_env(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        runtime_auth: BrokeredExternalCredential,
+    ) -> ExternalToolCallResult:
+        def _prepare_config(ephemeral_config: ExternalMCPServerConfig) -> None:
+            stdio_cfg = ephemeral_config.stdio
+            if stdio_cfg is None:
+                raise ValueError(f"Missing stdio config for server '{self.server_id}'")
+            merged_env = dict(stdio_cfg.env or {})
+            merged_env.update(dict(runtime_auth.env or {}))
+            stdio_cfg.env = merged_env
+
+        return await call_tool_with_ephemeral_adapter(
+            server_config=self.server_config,
+            adapter_factory=lambda config: StdioExternalMCPAdapter(
+                config,
+                client_factory=self._client_factory,
+            ),
+            prepare_config=_prepare_config,
+            tool_name=tool_name,
+            arguments=arguments,
+        )

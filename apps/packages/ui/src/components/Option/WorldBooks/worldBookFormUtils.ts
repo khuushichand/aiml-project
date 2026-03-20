@@ -1,9 +1,16 @@
-export const WORLD_BOOK_FORM_DEFAULTS = {
+export type WorldBookFormDefaults = {
+  enabled: boolean
+  scan_depth: number
+  token_budget: number
+  recursive_scanning: boolean
+}
+
+export const WORLD_BOOK_FORM_DEFAULTS: WorldBookFormDefaults = {
   enabled: true,
   scan_depth: 3,
   token_budget: 500,
   recursive_scanning: false
-} as const
+}
 
 export type WorldBookStarterEntry = {
   keywords: string[]
@@ -21,7 +28,7 @@ export type WorldBookStarterTemplate = {
   label: string
   suggestedName: string
   description: string
-  defaults?: Partial<typeof WORLD_BOOK_FORM_DEFAULTS>
+  defaults?: Partial<WorldBookFormDefaults>
   entries: WorldBookStarterEntry[]
 }
 
@@ -170,7 +177,8 @@ export const buildWorldBookFormPayload = (
   values: Record<string, any>,
   mode: "create" | "edit"
 ): Record<string, any> => {
-  const payload = mode === "create" ? { ...WORLD_BOOK_FORM_DEFAULTS, ...values } : { ...values }
+  const payload: Record<string, any> =
+    mode === "create" ? { ...WORLD_BOOK_FORM_DEFAULTS, ...values } : { ...values }
   const templateKey =
     typeof payload.template_key === "string" ? payload.template_key : undefined
   const scanDepth =

@@ -175,6 +175,18 @@ class _ResolverRepo:
     async def get_policy_override_by_assignment(self, assignment_id: int) -> dict | None:
         return self.overrides.get(assignment_id)
 
+    async def list_policy_assignment_workspaces(self, assignment_id: int) -> list[dict]:  # noqa: ARG002
+        return []
+
+    async def find_active_capability_mapping(
+        self,
+        *,
+        owner_scope_type: str,  # noqa: ARG002
+        owner_scope_id: int | None,  # noqa: ARG002
+        capability_name: str,  # noqa: ARG002
+    ) -> dict | None:
+        return None
+
 
 @pytest.mark.asyncio
 async def test_policy_resolver_applies_assignment_override_and_emits_provenance() -> None:
@@ -191,6 +203,7 @@ async def test_policy_resolver_applies_assignment_override_and_emits_provenance(
     assert policy["allowed_tools"] == ["notes.search", "Bash(git *)", "remote.fetch"]
     assert policy["capabilities"] == ["filesystem.read"]
     assert policy["approval_mode"] == "ask_outside_profile"
+    assert policy["authored_policy_document"] == policy["resolved_policy_document"]
     assert policy["sources"] == [
         {
             "assignment_id": 12,
@@ -199,6 +212,7 @@ async def test_policy_resolver_applies_assignment_override_and_emits_provenance(
             "owner_scope_type": "user",
             "owner_scope_id": 7,
             "profile_id": 1,
+            "path_scope_object_id": None,
         }
     ]
     assert policy["provenance"] == [
@@ -256,6 +270,20 @@ async def test_policy_resolver_applies_assignment_override_and_emits_provenance(
             "override_id": 101,
             "effect": "replaced",
         },
+        {
+            "field": "capabilities",
+            "value": "filesystem.read",
+            "source_kind": "capability_mapping",
+            "assignment_id": None,
+            "profile_id": None,
+            "override_id": None,
+            "capability_name": "filesystem.read",
+            "mapping_id": None,
+            "mapping_scope_type": None,
+            "mapping_scope_id": None,
+            "resolved_effects": {},
+            "effect": "blocked",
+        },
     ]
 
 
@@ -273,6 +301,7 @@ async def test_policy_resolver_ignores_inactive_assignment_override() -> None:
     assert policy["enabled"] is True
     assert policy["allowed_tools"] == ["notes.search", "Bash(git *)"]
     assert policy["approval_mode"] == "ask_every_time"
+    assert policy["unresolved_capabilities"] == ["filesystem.read"]
     assert not any(
         entry["source_kind"] == "assignment_override" for entry in policy["provenance"]
     )

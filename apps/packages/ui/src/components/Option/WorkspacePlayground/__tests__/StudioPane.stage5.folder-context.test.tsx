@@ -5,6 +5,8 @@ import { StudioPane } from "../StudioPane"
 
 const {
   mockRagSearch,
+  mockCreateChatCompletion,
+  mockGetMediaDetails,
   mockGetChatModels,
   mockAddArtifact,
   mockUpdateArtifactStatus,
@@ -14,6 +16,8 @@ const {
   chatModelSettingsStoreState
 } = vi.hoisted(() => {
   const ragSearch = vi.fn()
+  const createChatCompletion = vi.fn()
+  const getMediaDetails = vi.fn()
   const getChatModels = vi.fn()
   const addArtifact = vi.fn()
   const updateArtifactStatus = vi.fn()
@@ -76,6 +80,8 @@ const {
 
   return {
     mockRagSearch: ragSearch,
+    mockCreateChatCompletion: createChatCompletion,
+    mockGetMediaDetails: getMediaDetails,
     mockGetChatModels: getChatModels,
     mockAddArtifact: addArtifact,
     mockUpdateArtifactStatus: updateArtifactStatus,
@@ -136,8 +142,11 @@ vi.mock("@/services/flashcards", () => ({
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     ragSearch: mockRagSearch,
+    createChatCompletion: mockCreateChatCompletion,
+    getMediaDetails: mockGetMediaDetails,
     synthesizeSpeech: vi.fn(),
     generateSlidesFromMedia: vi.fn(),
+    listVisualStyles: vi.fn().mockResolvedValue([]),
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }
@@ -199,6 +208,25 @@ const expandOutputTypesSection = () => {
   }
 }
 
+const createChatCompletionResponse = (content: string) =>
+  new Response(
+    JSON.stringify({
+      choices: [
+        {
+          message: {
+            content
+          }
+        }
+      ]
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json"
+      }
+    }
+  )
+
 describe("StudioPane Stage 5 folder-derived context", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -211,6 +239,11 @@ describe("StudioPane Stage 5 folder-derived context", () => {
     workspaceStoreState.generatedArtifacts = []
     workspaceStoreState.isGeneratingOutput = false
     workspaceStoreState.generatingOutputType = null
+    messageOptionStoreState.selectedModel = "gpt-4o-mini"
+    messageOptionStoreState.ragAdvancedOptions = {
+      min_score: 0.2,
+      enable_reranking: true
+    }
 
     let artifactCounter = 0
     mockAddArtifact.mockImplementation((artifactData: any) => {
@@ -224,15 +257,16 @@ describe("StudioPane Stage 5 folder-derived context", () => {
     mockUpdateArtifactStatus.mockImplementation(() => {})
 
     mockGetChatModels.mockResolvedValue([])
-    mockRagSearch.mockResolvedValue({
-      answer: "Folder-derived summary",
-      total_tokens: 32,
-      prompt_tokens: 24,
-      completion_tokens: 8
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse("Folder-derived summary")
+    )
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "Folder Article" },
+      content: { text: "Folder-selected content for summary generation." }
     })
   })
 
-  it("enables generation and uses folder-derived media ids", async () => {
+  it("enables generation and uses folder-derived media ids for direct summary generation", async () => {
     render(<StudioPane />)
     expandOutputTypesSection()
 
@@ -242,10 +276,31 @@ describe("StudioPane Stage 5 folder-derived context", () => {
     fireEvent.click(summaryButton)
 
     await waitFor(() => {
-      expect(mockRagSearch).toHaveBeenCalledWith(
-        expect.stringContaining("summary"),
+      expect(mockGetMediaDetails).toHaveBeenCalledWith(
+        101,
         expect.objectContaining({
-          media_ids: [101]
+          include_content: true,
+          signal: expect.any(AbortSignal)
+        })
+      )
+    })
+
+    const summaryRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(summaryRequest).toMatchObject({
+      model: "gpt-4o-mini"
+    })
+    expect(summaryRequest.messages?.[1]?.content).toContain("Folder Article")
+    expect(summaryRequest.messages?.[1]?.content).toContain(
+      "Folder-selected content for summary generation."
+    )
+    expect(mockRagSearch).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        "artifact-1",
+        "completed",
+        expect.objectContaining({
+          content: "Folder-derived summary"
         })
       )
     })

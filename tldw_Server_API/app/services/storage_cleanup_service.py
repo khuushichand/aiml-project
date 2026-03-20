@@ -21,7 +21,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
     AuthnzGeneratedFilesRepo,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
 
 try:  # pragma: no cover - optional dependency guard for static tooling
@@ -81,14 +81,15 @@ def _mark_tts_history_artifact_deleted(user_id: int | None, file_id: int | None)
         return
     try:
         db_path = DatabasePaths.get_media_db_path(user_id)
-        db = MediaDatabase(db_path=str(db_path), client_id="storage_cleanup")
-        try:
+        with managed_media_database(
+            "storage_cleanup",
+            db_path=str(db_path),
+            initialize=False,
+        ) as db:
             db.mark_tts_history_artifacts_deleted_for_file_id(
                 user_id=str(user_id),
                 file_id=int(file_id),
             )
-        finally:
-            db.close_connection()
     except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.debug(f"storage_cleanup: failed to update tts_history for file {file_id}: {exc}")
 

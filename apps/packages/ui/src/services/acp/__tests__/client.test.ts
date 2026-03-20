@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ACPRestClient, ACPWebSocketClient } from "@/services/acp/client"
+import type { ACPWSPermissionRequestMessage } from "@/services/acp/types"
 
 describe("ACPRestClient", () => {
   beforeEach(() => {
@@ -39,7 +40,16 @@ describe("ACPRestClient", () => {
       .fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ session_id: "sess-1", messages: [] }),
+        json: async () => ({
+          session_id: "sess-1",
+          messages: [],
+          policy_snapshot_version: "resolved-v1",
+          policy_snapshot_fingerprint: "snapshot-123",
+          policy_snapshot_refreshed_at: "2026-03-14T12:00:00+00:00",
+          policy_summary: { allowed_tool_count: 2, approval_mode: "require_approval" },
+          policy_provenance_summary: { source_kinds: ["capability_mapping"] },
+          policy_refresh_error: null,
+        }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -48,8 +58,13 @@ describe("ACPRestClient", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     const client = createClient()
-    await client.getSessionDetail("sess-1")
+    const detail = await client.getSessionDetail("sess-1")
     await client.getSessionUsage("sess-1")
+
+    expect(detail.policy_snapshot_version).toBe("resolved-v1")
+    expect(detail.policy_snapshot_fingerprint).toBe("snapshot-123")
+    expect(detail.policy_summary?.approval_mode).toBe("require_approval")
+    expect(detail.policy_provenance_summary?.source_kinds).toEqual(["capability_mapping"])
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -85,6 +100,29 @@ describe("ACPRestClient", () => {
         body: JSON.stringify({ message_index: 3, name: "Forked" }),
       })
     )
+  })
+
+  it("keeps tier while exposing permission policy metadata", () => {
+    const message: ACPWSPermissionRequestMessage = {
+      type: "permission_request",
+      request_id: "req-1",
+      session_id: "sess-1",
+      tool_name: "web.search",
+      tool_arguments: { query: "opa" },
+      tier: "individual",
+      timeout_seconds: 30,
+      approval_requirement: "approval_required",
+      governance_reason: "policy_approval_required",
+      deny_reason: undefined,
+      provenance_summary: { source_kinds: ["capability_mapping"] },
+      runtime_narrowing_reason: "workspace_trust_required",
+      policy_snapshot_fingerprint: "snapshot-123",
+    }
+
+    expect(message.tier).toBe("individual")
+    expect(message.approval_requirement).toBe("approval_required")
+    expect(message.policy_snapshot_fingerprint).toBe("snapshot-123")
+    expect(message.provenance_summary?.source_kinds).toEqual(["capability_mapping"])
   })
 })
 

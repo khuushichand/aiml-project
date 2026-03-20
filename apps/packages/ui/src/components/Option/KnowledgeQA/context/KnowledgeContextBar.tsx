@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { RagPresetName } from "@/services/rag/unified-rag"
+import type { RagPresetName, RagSource } from "@/services/rag/unified-rag"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { cn } from "@/libs/utils"
 import {
@@ -17,8 +17,8 @@ import {
 type KnowledgeContextBarProps = {
   preset: RagPresetName
   onPresetChange: (preset: RagPresetName) => void
-  sources: string[]
-  onSourcesChange: (sources: string[]) => void
+  sources: RagSource[]
+  onSourcesChange: (sources: RagSource[]) => void
   includeMediaIds: number[]
   onIncludeMediaIdsChange: (ids: number[]) => void
   includeNoteIds: string[]
@@ -75,7 +75,7 @@ const PRESET_DETAILS: Record<PresetKey, PresetDetails> = {
   },
 }
 
-const SOURCE_LABELS: Record<string, string> = {
+const SOURCE_LABELS: Record<RagSource, string> = {
   media_db: "Docs & Media",
   notes: "Notes",
   characters: "Characters",
@@ -93,7 +93,7 @@ const SOURCE_OPTIONS = [
 
 const MAX_VISIBLE_GRANULAR_RESULTS = 80
 
-function summarizeSources(sources: string[]): string {
+function summarizeSources(sources: RagSource[]): string {
   if (!Array.isArray(sources) || sources.length === 0) {
     return "None selected"
   }
@@ -197,7 +197,7 @@ function normalizeNoteOptions(payload: unknown): GranularSourceOption<string>[] 
     if (!record) continue
 
     const id = asString(record.id ?? record.note_id)
-    if (!id || seen.has(id)) continue
+    if (id === null || seen.has(id)) continue
 
     const contentPreview = asString(record.content)?.slice(0, 80)
     const label = asString(record.title) ?? asString(record.name) ?? contentPreview ?? `Note ${id}`
@@ -237,15 +237,18 @@ export function KnowledgeContextBar({
 
   const sourceMenuRef = useRef<HTMLDivElement | null>(null)
   const granularMenuRef = useRef<HTMLDivElement | null>(null)
+  const granularLoadRequestIdRef = useRef(0)
 
   const normalizedSources = useMemo(
     () =>
       Array.from(
         new Set(
           sources
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
+            .filter(
+              (value): value is RagSource =>
+                typeof value === "string" &&
+                SOURCE_OPTIONS.some((option) => option.key === value)
+            )
         )
       ),
     [sources]
@@ -309,6 +312,8 @@ export function KnowledgeContextBar({
   }, [granularQuery, noteOptions])
 
   const loadGranularOptions = useCallback(async () => {
+    const requestId = granularLoadRequestIdRef.current + 1
+    granularLoadRequestIdRef.current = requestId
     setGranularLoading(true)
     setGranularError(null)
     try {
@@ -317,12 +322,21 @@ export function KnowledgeContextBar({
         tldwClient.listNotes({ page: 1, results_per_page: 200, include_keywords: false }),
       ])
 
+      if (granularLoadRequestIdRef.current !== requestId) {
+        return
+      }
       setMediaOptions(normalizeMediaOptions(mediaResponse))
       setNoteOptions(normalizeNoteOptions(notesResponse))
       setGranularLoaded(true)
     } catch (error) {
+      if (granularLoadRequestIdRef.current !== requestId) {
+        return
+      }
       setGranularError(error instanceof Error ? error.message : "Failed to load source lists")
     } finally {
+      if (granularLoadRequestIdRef.current !== requestId) {
+        return
+      }
       setGranularLoading(false)
     }
   }, [])
@@ -356,25 +370,42 @@ export function KnowledgeContextBar({
     void loadGranularOptions()
   }, [granularMenuOpen, granularLoaded, granularLoading, loadGranularOptions])
 
-  const toggleSource = (sourceKey: string) => {
+  const toggleSource = (sourceKey: RagSource) => {
     const exists = normalizedSources.includes(sourceKey)
     const nextSources = exists
       ? normalizedSources.filter((value) => value !== sourceKey)
       : [...normalizedSources, sourceKey]
     onSourcesChange(nextSources)
+
+    if (!exists) return
+
+    if (sourceKey === "media_db" && normalizedMediaIds.length > 0) {
+      onIncludeMediaIdsChange([])
+    }
+    if (sourceKey === "notes" && normalizedNoteIds.length > 0) {
+      onIncludeNoteIdsChange([])
+    }
   }
 
   const toggleMediaId = (id: number) => {
-    const next = selectedMediaSet.has(id)
+    const isRemoving = selectedMediaSet.has(id)
+    const next = isRemoving
       ? normalizedMediaIds.filter((value) => value !== id)
       : [...normalizedMediaIds, id].sort((left, right) => left - right)
+    if (!isRemoving && !normalizedSources.includes("media_db")) {
+      onSourcesChange([...normalizedSources, "media_db"])
+    }
     onIncludeMediaIdsChange(next)
   }
 
   const toggleNoteId = (id: string) => {
-    const next = selectedNoteSet.has(id)
+    const isRemoving = selectedNoteSet.has(id)
+    const next = isRemoving
       ? normalizedNoteIds.filter((value) => value !== id)
       : [...normalizedNoteIds, id].sort((left, right) => left.localeCompare(right))
+    if (!isRemoving && !normalizedSources.includes("notes")) {
+      onSourcesChange([...normalizedSources, "notes"])
+    }
     onIncludeNoteIdsChange(next)
   }
 
@@ -384,6 +415,12 @@ export function KnowledgeContextBar({
 
   const clearSources = () => {
     onSourcesChange([])
+    if (normalizedMediaIds.length > 0) {
+      onIncludeMediaIdsChange([])
+    }
+    if (normalizedNoteIds.length > 0) {
+      onIncludeNoteIdsChange([])
+    }
   }
 
   const clearSpecificSources = () => {

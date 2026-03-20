@@ -60,10 +60,7 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.pressSlashToFocus()
 
       const input = await qaPage.getSearchInput()
-      // Input should be focused
-      await expect(input).toBeFocused({ timeout: 5_000 }).catch(() => {
-        // / shortcut may not be bound or may only work when no input focused
-      })
+      await expect(input).toBeFocused({ timeout: 5_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -82,9 +79,12 @@ test.describe("KnowledgeQA Workflow", () => {
       const query = "What is machine learning?"
 
       const [ragResult] = await Promise.all([
-        qaPage.waitForRagSearch().catch(() => ({ status: 0, body: null })),
+        qaPage.waitForRagSearch(),
         qaPage.search(query)
       ])
+
+      expect(ragResult.status).toBe(200)
+      expect(ragResult.requestBody?.query).toBe(query)
 
       // Wait for results to render
       await qaPage.waitForResults()
@@ -99,7 +99,7 @@ test.describe("KnowledgeQA Workflow", () => {
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should display sources with citations", async ({
+    test("should surface the evidence panel after a live search", async ({
       authedPage,
       serverInfo,
       diagnostics
@@ -112,20 +112,18 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.search("content analysis")
       await qaPage.waitForResults()
 
+      await expect(qaPage.getEvidencePanel()).toBeVisible({ timeout: 10_000 })
       const answer = await qaPage.getAnswerText()
       if (answer.length > 0) {
-        // Check for source cards
-        const sourceCount = await qaPage.getSourceCount()
-        // Sources may or may not be present depending on content
-        if (sourceCount > 0) {
-          // Try clicking a citation
-          try {
-            await qaPage.clickCitation(0)
-            // Should scroll/highlight the source
-            await authedPage.waitForTimeout(500)
-          } catch {
-            // Citation badge may not be clickable
-          }
+        const citationButtons = qaPage.getCitationButtons()
+        const citationCount = await citationButtons.count()
+        if (citationCount > 0) {
+          await qaPage.clickCitation(0)
+          await expect(qaPage.getEvidencePanel()).toBeVisible({ timeout: 10_000 })
+        } else {
+          await expect(
+            qaPage.getEvidencePanel().getByText(/No sources yet|0 sources/i).first()
+          ).toBeVisible({ timeout: 10_000 })
         }
       }
 
@@ -211,9 +209,65 @@ test.describe("KnowledgeQA Workflow", () => {
       ).toBeVisible({ timeout: 10_000 })
 
       await qaPage.waitForResults()
+      await expect(authedPage.getByText("AI Answer")).toBeVisible({
+        timeout: 10_000
+      })
       await expect(
-        authedPage.getByText(/Delayed answer \[1\]/i)
+        authedPage.getByTestId("knowledge-answer-content")
+      ).toContainText(/Delayed answer/i, { timeout: 10_000 })
+      await expect(qaPage.getCitationButtons().first()).toBeVisible({
+        timeout: 10_000
+      })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("treats whitespace-only answers as no generated answer", async ({
+      authedPage,
+      diagnostics
+    }) => {
+      qaPage = new KnowledgeQAPage(authedPage)
+
+      await authedPage.route("**/api/v1/rag/search/stream", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/plain",
+          body: "",
+        })
+      })
+
+      await authedPage.route("**/api/v1/rag/search", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            results: [
+              {
+                id: "blank-answer-source-1",
+                content: "Relevant source excerpt",
+                metadata: {
+                  title: "Blank Answer Source",
+                  source_type: "notes",
+                },
+                score: 0.91,
+              },
+            ],
+            answer: "   ",
+          }),
+        })
+      })
+
+      await qaPage.goto()
+      await qaPage.waitForReady()
+      await qaPage.search("blank answer regression")
+      await qaPage.waitForResults()
+
+      await expect(
+        authedPage.getByText(/Found 1 relevant source\./i)
       ).toBeVisible({ timeout: 10_000 })
+      await expect(authedPage.getByText("AI Answer")).toHaveCount(0)
+      await expect(authedPage.getByTestId("knowledge-answer-content")).toHaveCount(0)
+      await expect(await qaPage.getAnswerText()).toBe("")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -232,16 +286,11 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.goto()
       await qaPage.waitForReady()
 
-      try {
-        await qaPage.openSettings()
-        // Settings panel should be visible
-        const settingsPanel = authedPage.locator(
-          "[data-testid*='settings'], .settings-panel, .ant-drawer"
-        )
-        await expect(settingsPanel.first()).toBeVisible({ timeout: 10_000 })
-      } catch {
-        // Settings may be inline or use a different pattern
-      }
+      await qaPage.openSettings()
+      await expect(qaPage.getSettingsDialog()).toBeVisible({ timeout: 10_000 })
+      await expect(
+        qaPage.getSettingsDialog().getByText(/RAG Settings/i)
+      ).toBeVisible()
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -254,21 +303,16 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.goto()
       await qaPage.waitForReady()
 
-      try {
-        await qaPage.openSettings()
-        await authedPage.waitForTimeout(500)
+      await qaPage.openSettings()
+      await expect(qaPage.getSettingsDialog()).toBeVisible({ timeout: 10_000 })
 
-        // Try each preset
-        for (const preset of ["fast", "balanced", "thorough"] as const) {
-          try {
-            await qaPage.selectPreset(preset)
-            await authedPage.waitForTimeout(300)
-          } catch {
-            // Preset button may not be found
-          }
-        }
-      } catch {
-        // Settings panel may not be openable
+      for (const preset of ["fast", "balanced", "thorough"] as const) {
+        await qaPage.selectPreset(preset)
+        await expect(
+          qaPage
+            .getSettingsDialog()
+            .getByRole("radio", { name: new RegExp(`^${preset}\\b`, "i") })
+        ).toHaveAttribute("aria-checked", "true")
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -282,24 +326,17 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.goto()
       await qaPage.waitForReady()
 
-      try {
-        await qaPage.openSettings()
-        await authedPage.waitForTimeout(500)
+      await qaPage.openSettings()
+      const settingsDialog = qaPage.getSettingsDialog()
+      const expertToggle = qaPage.getExpertModeToggle()
 
-        await qaPage.toggleExpertMode()
-        await authedPage.waitForTimeout(300)
+      const initialChecked = await expertToggle.getAttribute("aria-checked")
+      await qaPage.toggleExpertMode()
 
-        // Expert mode should reveal advanced fields
-        const advancedFields = authedPage.locator(
-          "[data-testid*='search-mode'], [data-testid*='rerank'], [id*='search_mode']"
-        )
-        // Advanced fields are optional
-        if ((await advancedFields.count()) > 0) {
-          await expect(advancedFields.first()).toBeVisible()
-        }
-      } catch {
-        // Expert mode toggle may not be available
-      }
+      await expect(expertToggle).not.toHaveAttribute("aria-checked", initialChecked)
+      await expect(settingsDialog.getByText("Agentic RAG")).toBeVisible({
+        timeout: 10_000
+      })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -314,22 +351,25 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.goto()
       await qaPage.waitForReady()
 
-      try {
-        await qaPage.openSettings()
-        await authedPage.waitForTimeout(500)
-        await qaPage.selectPreset("thorough")
-        await authedPage.waitForTimeout(300)
-      } catch {
-        // Settings may not be available; search with defaults
-      }
+      await qaPage.openSettings()
+      await qaPage.selectPreset("thorough")
+      await expect(
+        qaPage
+          .getSettingsDialog()
+          .getByRole("radio", { name: /^thorough\b/i })
+      ).toHaveAttribute("aria-checked", "true")
+      await qaPage.getSettingsDialog().getByRole("button", { name: /^Done$/i }).click()
 
-      // Perform search and verify API call is made
       const [ragResult] = await Promise.all([
-        qaPage.waitForRagSearch().catch(() => ({ status: 0, body: null })),
+        qaPage.waitForRagSearch(),
         qaPage.search("test with settings")
       ])
 
       await qaPage.waitForResults()
+      expect(ragResult.status).toBe(200)
+      expect(ragResult.requestBody?.top_k).toBe(20)
+      expect(ragResult.requestBody?.enable_citations).toBe(true)
+      expect(ragResult.requestBody?.enable_post_verification).toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -355,13 +395,8 @@ test.describe("KnowledgeQA Workflow", () => {
 
       const answer = await qaPage.getAnswerText()
       if (answer.length > 0) {
-        // Follow-up input should appear
-        const hasFollowUp = await qaPage.isFollowUpVisible()
-        // Follow-up is optional feature
-        if (hasFollowUp) {
-          const followUpInput = await qaPage.getFollowUpInput()
-          await expect(followUpInput).toBeVisible()
-        }
+        const followUpInput = await qaPage.getFollowUpInput()
+        await expect(followUpInput).toBeVisible()
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -381,14 +416,21 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.waitForResults()
 
       const hasFollowUp = await qaPage.isFollowUpVisible()
+      expect(hasFollowUp).toBeTruthy()
       if (hasFollowUp) {
-        // Ask follow-up
         const [ragResult] = await Promise.all([
-          qaPage.waitForRagSearch().catch(() => ({ status: 0, body: null })),
+          qaPage.waitForRagSearch(),
           qaPage.askFollowUp("Can you elaborate on convolutional networks?")
         ])
 
         await qaPage.waitForResults()
+        expect(ragResult.status).toBe(200)
+        expect(ragResult.requestBody?.query).toBe(
+          "Can you elaborate on convolutional networks?"
+        )
+        await expect(
+          authedPage.getByText(/Conversation • 2 turns/i)
+        ).toBeVisible({ timeout: 10_000 })
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -408,18 +450,27 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.goto()
       await qaPage.waitForReady()
 
-      try {
-        await qaPage.toggleHistorySidebar()
-        await authedPage.waitForTimeout(500)
+      const firstQuery = `history-${generateTestId("first")}`
+      const secondQuery = `history-${generateTestId("second")}`
 
-        // Sidebar should be visible
-        const sidebar = authedPage.locator(
-          "[data-testid*='history'], .history-sidebar, .ant-drawer"
-        )
-        await expect(sidebar.first()).toBeVisible({ timeout: 10_000 })
-      } catch {
-        // History sidebar may not be available
-      }
+      await qaPage.search(firstQuery)
+      await qaPage.waitForResults()
+
+      const input = await qaPage.getSearchInput()
+      await input.fill(secondQuery)
+      await input.press("Enter")
+      await qaPage.waitForResults()
+
+      await qaPage.toggleHistorySidebar()
+      await expect(qaPage.getHistorySidebar()).toBeVisible({ timeout: 10_000 })
+
+      const firstHistoryEntry = authedPage.getByRole("button", {
+        name: new RegExp(secondQuery, "i")
+      })
+      await expect(firstHistoryEntry).toBeVisible({ timeout: 10_000 })
+      await firstHistoryEntry.click()
+
+      await expect(input).toHaveValue(secondQuery)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -466,9 +517,9 @@ test.describe("KnowledgeQA Workflow", () => {
       // Should get empty results or web fallback
       const answer = await qaPage.getAnswerText()
       const noResults = await qaPage.hasNoResults()
+      const sourceOnlyState = await qaPage.hasSourceOnlyState()
 
-      // One of these should be true (or web fallback provides an answer)
-      expect(answer.length > 0 || noResults || true).toBeTruthy()
+      expect(answer.length > 0 || noResults || sourceOnlyState).toBeTruthy()
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -495,10 +546,8 @@ test.describe("KnowledgeQA Workflow", () => {
 
       // Should show some kind of error state
       const errorMsg = await qaPage.getErrorMessage()
-      const noResults = await qaPage.hasNoResults()
 
-      // Either an error message or graceful empty state
-      expect(errorMsg !== null || noResults || true).toBeTruthy()
+      expect(errorMsg).not.toBeNull()
 
       // Unroute to not affect other tests
       await authedPage.unroute("**/api/v1/rag/search")
