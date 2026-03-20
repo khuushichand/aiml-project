@@ -389,9 +389,11 @@ class _FakeGovernancePackTrustService:
             _stable_policy_fingerprint,
         )
 
-        requested_fingerprint = str(policy.get("policy_fingerprint") or "").strip() or None
+        requested_fingerprint = str(policy.get("policy_fingerprint") or "").strip()
         current_fingerprint = _stable_policy_fingerprint(self.policy)
-        if requested_fingerprint and requested_fingerprint != current_fingerprint:
+        if not requested_fingerprint:
+            raise GovernancePackTrustPolicyStaleError("policy_fingerprint is required for trust policy updates")
+        if requested_fingerprint != current_fingerprint:
             raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")
         self.update_calls.append({"policy": dict(policy), "actor_id": actor_id})
         self.policy = {
@@ -1194,9 +1196,11 @@ def test_governance_pack_trust_policy_round_trip() -> None:
 
     with TestClient(app) as client:
         get_resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
+        policy_fingerprint = get_resp.json()["policy_fingerprint"]
         put_resp = client.put(
             "/api/v1/mcp/hub/governance-packs/trust-policy",
             json={
+                "policy_fingerprint": policy_fingerprint,
                 "allow_local_path_sources": True,
                 "allowed_local_roots": ["/srv/trusted-packs"],
                 "allow_git_sources": True,
@@ -1304,6 +1308,12 @@ async def test_governance_pack_trust_service_classifies_signer_result_codes() ->
                             "repo_bindings": ["github.com/example/researcher-pack"],
                             "status": "revoked",
                         },
+                        {
+                            "fingerprint": "INACTIVE1",
+                            "display_name": "Paused Bot",
+                            "repo_bindings": ["github.com/example/researcher-pack"],
+                            "status": "inactive",
+                        },
                     ],
                 }
             }
@@ -1322,10 +1332,15 @@ async def test_governance_pack_trust_service_classifies_signer_result_codes() ->
         "REVOKED1",
         "github.com/example/researcher-pack",
     )
+    inactive = await service.evaluate_signer_for_repository(
+        "INACTIVE1",
+        "github.com/example/researcher-pack",
+    )
 
     assert trusted["result_code"] == "signer_trusted_for_repo"
     assert not_allowed["result_code"] == "signer_not_allowed_for_repo"
     assert revoked["result_code"] == "signer_revoked"
+    assert inactive["result_code"] == "signer_not_allowed_for_repo"
 
 
 def test_governance_pack_trust_policy_rejects_invalid_repo_binding() -> None:
@@ -1346,9 +1361,11 @@ def test_governance_pack_trust_policy_rejects_invalid_repo_binding() -> None:
     )
 
     with TestClient(app) as client:
+        get_resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
         resp = client.put(
             "/api/v1/mcp/hub/governance-packs/trust-policy",
             json={
+                "policy_fingerprint": get_resp.json()["policy_fingerprint"],
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
                 "allowed_git_repositories": ["github.com/example/researcher-pack"],
@@ -1374,9 +1391,11 @@ def test_governance_pack_trust_policy_rejects_blank_fingerprint() -> None:
     )
 
     with TestClient(app) as client:
+        get_resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
         resp = client.put(
             "/api/v1/mcp/hub/governance-packs/trust-policy",
             json={
+                "policy_fingerprint": get_resp.json()["policy_fingerprint"],
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
                 "allowed_git_repositories": ["github.com/example/researcher-pack"],
@@ -1396,9 +1415,11 @@ def test_governance_pack_trust_policy_rejects_empty_repo_bindings() -> None:
     )
 
     with TestClient(app) as client:
+        get_resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
         resp = client.put(
             "/api/v1/mcp/hub/governance-packs/trust-policy",
             json={
+                "policy_fingerprint": get_resp.json()["policy_fingerprint"],
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
                 "allowed_git_repositories": ["github.com/example/researcher-pack"],
@@ -1424,9 +1445,11 @@ def test_governance_pack_trust_policy_rejects_blank_repo_binding() -> None:
     )
 
     with TestClient(app) as client:
+        get_resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
         resp = client.put(
             "/api/v1/mcp/hub/governance-packs/trust-policy",
             json={
+                "policy_fingerprint": get_resp.json()["policy_fingerprint"],
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
                 "allowed_git_repositories": ["github.com/example/researcher-pack"],

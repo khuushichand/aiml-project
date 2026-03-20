@@ -298,12 +298,13 @@ class McpHubGovernancePackTrustService:
 
     async def update_policy(self, policy: dict[str, Any], *, actor_id: int | None) -> dict[str, Any]:
         """Persist a normalized deployment-wide trust policy."""
-        requested_fingerprint = str(policy.get("policy_fingerprint") or "").strip() or None
-        if requested_fingerprint:
-            current_policy = await self.get_policy()
-            current_fingerprint = str(current_policy.get("policy_fingerprint") or "").strip()
-            if current_fingerprint and requested_fingerprint != current_fingerprint:
-                raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")
+        requested_fingerprint = str(policy.get("policy_fingerprint") or "").strip()
+        if not requested_fingerprint:
+            raise GovernancePackTrustPolicyStaleError("policy_fingerprint is required for trust policy updates")
+        current_policy = await self.get_policy()
+        current_fingerprint = str(current_policy.get("policy_fingerprint") or "").strip()
+        if current_fingerprint and requested_fingerprint != current_fingerprint:
+            raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")
         normalized = self._normalize_policy(policy, for_write=True)
         response_payload = dict(normalized)
         response_payload["policy_fingerprint"] = _stable_policy_fingerprint(normalized)
@@ -435,6 +436,14 @@ class McpHubGovernancePackTrustService:
                 "allowed": False,
                 "reason": "signer_revoked",
                 "result_code": "signer_revoked",
+                "canonical_repository": canonical_repository,
+                "signer_fingerprint": canonical_fingerprint,
+            }
+        if str(signer.get("status") or "").strip().lower() != "active":
+            return {
+                "allowed": False,
+                "reason": "signer_not_allowed_for_repo",
+                "result_code": "signer_not_allowed_for_repo",
                 "canonical_repository": canonical_repository,
                 "signer_fingerprint": canonical_fingerprint,
             }
