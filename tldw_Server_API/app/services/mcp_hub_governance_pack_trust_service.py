@@ -85,6 +85,14 @@ def _normalize_repo_binding(repo_binding: Any) -> str:
     return f"{canonical}/" if is_prefix else canonical
 
 
+def _normalize_signer_status(raw_status: Any) -> str:
+    """Normalize a signer status or reject invalid values."""
+    status = str(raw_status or "active").strip().lower()
+    if status not in _ALLOWED_SIGNER_STATUSES:
+        raise ValueError(f"invalid signer status: {raw_status}")
+    return status
+
+
 def _normalize_trusted_signer_entry(
     signer: dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -101,14 +109,11 @@ def _normalize_trusted_signer_entry(
             continue
         seen_bindings.add(normalized_binding)
         repo_bindings.append(normalized_binding)
-    status = str(signer.get("status") or "active").strip().lower()
-    if status not in _ALLOWED_SIGNER_STATUSES:
-        status = "active"
     return {
         "fingerprint": fingerprint,
         "display_name": display_name,
         "repo_bindings": repo_bindings,
-        "status": status,
+        "status": _normalize_signer_status(signer.get("status")),
     }
 
 
@@ -124,27 +129,16 @@ def _normalize_trusted_signers(
         fingerprint = str(entry.get("fingerprint") or "").strip().upper()
         if not fingerprint:
             return
-        existing = by_fingerprint.get(fingerprint)
-        if existing is None:
-            canonical = {
-                "fingerprint": fingerprint,
-                "display_name": entry.get("display_name"),
-                "repo_bindings": list(entry.get("repo_bindings") or []),
-                "status": str(entry.get("status") or "active").strip().lower() or "active",
-            }
-            by_fingerprint[fingerprint] = canonical
-            normalized.append(canonical)
-            return
-
-        if not existing.get("display_name") and entry.get("display_name"):
-            existing["display_name"] = entry["display_name"]
-        for repo_binding in entry.get("repo_bindings") or []:
-            if repo_binding not in existing["repo_bindings"]:
-                existing["repo_bindings"].append(repo_binding)
-        if str(existing.get("status") or "").strip().lower() != "active":
-            status = str(entry.get("status") or "").strip().lower()
-            if status == "active":
-                existing["status"] = status
+        if fingerprint in by_fingerprint:
+            raise ValueError(f"duplicate trusted signer fingerprint: {fingerprint}")
+        canonical = {
+            "fingerprint": fingerprint,
+            "display_name": entry.get("display_name"),
+            "repo_bindings": list(entry.get("repo_bindings") or []),
+            "status": _normalize_signer_status(entry.get("status")),
+        }
+        by_fingerprint[fingerprint] = canonical
+        normalized.append(canonical)
 
     for raw_signer in signers or []:
         if not isinstance(raw_signer, dict):

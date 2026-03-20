@@ -318,6 +318,73 @@ async def test_governance_pack_trust_service_keeps_structured_signer_status_auth
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_trust_service_rejects_duplicate_structured_signer_fingerprints(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    with pytest.raises(ValueError, match="duplicate trusted signer fingerprint"):
+        await service.update_policy(
+            {
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/packs"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "abc123",
+                        "repo_bindings": ["github.com/example/packs"],
+                        "status": "active",
+                    },
+                    {
+                        "fingerprint": "ABC123",
+                        "repo_bindings": ["github.com/example/"],
+                        "status": "revoked",
+                    },
+                ],
+            },
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_governance_pack_trust_service_rejects_invalid_structured_signer_status(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    with pytest.raises(ValueError, match="invalid signer status"):
+        await service.update_policy(
+            {
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/packs"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "abc123",
+                        "repo_bindings": ["github.com/example/packs"],
+                        "status": "pending",
+                    }
+                ],
+            },
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_governance_pack_trust_service_filters_signers_by_repo_bindings_when_evaluating_git_sources(
     tmp_path,
     monkeypatch,
