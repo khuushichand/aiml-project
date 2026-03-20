@@ -9,6 +9,8 @@ _CHARACTER_CONVERSATION_NAMESPACE = uuid.UUID("8f6d6df3-0b13-5c67-a1f4-5c62fa2d4
 
 
 def _coerce_nonempty_string(value: Any) -> str:
+    if value is None:
+        raise ValueError("value must be a non-empty string")
     text = str(value).strip()
     if not text:
         raise ValueError("value must be a non-empty string")
@@ -23,20 +25,21 @@ def _coerce_nonempty_id(value: Any, *, field_name: str) -> str:
 def build_telegram_session_key(
     *,
     tenant_id: Any,
+    chat_type: Any,
     telegram_user_id: Any,
     telegram_chat_id: Any | None = None,
     topic_or_thread_id: Any | None = None,
 ) -> str:
     tenant = _coerce_nonempty_string(tenant_id)
+    normalized_chat_type = _coerce_nonempty_string(chat_type).lower()
     user = _coerce_nonempty_string(telegram_user_id)
-    if telegram_chat_id is None:
+    if normalized_chat_type == "private":
         return f"{tenant}:dm:{user}"
+    if normalized_chat_type not in {"group", "supergroup"}:
+        raise ValueError("chat_type must be private, group, or supergroup")
 
     chat = _coerce_nonempty_string(telegram_chat_id)
-    if topic_or_thread_id is None:
-        return f"{tenant}:group:{chat}:user:{user}"
-
-    topic = _coerce_nonempty_string(topic_or_thread_id)
+    topic = _coerce_nonempty_string(topic_or_thread_id) if topic_or_thread_id is not None else "root"
     return f"{tenant}:group:{chat}:topic:{topic}:user:{user}"
 
 
