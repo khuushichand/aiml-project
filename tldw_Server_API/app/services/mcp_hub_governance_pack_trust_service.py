@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -13,6 +15,10 @@ from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
 _ALLOWED_REF_KINDS = frozenset({"branch", "tag", "commit"})
 _ALLOWED_SIGNER_STATUSES = frozenset({"active", "inactive", "revoked"})
 _SSH_REPO_RE = re.compile(r"^(?:[^@]+@)?(?P<host>[^:]+):(?P<path>.+)$")
+
+
+class GovernancePackTrustPolicyStaleError(ValueError):
+    """Raised when a trust-policy update uses a stale fingerprint."""
 
 
 def _normalize_string_list(value: Any) -> list[str]:
@@ -226,6 +232,12 @@ def _match_trusted_signers_for_repository(
     return matched
 
 
+def _stable_policy_fingerprint(policy: dict[str, Any]) -> str:
+    """Build a deterministic trust-policy fingerprint from the normalized policy document."""
+    encoded = json.dumps(policy, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 class McpHubGovernancePackTrustService:
     """Deployment-wide trust-policy storage and evaluation for governance-pack sources."""
 
@@ -278,18 +290,28 @@ class McpHubGovernancePackTrustService:
         """Load and normalize the deployment-wide governance-pack trust policy."""
         row = await self.repo.get_governance_pack_trust_policy()
         try:
-            return self._normalize_policy(row.get("policy_document"), for_write=False)
+            policy = self._normalize_policy(row.get("policy_document"), for_write=False)
+            policy["policy_fingerprint"] = _stable_policy_fingerprint(policy)
+            return policy
         except ValueError as exc:
             raise ValueError(f"invalid persisted governance pack trust policy: {exc}") from exc
 
     async def update_policy(self, policy: dict[str, Any], *, actor_id: int | None) -> dict[str, Any]:
         """Persist a normalized deployment-wide trust policy."""
+        requested_fingerprint = str(policy.get("policy_fingerprint") or "").strip() or None
+        if requested_fingerprint:
+            current_policy = await self.get_policy()
+            current_fingerprint = str(current_policy.get("policy_fingerprint") or "").strip()
+            if current_fingerprint and requested_fingerprint != current_fingerprint:
+                raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")
         normalized = self._normalize_policy(policy, for_write=True)
+        response_payload = dict(normalized)
+        response_payload["policy_fingerprint"] = _stable_policy_fingerprint(normalized)
         await self.repo.upsert_governance_pack_trust_policy(
             policy_document=normalized,
             actor_id=actor_id,
         )
-        return normalized
+        return response_payload
 
     async def evaluate_local_path(self, path: str) -> dict[str, Any]:
         """Evaluate whether a local filesystem source path is allowed."""
@@ -370,4 +392,65 @@ class McpHubGovernancePackTrustService:
             "verification_required": bool(policy["require_git_signature_verification"]),
             "trusted_git_key_fingerprints": matched_fingerprints,
             "trusted_signers": matched_signers,
+        }
+
+    async def evaluate_signer_for_repository(
+        self,
+        signer_fingerprint: str,
+        repo_url: str,
+    ) -> dict[str, Any]:
+        """Evaluate a signer against the current deployment trust policy for a repository."""
+        canonical_repository = _canonicalize_git_repository(repo_url)
+        canonical_fingerprint = str(signer_fingerprint or "").strip().upper()
+        try:
+            policy = await self.get_policy()
+        except ValueError:
+            return {
+                "allowed": False,
+                "reason": "invalid_trust_policy",
+                "result_code": "signer_not_allowed_for_repo",
+                "canonical_repository": canonical_repository,
+                "signer_fingerprint": canonical_fingerprint,
+            }
+
+        trusted_signers = list(policy.get("trusted_signers") or [])
+        signer = next(
+            (
+                dict(entry)
+                for entry in trusted_signers
+                if str(entry.get("fingerprint") or "").strip().upper() == canonical_fingerprint
+            ),
+            None,
+        )
+        if signer is None:
+            return {
+                "allowed": False,
+                "reason": "signer_not_allowed_for_repo",
+                "result_code": "signer_not_allowed_for_repo",
+                "canonical_repository": canonical_repository,
+                "signer_fingerprint": canonical_fingerprint,
+            }
+        if str(signer.get("status") or "").strip().lower() == "revoked":
+            return {
+                "allowed": False,
+                "reason": "signer_revoked",
+                "result_code": "signer_revoked",
+                "canonical_repository": canonical_repository,
+                "signer_fingerprint": canonical_fingerprint,
+            }
+        if any(_repo_binding_matches(canonical_repository, binding) for binding in signer.get("repo_bindings") or []):
+            return {
+                "allowed": True,
+                "reason": None,
+                "result_code": "signer_trusted_for_repo",
+                "canonical_repository": canonical_repository,
+                "signer_fingerprint": canonical_fingerprint,
+                "signer_display_name": signer.get("display_name"),
+            }
+        return {
+            "allowed": False,
+            "reason": "signer_not_allowed_for_repo",
+            "result_code": "signer_not_allowed_for_repo",
+            "canonical_repository": canonical_repository,
+            "signer_fingerprint": canonical_fingerprint,
         }

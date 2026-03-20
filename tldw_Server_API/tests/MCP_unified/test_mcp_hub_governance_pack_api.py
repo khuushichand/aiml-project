@@ -374,18 +374,31 @@ class _FakeGovernancePackTrustService:
         self.update_calls: list[dict[str, object]] = []
 
     async def get_policy(self) -> dict[str, object]:
-        return dict(self.policy)
+        from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+            _stable_policy_fingerprint,
+        )
+
+        payload = dict(self.policy)
+        payload["policy_fingerprint"] = _stable_policy_fingerprint(payload)
+        return payload
 
     async def update_policy(self, policy: dict[str, object], *, actor_id: int | None) -> dict[str, object]:
         from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+            GovernancePackTrustPolicyStaleError,
             _normalize_repo_binding,
+            _stable_policy_fingerprint,
         )
 
+        requested_fingerprint = str(policy.get("policy_fingerprint") or "").strip() or None
+        current_fingerprint = _stable_policy_fingerprint(self.policy)
+        if requested_fingerprint and requested_fingerprint != current_fingerprint:
+            raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")
         self.update_calls.append({"policy": dict(policy), "actor_id": actor_id})
         self.policy = {
             **self.policy,
             **dict(policy),
         }
+        self.policy.pop("policy_fingerprint", None)
         allowed_repositories = [
             str(entry).strip()
             for entry in self.policy.get("allowed_git_repositories", [])
@@ -432,7 +445,9 @@ class _FakeGovernancePackTrustService:
             seen_fingerprints.add(cleaned)
         self.policy["trusted_signers"] = normalized_signers
         self.policy.pop("trusted_git_key_fingerprints", None)
-        return dict(self.policy)
+        payload = dict(self.policy)
+        payload["policy_fingerprint"] = _stable_policy_fingerprint(payload)
+        return payload
 
 
 class _FakeGovernancePackDistributionService:
@@ -1225,6 +1240,92 @@ def test_governance_pack_trust_policy_round_trip() -> None:
     ]
     assert "trusted_git_key_fingerprints" not in payload
     assert trust_service.update_calls[0]["actor_id"] == 7
+
+
+def test_governance_pack_trust_policy_exposes_fingerprint_and_rejects_stale_write() -> None:
+    trust_service = _FakeGovernancePackTrustService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE]),
+        trust_service=trust_service,
+    )
+
+    with TestClient(app) as client:
+        get_resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
+        stale_resp = client.put(
+            "/api/v1/mcp/hub/governance-packs/trust-policy",
+            json={
+                "policy_fingerprint": "stale-policy-fingerprint",
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/researcher-pack"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "ABCD1234",
+                        "repo_bindings": ["github.com/example/researcher-pack"],
+                        "status": "active",
+                    }
+                ],
+            },
+        )
+
+    assert get_resp.status_code == 200
+    assert "policy_fingerprint" in get_resp.json()
+    assert get_resp.json()["policy_fingerprint"]
+    assert stale_resp.status_code == 409
+    assert "stale" in stale_resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_governance_pack_trust_service_classifies_signer_result_codes() -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    class _Repo:
+        async def get_governance_pack_trust_policy(self) -> dict[str, object]:
+            return {
+                "policy_document": {
+                    "allow_git_sources": True,
+                    "allowed_git_hosts": ["github.com"],
+                    "allowed_git_repositories": ["github.com/example/researcher-pack"],
+                    "allowed_git_ref_kinds": ["tag"],
+                    "require_git_signature_verification": True,
+                    "trusted_signers": [
+                        {
+                            "fingerprint": "ABCD1234",
+                            "display_name": "Release Bot",
+                            "repo_bindings": ["github.com/example/researcher-pack"],
+                            "status": "active",
+                        },
+                        {
+                            "fingerprint": "REVOKED1",
+                            "display_name": "Old Bot",
+                            "repo_bindings": ["github.com/example/researcher-pack"],
+                            "status": "revoked",
+                        },
+                    ],
+                }
+            }
+
+    service = McpHubGovernancePackTrustService(repo=_Repo())
+
+    trusted = await service.evaluate_signer_for_repository(
+        "ABCD1234",
+        "github.com/example/researcher-pack",
+    )
+    not_allowed = await service.evaluate_signer_for_repository(
+        "ABCD1234",
+        "github.com/other/project",
+    )
+    revoked = await service.evaluate_signer_for_repository(
+        "REVOKED1",
+        "github.com/example/researcher-pack",
+    )
+
+    assert trusted["result_code"] == "signer_trusted_for_repo"
+    assert not_allowed["result_code"] == "signer_not_allowed_for_repo"
+    assert revoked["result_code"] == "signer_revoked"
 
 
 def test_governance_pack_trust_policy_rejects_invalid_repo_binding() -> None:
