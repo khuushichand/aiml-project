@@ -14,6 +14,9 @@ from tldw_Server_API.app.api.v1.schemas.telegram_schemas import (
     TelegramBotConfigUpdate,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.services.telegram_execution_identity_service import (
+    get_telegram_execution_identity_service,
+)
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
@@ -45,4 +48,7 @@ async def telegram_admin_start_link(
 
 @router.post("/webhook")
 async def telegram_webhook(request: Request):
-    return await telegram_webhook_impl(request=request)
+    return await telegram_webhook_impl(
+        request=request,
+        get_execution_identity_service=get_telegram_execution_identity_service,
+    )

@@ -44,6 +44,9 @@ from tldw_Server_API.app.services.mcp_hub_approval_service import (
     get_mcp_hub_approval_service,
 )
 from tldw_Server_API.app.services.telegram_delivery_service import TelegramDeliveryService
+from tldw_Server_API.app.services.telegram_execution_identity_service import (
+    get_telegram_execution_identity_service,
+)
 
 _PROVIDER = "telegram"
 _DEFAULT_BOT_USERNAME = "example_bot"
@@ -812,6 +815,7 @@ async def telegram_webhook_impl(
     get_org_secret_repo: Callable[[], Awaitable[Any]] = _get_org_secret_repo,
     get_telegram_approvals_repo: Callable[[], Awaitable[Any]] = get_telegram_approvals_repo,
     get_approval_service: Callable[[], Awaitable[Any]] = get_mcp_hub_approval_service,
+    get_execution_identity_service: Callable[[], Awaitable[Any]] = get_telegram_execution_identity_service,
     dedupe_receipts: TTLReceiptStore = _WEBHOOK_RECEIPTS,
     dedupe_ttl_seconds: int = _WEBHOOK_REPLAY_WINDOW_SECONDS,
 ) -> JSONResponse:
@@ -900,6 +904,26 @@ async def telegram_webhook_impl(
             telegram_thread_id=telegram_thread_id,
             request_id=request_id,
         )
+        try:
+            execution_identity_service = await get_execution_identity_service()
+            execution_identity = execution_identity_service.mint_telegram_identity(
+                tenant_id=str(payload["session"]["tenant_id"]),
+                auth_user_id=str(linked_actor["auth_user_id"]),
+                request_id=request_id,
+                conversation_id=str(payload["session"]["assistant_conversation_id"]),
+                telegram_user_id=telegram_user_id,
+                telegram_chat_id=telegram_chat_id,
+                telegram_thread_id=telegram_thread_id,
+                scope_type=scope.scope_type,
+                scope_id=scope.scope_id,
+            )
+        except Exception as exc:
+            logger.error("Failed to mint Telegram execution identity: {}", exc)
+            return _telegram_webhook_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "execution_identity_unavailable",
+            )
+        payload["execution_identity"] = execution_identity.to_payload()
         queued_job = TelegramDeliveryService(job_manager).queue_inbound_ask(
             owner_user_id=str(linked_actor["auth_user_id"]),
             request_id=request_id,

@@ -14,9 +14,11 @@ from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     _reset_telegram_webhook_state_for_tests,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.permissions import TELEGRAM_RECEIVE, TELEGRAM_REPLY
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.services.telegram_delivery_service import TelegramDeliveryService
+from tldw_Server_API.app.services import telegram_execution_identity_service as telegram_identity_service
 
 
 def _b64_key(byte_char: bytes) -> str:
@@ -196,7 +198,13 @@ def test_linked_ask_job_payload_includes_owner_and_session_mapping(
     client,
     principal_override,
     job_manager_override,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        telegram_identity_service,
+        "get_effective_permissions",
+        lambda user_id: ["email.read"] if int(user_id) == 901 else [],
+    )
     _seed_telegram_bot(
         client,
         principal_override,
@@ -232,6 +240,13 @@ def test_linked_ask_job_payload_includes_owner_and_session_mapping(
     assert session_payload["tenant_id"] == "team:22"
     assert session_payload["session_key"] == "team:22:dm:77"
     assert uuid.UUID(session_payload["assistant_conversation_id"])
+    execution_identity = job["payload"]["execution_identity"]
+    assert execution_identity["source"] == "telegram"
+    assert execution_identity["tenant_id"] == "team:22"
+    assert execution_identity["auth_user_id"] == "901"
+    assert execution_identity["conversation_id"] == session_payload["assistant_conversation_id"]
+    assert execution_identity["permissions"] == [TELEGRAM_RECEIVE, TELEGRAM_REPLY, "email.read"]
+    assert execution_identity["allowed_workspace_ids"] == []
 
 
 class _DummyResponse:
