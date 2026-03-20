@@ -1279,3 +1279,31 @@ def test_governance_pack_trust_policy_rejects_blank_fingerprint() -> None:
 
     assert resp.status_code == 422
     assert resp.json()["detail"][0]["msg"] == "Value error, fingerprint entries cannot be blank"
+
+
+def test_governance_pack_trust_policy_rejects_blank_repo_binding() -> None:
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE]),
+        trust_service=_FakeGovernancePackTrustService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/mcp/hub/governance-packs/trust-policy",
+            json={
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/researcher-pack"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "ABCD1234",
+                        "repo_bindings": ["   "],
+                        "status": "active",
+                    }
+                ],
+            },
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"][0]["msg"] == "Value error, repo binding is required"
