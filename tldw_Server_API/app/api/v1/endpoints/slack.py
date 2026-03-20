@@ -12,6 +12,11 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_memberships_for_user
+from tldw_Server_API.app.core.AuthNZ.repos import (
+    get_workspace_provider_installations_repo as _get_workspace_provider_installations_repo_impl,
+)
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
 
 from tldw_Server_API.app.api.v1.endpoints.slack_support import (
@@ -79,6 +84,52 @@ def _emit_slack_counter(metric_name: str, **labels: Any) -> None:
         log_counter(metric_name, labels=_metric_labels(**labels))
     except Exception as exc:
         logger.debug("Failed to emit Slack metric {}: {}", metric_name, exc)
+
+
+async def _get_workspace_provider_installations_repo():
+    return await _get_workspace_provider_installations_repo_impl()
+
+
+async def _resolve_workspace_org_id(request: Request | None, user_id: int) -> int:
+    if request is not None:
+        active_org_id = _safe_int(getattr(request.state, "active_org_id", None))
+        if active_org_id is not None and active_org_id > 0:
+            return active_org_id
+        request_org_ids = getattr(request.state, "org_ids", None)
+        if isinstance(request_org_ids, (list, tuple, set)):
+            for candidate in request_org_ids:
+                org_id = _safe_int(candidate)
+                if org_id is not None and org_id > 0:
+                    return org_id
+
+    settings = get_settings()
+    if str(getattr(settings, "AUTH_MODE", "")).strip().lower() == "single_user":
+        return 1
+
+    memberships = await list_org_memberships_for_user(int(user_id))
+    for membership in memberships or []:
+        try:
+            org_id = int((membership or {}).get("org_id"))
+        except (TypeError, ValueError):
+            continue
+        if org_id <= 0:
+            continue
+        status_value = str((membership or {}).get("status") or "").strip().lower()
+        if not status_value or status_value in {"active", "member", "approved"}:
+            return org_id
+
+    for membership in memberships or []:
+        try:
+            org_id = int((membership or {}).get("org_id"))
+        except (TypeError, ValueError):
+            continue
+        if org_id > 0:
+            return org_id
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Unable to resolve workspace organization for installation",
+    )
 
 
 def _slack_policy_error_response(policy_error: dict[str, Any], *, team_id: str | None, action: str | None) -> JSONResponse:
@@ -420,10 +471,13 @@ async def slack_job_status(
 
 @router.post("/oauth/start")
 async def slack_oauth_start(
+    request: Request,
     user: User = Depends(get_request_user),
 ):
+    workspace_org_id = await _resolve_workspace_org_id(request, int(user.id))
     return await slack_oauth_start_impl(
         user=user,
+        workspace_org_id=workspace_org_id,
         oauth_client_id=_oauth_client_id,
         oauth_redirect_uri=_oauth_redirect_uri,
         oauth_state_ttl_seconds=_oauth_state_ttl_seconds,
@@ -450,6 +504,8 @@ async def slack_oauth_callback(
         oauth_token_url=_oauth_token_url,
         slack_oauth_token_exchange=_slack_oauth_token_exchange,
         get_user_secret_repo=_get_user_secret_repo,
+        get_workspace_provider_installations_repo=_get_workspace_provider_installations_repo,
+        resolve_workspace_org_id=lambda user_id: _resolve_workspace_org_id(None, user_id),
         decrypt_slack_payload=_decrypt_slack_payload,
         normalize_installations_payload=_normalize_installations_payload,
         encrypt_slack_payload=_encrypt_slack_payload,
@@ -485,7 +541,7 @@ async def slack_admin_set_policy(
     )
 
 
-@router.get("/admin/installations")
+@router.get("/admin/installations", dependencies=[Depends(require_roles("admin"))])
 async def slack_admin_list_installations(
     user: User = Depends(get_request_user),
 ):
@@ -498,8 +554,9 @@ async def slack_admin_list_installations(
     )
 
 
-@router.delete("/admin/installations/{team_id}")
+@router.delete("/admin/installations/{team_id}", dependencies=[Depends(require_roles("admin"))])
 async def slack_admin_delete_installation(
+    request: Request,
     team_id: str,
     user: User = Depends(get_request_user),
 ):
@@ -508,14 +565,17 @@ async def slack_admin_delete_installation(
         user=user,
         coerce_nonempty_string=_coerce_nonempty_string,
         get_user_secret_repo=_get_user_secret_repo,
+        get_workspace_provider_installations_repo=_get_workspace_provider_installations_repo,
+        resolve_workspace_org_id=lambda resolved_user_id: _resolve_workspace_org_id(request, resolved_user_id),
         decrypt_slack_payload=_decrypt_slack_payload,
         normalize_installations_payload=_normalize_installations_payload,
         encrypt_slack_payload=_encrypt_slack_payload,
     )
 
 
-@router.put("/admin/installations/{team_id}")
+@router.put("/admin/installations/{team_id}", dependencies=[Depends(require_roles("admin"))])
 async def slack_admin_set_installation_state(
+    request: Request,
     team_id: str,
     payload: dict[str, Any] | None = None,
     user: User = Depends(get_request_user),
@@ -526,6 +586,8 @@ async def slack_admin_set_installation_state(
         user=user,
         coerce_nonempty_string=_coerce_nonempty_string,
         get_user_secret_repo=_get_user_secret_repo,
+        get_workspace_provider_installations_repo=_get_workspace_provider_installations_repo,
+        resolve_workspace_org_id=lambda resolved_user_id: _resolve_workspace_org_id(request, resolved_user_id),
         decrypt_slack_payload=_decrypt_slack_payload,
         normalize_installations_payload=_normalize_installations_payload,
         encrypt_slack_payload=_encrypt_slack_payload,
