@@ -17,55 +17,88 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from loguru import logger
+
+
+def _log_optional_dependency_fallback(module_name: str, exc: BaseException) -> None:
+    logger.warning(
+        "KittenTTS optional dependency '{}' failed to import; falling back to lazy error stubs: {}",
+        module_name,
+        exc,
+    )
+
+
+def _missing_dependency_callable(module_name: str, feature: str, exc: BaseException):
+    def _missing(*_args: Any, **_kwargs: Any):
+        raise ImportError(
+            f"{module_name} is required for KittenTTS {feature}: {exc}"
+        ) from exc
+
+    return _missing
+
+
+def _missing_dependency_type(module_name: str, feature: str, exc: BaseException):
+    class _MissingDependency:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            raise ImportError(
+                f"{module_name} is required for KittenTTS {feature}: {exc}"
+            ) from exc
+
+    return _MissingDependency
 
 try:
     import espeakng_loader  # type: ignore
-except Exception:  # pragma: no cover - exercised through missing-dependency paths
+except (ImportError, OSError) as exc:  # pragma: no cover - exercised through missing-dependency paths
+    _log_optional_dependency_fallback("espeakng_loader", exc)
     espeakng_loader = types.SimpleNamespace(
-        get_library_path=lambda: (_ for _ in ()).throw(
-            ImportError("espeakng_loader is required for KittenTTS")
-        ),
-        get_data_path=lambda: (_ for _ in ()).throw(
-            ImportError("espeakng_loader is required for KittenTTS")
-        ),
+        get_library_path=_missing_dependency_callable("espeakng_loader", "eSpeak library discovery", exc),
+        get_data_path=_missing_dependency_callable("espeakng_loader", "eSpeak data discovery", exc),
     )
 
 try:
     import onnxruntime as ort  # type: ignore
-except Exception:  # pragma: no cover
-    ort = types.SimpleNamespace()
+except (ImportError, OSError) as exc:  # pragma: no cover
+    _log_optional_dependency_fallback("onnxruntime", exc)
+    ort = types.SimpleNamespace(
+        InferenceSession=_missing_dependency_callable("onnxruntime", "runtime sessions", exc)
+    )
 
 try:
     import phonemizer  # type: ignore
     from phonemizer.backend.espeak.wrapper import EspeakWrapper  # type: ignore
-except Exception:  # pragma: no cover
-    class _MissingEspeakBackend:
-        def __init__(self, **_kwargs: Any) -> None:
-            raise ImportError("phonemizer is required for KittenTTS")
-
+except (ImportError, OSError) as exc:  # pragma: no cover
+    _log_optional_dependency_fallback("phonemizer", exc)
     phonemizer = types.SimpleNamespace(
-        backend=types.SimpleNamespace(EspeakBackend=_MissingEspeakBackend)
+        backend=types.SimpleNamespace(
+            EspeakBackend=_missing_dependency_type("phonemizer", "phonemizer backend", exc)
+        )
     )
 
     class EspeakWrapper:  # type: ignore[override]
         @staticmethod
         def set_library(_path: str) -> None:
-            raise ImportError("phonemizer is required for KittenTTS")
+            raise ImportError(
+                f"phonemizer is required for KittenTTS eSpeak wrapper setup: {exc}"
+            ) from exc
 
         @staticmethod
         def set_data_path(_path: str) -> None:
-            raise ImportError("phonemizer is required for KittenTTS")
+            raise ImportError(
+                f"phonemizer is required for KittenTTS eSpeak wrapper setup: {exc}"
+            ) from exc
 
 
 try:
     from huggingface_hub import hf_hub_download
-except Exception:  # pragma: no cover
+except (ImportError, OSError) as exc:  # pragma: no cover
+    _log_optional_dependency_fallback("huggingface_hub", exc)
     hf_hub_download = None
 
 
 DEFAULT_REPO_ID = "KittenML/kitten-tts-nano-0.8"
 DEFAULT_CANONICAL_REPO_ID = "KittenML/kitten-tts-nano-0.8-fp32"
 DEFAULT_INTERNAL_VOICE = "expr-voice-5-m"
+TAIL_TRIM_SAMPLES = 5000
 REVISION_RE = re.compile(r"^[0-9a-fA-F]{7,}$")
 MODEL_REPO_ALIASES: dict[str, str] = {
     "KittenML/kitten-tts-nano-0.8": DEFAULT_CANONICAL_REPO_ID,
@@ -338,8 +371,9 @@ class KittenRuntime:
         audio = np.asarray(outputs[0], dtype=np.float32)
         if audio.ndim > 1:
             audio = audio.reshape(-1)
-        if audio.shape[-1] > 5000:
-            audio = audio[:-5000]
+        if audio.shape[-1] > TAIL_TRIM_SAMPLES:
+            # Upstream ONNX outputs carry a short padded tail we do not want in the rendered clip.
+            audio = audio[:-TAIL_TRIM_SAMPLES]
         return audio
 
     def generate(
