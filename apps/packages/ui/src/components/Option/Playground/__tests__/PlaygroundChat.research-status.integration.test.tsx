@@ -378,6 +378,127 @@ describe("PlaygroundChat linked research status integration", () => {
     )
   })
 
+  it("renders plan review handoff rows with a specific reason label and review action", () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_plan",
+        query: "Plan review query",
+        status: "waiting_human",
+        phase: "awaiting_plan_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_plan",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      }
+    ])
+
+    renderChat({ onPrepareResearchFollowUp: vi.fn(), onAttachResearchContext: vi.fn() })
+
+    const row = screen.getByTestId("research-run-status-row")
+    expect(within(row).getByText("Plan review needed")).toBeInTheDocument()
+    expect(within(row).getByRole("link", { name: "Review in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=rs_plan"
+    )
+    expect(within(row).queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
+    expect(within(row).queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
+  })
+
+  it("renders sources review handoff labels for both supported source-review phases", () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_sources_1",
+        query: "Source review query",
+        status: "waiting_human",
+        phase: "awaiting_source_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_sources_1",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      },
+      {
+        run_id: "rs_sources_2",
+        query: "Sources review query",
+        status: "waiting_human",
+        phase: "awaiting_sources_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_sources_2",
+        updated_at: "2026-03-19T20:02:00+00:00"
+      }
+    ])
+
+    renderChat()
+
+    const rows = screen.getAllByTestId("research-run-status-row")
+    expect(within(rows[0]).getByText("Sources review needed")).toBeInTheDocument()
+    expect(within(rows[0]).getByRole("link", { name: "Review in Research" })).toBeInTheDocument()
+    expect(within(rows[1]).getByText("Sources review needed")).toBeInTheDocument()
+    expect(within(rows[1]).getByRole("link", { name: "Review in Research" })).toBeInTheDocument()
+  })
+
+  it("renders outline review handoff labels for checkpoint-needed rows", () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_outline",
+        query: "Outline review query",
+        status: "waiting_human",
+        phase: "awaiting_outline_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_outline",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      }
+    ])
+
+    renderChat()
+
+    const row = screen.getByTestId("research-run-status-row")
+    expect(within(row).getByText("Outline review needed")).toBeInTheDocument()
+    expect(within(row).getByRole("link", { name: "Review in Research" })).toBeInTheDocument()
+  })
+
+  it("falls back to a generic review-needed label for unknown waiting_human phases", () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_unknown_review",
+        query: "Unknown review query",
+        status: "waiting_human",
+        phase: "awaiting_custom_review",
+        control_state: "running",
+        latest_checkpoint_id: "cp_custom",
+        updated_at: "2026-03-19T20:03:00+00:00"
+      }
+    ])
+
+    renderChat()
+
+    const row = screen.getByTestId("research-run-status-row")
+    expect(within(row).getByText("Review needed")).toBeInTheDocument()
+    expect(within(row).getByRole("link", { name: "Review in Research" })).toBeInTheDocument()
+  })
+
+  it("keeps completed-run actions unchanged while checkpoint handoff rows are stricter", () => {
+    setLinkedRuns([
+      {
+        run_id: "rs_completed",
+        query: "Completed query",
+        status: "completed",
+        phase: "completed",
+        control_state: "running",
+        latest_checkpoint_id: null,
+        updated_at: "2026-03-19T20:03:00+00:00"
+      }
+    ])
+
+    renderChat({ onPrepareResearchFollowUp: vi.fn(), onAttachResearchContext: vi.fn() })
+
+    const row = screen.getByTestId("research-run-status-row")
+    expect(within(row).getByRole("button", { name: "Use in Chat" })).toBeInTheDocument()
+    expect(within(row).getByRole("button", { name: "Follow up" })).toBeInTheDocument()
+    expect(within(row).getByRole("link", { name: "Open in Research" })).toHaveAttribute(
+      "href",
+      "/research?run=rs_completed"
+    )
+    expect(within(row).queryByText("Review needed")).not.toBeInTheDocument()
+  })
+
   it("does not render the status block for temporary chats or chats without a server id", () => {
     setLinkedRuns([
       {
