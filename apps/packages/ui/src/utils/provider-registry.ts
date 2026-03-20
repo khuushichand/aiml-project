@@ -289,10 +289,6 @@ export const PROVIDER_REGISTRY: Record<string, ProviderMeta> = {
     label: "KittenTTS",
     capabilities: ["tts-engine"]
   },
-  kittentts: {
-    label: "KittenTTS",
-    capabilities: ["tts-engine"]
-  },
   higgs: {
     label: "Higgs",
     capabilities: ["tts-engine"]
@@ -392,8 +388,13 @@ export const PROVIDER_ICON_COMPONENTS: Record<
   default: CpuIcon
 }
 
-export const normalizeProviderKey = (provider?: string): string =>
-  String(provider || "unknown").toLowerCase()
+export const normalizeProviderKey = (provider?: string): string => {
+  const normalized = String(provider || "unknown").toLowerCase()
+  if (normalized === "kittentts" || normalized === "kitten-tts") {
+    return "kitten_tts"
+  }
+  return normalized
+}
 
 const hasCapability = (
   meta: ProviderMeta,

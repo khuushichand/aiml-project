@@ -159,8 +159,14 @@ def test_download_model_assets_accepts_explicit_commit_revision(monkeypatch, tmp
     )
 
 
-def test_download_model_assets_rejects_branch_revision():
+def test_download_model_assets_rejects_branch_revision(monkeypatch):
     from tldw_Server_API.app.core.TTS.vendors import kittentts_compat as mod
+
+    monkeypatch.setattr(
+        mod,
+        "hf_hub_download",
+        lambda **_kwargs: pytest.fail("revision validation should happen before downloads"),
+    )
 
     with pytest.raises(ValueError, match="immutable Hugging Face commit hash"):
         mod.download_model_assets(

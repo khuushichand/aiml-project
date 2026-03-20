@@ -967,6 +967,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [showTtsSettings, setShowTtsSettings] = useState(false)
   const [tldwVoices, setTldwVoices] = useState<TldwVoice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(false)
+  const [voiceCatalogSettled, setVoiceCatalogSettled] = useState(false)
   const [previewingVoice, setPreviewingVoice] = useState(false)
   const [slidesVisualStyles, setSlidesVisualStyles] = useState<VisualStyleRecord[]>([])
   const [slidesVisualStylesLoading, setSlidesVisualStylesLoading] = useState(false)
@@ -1021,21 +1022,43 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
   // Fetch voices when provider changes to tldw
   useEffect(() => {
+    let cancelled = false
+
     if (audioSettings.provider !== "tldw") {
       setTldwVoices([])
       setLoadingVoices(false)
+      setVoiceCatalogSettled(true)
       return
     }
     if (!inferredTldwProviderKey) {
       setTldwVoices([])
       setLoadingVoices(false)
+      setVoiceCatalogSettled(true)
       return
     }
+    setVoiceCatalogSettled(false)
     setLoadingVoices(true)
     fetchTldwVoiceCatalog(inferredTldwProviderKey)
-      .then((voices) => setTldwVoices(voices))
-      .catch(() => setTldwVoices([]))
-      .finally(() => setLoadingVoices(false))
+      .then((voices) => {
+        if (!cancelled) {
+          setTldwVoices(voices)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTldwVoices([])
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingVoices(false)
+          setVoiceCatalogSettled(true)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [audioSettings.provider, inferredTldwProviderKey])
 
   useEffect(() => {
@@ -1517,6 +1540,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       return
     }
 
+    if (!voiceCatalogSettled && !tldwVoices.length) {
+      return
+    }
+
     const currentVoice = String(audioSettings.voice || "").trim()
     if (currentVoice && tldwVoiceOptions.some((option) => option.value === currentVoice)) {
       return
@@ -1527,7 +1554,9 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     audioSettings.provider,
     audioSettings.voice,
     setAudioSettings,
-    tldwVoiceOptions
+    tldwVoiceOptions,
+    tldwVoices.length,
+    voiceCatalogSettled
   ])
 
   const handleCancelGeneration = () => {

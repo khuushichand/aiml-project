@@ -120,7 +120,9 @@ def test_kitten_tts_dependencies_trigger_pip_install(monkeypatch):
         original_find_spec = importlib.util.find_spec
 
         def fake_find_spec(name):
-            if name in {'phonemizer', 'espeakng_loader', 'huggingface_hub'}:
+            if name == 'phonemizer':
+                return object()
+            if name in {'espeakng_loader', 'huggingface_hub'}:
                 return None
             return original_find_spec(name)
 
@@ -139,6 +141,28 @@ def test_kitten_tts_dependencies_trigger_pip_install(monkeypatch):
         flattened = ' '.join(' '.join(cmd) for cmd in commands)
         assert 'phonemizer-fork' in flattened
         assert 'espeakng_loader' in flattened
+
+
+def test_install_kitten_tts_rejects_unknown_variants(monkeypatch):
+    monkeypatch.setattr(install_manager, "_ensure_downloads_allowed", lambda _label: None)
+    monkeypatch.setattr(
+        install_manager,
+        "_resolve_kitten_tts_prefetch_settings",
+        lambda: {"cache_dir": "cache/kitten_tts", "revision": None},
+        raising=False,
+    )
+
+    fake_module = types.SimpleNamespace(
+        download_model_assets=lambda *_args, **_kwargs: pytest.fail("unknown variants should fail before downloads")
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "tldw_Server_API.app.core.TTS.vendors.kittentts_compat",
+        fake_module,
+    )
+
+    with pytest.raises(ValueError, match="Unsupported KittenTTS variants: custom"):
+        install_manager._install_kitten_tts(["custom"])
 
 
 def test_cuda_available_requires_successful_nvidia_probe(monkeypatch):

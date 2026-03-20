@@ -98,6 +98,7 @@ except (ImportError, OSError) as exc:  # pragma: no cover
 DEFAULT_REPO_ID = "KittenML/kitten-tts-nano-0.8"
 DEFAULT_CANONICAL_REPO_ID = "KittenML/kitten-tts-nano-0.8-fp32"
 DEFAULT_INTERNAL_VOICE = "expr-voice-5-m"
+TAIL_TRIM_SAMPLES = 5000
 REVISION_RE = re.compile(r"^[0-9a-fA-F]{7,}$")
 MODEL_REPO_ALIASES: dict[str, str] = {
     "KittenML/kitten-tts-nano-0.8": DEFAULT_CANONICAL_REPO_ID,
@@ -370,8 +371,9 @@ class KittenRuntime:
         audio = np.asarray(outputs[0], dtype=np.float32)
         if audio.ndim > 1:
             audio = audio.reshape(-1)
-        if audio.shape[-1] > 5000:
-            audio = audio[:-5000]
+        if audio.shape[-1] > TAIL_TRIM_SAMPLES:
+            # Upstream ONNX outputs carry a short padded tail we do not want in the rendered clip.
+            audio = audio[:-TAIL_TRIM_SAMPLES]
         return audio
 
     def generate(

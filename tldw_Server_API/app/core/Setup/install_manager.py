@@ -1118,11 +1118,14 @@ def _install_kitten_tts(variants: list[str]) -> None:
         'micro': 'KittenML/kitten-tts-micro-0.8',
         'mini': 'KittenML/kitten-tts-mini-0.8',
     }
-    selected = variants or ['nano']
+    selected = [str(variant).strip().lower() for variant in (variants or ['nano']) if str(variant).strip()]
+    if not selected:
+        selected = ['nano']
+    unknown = [variant for variant in selected if variant not in variant_to_repo]
+    if unknown:
+        raise ValueError(f"Unsupported KittenTTS variants: {', '.join(unknown)}")
     for variant in selected:
-        repo_id = variant_to_repo.get(str(variant).strip().lower(), str(variant).strip())
-        if not repo_id:
-            continue
+        repo_id = variant_to_repo[variant]
         logger.info('Prefetching KittenTTS assets for {}', repo_id)
         try:
             download_model_assets(
@@ -1366,7 +1369,7 @@ TTS_DEPENDENCIES: dict[str, list[PipRequirement]] = {
     ],
     'kitten_tts': [
         PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
-        PipRequirement(package='phonemizer-fork~=3.3.2', import_name='phonemizer'),
+        PipRequirement(package='phonemizer-fork~=3.3.2'),
         PipRequirement(package='espeakng_loader', import_name='espeakng_loader'),
         PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],

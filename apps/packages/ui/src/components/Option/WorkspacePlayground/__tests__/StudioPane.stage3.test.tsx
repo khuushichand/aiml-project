@@ -672,8 +672,28 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
 
     await waitFor(() => {
       expect(fetchTldwVoiceCatalog).toHaveBeenCalledWith("kitten_tts")
-      expect(mockSetAudioSettings).toHaveBeenCalledWith({ voice: "Bella" })
+      expect(mockSetAudioSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ voice: "Bella" })
+      )
     })
+  })
+
+  it("does not reset the selected voice while the Kitten voice catalog is still loading", async () => {
+    workspaceStoreState.audioSettings = {
+      provider: "tldw",
+      model: "KittenML/kitten-tts-nano-0.8",
+      voice: "custom-kitten-voice",
+      speed: 1,
+      format: "mp3"
+    }
+    vi.mocked(inferTldwProviderFromModel).mockReturnValue("kitten_tts")
+    vi.mocked(fetchTldwVoiceCatalog).mockReturnValue(new Promise(() => {}))
+
+    renderExpandedStudioPane()
+    await Promise.resolve()
+
+    expect(fetchTldwVoiceCatalog).toHaveBeenCalledWith("kitten_tts")
+    expect(mockSetAudioSettings).not.toHaveBeenCalled()
   })
 
   it("wires Studio Options controls to model and RAG stores", async () => {
