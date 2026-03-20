@@ -136,24 +136,33 @@ vi.mock("../PlaygroundEmpty", () => ({
 vi.mock("@/components/Common/Playground/Message", () => ({
   PlaygroundMessage: (props: {
     message: string
-    onUseInChat?: () => void
-    onFollowUp?: () => void
-    researchReviewReason?: string
-    researchReviewHref?: string
+    researchActions?: {
+      reasonLabel?: string
+      primaryLink?: {
+        href: string
+        label: string
+      }
+      onUseInChat?: () => void
+      onFollowUp?: () => void
+    }
   }) => (
     <div data-testid="playground-message-mock">
       <div>{props.message}</div>
-      {props.researchReviewReason && <div>{props.researchReviewReason}</div>}
-      {props.researchReviewHref && (
-        <a href={props.researchReviewHref}>Review in Research</a>
+      {props.researchActions?.reasonLabel && (
+        <div>{props.researchActions.reasonLabel}</div>
       )}
-      {props.onUseInChat && (
-        <button type="button" onClick={() => props.onUseInChat?.()}>
+      {props.researchActions?.primaryLink && (
+        <a href={props.researchActions.primaryLink.href}>
+          {props.researchActions.primaryLink.label}
+        </a>
+      )}
+      {props.researchActions?.onUseInChat && (
+        <button type="button" onClick={() => props.researchActions?.onUseInChat?.()}>
           Use in Chat
         </button>
       )}
-      {props.onFollowUp && (
-        <button type="button" onClick={() => props.onFollowUp?.()}>
+      {props.researchActions?.onFollowUp && (
+        <button type="button" onClick={() => props.researchActions?.onFollowUp?.()}>
           Follow up
         </button>
       )}

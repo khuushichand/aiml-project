@@ -229,10 +229,7 @@ type Props = {
   onMessageSteeringForceNarrateChange?: (enabled: boolean) => void
   onClearMessageSteering?: () => void
   metadataExtra?: Record<string, unknown>
-  onUseInChat?: () => void
-  onFollowUp?: () => void
-  researchReviewReason?: string
-  researchReviewHref?: string
+  researchActions?: MessageResearchActions
   onRegenerateImage?: (payload: {
     messageId?: string
     imageIndex: number
@@ -259,6 +256,16 @@ type Props = {
   onDeleteAllImageVariants?: (payload: {
     messageId?: string
   }) => void
+}
+
+export type MessageResearchActions = {
+  reasonLabel?: string
+  primaryLink?: {
+    href: string
+    label: string
+  }
+  onUseInChat?: () => void
+  onFollowUp?: () => void
 }
 
 export const PlaygroundMessage = (props: Props) => {
@@ -457,12 +464,9 @@ export const PlaygroundMessage = (props: Props) => {
     Boolean(props.onRegenerateImage) &&
     Boolean(imageGenerationMetadata?.request)
   const showInlineImageActions = canRegenerateImage || Boolean(props.onDeleteImage)
-  const deepResearchCompletion = React.useMemo(() => {
-    const candidate = props.metadataExtra?.deep_research_completion
-    return isDeepResearchCompletionMetadata(candidate) ? candidate : null
-  }, [props.metadataExtra])
-  const showUseInChat = Boolean(props.onUseInChat && deepResearchCompletion)
-  const showFollowUp = Boolean(props.onFollowUp && deepResearchCompletion)
+  const researchActions = props.researchActions
+  const showUseInChat = Boolean(researchActions?.onUseInChat)
+  const showFollowUp = Boolean(researchActions?.onFollowUp)
   const isImageGenerationAssistantEvent =
     props.isBot &&
     Boolean(imageGenerationMetadata?.request) &&
@@ -2453,27 +2457,27 @@ export const PlaygroundMessage = (props: Props) => {
               </div>
             )}
 
-          {(showUseInChat || showFollowUp || props.researchReviewHref) && (
+          {(showUseInChat || showFollowUp || researchActions?.primaryLink) && (
             <div className="mt-3 flex">
               <div className="flex items-center gap-2">
-                {props.researchReviewReason && (
+                {researchActions?.reasonLabel && (
                   <span className="text-sm text-text-subtle">
-                    {props.researchReviewReason}
+                    {researchActions.reasonLabel}
                   </span>
                 )}
-                {props.researchReviewHref && (
+                {researchActions?.primaryLink && (
                   <a
-                    href={props.researchReviewHref}
+                    href={researchActions.primaryLink.href}
                     className="rounded-full border border-border/70 bg-surface px-3 py-1 text-sm font-medium text-primary transition hover:border-primary/50 hover:text-primary"
                   >
-                    Review in Research
+                    {researchActions.primaryLink.label}
                   </a>
                 )}
                 {showUseInChat && (
                   <button
                     type="button"
                     className="rounded-full border border-border/70 bg-surface px-3 py-1 text-sm font-medium text-text transition hover:border-primary/50 hover:text-primary"
-                    onClick={props.onUseInChat}
+                    onClick={researchActions?.onUseInChat}
                   >
                     Use in Chat
                   </button>
@@ -2482,7 +2486,7 @@ export const PlaygroundMessage = (props: Props) => {
                   <button
                     type="button"
                     className="rounded-full border border-border/70 bg-surface px-3 py-1 text-sm font-medium text-text transition hover:border-primary/50 hover:text-primary"
-                    onClick={props.onFollowUp}
+                    onClick={researchActions?.onFollowUp}
                   >
                     Follow up
                   </button>

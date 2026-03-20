@@ -3,7 +3,10 @@ import { useQuery } from "@tanstack/react-query"
 import { useMessageOption } from "@/hooks/useMessageOption"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { PlaygroundEmpty } from "./PlaygroundEmpty"
-import { PlaygroundMessage } from "@/components/Common/Playground/Message"
+import {
+  PlaygroundMessage,
+  type MessageResearchActions
+} from "@/components/Common/Playground/Message"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import { useStorage } from "@plasmohq/storage/hook"
 import { useTranslation } from "react-i18next"
@@ -393,15 +396,29 @@ export const PlaygroundChat = ({
     },
     [getMessageResearchHandoffState, onPrepareResearchFollowUp]
   )
-  const buildMessageReviewReason = React.useCallback(
-    (metadataExtra?: Record<string, unknown>) =>
-      getMessageResearchHandoffState(metadataExtra)?.reviewReason ?? undefined,
-    [getMessageResearchHandoffState]
-  )
-  const buildMessageReviewHref = React.useCallback(
-    (metadataExtra?: Record<string, unknown>) =>
-      getMessageResearchHandoffState(metadataExtra)?.reviewHref ?? undefined,
-    [getMessageResearchHandoffState]
+  const buildMessageResearchActions = React.useCallback(
+    (metadataExtra?: Record<string, unknown>): MessageResearchActions | undefined => {
+      const handoff = getMessageResearchHandoffState(metadataExtra)
+      if (!handoff) {
+        return undefined
+      }
+      return {
+        reasonLabel: handoff.reviewReason ?? undefined,
+        primaryLink: handoff.reviewHref
+          ? {
+              href: handoff.reviewHref,
+              label: "Review in Research"
+            }
+          : undefined,
+        onUseInChat: buildMessageUseInChatHandler(metadataExtra),
+        onFollowUp: buildMessageFollowUpHandler(metadataExtra)
+      }
+    },
+    [
+      buildMessageFollowUpHandler,
+      buildMessageUseInChatHandler,
+      getMessageResearchHandoffState
+    ]
   )
   const showSelectedServerChatLoadFailure =
     messages.length === 0 &&
@@ -1103,10 +1120,7 @@ export const PlaygroundChat = ({
                 messageId={message.id}
                 pinned={Boolean(message.pinned)}
                 metadataExtra={message.metadataExtra}
-                onUseInChat={buildMessageUseInChatHandler(message.metadataExtra)}
-                onFollowUp={buildMessageFollowUpHandler(message.metadataExtra)}
-                researchReviewReason={buildMessageReviewReason(message.metadataExtra)}
-                researchReviewHref={buildMessageReviewHref(message.metadataExtra)}
+                researchActions={buildMessageResearchActions(message.metadataExtra)}
                 discoSkillComment={message.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -1404,10 +1418,7 @@ export const PlaygroundChat = ({
                 messageId={userMessage.id}
                 pinned={Boolean(userMessage.pinned)}
                 metadataExtra={userMessage.metadataExtra}
-                onUseInChat={buildMessageUseInChatHandler(userMessage.metadataExtra)}
-                onFollowUp={buildMessageFollowUpHandler(userMessage.metadataExtra)}
-                researchReviewReason={buildMessageReviewReason(userMessage.metadataExtra)}
-                researchReviewHref={buildMessageReviewHref(userMessage.metadataExtra)}
+                researchActions={buildMessageResearchActions(userMessage.metadataExtra)}
                 discoSkillComment={userMessage.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -2024,10 +2035,7 @@ export const PlaygroundChat = ({
                         messageId={message.id}
                         pinned={Boolean(message.pinned)}
                         metadataExtra={message.metadataExtra}
-                        onUseInChat={buildMessageUseInChatHandler(message.metadataExtra)}
-                        onFollowUp={buildMessageFollowUpHandler(message.metadataExtra)}
-                        researchReviewReason={buildMessageReviewReason(message.metadataExtra)}
-                        researchReviewHref={buildMessageReviewHref(message.metadataExtra)}
+                        researchActions={buildMessageResearchActions(message.metadataExtra)}
                         discoSkillComment={message.discoSkillComment}
                         historyId={stableHistoryId ?? undefined}
                         conversationInstanceId={conversationInstanceId}
