@@ -259,4 +259,21 @@ git commit -m "docs(research): finalize chat action policy plan"
 
 ## Execution Notes
 
-- Not started.
+- Added red helper coverage in `research-run-status.test.ts` for completed, checkpoint-review, unknown-review, and conservative nonterminal action-policy cases. The initial red run failed with `TypeError: getChatLinkedResearchActionPolicy is not a function`, which confirmed the missing shared policy seam.
+- Implemented `ChatLinkedResearchActionPolicy` and `getChatLinkedResearchActionPolicy(...)` in `research-run-status.ts`, keeping checkpoint-reason derivation and research path generation as the underlying building blocks.
+- Refactored `ResearchRunStatusStack.tsx` to consume the shared policy for `Use in Chat`, `Follow up`, and the primary research-link label/href without changing row layout or status-badge behavior.
+- Refactored `PlaygroundChat.tsx` to resolve the current linked run once per genuine research handoff message and adapt the shared policy back into the existing message action props. The no-current-run fallback was preserved so historical handoff messages still keep completion actions when current linked-run state is unavailable.
+- Focused verification commands:
+  - `./node_modules/.bin/vitest run src/components/Option/Playground/__tests__/research-run-status.test.ts`
+    - `10/10` passed after helper implementation
+  - `./node_modules/.bin/vitest run src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx src/components/Option/Playground/__tests__/research-run-status.test.ts`
+    - `23/23` passed after the status-row refactor
+  - `./node_modules/.bin/vitest run src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx src/components/Option/Playground/__tests__/research-run-status.test.ts`
+    - initially failed on message actions for no-current-run handoffs
+    - `30/30` passed after restoring the intended fallback
+  - `./node_modules/.bin/vitest run src/components/Option/Playground/__tests__/research-run-status.test.ts src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx`
+    - final focused suite: `51/51` passed
+- Commits:
+  - `3dee22767` `feat(chat): add shared research action policy helper`
+  - `19bfd2c41` `refactor(chat): share status-row research policy`
+  - `24a9c882c` `refactor(chat): share message research policy`
