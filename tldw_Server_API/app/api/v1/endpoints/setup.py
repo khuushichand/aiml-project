@@ -16,7 +16,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
     require_roles,
 )
-from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
+from tldw_Server_API.app.api.v1.API_Deps.setup_deps import (
+    require_local_setup_access,
+    require_shared_audio_installer_access,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Setup import install_manager, setup_manager
@@ -142,6 +145,11 @@ async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -
 async def get_install_status(_guard: None = Depends(require_local_setup_access)) -> dict[str, Any]:
     """Return the current installation plan progress if available."""
 
+    return _get_audio_install_status()
+
+
+def _get_audio_install_status() -> dict[str, Any]:
+    """Return the current audio install status payload used by legacy and admin routes."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
@@ -161,6 +169,18 @@ async def get_audio_recommendations(
 ) -> dict[str, Any]:
     """Return machine profile information and ranked audio setup bundle recommendations."""
 
+    return _build_audio_recommendations_response(
+        prefer_offline_runtime=prefer_offline_runtime,
+        allow_hosted_fallbacks=allow_hosted_fallbacks,
+    )
+
+
+def _build_audio_recommendations_response(
+    *,
+    prefer_offline_runtime: bool,
+    allow_hosted_fallbacks: bool,
+) -> dict[str, Any]:
+    """Build the shared audio recommendations payload."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
@@ -236,6 +256,11 @@ async def provision_audio_bundle(
 ) -> dict[str, Any]:
     """Expand and provision a curated audio bundle."""
 
+    return _execute_audio_bundle_provision(payload)
+
+
+def _execute_audio_bundle_provision(payload: AudioBundleProvisionRequest) -> dict[str, Any]:
+    """Execute the bundle provisioning flow shared by legacy and admin routes."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
@@ -257,6 +282,13 @@ async def verify_audio_bundle(
 ) -> dict[str, Any]:
     """Verify the primary STT/TTS paths for a curated audio bundle."""
 
+    return await _execute_audio_bundle_verification(payload)
+
+
+async def _execute_audio_bundle_verification(
+    payload: AudioBundleVerificationRequest,
+) -> dict[str, Any]:
+    """Execute bundle verification shared by legacy and admin routes."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
@@ -268,6 +300,49 @@ async def verify_audio_bundle(
         )
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/admin/install-status")
+async def get_admin_install_status(
+    _guard: None = Depends(require_shared_audio_installer_access),
+) -> dict[str, Any]:
+    """Return installer status for the shared admin audio installer."""
+
+    return _get_audio_install_status()
+
+
+@router.get("/admin/audio/recommendations")
+async def get_admin_audio_recommendations(
+    prefer_offline_runtime: bool = True,
+    allow_hosted_fallbacks: bool = True,
+    _guard: None = Depends(require_shared_audio_installer_access),
+) -> dict[str, Any]:
+    """Return admin-gated audio bundle recommendations for the shared installer UI."""
+
+    return _build_audio_recommendations_response(
+        prefer_offline_runtime=prefer_offline_runtime,
+        allow_hosted_fallbacks=allow_hosted_fallbacks,
+    )
+
+
+@router.post("/admin/audio/provision")
+async def provision_admin_audio_bundle(
+    payload: AudioBundleProvisionRequest,
+    _guard: None = Depends(require_shared_audio_installer_access),
+) -> dict[str, Any]:
+    """Provision a curated audio bundle through the shared admin installer UI."""
+
+    return _execute_audio_bundle_provision(payload)
+
+
+@router.post("/admin/audio/verify")
+async def verify_admin_audio_bundle(
+    payload: AudioBundleVerificationRequest,
+    _guard: None = Depends(require_shared_audio_installer_access),
+) -> dict[str, Any]:
+    """Verify a curated audio bundle through the shared admin installer UI."""
+
+    return await _execute_audio_bundle_verification(payload)
 
 
 @router.post("/audio/packs/export", openapi_extra={"security": []})
