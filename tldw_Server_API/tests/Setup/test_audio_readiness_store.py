@@ -19,6 +19,8 @@ def test_audio_readiness_update_persists_to_disk(tmp_path):
         status="provisioning",
         selected_bundle_id="cpu_local",
         selected_resource_profile="light",
+        tts_choice="kitten_tts",
+        selection_key="v2:cpu_local:light:kitten_tts",
         remediation_items=["Verification still pending"],
     )
 
@@ -27,6 +29,8 @@ def test_audio_readiness_update_persists_to_disk(tmp_path):
     assert reloaded["status"] == "provisioning"
     assert reloaded["selected_bundle_id"] == "cpu_local"
     assert reloaded["selected_resource_profile"] == "light"
+    assert reloaded["tts_choice"] == "kitten_tts"
+    assert reloaded["selection_key"] == "v2:cpu_local:light:kitten_tts"
     assert reloaded["remediation_items"] == ["Verification still pending"]
 
 
@@ -37,6 +41,39 @@ def test_readiness_defaults_missing_profile_to_balanced(tmp_path):
     readiness = AudioReadinessStore(readiness_path).load()
 
     assert readiness["selected_resource_profile"] == "balanced"
+
+
+def test_readiness_canonicalizes_default_tts_choice_identity(tmp_path):
+    readiness_path = tmp_path / "audio_readiness.json"
+    readiness_path.write_text(
+        (
+            '{"status":"ready","selected_bundle_id":"cpu_local","selected_resource_profile":"balanced",'
+            '"tts_choice":"kokoro","selection_key":"v2:cpu_local:balanced:kokoro"}'
+        ),
+        encoding="utf-8",
+    )
+
+    readiness = AudioReadinessStore(readiness_path).load()
+
+    assert readiness["tts_choice"] is None
+    assert readiness["selection_key"] == "v2:cpu_local:balanced"
+
+
+def test_readiness_save_rewrites_stale_selection_key_to_canonical_identity(tmp_path):
+    store = AudioReadinessStore(tmp_path / "audio_readiness.json")
+
+    saved = store.save(
+        {
+            "status": "ready",
+            "selected_bundle_id": "cpu_local",
+            "selected_resource_profile": "balanced",
+            "tts_choice": "kokoro",
+            "selection_key": "v2:cpu_local:balanced:kokoro",
+        }
+    )
+
+    assert saved["tts_choice"] is None
+    assert saved["selection_key"] == "v2:cpu_local:balanced"
 
 
 def test_install_plan_success_marks_audio_readiness_partial(tmp_path, mocker):

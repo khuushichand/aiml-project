@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.Setup.audio_bundle_catalog import (
     AUDIO_BUNDLE_CATALOG_VERSION,
     DEFAULT_AUDIO_RESOURCE_PROFILE,
     build_audio_selection_key,
+    get_audio_bundle_catalog,
 )
 
 CONFIG_ROOT = setup_manager.CONFIG_RELATIVE_PATH.parent
@@ -42,6 +43,7 @@ class AudioReadinessRecord(BaseModel):
     ] = "not_started"
     selected_bundle_id: str | None = None
     selected_resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE
+    tts_choice: str | None = None
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION
     selection_key: str | None = None
     machine_profile: dict[str, Any] | None = None
@@ -62,6 +64,7 @@ class AudioReadinessRecord(BaseModel):
 
         payload = dict(data)
         payload.setdefault("selected_resource_profile", DEFAULT_AUDIO_RESOURCE_PROFILE)
+        payload.setdefault("tts_choice", None)
         payload.setdefault("catalog_version", AUDIO_BUNDLE_CATALOG_VERSION)
         payload.setdefault("installed_profiles", [])
         payload.setdefault("installed_asset_manifests", [])
@@ -73,11 +76,44 @@ class AudioReadinessRecord(BaseModel):
                 selected_bundle_id,
                 payload["selected_resource_profile"],
                 payload["catalog_version"],
+                payload.get("tts_choice"),
             )
         else:
             payload.setdefault("selection_key", None)
 
         return payload
+
+    @model_validator(mode="after")
+    def canonicalize_selection_identity(self) -> "AudioReadinessRecord":
+        """Normalize persisted bundle/profile/TTS selection identity when the catalog knows it."""
+
+        if not self.selected_bundle_id:
+            self.tts_choice = None
+            self.selection_key = None
+            return self
+
+        try:
+            bundle = get_audio_bundle_catalog().bundle_by_id(self.selected_bundle_id)
+            profile = bundle.profile_by_id(self.selected_resource_profile)
+            canonical_tts_choice = profile.canonical_tts_choice(self.tts_choice)
+        except Exception:  # noqa: BLE001
+            if not self.selection_key:
+                self.selection_key = build_audio_selection_key(
+                    self.selected_bundle_id,
+                    self.selected_resource_profile,
+                    self.catalog_version,
+                    self.tts_choice,
+                )
+            return self
+
+        self.tts_choice = canonical_tts_choice
+        self.selection_key = build_audio_selection_key(
+            self.selected_bundle_id,
+            self.selected_resource_profile,
+            self.catalog_version,
+            canonical_tts_choice,
+        )
+        return self
 
 
 def _candidate_readiness_files() -> list[Path]:

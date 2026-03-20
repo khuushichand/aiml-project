@@ -85,6 +85,54 @@ class AudioResourceProfile(BaseModel):
         self.tts_plan = deepcopy(choice.tts_plan)
         return self
 
+    def tts_plan_for_choice(self, choice_id: str | None = None) -> list[dict[str, Any]]:
+        """Return a deep-copied TTS plan for the requested curated choice."""
+
+        if not self.tts_choices:
+            if choice_id is None or not str(choice_id).strip():
+                return deepcopy(self.tts_plan)
+            raise KeyError(
+                f"Unknown curated TTS choice '{str(choice_id).strip()}' for profile '{self.profile_id}'"
+            )
+
+        selected_choice = self.canonical_tts_choice(choice_id)
+        choice_key = self.default_tts_choice or self.tts_choices[0].choice_id
+        if selected_choice is not None:
+            choice_key = selected_choice
+
+        for choice in self.tts_choices:
+            if choice.choice_id == choice_key:
+                return deepcopy(choice.tts_plan)
+
+        raise KeyError(
+            f"Unknown curated TTS choice '{choice_key}' for profile '{self.profile_id}'"
+        )
+
+    def canonical_tts_choice(self, choice_id: str | None = None) -> str | None:
+        """Return a canonical choice id or ``None`` for the default curated choice."""
+
+        if not self.tts_choices:
+            if choice_id is None or not str(choice_id).strip():
+                return None
+            raise KeyError(
+                f"Unknown curated TTS choice '{str(choice_id).strip()}' for profile '{self.profile_id}'"
+            )
+
+        normalized_choice = str(choice_id).strip() if choice_id is not None else ""
+        if not normalized_choice:
+            return None
+
+        available_choices = {choice.choice_id for choice in self.tts_choices}
+        if normalized_choice not in available_choices:
+            raise KeyError(
+                f"Unknown curated TTS choice '{normalized_choice}' for profile '{self.profile_id}'"
+            )
+
+        default_choice = self.default_tts_choice or self.tts_choices[0].choice_id
+        if normalized_choice == default_choice:
+            return None
+        return normalized_choice
+
 
 def _build_curated_cpu_tts_choices() -> list[AudioResourceProfile.CuratedTTSChoice]:
     return [
@@ -173,10 +221,16 @@ def build_audio_selection_key(
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
+    tts_choice: str | None = None,
 ) -> str:
     """Build a stable identity key for a bundle/profile selection."""
 
-    return f"{catalog_version}:{bundle_id}:{resource_profile}"
+    parts = [str(catalog_version), str(bundle_id), str(resource_profile)]
+    if tts_choice:
+        normalized_choice = str(tts_choice).strip()
+        if normalized_choice:
+            parts.append(normalized_choice)
+    return ":".join(parts)
 
 
 def _guided_prerequisites() -> list[AudioBundleStep]:

@@ -74,6 +74,7 @@ def build_audio_pack_manifest(
     *,
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    tts_choice: str | None = None,
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
     compatibility: dict[str, str] | None = None,
     installed_assets: list[dict[str, Any]] | None = None,
@@ -82,6 +83,10 @@ def build_audio_pack_manifest(
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
     profile = bundle.profile_by_id(resource_profile)
+    try:
+        canonical_tts_choice = profile.canonical_tts_choice(tts_choice)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from exc
     assets = _copy_asset_manifest(installed_assets)
 
     manifest = {
@@ -89,9 +94,15 @@ def build_audio_pack_manifest(
         "bundle_id": bundle.bundle_id,
         "bundle_label": bundle.label,
         "resource_profile": profile.profile_id,
+        "tts_choice": canonical_tts_choice,
         "profile_label": profile.label,
         "catalog_version": catalog_version,
-        "selection_key": build_audio_selection_key(bundle.bundle_id, profile.profile_id, catalog_version),
+        "selection_key": build_audio_selection_key(
+            bundle.bundle_id,
+            profile.profile_id,
+            catalog_version,
+            tts_choice=canonical_tts_choice,
+        ),
         "compatibility": compatibility or _default_compatibility(),
         "assets": assets,
         "created_at": _utc_now(),
@@ -112,6 +123,7 @@ def write_audio_pack_manifest(
     pack_path: str | Path,
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    tts_choice: str | None = None,
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
     compatibility: dict[str, str] | None = None,
     installed_assets: list[dict[str, Any]] | None = None,
@@ -121,6 +133,7 @@ def write_audio_pack_manifest(
     manifest = build_audio_pack_manifest(
         bundle_id=bundle_id,
         resource_profile=resource_profile,
+        tts_choice=tts_choice,
         catalog_version=catalog_version,
         compatibility=compatibility,
         installed_assets=installed_assets,
@@ -155,11 +168,13 @@ def validate_audio_pack_manifest(
     bundle_id = manifest.get("bundle_id")
     resource_profile = manifest.get("resource_profile")
     catalog_version = manifest.get("catalog_version") or AUDIO_BUNDLE_CATALOG_VERSION
+    canonical_tts_choice = None
     try:
         bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
-        bundle.profile_by_id(resource_profile)
+        profile = bundle.profile_by_id(resource_profile)
     except Exception:  # noqa: BLE001
         bundle = None
+        profile = None
         issues.append("Referenced audio bundle or resource profile is not available in this catalog.")
 
     checksum_payload = dict(manifest)
@@ -183,6 +198,24 @@ def validate_audio_pack_manifest(
     if expected_python and expected_python != local_python:
         issues.append(f"Pack Python {expected_python} does not match local Python {local_python}.")
 
+    if profile is not None:
+        try:
+            expected_tts_choice = profile.canonical_tts_choice(manifest.get("tts_choice"))
+        except KeyError as exc:
+            issues.append(str(exc))
+            expected_tts_choice = None
+        canonical_tts_choice = expected_tts_choice
+
+    canonical_selection_key = build_audio_selection_key(
+        bundle_id,
+        resource_profile,
+        catalog_version,
+        tts_choice=canonical_tts_choice,
+    )
+    manifest_selection_key = manifest.get("selection_key")
+    if manifest_selection_key != canonical_selection_key:
+        issues.append("Pack selection key does not match the canonical bundle/profile/TTS choice identity.")
+
     for asset in manifest.get("assets", []):
         path_value = asset.get("path") or asset.get("asset_path")
         if not path_value:
@@ -196,8 +229,8 @@ def validate_audio_pack_manifest(
         "issues": issues,
         "warnings": warnings,
         "manifest": manifest,
-        "selection_key": manifest.get("selection_key")
-        or build_audio_selection_key(bundle_id, resource_profile, catalog_version),
+        "tts_choice": canonical_tts_choice,
+        "selection_key": canonical_selection_key,
         "bundle_label": bundle.label if bundle else None,
     }
 
@@ -218,12 +251,31 @@ def register_imported_audio_pack(
     )
     readiness = readiness_store.load()
     manifest = validation["manifest"]
+    blocking_issue = next(
+        (
+            issue
+            for issue in validation["issues"]
+            if any(
+                fragment in str(issue).lower()
+                for fragment in (
+                    "curated tts choice",
+                    "selection key",
+                    "checksum mismatch",
+                    "not available in this catalog",
+                )
+            )
+        ),
+        None,
+    )
+    if blocking_issue is not None:
+        raise ValueError(blocking_issue)
     imported_packs = list(readiness.get("imported_packs") or [])
     imported_packs.append(
         {
             "pack_path": str(pack_path),
             "bundle_id": manifest.get("bundle_id"),
             "resource_profile": manifest.get("resource_profile"),
+            "tts_choice": validation["tts_choice"],
             "catalog_version": manifest.get("catalog_version"),
             "selection_key": validation["selection_key"],
             "compatible": validation["compatible"],
@@ -237,6 +289,7 @@ def register_imported_audio_pack(
     updated = readiness_store.update(
         selected_bundle_id=manifest.get("bundle_id"),
         selected_resource_profile=manifest.get("resource_profile") or DEFAULT_AUDIO_RESOURCE_PROFILE,
+        tts_choice=validation["tts_choice"],
         catalog_version=manifest.get("catalog_version") or AUDIO_BUNDLE_CATALOG_VERSION,
         selection_key=validation["selection_key"],
         machine_profile=machine_profile or readiness.get("machine_profile"),
