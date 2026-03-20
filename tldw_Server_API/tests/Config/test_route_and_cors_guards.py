@@ -90,6 +90,15 @@ def test_validate_cors_configuration_allows_wildcard_without_credentials() -> No
     app_main._validate_cors_configuration_or_raise(["*"], allow_credentials=False)
 
 
+def test_default_allowed_origins_include_ipv6_loopback_dev_hosts() -> None:
+    origins = config_mod.get_default_allowed_origins()
+
+    assert "http://[::1]" in origins
+    assert "http://[::1]:3000" in origins
+    assert "http://[::1]:3001" in origins
+    assert "http://[::1]:8000" in origins
+
+
 def test_compute_dev_cors_origin_regex_allows_private_lan_origins_in_non_production() -> None:
     pattern = app_main._compute_dev_cors_origin_regex(
         ["http://localhost:3000"],

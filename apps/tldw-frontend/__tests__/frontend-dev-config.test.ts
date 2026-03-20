@@ -16,7 +16,7 @@ describe("frontend dev config", () => {
     const nextConfig = await loadNextConfig()
 
     expect(nextConfig.allowedDevOrigins).toEqual(
-      expect.arrayContaining(["localhost", "127.0.0.1"])
+      expect.arrayContaining(["localhost", "127.0.0.1", "[::1]"])
     )
   })
 

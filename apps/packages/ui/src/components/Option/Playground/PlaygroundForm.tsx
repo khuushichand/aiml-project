@@ -1912,6 +1912,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const handleKnowledgeAddFile = React.useCallback(() => {
     fileInputRef.current?.click()
   }, [])
+  const voiceChatSubmitFormRef = React.useRef<() => void>(() => undefined)
 
   const voiceChatHook = usePlaygroundVoiceChat({
     voiceChatAvailable,
@@ -1939,7 +1940,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     autoSubmitVoiceMessage,
     speechToTextLanguage,
     setMessageValue,
-    submitForm,
+    submitForm: () => voiceChatSubmitFormRef.current(),
     stopSpeechRecognition: () => {},
     notificationApi,
     isSending,
@@ -2176,6 +2177,12 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     notificationApi,
     t
   })
+
+  React.useEffect(() => {
+    voiceChatSubmitFormRef.current = () => {
+      submitForm()
+    }
+  }, [submitForm])
 
   const handleKnowledgeAsk = React.useCallback(
     (text: string, options?: { ignorePinnedResults?: boolean }) => {
