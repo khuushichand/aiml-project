@@ -148,11 +148,23 @@ async def get_install_status(_guard: None = Depends(require_local_setup_access))
     return _get_audio_install_status()
 
 
-def _get_audio_install_status() -> dict[str, Any]:
-    """Return the current audio install status payload used by legacy and admin routes."""
+def _ensure_audio_installer_available(*, allow_completed_when_disabled: bool) -> None:
+    """Validate whether audio installer actions should remain available."""
     status_snapshot = setup_manager.get_status_snapshot()
-    if not status_snapshot["enabled"]:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+    if status_snapshot["enabled"]:
+        return
+
+    if allow_completed_when_disabled and (
+        status_snapshot.get("setup_completed") or status_snapshot.get("completed")
+    ):
+        return
+
+    raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+
+
+def _get_audio_install_status(*, allow_completed_when_disabled: bool = False) -> dict[str, Any]:
+    """Return the current audio install status payload used by legacy and admin routes."""
+    _ensure_audio_installer_available(allow_completed_when_disabled=allow_completed_when_disabled)
 
     install_status = install_manager.get_install_status_snapshot()
     if not install_status:
@@ -179,11 +191,10 @@ def _build_audio_recommendations_response(
     *,
     prefer_offline_runtime: bool,
     allow_hosted_fallbacks: bool,
+    allow_completed_when_disabled: bool = False,
 ) -> dict[str, Any]:
     """Build the shared audio recommendations payload."""
-    status_snapshot = setup_manager.get_status_snapshot()
-    if not status_snapshot["enabled"]:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+    _ensure_audio_installer_available(allow_completed_when_disabled=allow_completed_when_disabled)
 
     machine_profile = audio_profile_service.detect_machine_profile()
     recommendations = audio_profile_service.recommend_audio_bundles(
@@ -259,11 +270,13 @@ async def provision_audio_bundle(
     return _execute_audio_bundle_provision(payload)
 
 
-def _execute_audio_bundle_provision(payload: AudioBundleProvisionRequest) -> dict[str, Any]:
+def _execute_audio_bundle_provision(
+    payload: AudioBundleProvisionRequest,
+    *,
+    allow_completed_when_disabled: bool = False,
+) -> dict[str, Any]:
     """Execute the bundle provisioning flow shared by legacy and admin routes."""
-    status_snapshot = setup_manager.get_status_snapshot()
-    if not status_snapshot["enabled"]:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+    _ensure_audio_installer_available(allow_completed_when_disabled=allow_completed_when_disabled)
 
     try:
         return install_manager.execute_audio_bundle(
@@ -287,11 +300,11 @@ async def verify_audio_bundle(
 
 async def _execute_audio_bundle_verification(
     payload: AudioBundleVerificationRequest,
+    *,
+    allow_completed_when_disabled: bool = False,
 ) -> dict[str, Any]:
     """Execute bundle verification shared by legacy and admin routes."""
-    status_snapshot = setup_manager.get_status_snapshot()
-    if not status_snapshot["enabled"]:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Setup flow not enabled in config.txt")
+    _ensure_audio_installer_available(allow_completed_when_disabled=allow_completed_when_disabled)
 
     try:
         return await install_manager.verify_audio_bundle_async(
@@ -308,7 +321,7 @@ async def get_admin_install_status(
 ) -> dict[str, Any]:
     """Return installer status for the shared admin audio installer."""
 
-    return _get_audio_install_status()
+    return _get_audio_install_status(allow_completed_when_disabled=True)
 
 
 @router.get("/admin/audio/recommendations")
@@ -322,6 +335,7 @@ async def get_admin_audio_recommendations(
     return _build_audio_recommendations_response(
         prefer_offline_runtime=prefer_offline_runtime,
         allow_hosted_fallbacks=allow_hosted_fallbacks,
+        allow_completed_when_disabled=True,
     )
 
 
@@ -332,7 +346,7 @@ async def provision_admin_audio_bundle(
 ) -> dict[str, Any]:
     """Provision a curated audio bundle through the shared admin installer UI."""
 
-    return _execute_audio_bundle_provision(payload)
+    return _execute_audio_bundle_provision(payload, allow_completed_when_disabled=True)
 
 
 @router.post("/admin/audio/verify")
@@ -342,7 +356,7 @@ async def verify_admin_audio_bundle(
 ) -> dict[str, Any]:
     """Verify a curated audio bundle through the shared admin installer UI."""
 
-    return await _execute_audio_bundle_verification(payload)
+    return await _execute_audio_bundle_verification(payload, allow_completed_when_disabled=True)
 
 
 @router.post("/audio/packs/export", openapi_extra={"security": []})
