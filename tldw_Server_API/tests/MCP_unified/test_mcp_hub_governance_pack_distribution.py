@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -105,6 +106,24 @@ class _FakeGitTrustService:
             "canonical_repository": self.canonical_repository,
             "verification_required": self.verification_required,
             "trusted_git_key_fingerprints": list(self.trusted_git_key_fingerprints),
+        }
+
+    async def evaluate_signer_for_repository(self, signer_fingerprint: str, repo_url: str) -> dict[str, Any]:
+        cleaned = str(signer_fingerprint or "").strip().upper()
+        if cleaned in {value.upper() for value in self.trusted_git_key_fingerprints}:
+            return {
+                "allowed": True,
+                "reason": None,
+                "result_code": "signer_trusted_for_repo",
+                "canonical_repository": self.canonical_repository,
+                "signer_fingerprint": cleaned,
+            }
+        return {
+            "allowed": False,
+            "reason": "signer_not_allowed_for_repo",
+            "result_code": "signer_not_allowed_for_repo",
+            "canonical_repository": self.canonical_repository,
+            "signer_fingerprint": cleaned,
         }
 
 
@@ -942,31 +961,192 @@ async def test_distribution_service_verify_git_revision_uses_thread_offload(
     def _fake_verify_sync(
         *,
         checkout_root: Path,
+        repo_url: str,
         ref: str | None,
         ref_kind: str,
         commit: str,
         trusted_git_key_fingerprints: list[str] | None = None,
-    ) -> bool:
+    ) -> dict[str, Any]:
         assert checkout_root == tmp_path / "checkout"
+        assert repo_url == "https://example.com/researcher-pack.git"
         assert ref == "v1.0.0"
         assert ref_kind == "tag"
         assert commit == "abc123"
         assert trusted_git_key_fingerprints == ["ABCD1234"]
-        return True
+        return {
+            "verified": True,
+            "verification_mode": "git_signature",
+            "verified_object_type": "tag",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "verified_and_trusted",
+            "warning_code": None,
+        }
 
     monkeypatch.setattr(distribution_module.asyncio, "to_thread", _fake_to_thread)
     monkeypatch.setattr(service, "_verify_git_revision_sync", _fake_verify_sync)
 
     verified = await service._verify_git_revision(
         checkout_root=tmp_path / "checkout",
+        repo_url="https://example.com/researcher-pack.git",
         ref="v1.0.0",
         ref_kind="tag",
         commit="abc123",
         trusted_git_key_fingerprints=["ABCD1234"],
     )
 
-    assert verified is True
+    assert verified["verified"] is True
+    assert verified["result_code"] == "verified_and_trusted"
     assert calls == ["_fake_verify_sync"]
+
+
+def test_distribution_service_verify_git_revision_sync_returns_structured_result_for_signed_tag(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services import mcp_hub_governance_pack_distribution_service as distribution_module
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    service = McpHubGovernancePackDistributionService(
+        trust_service=_FakeGitTrustService(trusted_git_key_fingerprints=["ABCD1234"])
+    )
+
+    def _fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        assert command[-4:] == ["verify-tag", "--raw", "--", "v1.0.0"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr='[GNUPG:] VALIDSIG ABCD1234\n[GNUPG:] GOODSIG ABCD1234 Release Bot\ngpg: Good signature from "Release Bot <bot@example.com>"',
+        )
+
+    monkeypatch.setattr(distribution_module, "_git_executable", lambda: "git")
+    monkeypatch.setattr(distribution_module.subprocess, "run", _fake_run)
+
+    result = service._verify_git_revision_sync(
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://github.com/example/researcher-pack.git",
+        ref="v1.0.0",
+        ref_kind="tag",
+        commit="abc123",
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+
+    assert result["verified"] is True
+    assert result["verification_mode"] == "git_signature"
+    assert result["verified_object_type"] == "tag"
+    assert result["signer_fingerprint"] == "ABCD1234"
+    assert result["signer_identity"] == "Release Bot <bot@example.com>"
+    assert result["result_code"] == "verified_and_trusted"
+    assert result["warning_code"] is None
+
+
+def test_distribution_service_verify_git_revision_sync_returns_signature_invalid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services import mcp_hub_governance_pack_distribution_service as distribution_module
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    service = McpHubGovernancePackDistributionService(trust_service=_FakeGitTrustService())
+
+    def _fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        assert command[-4:] == ["verify-commit", "--raw", "--", "abc123"]
+        return SimpleNamespace(returncode=1, stdout="", stderr="gpg: BAD signature")
+
+    monkeypatch.setattr(distribution_module, "_git_executable", lambda: "git")
+    monkeypatch.setattr(distribution_module.subprocess, "run", _fake_run)
+
+    result = service._verify_git_revision_sync(
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://github.com/example/researcher-pack.git",
+        ref=None,
+        ref_kind="commit",
+        commit="abc123",
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+
+    assert result["verified"] is False
+    assert result["verified_object_type"] == "commit"
+    assert result["result_code"] == "signature_invalid"
+    assert result["warning_code"] is None
+
+
+def test_distribution_service_verify_git_revision_sync_returns_signer_unknown_without_validsig(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services import mcp_hub_governance_pack_distribution_service as distribution_module
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    service = McpHubGovernancePackDistributionService(
+        trust_service=_FakeGitTrustService(trusted_git_key_fingerprints=["ABCD1234"])
+    )
+
+    def _fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr='gpg: Good signature from "Release Bot <bot@example.com>"',
+        )
+
+    monkeypatch.setattr(distribution_module, "_git_executable", lambda: "git")
+    monkeypatch.setattr(distribution_module.subprocess, "run", _fake_run)
+
+    result = service._verify_git_revision_sync(
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://github.com/example/researcher-pack.git",
+        ref="v1.0.0",
+        ref_kind="tag",
+        commit="abc123",
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+
+    assert result["verified"] is False
+    assert result["result_code"] == "signer_unknown"
+    assert result["warning_code"] is None
+
+
+def test_distribution_service_verify_git_revision_sync_reports_unsupported_signature_backend(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services import mcp_hub_governance_pack_distribution_service as distribution_module
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    service = McpHubGovernancePackDistributionService(
+        trust_service=_FakeGitTrustService(trusted_git_key_fingerprints=["ABCD1234"])
+    )
+
+    def _fake_run(command: list[str], **kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=0,
+            stdout='Good "git" signature for abc123 with ED25519 key SHA256:deadbeef',
+            stderr="",
+        )
+
+    monkeypatch.setattr(distribution_module, "_git_executable", lambda: "git")
+    monkeypatch.setattr(distribution_module.subprocess, "run", _fake_run)
+
+    result = service._verify_git_revision_sync(
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://github.com/example/researcher-pack.git",
+        ref=None,
+        ref_kind="commit",
+        commit="abc123",
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+
+    assert result["verified"] is False
+    assert result["result_code"] == "unsupported_signature_backend"
+    assert result["warning_code"] is None
 
 
 @pytest.mark.asyncio
@@ -1099,8 +1279,16 @@ async def test_distribution_service_requires_git_signature_verification_when_con
     trust_service = _FakeGitTrustService(verification_required=True)
     service = McpHubGovernancePackDistributionService(trust_service=trust_service)
 
-    async def _fake_verify(*args: Any, **kwargs: Any) -> bool:
-        return False
+    async def _fake_verify(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "verified": False,
+            "verification_mode": "git_signature",
+            "verified_object_type": "tag",
+            "signer_fingerprint": None,
+            "signer_identity": None,
+            "result_code": "signature_invalid",
+            "warning_code": None,
+        }
 
     monkeypatch.setattr(service, "_verify_git_revision", _fake_verify)
 
@@ -1129,9 +1317,18 @@ async def test_distribution_service_passes_trusted_key_fingerprints_to_verifier(
     )
     service = McpHubGovernancePackDistributionService(trust_service=trust_service)
 
-    async def _fake_verify(*args: Any, **kwargs: Any) -> bool:
+    async def _fake_verify(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert kwargs["repo_url"] == repo_url
         assert kwargs["trusted_git_key_fingerprints"] == ["ABCD1234"]
-        return True
+        return {
+            "verified": True,
+            "verification_mode": "git_signature",
+            "verified_object_type": "tag",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "verified_and_trusted",
+            "warning_code": None,
+        }
 
     monkeypatch.setattr(service, "_verify_git_revision", _fake_verify)
 
@@ -1142,6 +1339,47 @@ async def test_distribution_service_passes_trusted_key_fingerprints_to_verifier(
         subpath="packs/researcher",
     )
 
+    assert resolved.source_commit_resolved == commit
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_derives_summary_fields_from_structured_verification_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    repo_url, commit = _init_git_pack_repo(tmp_path)
+    trust_service = _FakeGitTrustService(
+        verification_required=True,
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+    service = McpHubGovernancePackDistributionService(trust_service=trust_service)
+
+    async def _fake_verify(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "verified": True,
+            "verification_mode": "git_signature",
+            "verified_object_type": "tag",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "verified_and_trusted",
+            "warning_code": None,
+        }
+
+    monkeypatch.setattr(service, "_verify_git_revision", _fake_verify)
+
+    resolved = await service.resolve_git_source(
+        repo_url,
+        ref="v1.0.0",
+        ref_kind="tag",
+        subpath="packs/researcher",
+    )
+
+    assert resolved.source_verified is True
+    assert resolved.source_verification_mode == "git_signature"
     assert resolved.source_commit_resolved == commit
 
 
