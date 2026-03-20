@@ -1474,18 +1474,22 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     }
   }, [generatedArtifacts.length, outputListViewportHeight, useVirtualizedOutputs])
 
+  const tldwVoiceOptions = React.useMemo(() => {
+    if (tldwVoices.length > 0) {
+      return tldwVoices.map((voice) => ({
+        value: voice.voice_id || voice.id || voice.name || "",
+        label: voice.name || voice.voice_id || voice.id || "Unknown"
+      }))
+    }
+    return inferredTldwProviderKey === "kitten_tts"
+      ? KITTEN_FALLBACK_VOICES
+      : KOKORO_FALLBACK_VOICES
+  }, [inferredTldwProviderKey, tldwVoices])
+
   // Get voice options based on provider
   const getVoiceOptions = () => {
     if (audioSettings.provider === "tldw") {
-      if (tldwVoices.length > 0) {
-        return tldwVoices.map((v) => ({
-          value: v.voice_id || v.id || v.name || "",
-          label: v.name || v.voice_id || v.id || "Unknown"
-        }))
-      }
-      return inferredTldwProviderKey === "kitten_tts"
-        ? KITTEN_FALLBACK_VOICES
-        : KOKORO_FALLBACK_VOICES
+      return tldwVoiceOptions
     }
     if (audioSettings.provider === "openai") {
       return OPENAI_TTS_VOICES
@@ -1509,32 +1513,21 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       return
     }
 
-    const voiceOptions =
-      tldwVoices.length > 0
-        ? tldwVoices.map((voice) => ({
-            value: voice.voice_id || voice.id || voice.name || "",
-            label: voice.name || voice.voice_id || voice.id || "Unknown"
-          }))
-        : inferredTldwProviderKey === "kitten_tts"
-          ? KITTEN_FALLBACK_VOICES
-          : KOKORO_FALLBACK_VOICES
-
-    if (!voiceOptions.length) {
+    if (!tldwVoiceOptions.length) {
       return
     }
 
     const currentVoice = String(audioSettings.voice || "").trim()
-    if (currentVoice && voiceOptions.some((option) => option.value === currentVoice)) {
+    if (currentVoice && tldwVoiceOptions.some((option) => option.value === currentVoice)) {
       return
     }
 
-    setAudioSettings({ voice: voiceOptions[0].value })
+    setAudioSettings({ voice: tldwVoiceOptions[0].value })
   }, [
     audioSettings.provider,
     audioSettings.voice,
-    inferredTldwProviderKey,
     setAudioSettings,
-    tldwVoices
+    tldwVoiceOptions
   ])
 
   const handleCancelGeneration = () => {

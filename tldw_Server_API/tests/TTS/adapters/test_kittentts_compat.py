@@ -8,6 +8,27 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+def test_missing_dependency_helpers_preserve_context_and_log(monkeypatch):
+    from tldw_Server_API.app.core.TTS.vendors import kittentts_compat as mod
+
+    warnings: list[str] = []
+
+    def fake_warning(message, *args, **_kwargs):
+        warnings.append(str(message).format(*args))
+
+    monkeypatch.setattr(mod.logger, "warning", fake_warning)
+
+    exc = ImportError("broken optional dependency")
+    mod._log_optional_dependency_fallback("onnxruntime", exc)
+    missing = mod._missing_dependency_callable("onnxruntime", "runtime sessions", exc)
+
+    with pytest.raises(ImportError, match="onnxruntime is required for KittenTTS runtime sessions"):
+        missing()
+
+    assert warnings
+    assert "onnxruntime" in warnings[0]
+
+
 def test_initialize_espeak_paths_uses_espeakng_loader(monkeypatch):
     from tldw_Server_API.app.core.TTS.vendors import kittentts_compat as mod
 

@@ -1093,6 +1093,7 @@ class TTSAdapterFactory:
         "kittenml/kitten-tts-mini-0.8": TTSProvider.KITTEN_TTS,
         "kittenml/kitten-tts-micro-0.8": TTSProvider.KITTEN_TTS,
         "kittenml/kitten-tts-nano-0.8": TTSProvider.KITTEN_TTS,
+        "kittenml/kitten-tts-nano-0.8-fp32": TTSProvider.KITTEN_TTS,
         "kittenml/kitten-tts-nano-0.8-int8": TTSProvider.KITTEN_TTS,
     }
 

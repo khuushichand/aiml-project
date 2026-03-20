@@ -278,11 +278,45 @@ def _cuda_available() -> bool:
     if _truthy(os.getenv("TLDW_SETUP_FORCE_GPU")):
         return True
 
-    if shutil.which("nvidia-smi"):
-        return True
-    if os.getenv("CUDA_HOME") or os.getenv("CUDA_PATH"):
-        return True
-    return False
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return False
+
+    try:
+        result = subprocess.run(  # nosec B603 - fixed nvidia-smi probe command for CUDA detection
+            [nvidia_smi, "-L"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        logger.debug("nvidia-smi probe failed during CUDA detection: {}", exc)
+        return False
+
+    if result.returncode != 0:
+        return False
+
+    gpu_listing = (result.stdout or "").strip()
+    return bool(gpu_listing)
+
+
+def _resolve_kitten_tts_prefetch_settings() -> dict[str, str | None]:
+    cache_dir = "cache/kitten_tts"
+
+    try:
+        from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
+
+        cfg = get_tts_config()
+        provider_cfg = getattr(cfg, "providers", {}).get("kitten_tts")
+        if provider_cfg:
+            extra_params = getattr(provider_cfg, "extra_params", {}) or {}
+            configured_cache_dir = extra_params.get("cache_dir")
+            if configured_cache_dir:
+                cache_dir = str(configured_cache_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Unable to load KittenTTS prefetch settings from config: {}", exc)
+
+    return {"cache_dir": cache_dir, "revision": None}
 
 class InstallationStatus:
     """Persist installation progress to a status file."""
@@ -1077,6 +1111,7 @@ def _install_kitten_tts(variants: list[str]) -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError('KittenTTS compatibility runtime is required for asset downloads.') from exc
 
+    settings = _resolve_kitten_tts_prefetch_settings()
     variant_to_repo = {
         'nano': 'KittenML/kitten-tts-nano-0.8',
         'nano-int8': 'KittenML/kitten-tts-nano-0.8-int8',
@@ -1090,7 +1125,12 @@ def _install_kitten_tts(variants: list[str]) -> None:
             continue
         logger.info('Prefetching KittenTTS assets for {}', repo_id)
         try:
-            download_model_assets(repo_id, auto_download=True)
+            download_model_assets(
+                repo_id,
+                cache_dir=settings.get("cache_dir"),
+                auto_download=True,
+                revision=settings.get("revision"),
+            )
         except Exception as exc:  # noqa: BLE001
             if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
                 raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
