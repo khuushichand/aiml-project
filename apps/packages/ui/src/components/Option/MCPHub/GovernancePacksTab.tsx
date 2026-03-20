@@ -101,21 +101,95 @@ const getVerificationTag = (pack: Pick<McpHubGovernancePackSummary, "source_type
   return <Tag color="default">Unverified Source</Tag>
 }
 
+const describeVerificationWarning = (code?: string | null) => {
+  switch (code) {
+    case "signer_rotated_trusted":
+      return "Signer rotated"
+    case "signer_revoked":
+      return "Signer revoked"
+    case "unknown_previous_signer":
+      return "Previous signer unknown"
+    default:
+      return code ?? null
+  }
+}
+
+const renderVerificationDetails = (
+  pack: Pick<
+    McpHubGovernancePackSummary,
+    | "source_type"
+    | "signer_fingerprint"
+    | "signer_identity"
+    | "verified_object_type"
+    | "verification_result_code"
+    | "verification_warning_code"
+  >
+) => {
+  if (pack.source_type !== "git") {
+    return null
+  }
+  const signerFingerprint = pack.signer_fingerprint ?? null
+  const signerIdentity = pack.signer_identity ?? null
+  const verifiedObjectType = pack.verified_object_type ?? null
+  const resultCode = pack.verification_result_code ?? null
+  const warningCode = describeVerificationWarning(pack.verification_warning_code)
+  if (!signerFingerprint && !signerIdentity && !verifiedObjectType && !resultCode && !warningCode) {
+    return null
+  }
+  return (
+    <details>
+      <summary>Verification details</summary>
+      <Descriptions bordered column={1} size="small" style={{ marginTop: 8 }}>
+        {signerFingerprint ? (
+          <Descriptions.Item label="Signer fingerprint">
+            <Typography.Text code>{signerFingerprint}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {signerIdentity ? (
+          <Descriptions.Item label="Signer identity">
+            <Typography.Text>{signerIdentity}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {verifiedObjectType ? (
+          <Descriptions.Item label="Verified object type">
+            <Typography.Text code>{verifiedObjectType}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {resultCode ? (
+          <Descriptions.Item label="Verification result">
+            <Typography.Text code>{resultCode}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {warningCode ? (
+          <Descriptions.Item label="Verification warning">
+            <Tag color="orange">{warningCode}</Tag>
+          </Descriptions.Item>
+        ) : null}
+      </Descriptions>
+    </details>
+  )
+}
+
 const describeUpdateStatus = (updateCheck: McpHubGovernancePackSourceUpdateCheck) => {
+  const warningText = describeVerificationWarning(updateCheck.verification_warning_code)
+  const signerText = updateCheck.signer_fingerprint ? ` (${updateCheck.signer_fingerprint})` : ""
   if (updateCheck.status === "newer_version_available") {
     return {
       type: "success" as const,
       message: `Newer version available: ${String(updateCheck.candidate_manifest?.pack_version ?? "")}`,
-      description: `Current ${updateCheck.installed_manifest.pack_version} -> candidate ${String(
-        updateCheck.candidate_manifest?.pack_version ?? ""
-      )}`
+      description:
+        `Current ${updateCheck.installed_manifest.pack_version} -> candidate ${String(
+          updateCheck.candidate_manifest?.pack_version ?? ""
+        )}` + (warningText ? `. ${warningText}${signerText}.` : "")
     }
   }
   if (updateCheck.status === "source_drift_same_version") {
     return {
       type: "warning" as const,
       message: "Source drift detected at the same version",
-      description: `Tracked source now resolves to ${String(updateCheck.source_commit_resolved ?? "a different commit")} without a version bump.`
+      description:
+        `Tracked source now resolves to ${String(updateCheck.source_commit_resolved ?? "a different commit")} without a version bump.` +
+        (warningText ? ` ${warningText}${signerText}.` : "")
     }
   }
   return {
@@ -655,6 +729,7 @@ export const GovernancePacksTab = () => {
 
               {selectedPack.source_type === "git" ? (
                 <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                  {renderVerificationDetails(selectedPack)}
                   <Space wrap>
                     <Button onClick={() => void handleCheckForUpdates()} loading={checkingUpdates}>
                       Check For Updates
@@ -816,21 +891,24 @@ export const GovernancePacksTab = () => {
               </Button>
             </Space>
             {preparedSourceCandidate ? (
-              <Descriptions bordered column={1} size="small">
-                <Descriptions.Item label="Prepared candidate">
-                  <Typography.Text code>{preparedSourceCandidate.source_location}</Typography.Text>
-                </Descriptions.Item>
-                {preparedSourceCandidate.source_commit_resolved ? (
-                  <Descriptions.Item label="Prepared commit">
-                    <Typography.Text code>{preparedSourceCandidate.source_commit_resolved}</Typography.Text>
+              <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                <Descriptions bordered column={1} size="small">
+                  <Descriptions.Item label="Prepared candidate">
+                    <Typography.Text code>{preparedSourceCandidate.source_location}</Typography.Text>
                   </Descriptions.Item>
-                ) : null}
-                {preparedSourceCandidate.source_ref_kind ? (
-                  <Descriptions.Item label="Prepared ref kind">
-                    <Typography.Text code>{preparedSourceCandidate.source_ref_kind}</Typography.Text>
-                  </Descriptions.Item>
-                ) : null}
-              </Descriptions>
+                  {preparedSourceCandidate.source_commit_resolved ? (
+                    <Descriptions.Item label="Prepared commit">
+                      <Typography.Text code>{preparedSourceCandidate.source_commit_resolved}</Typography.Text>
+                    </Descriptions.Item>
+                  ) : null}
+                  {preparedSourceCandidate.source_ref_kind ? (
+                    <Descriptions.Item label="Prepared ref kind">
+                      <Typography.Text code>{preparedSourceCandidate.source_ref_kind}</Typography.Text>
+                    </Descriptions.Item>
+                  ) : null}
+                </Descriptions>
+                {renderVerificationDetails(preparedSourceCandidate)}
+              </Space>
             ) : null}
           </Space>
           {report ? (
@@ -900,6 +978,7 @@ export const GovernancePacksTab = () => {
                 </Descriptions.Item>
               ) : null}
             </Descriptions>
+            {upgradeCandidate ? renderVerificationDetails(upgradeCandidate.candidate) : null}
 
             {modifiedDiffs.length ? (
               <div>
