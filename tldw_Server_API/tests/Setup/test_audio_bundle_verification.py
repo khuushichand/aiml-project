@@ -1,3 +1,5 @@
+import pytest
+
 from tldw_Server_API.app.core.Setup import install_manager
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import get_audio_bundle_catalog
 from tldw_Server_API.app.core.Setup.audio_profile_service import MachineProfile
@@ -190,6 +192,15 @@ def test_verify_audio_bundle_uses_selected_kitten_tts_choice(mocker, tmp_path):
     readiness = store.load()
     assert readiness["tts_choice"] == "kitten_tts"
     assert readiness["selection_key"] == "v2:cpu_local:balanced:kitten_tts"
+
+
+def test_verify_audio_bundle_rejects_invalid_curated_tts_choice_with_value_error():
+    with pytest.raises(ValueError, match="Unknown curated TTS choice"):
+        install_manager.verify_audio_bundle(
+            "cpu_local",
+            resource_profile="balanced",
+            tts_choice="bogus_choice",
+        )
 
 
 def test_verification_remediation_uses_stable_codes_for_primary_paths(mocker, tmp_path):

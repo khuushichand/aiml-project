@@ -258,3 +258,124 @@ def test_admin_audio_provision_and_verify_accept_tts_choice(
     assert provision_response.json()["tts_choice"] == "kitten_tts"
     assert verify_response.json()["tts_choice"] == "kitten_tts"
     assert captured["verify_tts_choice"] == "kitten_tts"
+
+
+def test_admin_audio_provision_rejects_invalid_tts_choice_with_400(
+    monkeypatch,
+    _admin_audio_installer_setup,
+):
+    monkeypatch.setattr(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        lambda: {"enabled": True, "setup_completed": False, "needs_setup": True},
+    )
+    monkeypatch.setattr(
+        setup_endpoint.install_manager,
+        "execute_audio_bundle",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Unknown curated TTS choice 'bogus_choice'")),
+    )
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/admin/audio/provision",
+            json={
+                "bundle_id": "cpu_local",
+                "resource_profile": "balanced",
+                "tts_choice": "bogus_choice",
+            },
+        )
+
+    assert response.status_code == 400
+    assert "Unknown curated TTS choice" in response.json()["detail"]
+
+
+def test_admin_audio_verify_rejects_invalid_tts_choice_with_400(
+    monkeypatch,
+    _admin_audio_installer_setup,
+):
+    monkeypatch.setattr(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        lambda: {"enabled": True, "setup_completed": False, "needs_setup": True},
+    )
+
+    async def _raise_invalid_choice(*args, **kwargs):
+        raise ValueError("Unknown curated TTS choice 'bogus_choice'")
+
+    monkeypatch.setattr(
+        setup_endpoint.install_manager,
+        "verify_audio_bundle_async",
+        _raise_invalid_choice,
+    )
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/admin/audio/verify",
+            json={
+                "bundle_id": "cpu_local",
+                "resource_profile": "balanced",
+                "tts_choice": "bogus_choice",
+            },
+        )
+
+    assert response.status_code == 400
+    assert "Unknown curated TTS choice" in response.json()["detail"]
+
+
+def test_audio_pack_export_rejects_invalid_tts_choice_with_400(
+    monkeypatch,
+    _admin_audio_installer_setup,
+):
+    monkeypatch.setattr(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        lambda: {"enabled": True, "setup_completed": False, "needs_setup": True},
+    )
+    monkeypatch.setattr(
+        setup_endpoint.audio_readiness_store,
+        "get_audio_readiness_store",
+        lambda: SimpleNamespace(load=lambda: {"installed_asset_manifests": []}),
+    )
+    monkeypatch.setattr(
+        setup_endpoint.audio_pack_service,
+        "build_audio_pack_manifest",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("Unknown curated TTS choice 'bogus_choice'")),
+    )
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/audio/packs/export",
+            json={
+                "bundle_id": "cpu_local",
+                "resource_profile": "balanced",
+                "tts_choice": "bogus_choice",
+            },
+        )
+
+    assert response.status_code == 400
+    assert "Unknown curated TTS choice" in response.json()["detail"]
+
+
+def test_audio_pack_import_rejects_invalid_tts_choice_with_400(
+    monkeypatch,
+    _admin_audio_installer_setup,
+):
+    monkeypatch.setattr(
+        setup_endpoint.setup_manager,
+        "get_status_snapshot",
+        lambda: {"enabled": True, "setup_completed": False, "needs_setup": True},
+    )
+    monkeypatch.setattr(
+        setup_endpoint.audio_pack_service,
+        "register_imported_audio_pack",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Unknown curated TTS choice 'bogus_choice'")),
+    )
+
+    with _make_client() as client:
+        response = client.post(
+            "/api/v1/setup/audio/packs/import",
+            json={"pack_path": "/tmp/invalid-audio-pack.json"},
+        )
+
+    assert response.status_code == 400
+    assert "Unknown curated TTS choice" in response.json()["detail"]

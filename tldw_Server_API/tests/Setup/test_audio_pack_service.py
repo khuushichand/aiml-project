@@ -107,6 +107,7 @@ def test_validate_audio_pack_manifest_rejects_invalid_tts_choice(tmp_path):
 
     assert result["compatible"] is False
     assert any("curated TTS choice" in issue for issue in result["issues"])
+    assert "invalid_tts_choice" in result["issue_codes"]
     assert result["selection_key"] == "v2:cpu_local:balanced"
 
 
@@ -133,6 +134,7 @@ def test_validate_audio_pack_manifest_rejects_noncanonical_selection_key(tmp_pat
 
     assert result["compatible"] is False
     assert any("selection key" in issue.lower() for issue in result["issues"])
+    assert "selection_key_mismatch" in result["issue_codes"]
     assert result["selection_key"] == "v2:cpu_local:balanced"
 
 
@@ -242,6 +244,7 @@ def test_validate_audio_pack_manifest_handles_missing_bundle_identity_fields(tmp
 
     assert result["compatible"] is False
     assert any("audio bundle or resource profile" in issue.lower() for issue in result["issues"])
+    assert "unknown_bundle" in result["issue_codes"]
 
 
 def test_register_imported_audio_pack_rejects_unknown_bundle_identity(tmp_path):

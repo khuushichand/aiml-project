@@ -592,7 +592,7 @@ def build_install_plan_from_bundle(
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
     selected_profile = bundle.profile_by_id(resource_profile)
-    canonical_tts_choice = selected_profile.canonical_tts_choice(tts_choice)
+    canonical_tts_choice = _resolve_curated_tts_choice(selected_profile, tts_choice)
     return InstallPlan.model_validate(
         {
             "stt": selected_profile.stt_plan,
@@ -600,6 +600,15 @@ def build_install_plan_from_bundle(
             "embeddings": selected_profile.embeddings_plan,
         }
     )
+
+
+def _resolve_curated_tts_choice(selected_profile: Any, tts_choice: str | None) -> str | None:
+    """Normalize a curated TTS choice and treat invalid choices as request errors."""
+
+    try:
+        return selected_profile.canonical_tts_choice(tts_choice)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _entry_suffix(entry: Any, attribute: str, default: str = "default") -> str:
@@ -738,7 +747,7 @@ def execute_audio_bundle(
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
     selected_profile = bundle.profile_by_id(resource_profile)
-    canonical_tts_choice = selected_profile.canonical_tts_choice(tts_choice)
+    canonical_tts_choice = _resolve_curated_tts_choice(selected_profile, tts_choice)
     plan = build_install_plan_from_bundle(
         bundle_id,
         resource_profile=resource_profile,
@@ -858,7 +867,7 @@ async def verify_audio_bundle_async_for_profile(
     bundle_id = bundle.bundle_id
     resource_profile = selected_profile.profile_id
     machine_profile = audio_profile_service.detect_machine_profile()
-    canonical_tts_choice = selected_profile.canonical_tts_choice(tts_choice)
+    canonical_tts_choice = _resolve_curated_tts_choice(selected_profile, tts_choice)
     selection_key = build_audio_selection_key(
         bundle_id,
         resource_profile,

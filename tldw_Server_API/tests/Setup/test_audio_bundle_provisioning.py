@@ -1,3 +1,5 @@
+import pytest
+
 from tldw_Server_API.app.core.Setup import install_manager
 from tldw_Server_API.app.core.Setup.audio_bundle_catalog import build_audio_selection_key
 from tldw_Server_API.app.core.Setup.audio_profile_service import MachineProfile
@@ -48,6 +50,15 @@ def test_cpu_local_bundle_expands_to_curated_tts_choice_install_plan():
     )
 
     assert [entry.engine for entry in plan.tts] == ["kitten_tts"]
+
+
+def test_build_install_plan_rejects_invalid_curated_tts_choice_with_value_error():
+    with pytest.raises(ValueError, match="Unknown curated TTS choice"):
+        install_manager.build_install_plan_from_bundle(
+            "cpu_local",
+            resource_profile="balanced",
+            tts_choice="bogus_choice",
+        )
 
 
 def test_execute_audio_bundle_canonicalizes_default_tts_choice_identity(mocker, tmp_path):

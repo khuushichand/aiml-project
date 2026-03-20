@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,16 +19,16 @@ class _RecordingKittenTTSService:
 
     def generate_speech(
         self,
-        request_data,
-        provider=None,
-        fallback=True,
-        provider_overrides=None,
-        voice_to_voice_start=None,
-        voice_to_voice_route="audio.speech",
-        user_id=None,
-        request_id=None,
-        metadata_only=False,
-    ):
+        request_data: Any,
+        provider: str | None = None,
+        fallback: bool = True,
+        provider_overrides: dict[str, Any] | None = None,
+        voice_to_voice_start: float | None = None,
+        voice_to_voice_route: str = "audio.speech",
+        user_id: int | str | None = None,
+        request_id: str | None = None,
+        metadata_only: bool = False,
+    ) -> AsyncIterator[bytes]:
         self.calls.append(
             {
                 "request_data": request_data,
@@ -40,20 +43,20 @@ class _RecordingKittenTTSService:
             }
         )
 
-        async def _gen():
+        async def _gen() -> AsyncIterator[bytes]:
             yield b"kitten-audio"
 
         return _gen()
 
 
 @pytest.fixture()
-def _client_with_kitten_overrides(bypass_api_limits):
-    async def _override_user():
+def _client_with_kitten_overrides(bypass_api_limits: Any) -> Iterator[tuple[TestClient, _RecordingKittenTTSService]]:
+    async def _override_user() -> User:
         return User(id=1, username="tester", email="tester@example.com", is_active=True)
 
     service = _RecordingKittenTTSService()
 
-    async def _override_tts_service():
+    async def _override_tts_service() -> _RecordingKittenTTSService:
         return service
 
     original_overrides = dict(app.dependency_overrides)
@@ -68,7 +71,9 @@ def _client_with_kitten_overrides(bypass_api_limits):
         app.dependency_overrides.update(original_overrides)
 
 
-def test_audio_speech_routes_kitten_tts_through_current_backend_path(_client_with_kitten_overrides):
+def test_audio_speech_routes_kitten_tts_through_current_backend_path(
+    _client_with_kitten_overrides: tuple[TestClient, _RecordingKittenTTSService],
+) -> None:
     client, service = _client_with_kitten_overrides
     settings = get_settings()
 

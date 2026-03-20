@@ -1,7 +1,5 @@
 # KittenTTS Curated Bundle Parity Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Verify the existing `kitten_tts` speech path and add `kitten_tts` as a curated peer TTS choice to low-resource CPU-local setup profiles.
 
 **Architecture:** Keep the existing bundle/profile recommendation system and add an explicit `tts_choice` dimension only where curated low-resource CPU profiles need peer TTS options. Resolve that choice into a one-engine installer plan, propagate it through readiness/status/offline-pack persistence, and add a focused backend speech integration test proving the existing `kitten_tts` provider route already works.

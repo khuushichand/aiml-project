@@ -96,7 +96,7 @@ class AudioReadinessRecord(BaseModel):
             bundle = get_audio_bundle_catalog().bundle_by_id(self.selected_bundle_id)
             profile = bundle.profile_by_id(self.selected_resource_profile)
             canonical_tts_choice = profile.canonical_tts_choice(self.tts_choice)
-        except Exception:  # noqa: BLE001
+        except KeyError:
             if not self.selection_key:
                 self.selection_key = build_audio_selection_key(
                     self.selected_bundle_id,
