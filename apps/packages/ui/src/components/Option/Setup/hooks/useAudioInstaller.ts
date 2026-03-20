@@ -270,13 +270,24 @@ export const useAudioInstaller = () => {
   }, [recommendations, selectedBundle, selectedBundleId, selectedResourceProfile])
 
   const bundleOptions = React.useMemo(
-    () =>
-      (recommendations.length > 0
-        ? recommendations.map((entry) => ({
-            value: entry.bundle_id,
-            label: entry.bundle?.label || entry.label || entry.bundle_id
-          }))
-        : catalog.map((entry) => ({ value: entry.bundle_id, label: entry.label }))),
+    () => {
+      if (recommendations.length > 0) {
+        const seenBundleIds = new Set<string>()
+        return recommendations.flatMap((entry) => {
+          if (seenBundleIds.has(entry.bundle_id)) {
+            return []
+          }
+          seenBundleIds.add(entry.bundle_id)
+          return [
+            {
+              value: entry.bundle_id,
+              label: entry.bundle?.label || entry.label || entry.bundle_id
+            }
+          ]
+        })
+      }
+      return catalog.map((entry) => ({ value: entry.bundle_id, label: entry.label }))
+    },
     [catalog, recommendations]
   )
 
