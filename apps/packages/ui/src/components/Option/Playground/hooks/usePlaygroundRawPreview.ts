@@ -512,6 +512,7 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
 
   const openRawRequestModal = React.useCallback(() => {
     setToolsPopoverOpen(false)
+    setRawRequestSnapshot(null)
     setRawRequestModalOpen(true)
     void refreshRawRequestSnapshot()
   }, [refreshRawRequestSnapshot, setToolsPopoverOpen])

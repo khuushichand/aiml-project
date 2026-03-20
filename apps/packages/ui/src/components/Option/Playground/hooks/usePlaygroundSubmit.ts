@@ -191,8 +191,8 @@ export function usePlaygroundSubmit(deps: UsePlaygroundSubmitDeps) {
         return
       }
 
-      const defaultEM = await defaultEmbeddingModelForRag()
       if (!intent.isImageCommand && webSearch) {
+        const defaultEM = await defaultEmbeddingModelForRag()
         const simpleSearch = await getIsSimpleInternetSearch()
         if (!defaultEM && !simpleSearch) {
           form.setFieldError("message", t("formError.noEmbeddingModel"))

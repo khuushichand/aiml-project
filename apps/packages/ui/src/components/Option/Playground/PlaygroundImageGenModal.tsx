@@ -3,6 +3,7 @@ import {
   Button,
   Input,
   InputNumber,
+  Modal,
   Radio,
   Select
 } from "antd"
@@ -15,7 +16,6 @@ import {
   type ImageGenerationEventSyncMode,
   type ImageGenerationPromptMode
 } from "@/utils/image-generation-chat"
-import { Modal } from "antd"
 import { toText } from "./hooks"
 
 // ---------------------------------------------------------------------------
@@ -119,6 +119,13 @@ export interface PlaygroundImageGenModalProps {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const toNum = (value: number | null | undefined): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -180,9 +187,6 @@ export const PlaygroundImageGenModal: React.FC<PlaygroundImageGenModalProps> =
       onSubmit,
       t
     } = props
-
-    const toNum = (value: number | null | undefined): number | undefined =>
-      typeof value === "number" && Number.isFinite(value) ? value : undefined
 
     return (
       <Modal

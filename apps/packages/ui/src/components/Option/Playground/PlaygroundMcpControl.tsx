@@ -67,7 +67,7 @@ export const PlaygroundMcpControl: React.FC<PlaygroundMcpControlProps> =
             size="small"
             value={toolChoice}
             onChange={(e) =>
-              onToolChoiceChange(e.target.value as typeof toolChoice)
+              onToolChoiceChange(e.target.value)
             }
             className="flex flex-wrap gap-1"
             aria-label={t(
