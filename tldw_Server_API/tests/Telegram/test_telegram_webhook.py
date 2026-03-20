@@ -7,6 +7,7 @@ import pytest
 from fastapi import Request
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
 import tldw_Server_API.app.api.v1.endpoints.telegram_support as telegram_support
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     _reset_telegram_webhook_state_for_tests,
@@ -209,6 +210,33 @@ def test_telegram_webhook_rejects_invalid_secret(client, principal_override):
         json={"update_id": 5002, "message": {"message_id": 11, "chat": {"id": 333, "type": "private"}}},
         headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-secret"},
     )
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_secret"
+
+
+def test_telegram_webhook_rejects_invalid_secret_before_job_manager_resolution(client, principal_override):
+    _seed_telegram_bot(
+        client,
+        principal_override,
+        scope_type="org",
+        scope_id=34,
+        bot_token="123:ghi",
+        webhook_secret="secret-790",
+    )
+
+    def _failing_job_manager():
+        raise AssertionError("job manager should not be resolved before secret validation")
+
+    client.app.dependency_overrides[get_job_manager] = _failing_job_manager
+    try:
+        response = client.post(
+            "/api/v1/telegram/webhook",
+            json={"update_id": 5004, "message": {"message_id": 13, "chat": {"id": 334, "type": "private"}}},
+            headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-secret"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_job_manager, None)
 
     assert response.status_code == 401
     assert response.json()["error"] == "invalid_secret"

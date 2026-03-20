@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import secrets
 import threading
@@ -379,6 +380,23 @@ def _build_telegram_ask_job_payload(
     }
 
 
+async def _resolve_job_manager_for_request(request: Request) -> JobManager:
+    from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
+
+    resolver = get_job_manager
+    app = getattr(request, "app", None)
+    dependency_overrides = getattr(app, "dependency_overrides", None)
+    if isinstance(dependency_overrides, dict):
+        override = dependency_overrides.get(get_job_manager)
+        if override is not None:
+            resolver = override
+
+    resolved = resolver()
+    if inspect.isawaitable(resolved):
+        resolved = await resolved
+    return resolved
+
+
 def _normalize_bot_config_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     merged: dict[str, Any] = {
         "provider": _PROVIDER,
@@ -637,9 +655,7 @@ async def telegram_webhook_impl(
 
     if message_policy.command is not None and message_policy.command.action == "ask" and linked_actor is not None:
         if job_manager is None:
-            from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
-
-            job_manager = get_job_manager()
+            job_manager = await _resolve_job_manager_for_request(request)
         request_id = _build_telegram_request_id(scope, update_id_int)
         payload = _build_telegram_ask_job_payload(
             scope=scope,

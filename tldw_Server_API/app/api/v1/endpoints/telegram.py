@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, require_roles
-from tldw_Server_API.app.api.v1.API_Deps.jobs_deps import get_job_manager
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     telegram_admin_get_bot_impl,
     telegram_admin_put_bot_impl,
@@ -15,7 +14,6 @@ from tldw_Server_API.app.api.v1.schemas.telegram_schemas import (
     TelegramBotConfigUpdate,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
@@ -46,8 +44,5 @@ async def telegram_admin_start_link(
 
 
 @router.post("/webhook")
-async def telegram_webhook(
-    request: Request,
-    job_manager: JobManager = Depends(get_job_manager),
-):
-    return await telegram_webhook_impl(request=request, job_manager=job_manager)
+async def telegram_webhook(request: Request):
+    return await telegram_webhook_impl(request=request)
