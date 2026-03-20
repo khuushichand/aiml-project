@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Callable
@@ -64,7 +65,7 @@ class TelegramDeliveryService:
     job_manager: JobManager | None = None
     transport: Callable[..., Any] = fetch
 
-    def queue_inbound_ask(
+    async def queue_inbound_ask(
         self,
         *,
         owner_user_id: str,
@@ -73,7 +74,8 @@ class TelegramDeliveryService:
     ) -> dict[str, Any]:
         if self.job_manager is None:
             raise ValueError("job_manager is required for inbound ask queueing")  # noqa: TRY003
-        return self.job_manager.create_job(
+        return await asyncio.to_thread(
+            self.job_manager.create_job,
             domain="telegram",
             queue="default",
             job_type="telegram.ask",

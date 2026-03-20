@@ -82,6 +82,7 @@ def test_put_and_get_telegram_bot_config_uses_shared_scope(client, auth_header, 
     payload = {
         "bot_token": ":".join(["123", "abc"]),
         "webhook_secret": "-".join(["secret", "123"]),
+        "bot_username": "@ResearchBot",
         "enabled": True,
     }
     put_res = client.put("/api/v1/telegram/admin/bot", json=payload, headers=auth_header)
@@ -89,7 +90,7 @@ def test_put_and_get_telegram_bot_config_uses_shared_scope(client, auth_header, 
     put_body = put_res.json()
     assert put_body["scope_type"] == "team"
     assert put_body["scope_id"] == 22
-    assert put_body["bot_username"] == "example_bot"
+    assert put_body["bot_username"] == "researchbot"
     assert put_body["enabled"] is True
 
     get_res = client.get("/api/v1/telegram/admin/bot", headers=auth_header)
@@ -97,7 +98,7 @@ def test_put_and_get_telegram_bot_config_uses_shared_scope(client, auth_header, 
     body = get_res.json()
     assert body["scope_type"] == "team"
     assert body["scope_id"] == 22
-    assert body["bot_username"] == "example_bot"
+    assert body["bot_username"] == "researchbot"
     assert body["enabled"] is True
 
 

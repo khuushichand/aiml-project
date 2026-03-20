@@ -49,6 +49,10 @@ async def test_telegram_approvals_repo_persists_and_consumes_pending_approvals(t
 
     consumed = await repo.consume_pending_approval("tok-123")
     assert consumed is not None
+    assert consumed["consumed_at"] is not None
+
+    consumed_again = await repo.consume_pending_approval("tok-123")
+    assert consumed_again is None
 
     missing = await repo.get_pending_approval_by_token("tok-123")
     assert missing is None

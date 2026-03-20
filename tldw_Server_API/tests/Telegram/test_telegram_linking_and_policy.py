@@ -7,7 +7,6 @@ from fastapi import Request
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
-    _register_telegram_actor_link_for_tests,
     _reset_telegram_link_state_for_tests,
     _reset_telegram_webhook_state_for_tests,
 )
@@ -212,7 +211,14 @@ def test_replayed_denied_privileged_action_is_deduped(client, principal_override
     assert second.json() == {"ok": True, "status": "duplicate"}
 
 
-def test_linked_user_is_allowed_for_privileged_action(client, principal_override):
+def test_linked_user_is_allowed_for_privileged_action(client, auth_headers, principal_override):
+    principal = _make_principal(
+        active_team_id=22,
+        active_org_id=11,
+        team_ids=[22, 23],
+        org_ids=[11, 12],
+    )
+    principal_override(principal)
     _seed_telegram_bot(
         client,
         principal_override,
@@ -221,13 +227,25 @@ def test_linked_user_is_allowed_for_privileged_action(client, principal_override
         bot_token="123:abc",
         webhook_secret="secret-123",
     )
-    _register_telegram_actor_link_for_tests(
-        scope_type="team",
-        scope_id=22,
-        telegram_user_id=99,
-        auth_user_id=202,
-        telegram_username="linked",
+    start_link = client.post("/api/v1/telegram/admin/link/start", headers=auth_headers)
+    assert start_link.status_code == 200
+    pairing_code = start_link.json()["pairing_code"]
+
+    link_response = client.post(
+        "/api/v1/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret-123"},
+        json={
+            "update_id": 7,
+            "message": {
+                "message_id": 4,
+                "chat": {"id": 1, "type": "private"},
+                "from": {"id": 99, "username": "linked"},
+                "text": f"/link {pairing_code}",
+            },
+        },
     )
+    assert link_response.status_code == 200
+    assert link_response.json()["status"] == "linked"
 
     response = client.post(
         "/api/v1/telegram/webhook",

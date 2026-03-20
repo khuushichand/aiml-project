@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
-import json
 import secrets
-import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -12,11 +11,12 @@ from typing import Any, Awaitable, Callable
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from loguru import logger
+from pydantic import ValidationError
 
-from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import TTLReceiptStore
 from tldw_Server_API.app.api.v1.schemas.telegram_schemas import (
     TelegramBotConfigResponse,
     TelegramBotConfigUpdate,
+    TelegramWebhookUpdate,
     TELEGRAM_WEBHOOK_SECRET_MIN_LENGTH,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -26,6 +26,9 @@ from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
 )
 from tldw_Server_API.app.core.AuthNZ.repos.telegram_approvals_repo import (
     get_telegram_approvals_repo,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.telegram_runtime_repo import (
+    get_telegram_runtime_repo,
 )
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     decrypt_byok_payload,
@@ -55,10 +58,6 @@ _TELEGRAM_APPROVAL_CALLBACK_PREFIX = "tgapp1."
 _TELEGRAM_APPROVAL_CALLBACK_MAX_LENGTH = 64
 _TELEGRAM_PENDING_APPROVAL_TTL_SECONDS = 300
 _WEBHOOK_REPLAY_WINDOW_SECONDS = 3600
-_WEBHOOK_RECEIPTS = TTLReceiptStore()
-_TELEGRAM_LINK_LOCK = threading.Lock()
-_TELEGRAM_PAIRING_CODES: dict[str, dict[str, Any]] = {}
-_TELEGRAM_ACTOR_LINKS: dict[tuple[str, int, int], dict[str, Any]] = {}
 _TELEGRAM_PAIRING_CODE_TTL_SECONDS = 900
 
 
@@ -198,36 +197,52 @@ async def _peek_pending_telegram_approval_for_tests(callback_data: Any, *, repo:
     return await repo.get_pending_approval_by_token(parsed["approval_token"])
 
 
-def _telegram_actor_link_key(scope: TelegramScope, telegram_user_id: int) -> tuple[str, int, int]:
-    return (scope.scope_type, scope.scope_id, telegram_user_id)
-
-
 def _generate_telegram_pairing_code() -> str:
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     return "".join(secrets.choice(alphabet) for _ in range(8))
 
 
-def _store_telegram_pairing_code(
+def _normalize_pairing_code(value: Any) -> str | None:
+    text = _coerce_nonempty_string(value)
+    if not text:
+        return None
+    return text.replace(" ", "").upper() or None
+
+
+async def _store_telegram_pairing_code(
     *,
+    auth_user_id: int,
     scope: TelegramScope,
-    auth_user_id: int | None,
+    runtime_repo: Any,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
-    with _TELEGRAM_LINK_LOCK:
-        while True:
-            code = _generate_telegram_pairing_code()
-            if code in _TELEGRAM_PAIRING_CODES:
-                continue
-            record = {
-                "pairing_code": code,
-                "scope_type": scope.scope_type,
-                "scope_id": scope.scope_id,
-                "auth_user_id": auth_user_id,
-                "created_at": now,
-                "expires_at": now + timedelta(seconds=_TELEGRAM_PAIRING_CODE_TTL_SECONDS),
-            }
-            _TELEGRAM_PAIRING_CODES[code] = record
-            return record
+    return await runtime_repo.create_pairing_code(
+        pairing_code=_generate_telegram_pairing_code(),
+        scope_type=scope.scope_type,
+        scope_id=scope.scope_id,
+        auth_user_id=auth_user_id,
+        expires_at=now + timedelta(seconds=_TELEGRAM_PAIRING_CODE_TTL_SECONDS),
+        now=now,
+    )
+
+
+async def _register_telegram_actor_link_for_tests_async(
+    *,
+    scope_type: str,
+    scope_id: int,
+    telegram_user_id: int,
+    auth_user_id: int,
+    telegram_username: str | None = None,
+) -> None:
+    """Install a deterministic Telegram actor link for tests."""
+    runtime_repo = await get_telegram_runtime_repo()
+    await runtime_repo.upsert_actor_link(
+        scope_type=scope_type,
+        scope_id=scope_id,
+        telegram_user_id=telegram_user_id,
+        auth_user_id=auth_user_id,
+        telegram_username=telegram_username,
+    )
 
 
 def _register_telegram_actor_link_for_tests(
@@ -238,24 +253,15 @@ def _register_telegram_actor_link_for_tests(
     auth_user_id: int,
     telegram_username: str | None = None,
 ) -> None:
-    """Install a deterministic in-memory actor link for tests."""
-    record = {
-        "scope_type": scope_type,
-        "scope_id": scope_id,
-        "telegram_user_id": telegram_user_id,
-        "auth_user_id": auth_user_id,
-        "telegram_username": telegram_username,
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-    }
-    with _TELEGRAM_LINK_LOCK:
-        _TELEGRAM_ACTOR_LINKS[(scope_type, scope_id, telegram_user_id)] = record
-
-
-def _resolve_telegram_actor_link(scope: TelegramScope, telegram_user_id: int) -> dict[str, Any] | None:
-    with _TELEGRAM_LINK_LOCK:
-        link = _TELEGRAM_ACTOR_LINKS.get(_telegram_actor_link_key(scope, telegram_user_id))
-        return dict(link) if link else None
+    asyncio.run(
+        _register_telegram_actor_link_for_tests_async(
+            scope_type=scope_type,
+            scope_id=scope_id,
+            telegram_user_id=telegram_user_id,
+            auth_user_id=auth_user_id,
+            telegram_username=telegram_username,
+        )
+    )
 
 
 def _normalize_telegram_bot_username(value: Any) -> str | None:
@@ -351,6 +357,16 @@ def _extract_message_actor_and_text(payload: dict[str, Any]) -> tuple[int | None
     telegram_user_id = _coerce_int(from_block.get("id")) if isinstance(from_block, dict) else None
     text = _coerce_nonempty_string(message.get("text"))
     return telegram_user_id, text
+
+
+def _extract_message_actor_username(payload: dict[str, Any]) -> str | None:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return None
+    from_block = message.get("from")
+    if not isinstance(from_block, dict):
+        return None
+    return _coerce_nonempty_string(from_block.get("username"))
 
 
 def _extract_message_chat_type(payload: dict[str, Any]) -> str | None:
@@ -500,7 +516,10 @@ def _normalize_bot_config_payload(payload: dict[str, Any] | None) -> dict[str, A
     }
     if isinstance(payload, dict):
         merged.update(payload)
-    merged["bot_username"] = _coerce_nonempty_string(merged.get("bot_username")) or _DEFAULT_BOT_USERNAME
+    merged["bot_username"] = (
+        _normalize_telegram_bot_username(merged.get("bot_username"))
+        or _DEFAULT_BOT_USERNAME
+    )
     merged["enabled"] = bool(merged.get("enabled"))
     return merged
 
@@ -612,6 +631,7 @@ async def _handle_telegram_approval_callback_query(
     *,
     scope: TelegramScope,
     payload: dict[str, Any],
+    runtime_repo: Any,
     get_telegram_approvals_repo: Callable[[], Awaitable[Any]],
     get_approval_service: Callable[[], Awaitable[Any]],
 ) -> JSONResponse:
@@ -648,7 +668,11 @@ async def _handle_telegram_approval_callback_query(
         ):
             return _telegram_webhook_error(status.HTTP_409_CONFLICT, "approval_unavailable")
 
-        linked_actor = _resolve_telegram_actor_link(scope, telegram_user_id)
+        linked_actor = await runtime_repo.get_actor_link(
+            scope_type=scope.scope_type,
+            scope_id=scope.scope_id,
+            telegram_user_id=telegram_user_id,
+        )
         if linked_actor is None:
             return _telegram_webhook_error(status.HTTP_403_FORBIDDEN, "account_link_required")
 
@@ -712,16 +736,19 @@ async def _handle_telegram_approval_callback_query(
         )
 
 
+async def _reset_telegram_runtime_state_for_tests_async() -> None:
+    runtime_repo = await get_telegram_runtime_repo()
+    await runtime_repo.clear_all_for_tests()
+
+
 def _reset_telegram_webhook_state_for_tests() -> None:
     """Reset webhook dedupe receipts for deterministic tests."""
-    _WEBHOOK_RECEIPTS.clear()
+    asyncio.run(_reset_telegram_runtime_state_for_tests_async())
 
 
 def _reset_telegram_link_state_for_tests() -> None:
     """Reset Telegram pairing/link state for deterministic tests."""
-    with _TELEGRAM_LINK_LOCK:
-        _TELEGRAM_PAIRING_CODES.clear()
-        _TELEGRAM_ACTOR_LINKS.clear()
+    asyncio.run(_reset_telegram_runtime_state_for_tests_async())
 
 
 def _telegram_webhook_error(
@@ -808,17 +835,59 @@ async def _resolve_webhook_scope_from_secret(
     return matches[0] if matches else None
 
 
+async def _handle_telegram_link_command(
+    *,
+    scope: TelegramScope,
+    payload: dict[str, Any],
+    command: TelegramCommand,
+    runtime_repo: Any,
+) -> JSONResponse:
+    telegram_user_id = _extract_message_actor_and_text(payload)[0]
+    if telegram_user_id is None:
+        return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "invalid_payload")
+    pairing_code = _normalize_pairing_code(command.input)
+    if pairing_code is None:
+        return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "pairing_code_required")
+
+    consumed_pairing = await runtime_repo.consume_pairing_code(pairing_code)
+    if consumed_pairing is None:
+        return _telegram_webhook_error(status.HTTP_403_FORBIDDEN, "invalid_pairing_code")
+
+    auth_user_id = _coerce_int(consumed_pairing.get("auth_user_id"))
+    if auth_user_id is None:
+        return _telegram_webhook_error(status.HTTP_409_CONFLICT, "invalid_pairing_code")
+
+    linked_actor = await runtime_repo.upsert_actor_link(
+        scope_type=scope.scope_type,
+        scope_id=scope.scope_id,
+        telegram_user_id=telegram_user_id,
+        auth_user_id=auth_user_id,
+        telegram_username=_extract_message_actor_username(payload),
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "status": "linked",
+            "scope_type": linked_actor.get("scope_type", scope.scope_type),
+            "scope_id": linked_actor.get("scope_id", scope.scope_id),
+            "telegram_user_id": linked_actor.get("telegram_user_id", telegram_user_id),
+        },
+    )
+
+
 async def telegram_webhook_impl(
     *,
     request: Request,
     job_manager: JobManager | None = None,
     get_org_secret_repo: Callable[[], Awaitable[Any]] = _get_org_secret_repo,
     get_telegram_approvals_repo: Callable[[], Awaitable[Any]] = get_telegram_approvals_repo,
+    get_telegram_runtime_repo: Callable[[], Awaitable[Any]] = get_telegram_runtime_repo,
     get_approval_service: Callable[[], Awaitable[Any]] = get_mcp_hub_approval_service,
     get_execution_identity_service: Callable[[], Awaitable[Any]] = get_telegram_execution_identity_service,
-    dedupe_receipts: TTLReceiptStore = _WEBHOOK_RECEIPTS,
     dedupe_ttl_seconds: int = _WEBHOOK_REPLAY_WINDOW_SECONDS,
 ) -> JSONResponse:
+    """Validate, dedupe, and route a Telegram webhook update."""
     webhook_secret = _coerce_valid_webhook_secret_header(request)
     if not webhook_secret:
         return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
@@ -832,27 +901,28 @@ async def telegram_webhook_impl(
         return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
     scope = webhook_context.scope
     configured_bot_username = webhook_context.bot_username
+    runtime_repo = await get_telegram_runtime_repo()
 
     raw_body = await request.body()
     try:
-        payload = json.loads(raw_body.decode("utf-8") or "{}")
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "invalid_json")
-
-    if not isinstance(payload, dict):
+        webhook_update = TelegramWebhookUpdate.model_validate_json(raw_body or b"{}")
+    except ValidationError as exc:
+        if any(error.get("type") == "json_invalid" for error in exc.errors()):
+            return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "invalid_json")
         return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "invalid_payload")
+    payload = webhook_update.model_dump(by_alias=True, exclude_none=True)
 
-    update_id = payload.get("update_id")
-    if not isinstance(update_id, int) or isinstance(update_id, bool):
-        return _telegram_webhook_error(
-            status.HTTP_400_BAD_REQUEST,
-            "invalid_payload",
-            detail="update_id is required",
-        )
-    update_id_int = update_id
+    update_id_int = int(webhook_update.update_id)
 
     dedupe_key = f"{scope.scope_type}:{scope.scope_id}:{update_id_int}"
-    if dedupe_receipts.seen_or_store(dedupe_key, dedupe_ttl_seconds):
+    receipt_stored = await runtime_repo.store_webhook_receipt(
+        dedupe_key=dedupe_key,
+        scope_type=scope.scope_type,
+        scope_id=scope.scope_id,
+        update_id=update_id_int,
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=max(1, dedupe_ttl_seconds)),
+    )
+    if not receipt_stored:
         return JSONResponse(status_code=200, content={"ok": True, "status": "duplicate"})
 
     callback_query = _extract_callback_query(payload)
@@ -860,6 +930,7 @@ async def telegram_webhook_impl(
         return await _handle_telegram_approval_callback_query(
             scope=scope,
             payload=payload,
+            runtime_repo=runtime_repo,
             get_telegram_approvals_repo=get_telegram_approvals_repo,
             get_approval_service=get_approval_service,
         )
@@ -879,7 +950,21 @@ async def telegram_webhook_impl(
     if not message_policy.should_process:
         return JSONResponse(status_code=200, content={"ok": True, "status": "ignored"})
 
-    linked_actor = _resolve_telegram_actor_link(scope, telegram_user_id) if telegram_user_id is not None else None
+    if message_policy.command is not None and message_policy.command.action == "link":
+        return await _handle_telegram_link_command(
+            scope=scope,
+            payload=payload,
+            command=message_policy.command,
+            runtime_repo=runtime_repo,
+        )
+
+    linked_actor = None
+    if telegram_user_id is not None:
+        linked_actor = await runtime_repo.get_actor_link(
+            scope_type=scope.scope_type,
+            scope_id=scope.scope_id,
+            telegram_user_id=telegram_user_id,
+        )
 
     if _is_privileged_telegram_command(message_policy.command):
         if linked_actor is None:
@@ -924,7 +1009,7 @@ async def telegram_webhook_impl(
                 "execution_identity_unavailable",
             )
         payload["execution_identity"] = execution_identity.to_payload()
-        queued_job = TelegramDeliveryService(job_manager).queue_inbound_ask(
+        queued_job = await TelegramDeliveryService(job_manager).queue_inbound_ask(
             owner_user_id=str(linked_actor["auth_user_id"]),
             request_id=request_id,
             payload=payload,
@@ -946,18 +1031,28 @@ async def telegram_admin_start_link_impl(
     *,
     principal: AuthPrincipal,
     request: Request | None = None,
+    get_telegram_runtime_repo: Callable[[], Awaitable[Any]] = get_telegram_runtime_repo,
 ) -> dict[str, Any]:
     scope = _resolve_shared_scope(principal=principal, request=request)
-    record = _store_telegram_pairing_code(
+    auth_user_id = _coerce_int(principal.user_id)
+    if auth_user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authenticated user id is required",
+        )
+    runtime_repo = await get_telegram_runtime_repo()
+    record = await _store_telegram_pairing_code(
         scope=scope,
-        auth_user_id=int(principal.user_id) if principal.user_id is not None else None,
+        auth_user_id=auth_user_id,
+        runtime_repo=runtime_repo,
     )
+    expires_at = _coerce_datetime(record.get("expires_at"))
     return {
         "ok": True,
         "pairing_code": record["pairing_code"],
         "scope_type": record["scope_type"],
         "scope_id": record["scope_id"],
-        "expires_at": record["expires_at"].isoformat(),
+        "expires_at": expires_at.isoformat() if expires_at is not None else str(record.get("expires_at") or ""),
     }
 
 
@@ -982,12 +1077,14 @@ async def telegram_admin_put_bot_impl(
         {
             "bot_token": bot_token,
             "webhook_secret": webhook_secret,
+            "bot_username": payload.bot_username,
             "enabled": bool(payload.enabled),
         }
     )
 
     repo = await get_org_secret_repo()
     now = datetime.now(timezone.utc)
+    actor_user_id = _coerce_int(principal.user_id)
     await repo.upsert_secret(
         scope_type=scope.scope_type,
         scope_id=scope.scope_id,
@@ -1000,8 +1097,8 @@ async def telegram_admin_put_bot_impl(
             "credential_version": _CREDENTIAL_VERSION,
         },
         updated_at=now,
-        created_by=int(principal.user_id) if principal.user_id is not None else None,
-        updated_by=int(principal.user_id) if principal.user_id is not None else None,
+        created_by=actor_user_id,
+        updated_by=actor_user_id,
     )
     return _public_bot_config_record(config_payload, scope=scope)
 

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, require_roles
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
+    get_auth_principal,
+    require_roles,
+)
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     telegram_admin_get_bot_impl,
     telegram_admin_put_bot_impl,
@@ -46,7 +50,7 @@ async def telegram_admin_start_link(
     return await telegram_admin_start_link_impl(principal=principal, request=request)
 
 
-@router.post("/webhook")
+@router.post("/webhook", dependencies=[Depends(check_rate_limit)])
 async def telegram_webhook(request: Request):
     return await telegram_webhook_impl(
         request=request,

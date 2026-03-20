@@ -237,24 +237,26 @@ class TelegramApprovalsRepo:
     ) -> dict[str, Any] | None:
         current = now or datetime.now(timezone.utc)
         token = str(approval_token).strip()
-        pending = await self.get_pending_approval_by_token(token, now=current)
-        if pending is None:
-            return None
 
         if getattr(self.db_pool, "pool", None) is not None:
-            await self.db_pool.execute(
+            row = await self.db_pool.fetchone(
                 """
                 UPDATE telegram_pending_approvals
                 SET consumed_at = $1
                 WHERE approval_token = $2
                   AND consumed_at IS NULL
                   AND expires_at > $1
+                RETURNING id, approval_token, scope_type, scope_id, approval_policy_id, context_key,
+                          conversation_id, tool_name, scope_key, initiating_auth_user_id,
+                          expires_at, consumed_at, created_at
                 """,
                 self._normalize_datetime_for_postgres(current),
                 token,
             )
-        else:
-            await self.db_pool.execute(
+            return self._row_to_dict(row) if row else None
+
+        async with self.db_pool.transaction() as conn:
+            await conn.execute(
                 """
                 UPDATE telegram_pending_approvals
                 SET consumed_at = ?
@@ -268,8 +270,22 @@ class TelegramApprovalsRepo:
                     current.isoformat(),
                 ),
             )
-        pending["consumed_at"] = current
-        return pending
+            changes_row = await conn.execute("SELECT changes() AS changed")
+            changed = await changes_row.fetchone()
+            if int(self._row_to_dict(changed).get("changed") or 0) <= 0:
+                return None
+            row_cursor = await conn.execute(
+                """
+                SELECT id, approval_token, scope_type, scope_id, approval_policy_id, context_key,
+                       conversation_id, tool_name, scope_key, initiating_auth_user_id,
+                       expires_at, consumed_at, created_at
+                FROM telegram_pending_approvals
+                WHERE approval_token = ?
+                """,
+                (token,),
+            )
+            row = await row_cursor.fetchone()
+            return self._row_to_dict(row) if row else None
 
 
 async def get_telegram_approvals_repo() -> TelegramApprovalsRepo:

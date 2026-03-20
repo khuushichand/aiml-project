@@ -11,9 +11,6 @@ import tldw_Server_API.app.api.v1.endpoints.telegram_support as telegram_support
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     TelegramScope,
     TelegramWebhookContext,
-    _register_telegram_actor_link_for_tests,
-    _reset_telegram_link_state_for_tests,
-    _reset_telegram_webhook_state_for_tests,
     build_telegram_approval_callback_data,
     telegram_webhook_impl,
 )
@@ -146,6 +143,59 @@ class _FakeTelegramApprovalsRepo:
         return row
 
 
+class _FakeTelegramRuntimeRepo:
+    def __init__(self) -> None:
+        self.links: dict[tuple[str, int, int], dict[str, object]] = {}
+        self.receipts: set[str] = set()
+
+    async def store_webhook_receipt(
+        self,
+        *,
+        dedupe_key: str,
+        scope_type: str,
+        scope_id: int,
+        update_id: int,
+        expires_at: datetime,
+        now: datetime | None = None,
+    ) -> bool:
+        _ = (scope_type, scope_id, update_id, expires_at, now)
+        if dedupe_key in self.receipts:
+            return False
+        self.receipts.add(dedupe_key)
+        return True
+
+    async def upsert_actor_link(
+        self,
+        *,
+        scope_type: str,
+        scope_id: int,
+        telegram_user_id: int,
+        auth_user_id: int,
+        telegram_username: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, object]:
+        row = {
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "telegram_user_id": telegram_user_id,
+            "auth_user_id": auth_user_id,
+            "telegram_username": telegram_username,
+            "updated_at": now or datetime.now(timezone.utc),
+        }
+        self.links[(scope_type, scope_id, telegram_user_id)] = row
+        return dict(row)
+
+    async def get_actor_link(
+        self,
+        *,
+        scope_type: str,
+        scope_id: int,
+        telegram_user_id: int,
+    ) -> dict[str, object] | None:
+        row = self.links.get((scope_type, scope_id, telegram_user_id))
+        return dict(row) if row is not None else None
+
+
 def _build_request(*, update_id: int, telegram_user_id: int, callback_data: str) -> Request:
     body = {
         "update_id": update_id,
@@ -177,16 +227,11 @@ def _build_request(*, update_id: int, telegram_user_id: int, callback_data: str)
     return Request(scope, _receive)
 
 
-@pytest.fixture(autouse=True)
-def _reset_state() -> None:
-    _reset_telegram_webhook_state_for_tests()
-    _reset_telegram_link_state_for_tests()
-
-
 @pytest.mark.asyncio
 async def test_telegram_callback_rejects_approval_from_non_initiating_linked_user(monkeypatch):
     repo = _FakeTelegramApprovalsRepo()
-    _register_telegram_actor_link_for_tests(
+    runtime_repo = _FakeTelegramRuntimeRepo()
+    await runtime_repo.upsert_actor_link(
         scope_type="group",
         scope_id=88,
         telegram_user_id=303,
@@ -207,6 +252,9 @@ async def test_telegram_callback_rejects_approval_from_non_initiating_linked_use
     async def _fake_get_telegram_approvals_repo() -> _FakeTelegramApprovalsRepo:
         return repo
 
+    async def _fake_get_telegram_runtime_repo() -> _FakeTelegramRuntimeRepo:
+        return runtime_repo
+
     monkeypatch.setattr(telegram_support, "_resolve_webhook_scope_from_secret", _fake_resolve_webhook_scope_from_secret)
 
     callback_data = await build_telegram_approval_callback_data(
@@ -226,6 +274,7 @@ async def test_telegram_callback_rejects_approval_from_non_initiating_linked_use
         request=request,
         get_org_secret_repo=_fake_get_org_secret_repo,
         get_telegram_approvals_repo=_fake_get_telegram_approvals_repo,
+        get_telegram_runtime_repo=_fake_get_telegram_runtime_repo,
         get_approval_service=_fake_get_approval_service,
     )
 
@@ -237,7 +286,8 @@ async def test_telegram_callback_rejects_approval_from_non_initiating_linked_use
 @pytest.mark.asyncio
 async def test_telegram_callback_approves_initiating_linked_user_and_is_single_use(monkeypatch):
     repo = _FakeTelegramApprovalsRepo()
-    _register_telegram_actor_link_for_tests(
+    runtime_repo = _FakeTelegramRuntimeRepo()
+    await runtime_repo.upsert_actor_link(
         scope_type="group",
         scope_id=88,
         telegram_user_id=202,
@@ -258,6 +308,9 @@ async def test_telegram_callback_approves_initiating_linked_user_and_is_single_u
     async def _fake_get_telegram_approvals_repo() -> _FakeTelegramApprovalsRepo:
         return repo
 
+    async def _fake_get_telegram_runtime_repo() -> _FakeTelegramRuntimeRepo:
+        return runtime_repo
+
     monkeypatch.setattr(telegram_support, "_resolve_webhook_scope_from_secret", _fake_resolve_webhook_scope_from_secret)
 
     callback_data = await build_telegram_approval_callback_data(
@@ -276,12 +329,14 @@ async def test_telegram_callback_approves_initiating_linked_user_and_is_single_u
         request=_build_request(update_id=9003, telegram_user_id=202, callback_data=callback_data),
         get_org_secret_repo=_fake_get_org_secret_repo,
         get_telegram_approvals_repo=_fake_get_telegram_approvals_repo,
+        get_telegram_runtime_repo=_fake_get_telegram_runtime_repo,
         get_approval_service=_fake_get_approval_service,
     )
     second = await telegram_webhook_impl(
         request=_build_request(update_id=9004, telegram_user_id=202, callback_data=callback_data),
         get_org_secret_repo=_fake_get_org_secret_repo,
         get_telegram_approvals_repo=_fake_get_telegram_approvals_repo,
+        get_telegram_runtime_repo=_fake_get_telegram_runtime_repo,
         get_approval_service=_fake_get_approval_service,
     )
 
@@ -300,7 +355,8 @@ async def test_telegram_callback_approves_initiating_linked_user_and_is_single_u
 @pytest.mark.asyncio
 async def test_telegram_callback_rejects_scope_mismatch_as_unavailable(monkeypatch):
     repo = _FakeTelegramApprovalsRepo()
-    _register_telegram_actor_link_for_tests(
+    runtime_repo = _FakeTelegramRuntimeRepo()
+    await runtime_repo.upsert_actor_link(
         scope_type="group",
         scope_id=88,
         telegram_user_id=202,
@@ -321,6 +377,9 @@ async def test_telegram_callback_rejects_scope_mismatch_as_unavailable(monkeypat
     async def _fake_get_telegram_approvals_repo() -> _FakeTelegramApprovalsRepo:
         return repo
 
+    async def _fake_get_telegram_runtime_repo() -> _FakeTelegramRuntimeRepo:
+        return runtime_repo
+
     monkeypatch.setattr(telegram_support, "_resolve_webhook_scope_from_secret", _fake_resolve_webhook_scope_from_secret)
 
     callback_data = await build_telegram_approval_callback_data(
@@ -340,6 +399,7 @@ async def test_telegram_callback_rejects_scope_mismatch_as_unavailable(monkeypat
         request=request,
         get_org_secret_repo=_fake_get_org_secret_repo,
         get_telegram_approvals_repo=_fake_get_telegram_approvals_repo,
+        get_telegram_runtime_repo=_fake_get_telegram_runtime_repo,
         get_approval_service=_fake_get_approval_service,
     )
 
@@ -351,7 +411,8 @@ async def test_telegram_callback_rejects_scope_mismatch_as_unavailable(monkeypat
 @pytest.mark.asyncio
 async def test_telegram_callback_rejects_expired_approval(monkeypatch):
     repo = _FakeTelegramApprovalsRepo()
-    _register_telegram_actor_link_for_tests(
+    runtime_repo = _FakeTelegramRuntimeRepo()
+    await runtime_repo.upsert_actor_link(
         scope_type="group",
         scope_id=88,
         telegram_user_id=202,
@@ -372,6 +433,9 @@ async def test_telegram_callback_rejects_expired_approval(monkeypatch):
     async def _fake_get_telegram_approvals_repo() -> _FakeTelegramApprovalsRepo:
         return repo
 
+    async def _fake_get_telegram_runtime_repo() -> _FakeTelegramRuntimeRepo:
+        return runtime_repo
+
     monkeypatch.setattr(telegram_support, "_resolve_webhook_scope_from_secret", _fake_resolve_webhook_scope_from_secret)
 
     callback_data = await build_telegram_approval_callback_data(
@@ -390,6 +454,7 @@ async def test_telegram_callback_rejects_expired_approval(monkeypatch):
         request=_build_request(update_id=9005, telegram_user_id=202, callback_data=callback_data),
         get_org_secret_repo=_fake_get_org_secret_repo,
         get_telegram_approvals_repo=_fake_get_telegram_approvals_repo,
+        get_telegram_runtime_repo=_fake_get_telegram_runtime_repo,
         get_approval_service=_fake_get_approval_service,
     )
 
