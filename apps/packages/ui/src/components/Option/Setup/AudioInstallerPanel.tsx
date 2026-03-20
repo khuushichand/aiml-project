@@ -26,6 +26,13 @@ const renderRemediation = (
 const renderStepLabel = (step: { label?: string; name?: string; status?: string }) =>
   step.label || step.name || step.status || "step"
 
+const renderInstallerError = (entry: unknown) => {
+  if (typeof entry === "string") return entry
+  if (entry instanceof Error) return entry.message
+  if (entry == null) return "Unknown installer error"
+  return String(entry)
+}
+
 export const AudioInstallerPanel: React.FC = () => {
   const { t } = useTranslation(["settings", "common", "option"])
   const {
@@ -203,8 +210,10 @@ export const AudioInstallerPanel: React.FC = () => {
               <Text>{installStatus.status || "unknown"}</Text>
               {(installStatus.steps || []).length > 0 && (
                 <ul className="mb-0 pl-5">
-                  {(installStatus.steps || []).map((step) => (
-                    <li key={`${step.name || step.label || "step"}:${step.status || "unknown"}`}>
+                  {(installStatus.steps || []).map((step, index) => (
+                    <li
+                      key={`${step.name || step.label || "step"}:${step.status || "unknown"}:${index}`}
+                    >
                       <Text>{`${renderStepLabel(step)} (${step.status || "unknown"})`}</Text>
                     </li>
                   ))}
@@ -217,8 +226,10 @@ export const AudioInstallerPanel: React.FC = () => {
                   title={t("settings:audioInstaller.installErrors", "Installer issues")}
                   description={
                     <ul className="mb-0 pl-5">
-                      {(installStatus.errors || []).map((entry) => (
-                        <li key={entry}>{entry}</li>
+                      {(installStatus.errors || []).map((entry, index) => (
+                        <li key={`${renderInstallerError(entry)}:${index}`}>
+                          {renderInstallerError(entry)}
+                        </li>
                       ))}
                     </ul>
                   }

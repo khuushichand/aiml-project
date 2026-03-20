@@ -1,4 +1,5 @@
 from tldw_Server_API.app.core.Setup import install_manager
+from tldw_Server_API.app.core.Setup.audio_bundle_catalog import get_audio_bundle_catalog
 from tldw_Server_API.app.core.Setup.audio_profile_service import MachineProfile
 from tldw_Server_API.app.core.Setup.audio_readiness_store import AudioReadinessStore
 
@@ -181,6 +182,31 @@ def test_verification_remediation_references_selected_profile_engines(mocker, tm
 
     result = install_manager.verify_audio_bundle("nvidia_local", resource_profile="performance")
     messages = [item["message"] for item in result["remediation_items"]]
+    profile = get_audio_bundle_catalog().bundle_by_id("nvidia_local").profile_by_id("performance")
+    expected_stt_engine = profile.stt_plan[0]["engine"]
+    expected_tts_engine = profile.tts_plan[0]["engine"]
 
-    assert any("nemo_parakeet_standard" in message for message in messages)
-    assert any("dia" in message for message in messages)
+    assert any(expected_stt_engine in message for message in messages)
+    assert any(expected_tts_engine in message for message in messages)
+
+
+def test_cuda_available_ignores_cuda_env_without_verified_gpu(mocker):
+    mocker.patch.dict(
+        install_manager.os.environ,
+        {"CUDA_HOME": "/usr/local/cuda", "CUDA_PATH": "/usr/local/cuda"},
+        clear=False,
+    )
+    mocker.patch.object(install_manager.shutil, "which", return_value=None)
+
+    assert install_manager._cuda_available() is False
+
+
+def test_cuda_available_requires_working_nvidia_smi_probe(mocker):
+    mocker.patch.object(install_manager.shutil, "which", return_value="/usr/bin/nvidia-smi")
+    mocker.patch.object(
+        install_manager.subprocess,
+        "run",
+        return_value=mocker.Mock(returncode=0, stdout="GPU 0: Mock GPU\n", stderr=""),
+    )
+
+    assert install_manager._cuda_available() is True

@@ -209,7 +209,8 @@ describe("AudioInstallerPanel", () => {
     expect(mocks.bgRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/api/v1/setup/admin/audio/provision",
-        method: "POST"
+        method: "POST",
+        timeoutMs: 30 * 60 * 1000
       })
     )
 

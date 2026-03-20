@@ -14,6 +14,7 @@ const PROVISION_PATH = toAllowedPath("/api/v1/setup/admin/audio/provision")
 const VERIFY_PATH = toAllowedPath("/api/v1/setup/admin/audio/verify")
 
 const POLL_INTERVAL_MS = 3000
+const PROVISION_TIMEOUT_MS = 30 * 60 * 1000
 const ACTIVE_INSTALL_STATUSES = new Set(["queued", "running", "in_progress"])
 
 type MachineProfile = {
@@ -62,7 +63,7 @@ type InstallStep = {
 type InstallStatusSnapshot = {
   status?: string
   steps?: InstallStep[]
-  errors?: string[]
+  errors?: unknown[]
   bundle_id?: string
   resource_profile?: string
   safe_rerun?: boolean
@@ -156,6 +157,10 @@ const deriveSelection = (
   }
 }
 
+const logNonFatalRefreshError = (context: string, err: unknown) => {
+  console.warn(`Audio installer status refresh failed during ${context}.`, err)
+}
+
 export const useAudioInstaller = () => {
   const selectionRef = React.useRef<{
     bundleId: string | null
@@ -233,8 +238,8 @@ export const useAudioInstaller = () => {
     }
 
     const timeout = window.setTimeout(() => {
-      void refreshInstallStatus().catch(() => {
-        // Poll failures should not tear down the panel; the next manual action can retry.
+      void refreshInstallStatus().catch((error) => {
+        logNonFatalRefreshError("polling", error)
       })
     }, POLL_INTERVAL_MS)
 
@@ -318,6 +323,7 @@ export const useAudioInstaller = () => {
         const result = await requestJson<InstallStatusSnapshot>(PROVISION_PATH, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          timeoutMs: PROVISION_TIMEOUT_MS,
           body: JSON.stringify({
             bundle_id: selectedBundleId,
             resource_profile: selectedResourceProfile,
@@ -329,8 +335,8 @@ export const useAudioInstaller = () => {
         setAdminGuard(null)
         setError(null)
         if (result?.status && ACTIVE_INSTALL_STATUSES.has(result.status)) {
-          void refreshInstallStatus().catch(() => {
-            // Immediate status refresh is best-effort; polling continues afterward.
+          void refreshInstallStatus().catch((error) => {
+            logNonFatalRefreshError("post-provision refresh", error)
           })
         }
       } catch (err) {
