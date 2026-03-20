@@ -51,18 +51,13 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
-def _collect_scope_ids(values: list[int] | None, active_id: int | None) -> list[int]:
+def _collect_scope_ids(values: list[int] | None) -> list[int]:
     out: set[int] = set()
     for raw in values or []:
         try:
             out.add(int(raw))
         except (TypeError, ValueError):
             continue
-    if active_id is not None:
-        try:
-            out.add(int(active_id))
-        except (TypeError, ValueError):
-            pass
     return sorted(out)
 
 
@@ -131,8 +126,8 @@ def _resolve_shared_scope(
     if active_org_id is None:
         active_org_id = request_active_org_id
 
-    team_ids = _collect_scope_ids(principal.team_ids, active_team_id)
-    org_ids = _collect_scope_ids(principal.org_ids, active_org_id)
+    team_ids = _collect_scope_ids(principal.team_ids)
+    org_ids = _collect_scope_ids(principal.org_ids)
 
     if active_team_id is not None:
         if active_team_id not in team_ids:

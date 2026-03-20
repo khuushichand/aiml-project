@@ -118,6 +118,40 @@ def test_put_telegram_bot_config_rejects_missing_active_scope(client, auth_heade
     assert "active org/team scope" in res.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("active_org_id", "active_team_id", "org_ids", "team_ids"),
+    [
+        (999, None, [11], []),
+        (None, 999, [], [22]),
+    ],
+)
+def test_put_telegram_bot_config_rejects_stale_active_scope_claim(
+    client,
+    auth_header,
+    principal_override,
+    active_org_id,
+    active_team_id,
+    org_ids,
+    team_ids,
+):
+    principal = _make_principal(
+        active_org_id=active_org_id,
+        active_team_id=active_team_id,
+        org_ids=org_ids,
+        team_ids=team_ids,
+    )
+    principal_override(principal)
+
+    payload = {
+        "bot_token": ":".join(["123", "abc"]),
+        "webhook_secret": "-".join(["secret", "123"]),
+        "enabled": True,
+    }
+    res = client.put("/api/v1/telegram/admin/bot", json=payload, headers=auth_header)
+    assert res.status_code == 400
+    assert "active org/team scope" in res.json()["detail"]
+
+
 def test_put_telegram_bot_config_rejects_whitespace_credentials(client, auth_header, principal_override):
     principal = _make_principal(active_org_id=11, org_ids=[11], team_ids=[])
     principal_override(principal)
