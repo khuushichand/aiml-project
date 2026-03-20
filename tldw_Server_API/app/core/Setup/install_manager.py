@@ -278,10 +278,107 @@ def _cuda_available() -> bool:
     if _truthy(os.getenv("TLDW_SETUP_FORCE_GPU")):
         return True
 
-    if shutil.which("nvidia-smi"):
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return False
+
+    try:
+        probe = subprocess.run(  # nosec B603 - vetted command list, no shell
+            [nvidia_smi, "-L"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("CUDA probe via nvidia-smi failed: {}", exc)
+        return False
+
+    if probe.returncode != 0:
+        logger.debug(
+            "CUDA probe via nvidia-smi returned non-zero exit code {}",
+            probe.returncode,
+        )
+        return False
+
+    stdout = (probe.stdout or "").strip()
+    if not stdout or "GPU" not in stdout:
+        logger.debug("CUDA probe via nvidia-smi did not report any GPUs")
+        return False
+    return True
+
+
+def _resolve_kitten_tts_prefetch_settings() -> dict[str, str | None]:
+    cache_dir = "cache/kitten_tts"
+
+    try:
+        from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
+
+        cfg = get_tts_config()
+        provider_cfg = getattr(cfg, "providers", {}).get("kitten_tts")
+        if provider_cfg:
+            extra_params = getattr(provider_cfg, "extra_params", {}) or {}
+            configured_cache_dir = extra_params.get("cache_dir")
+            if configured_cache_dir:
+                cache_dir = str(configured_cache_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Unable to load KittenTTS prefetch settings from config: {}", exc)
+
+    return {"cache_dir": cache_dir, "revision": None}
+
+
+def _resolve_primary_stt_target(selected_profile: Any) -> tuple[str | None, str | None]:
+    primary_stt_engine = None
+    primary_stt_target = None
+    if selected_profile.stt_plan and isinstance(selected_profile.stt_plan[0], dict):
+        primary_stt_engine = selected_profile.stt_plan[0].get("engine")
+        primary_stt_target = ((selected_profile.stt_plan[0].get("models") or [None])[0]) or primary_stt_engine
+    return primary_stt_engine, primary_stt_target
+
+
+def _extract_tts_provider_details(tts_health: dict[str, Any] | None, provider_name: str | None) -> dict[str, Any]:
+    if not provider_name or not isinstance(tts_health, dict):
+        return {}
+
+    providers = tts_health.get("providers", {})
+    if not isinstance(providers, dict):
+        return {}
+
+    details = providers.get("details", {})
+    if isinstance(details, dict):
+        provider_details = details.get(provider_name)
+        if isinstance(provider_details, dict):
+            return provider_details
+
+    fallback_details = providers.get(provider_name)
+    if isinstance(fallback_details, dict):
+        return fallback_details
+    return {}
+
+
+def _tts_provider_usable(
+    provider_name: str | None,
+    provider_details: dict[str, Any],
+    tts_health: dict[str, Any] | None,
+) -> bool:
+    if not provider_name:
+        return False
+
+    status = str(provider_details.get("status") or provider_details.get("availability") or "").strip().lower()
+    if status in {"healthy", "enabled", "available", "ready", "ok"}:
         return True
-    if os.getenv("CUDA_HOME") or os.getenv("CUDA_PATH"):
+    if status in {"failed", "disabled", "unavailable", "error", "unhealthy"}:
+        return False
+
+    if isinstance(provider_details.get("failed"), bool):
+        return not provider_details["failed"]
+    if isinstance(provider_details.get("initialized"), bool) and provider_details["initialized"]:
         return True
+
+    if provider_name == "kokoro":
+        providers = (tts_health or {}).get("providers", {})
+        kokoro_info = providers.get("kokoro") if isinstance(providers, dict) else None
+        return isinstance(kokoro_info, dict)
     return False
 
 class InstallationStatus:
@@ -724,16 +821,8 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
     resource_profile = selected_profile.profile_id
     machine_profile = audio_profile_service.detect_machine_profile()
     selection_key = build_audio_selection_key(bundle_id, resource_profile, bundle.catalog_version)
-    expected_stt_model = None
-    primary_stt_engine = None
-    if selected_profile.stt_plan:
-        primary_stt_engine = selected_profile.stt_plan[0].get("engine")
-        expected_stt_model = (
-            (selected_profile.stt_plan[0].get("models") or [None])[0]
-            if isinstance(selected_profile.stt_plan[0], dict)
-            else None
-        )
-    stt_health = await _resolve_health_call(audio_health.collect_setup_stt_health(model=expected_stt_model))
+    primary_stt_engine, primary_stt_target = _resolve_primary_stt_target(selected_profile)
+    stt_health = await _resolve_health_call(audio_health.collect_setup_stt_health(model=primary_stt_target))
     tts_health = await _resolve_health_call(audio_health.collect_setup_tts_health())
 
     primary_tts_engine = selected_profile.tts_plan[0]["engine"] if selected_profile.tts_plan else None
@@ -741,7 +830,8 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
     warning_items: list[dict[str, str]] = []
 
     stt_usable = bool((stt_health or {}).get("usable", False))
-    tts_usable = str((tts_health or {}).get("status", "")).lower() == "healthy"
+    primary_tts_details = _extract_tts_provider_details(tts_health, primary_tts_engine)
+    tts_usable = _tts_provider_usable(primary_tts_engine, primary_tts_details, tts_health)
 
     if not machine_profile.ffmpeg_available:
         remediation_items.append(
@@ -766,24 +856,18 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
         remediation_items.append(
             _remediation_item(
                 "STT_UNUSABLE",
-                (
-                    f"Primary STT path ({primary_stt_engine}) is not usable. "
-                    "Rerun provisioning or inspect model downloads."
-                ),
+                "Primary STT path is not usable. Rerun provisioning or inspect model downloads.",
             )
         )
     if not tts_usable:
         remediation_items.append(
             _remediation_item(
                 "TTS_UNHEALTHY",
-                (
-                    f"Primary TTS path ({primary_tts_engine}) is not healthy. "
-                    "Rerun provisioning or inspect TTS logs."
-                ),
+                "Primary TTS path is not healthy. Rerun provisioning or inspect TTS logs.",
             )
         )
 
-    provider_details = (tts_health or {}).get("providers", {})
+    provider_details = providers.get("details", {}) if isinstance(providers, dict) else {}
     if isinstance(provider_details, dict):
         for provider_name, details in provider_details.items():
             if provider_name == primary_tts_engine or not isinstance(details, dict):
@@ -809,7 +893,6 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
         "bundle_id": bundle_id,
         "selected_resource_profile": resource_profile,
         "selection_key": selection_key,
-        "targets_checked": list(selected_profile.verification_targets),
         "status": status,
         "machine_profile": machine_profile.model_dump(),
         "stt_health": stt_health,
@@ -829,7 +912,6 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
             "bundle_id": bundle_id,
             "selected_resource_profile": resource_profile,
             "selection_key": selection_key,
-            "targets_checked": list(selected_profile.verification_targets),
             "verified_at": verified_at,
             "stt_health": stt_health,
             "tts_health": tts_health,
@@ -1087,20 +1169,29 @@ def _install_kitten_tts(variants: list[str]) -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError('KittenTTS compatibility runtime is required for asset downloads.') from exc
 
+    settings = _resolve_kitten_tts_prefetch_settings()
     variant_to_repo = {
         'nano': 'KittenML/kitten-tts-nano-0.8',
         'nano-int8': 'KittenML/kitten-tts-nano-0.8-int8',
         'micro': 'KittenML/kitten-tts-micro-0.8',
         'mini': 'KittenML/kitten-tts-mini-0.8',
     }
-    selected = variants or ['nano']
+    selected = [str(variant).strip().lower() for variant in (variants or ['nano']) if str(variant).strip()]
+    if not selected:
+        selected = ['nano']
+    unknown = [variant for variant in selected if variant not in variant_to_repo]
+    if unknown:
+        raise ValueError(f"Unsupported KittenTTS variants: {', '.join(unknown)}")
     for variant in selected:
-        repo_id = variant_to_repo.get(str(variant).strip().lower(), str(variant).strip())
-        if not repo_id:
-            continue
+        repo_id = variant_to_repo[variant]
         logger.info('Prefetching KittenTTS assets for {}', repo_id)
         try:
-            download_model_assets(repo_id, auto_download=True)
+            download_model_assets(
+                repo_id,
+                cache_dir=settings.get("cache_dir"),
+                auto_download=True,
+                revision=settings.get("revision"),
+            )
         except Exception as exc:  # noqa: BLE001
             if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
                 raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
@@ -1336,7 +1427,7 @@ TTS_DEPENDENCIES: dict[str, list[PipRequirement]] = {
     ],
     'kitten_tts': [
         PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
-        PipRequirement(package='phonemizer-fork~=3.3.2', import_name='phonemizer'),
+        PipRequirement(package='phonemizer-fork~=3.3.2'),
         PipRequirement(package='espeakng_loader', import_name='espeakng_loader'),
         PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],

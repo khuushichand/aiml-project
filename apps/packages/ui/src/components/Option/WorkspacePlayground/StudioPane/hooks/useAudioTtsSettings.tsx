@@ -18,6 +18,7 @@ export const TTS_PROVIDERS: { value: AudioTtsProvider; label: string }[] = [
 
 export const TLDW_TTS_MODELS = [
   { value: "kokoro", label: "Kokoro" },
+  { value: "kitten_tts", label: "KittenTTS" },
   { value: "KittenML/kitten-tts-nano-0.8", label: "KittenTTS (Nano)" },
   {
     value: "KittenML/kitten-tts-nano-0.8-int8",
@@ -109,6 +110,7 @@ export function useAudioTtsSettings(deps: UseAudioTtsSettingsDeps) {
   const [showTtsSettings, setShowTtsSettings] = useState(false)
   const [tldwVoices, setTldwVoices] = useState<TldwVoice[]>([])
   const [loadingVoices, setLoadingVoices] = useState(false)
+  const [voiceCatalogSettled, setVoiceCatalogSettled] = useState(false)
   const [previewingVoice, setPreviewingVoice] = useState(false)
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
@@ -116,21 +118,43 @@ export function useAudioTtsSettings(deps: UseAudioTtsSettingsDeps) {
 
   // Fetch voices when provider changes to tldw
   useEffect(() => {
+    let cancelled = false
+
     if (audioSettings.provider !== "tldw") {
       setTldwVoices([])
       setLoadingVoices(false)
+      setVoiceCatalogSettled(true)
       return
     }
     if (!inferredTldwProviderKey) {
       setTldwVoices([])
       setLoadingVoices(false)
+      setVoiceCatalogSettled(true)
       return
     }
+    setVoiceCatalogSettled(false)
     setLoadingVoices(true)
     fetchTldwVoiceCatalog(inferredTldwProviderKey)
-      .then((voices) => setTldwVoices(voices))
-      .catch(() => setTldwVoices([]))
-      .finally(() => setLoadingVoices(false))
+      .then((voices) => {
+        if (!cancelled) {
+          setTldwVoices(voices)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTldwVoices([])
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingVoices(false)
+          setVoiceCatalogSettled(true)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [audioSettings.provider, inferredTldwProviderKey])
 
   // Cleanup preview audio on unmount
@@ -172,6 +196,9 @@ export function useAudioTtsSettings(deps: UseAudioTtsSettingsDeps) {
     if (!voiceOptions.length) {
       return
     }
+    if (!voiceCatalogSettled && !tldwVoices.length) {
+      return
+    }
     const currentVoice = String(audioSettings.voice || "").trim()
     if (currentVoice && voiceOptions.some((option) => option.value === currentVoice)) {
       return
@@ -181,6 +208,8 @@ export function useAudioTtsSettings(deps: UseAudioTtsSettingsDeps) {
     audioSettings.provider,
     audioSettings.voice,
     getVoiceOptions,
+    tldwVoices.length,
+    voiceCatalogSettled,
     setAudioSettings
   ])
 

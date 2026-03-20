@@ -150,6 +150,43 @@ describe("AudioInstallerPanel", () => {
     expect(screen.getByRole("button", { name: "Safe rerun" })).toBeInTheDocument()
   })
 
+  it("deduplicates bundle options when recommendations contain multiple profiles for one bundle", async () => {
+    mocks.bgRequest.mockImplementation((init: { path: string }) => {
+      if (String(init.path).includes("/audio/recommendations")) {
+        return Promise.resolve(
+          createResponse({
+            ...recommendationPayload,
+            recommendations: [
+              recommendationPayload.recommendations[0],
+              {
+                ...recommendationPayload.recommendations[0],
+                resource_profile: "performance",
+                profile: {
+                  profile_id: "performance",
+                  label: "Performance",
+                  description: "Higher-throughput Apple Silicon speech profile.",
+                  stt_plan: [{ engine: "nemo_parakeet_mlx", models: [] }],
+                  tts_plan: [{ engine: "kokoro", variants: [] }],
+                  estimated_disk_gb: 4.5,
+                  resource_class: "high"
+                }
+              }
+            ]
+          })
+        )
+      }
+      if (String(init.path).includes("/install-status")) {
+        return Promise.resolve(createResponse({ status: "idle", steps: [], errors: [] }))
+      }
+      throw new Error(`Unexpected request: ${init.path}`)
+    })
+
+    render(<AudioInstallerPanel />)
+
+    expect(await screen.findByText("Recommended audio bundle")).toBeInTheDocument()
+    fireEvent.mouseDown(screen.getByRole("combobox"))
+    expect(await screen.findAllByRole("option", { name: "Apple Silicon Local" })).toHaveLength(1)
+  })
   it("provisions the selected bundle and polls install status while active", async () => {
     let installStatusCallCount = 0
 
@@ -209,7 +246,8 @@ describe("AudioInstallerPanel", () => {
     expect(mocks.bgRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         path: "/api/v1/setup/admin/audio/provision",
-        method: "POST"
+        method: "POST",
+        timeoutMs: 30 * 60 * 1000
       })
     )
 

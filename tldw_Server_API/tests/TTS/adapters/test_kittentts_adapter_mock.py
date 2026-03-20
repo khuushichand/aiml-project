@@ -131,3 +131,50 @@ async def test_kittentts_generate_stream_returns_pcm_chunks(monkeypatch):
     assert chunks
     assert all(isinstance(chunk, (bytes, bytearray)) for chunk in chunks)
     assert len(b"".join(chunks)) > 0
+
+
+@pytest.mark.asyncio
+async def test_kittentts_runtime_load_uses_revision_for_requested_model(monkeypatch):
+    from tldw_Server_API.app.core.TTS.adapters import kitten_tts_adapter as mod
+
+    fake_assets = SimpleNamespace(
+        repo_id="KittenML/kitten-tts-mini-0.8",
+        revision="ff7d47695d85548bcb0ac9378e063682e1cf0548",
+    )
+    download_calls = []
+
+    def fake_download(model_name, *, cache_dir=None, auto_download=True, revision=None):
+        download_calls.append((model_name, cache_dir, auto_download, revision))
+        return fake_assets
+
+    class FakeRuntime:
+        def __init__(self, _assets):
+            return
+
+        def generate(self, text, *, voice=None, speed=1.0, clean_text=False):
+            _ = (text, voice, speed, clean_text)
+            return np.linspace(-0.5, 0.5, 512, dtype=np.float32)
+
+    monkeypatch.setattr(mod, "download_model_assets", fake_download)
+    monkeypatch.setattr(mod, "KittenRuntime", FakeRuntime)
+
+    adapter = mod.KittenTTSAdapter(
+        {
+            "model": "KittenML/kitten-tts-nano-0.8",
+            "model_revision": "deadbeef1",
+        }
+    )
+
+    await adapter.generate(
+        TTSRequest(
+            text="switch models",
+            model="KittenML/kitten-tts-mini-0.8",
+            voice="Leo",
+            format=AudioFormat.WAV,
+            stream=False,
+        )
+    )
+
+    assert download_calls == [
+        ("KittenML/kitten-tts-mini-0.8", None, True, mod.resolve_model_revision("KittenML/kitten-tts-mini-0.8"))
+    ]
