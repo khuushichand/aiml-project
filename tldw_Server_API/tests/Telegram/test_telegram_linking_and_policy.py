@@ -147,6 +147,36 @@ def test_unknown_user_is_denied_for_privileged_action(client, principal_override
     assert response.json()["error"] == "account_link_required"
 
 
+def test_replayed_denied_privileged_action_is_deduped(client, principal_override):
+    _seed_telegram_bot(
+        client,
+        principal_override,
+        scope_type="team",
+        scope_id=22,
+        bot_token="123:abc",
+        webhook_secret="secret-123",
+    )
+
+    payload = {
+        "update_id": 9,
+        "message": {
+            "message_id": 6,
+            "chat": {"id": 1, "type": "private"},
+            "from": {"id": 99, "username": "unknown"},
+            "text": "/persona set analyst",
+        },
+    }
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "secret-123"}
+
+    first = client.post("/api/v1/telegram/webhook", headers=headers, json=payload)
+    second = client.post("/api/v1/telegram/webhook", headers=headers, json=payload)
+
+    assert first.status_code == 403
+    assert first.json()["error"] == "account_link_required"
+    assert second.status_code == 200
+    assert second.json() == {"ok": True, "status": "duplicate"}
+
+
 def test_linked_user_is_allowed_for_privileged_action(client, principal_override):
     _seed_telegram_bot(
         client,

@@ -36,7 +36,6 @@ _CREDENTIAL_VERSION = 1
 _WEBHOOK_REPLAY_WINDOW_SECONDS = 3600
 _WEBHOOK_RECEIPTS = TTLReceiptStore()
 _TELEGRAM_LINK_LOCK = threading.Lock()
-_TELEGRAM_PAIRING_CODE_COUNTER = 0
 _TELEGRAM_PAIRING_CODES: dict[str, dict[str, Any]] = {}
 _TELEGRAM_ACTOR_LINKS: dict[tuple[str, int, int], dict[str, Any]] = {}
 _TELEGRAM_PAIRING_CODE_TTL_SECONDS = 900
@@ -83,11 +82,10 @@ def _telegram_actor_link_key(scope: TelegramScope, telegram_user_id: int) -> tup
 
 
 def _generate_telegram_pairing_code() -> str:
-    global _TELEGRAM_PAIRING_CODE_COUNTER
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     with _TELEGRAM_LINK_LOCK:
         while True:
-            _TELEGRAM_PAIRING_CODE_COUNTER += 1
-            code = f"tg-{_TELEGRAM_PAIRING_CODE_COUNTER:06d}"
+            code = "".join(secrets.choice(alphabet) for _ in range(8))
             if code not in _TELEGRAM_PAIRING_CODES:
                 return code
 
@@ -263,9 +261,7 @@ def _reset_telegram_webhook_state_for_tests() -> None:
 
 def _reset_telegram_link_state_for_tests() -> None:
     """Reset Telegram pairing/link state for deterministic tests."""
-    global _TELEGRAM_PAIRING_CODE_COUNTER
     with _TELEGRAM_LINK_LOCK:
-        _TELEGRAM_PAIRING_CODE_COUNTER = 0
         _TELEGRAM_PAIRING_CODES.clear()
         _TELEGRAM_ACTOR_LINKS.clear()
 
@@ -385,14 +381,14 @@ async def telegram_webhook_impl(
         )
     update_id_int = update_id
 
+    dedupe_key = f"{scope.scope_type}:{scope.scope_id}:{update_id_int}"
+    if dedupe_receipts.seen_or_store(dedupe_key, dedupe_ttl_seconds):
+        return JSONResponse(status_code=200, content={"ok": True, "status": "duplicate"})
+
     telegram_user_id, text = _extract_message_actor_and_text(payload)
     if _is_privileged_telegram_action(text):
         if telegram_user_id is None or _resolve_telegram_actor_link(scope, telegram_user_id) is None:
             return _telegram_webhook_error(status.HTTP_403_FORBIDDEN, "account_link_required")
-
-    dedupe_key = f"{scope.scope_type}:{scope.scope_id}:{update_id_int}"
-    if dedupe_receipts.seen_or_store(dedupe_key, dedupe_ttl_seconds):
-        return JSONResponse(status_code=200, content={"ok": True, "status": "duplicate"})
 
     return JSONResponse(status_code=200, content={"ok": True, "status": "accepted"})
 
