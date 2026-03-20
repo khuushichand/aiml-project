@@ -94,6 +94,13 @@ from tldw_Server_API.app.core.Workflows import RunMode, WorkflowEngine, Workflow
 from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
 from tldw_Server_API.app.core.Workflows.capabilities import get_step_capability
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
+from tldw_Server_API.app.core.Workflows.adapters.research._config import (
+    DEEP_RESEARCH_CANONICAL_BUNDLE_FIELDS,
+    DeepResearchConfig,
+    DeepResearchLoadBundleConfig,
+    DeepResearchSelectBundleFieldsConfig,
+    DeepResearchWaitConfig,
+)
 from tldw_Server_API.app.core.Workflows.daily_ledger import (
     backfill_legacy_runs_to_ledger,
     get_workflows_daily_ledger,
@@ -399,9 +406,212 @@ def _rag_search_schema_base() -> dict[str, Any]:
     }
 
 
+def _deep_research_step_schema_base() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Launches a deep research session and returns its run reference; "
+            "does not wait for completion."
+        ),
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Templated research query resolved from workflow context",
+            },
+            "source_policy": {
+                "type": "string",
+                "enum": [
+                    "balanced",
+                    "local_first",
+                    "external_first",
+                    "local_only",
+                    "external_only",
+                ],
+                "default": "balanced",
+            },
+            "autonomy_mode": {
+                "type": "string",
+                "enum": ["checkpointed", "autonomous"],
+                "default": "checkpointed",
+            },
+            "limits_json": {
+                "type": ["object", "null"],
+                "description": "Optional deep research run limits",
+            },
+            "provider_overrides": {
+                "type": ["object", "null"],
+                "description": "Optional per-run provider override configuration",
+            },
+            "save_artifact": {
+                "type": "boolean",
+                "default": True,
+                "description": "Persist deep_research_launch.json as a workflow artifact",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Bounds only the launch step, not the research session lifetime",
+            },
+        },
+        "required": ["query"],
+        "additionalProperties": True,
+    }
+
+
 def _validate_rag_search_config(cfg: dict[str, Any], *, step_id: str) -> None:
     try:
         WorkflowRagSearchConfig.model_validate(cfg)
+    except ValidationError as exc:
+        detail = _pydantic_error_detail(exc)
+        raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
+
+
+def _validate_deep_research_config(cfg: dict[str, Any], *, step_id: str) -> None:
+    try:
+        DeepResearchConfig.model_validate(cfg)
+    except ValidationError as exc:
+        detail = _pydantic_error_detail(exc)
+        raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
+
+
+def _deep_research_wait_step_schema_base() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Waits for a launched deep-research run to finish and can return the final bundle."
+        ),
+        "properties": {
+            "run_id": {
+                "type": "string",
+                "description": "Templated research run ID, typically {{ deep_research.run_id }}",
+            },
+            "run": {
+                "type": "object",
+                "description": "Optional launch-step output object containing run_id",
+            },
+            "include_bundle": {
+                "type": "boolean",
+                "default": True,
+                "description": "Include the final research bundle in step outputs when available",
+            },
+            "fail_on_cancelled": {
+                "type": "boolean",
+                "default": True,
+            },
+            "fail_on_failed": {
+                "type": "boolean",
+                "default": True,
+            },
+            "poll_interval_seconds": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 60.0,
+                "default": 2.0,
+            },
+            "save_artifact": {
+                "type": "boolean",
+                "default": True,
+                "description": "Persist deep_research_wait.json as a workflow artifact",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Bounds how long the workflow waits for terminal research status",
+            },
+        },
+        "additionalProperties": True,
+    }
+
+
+def _validate_deep_research_wait_config(cfg: dict[str, Any], *, step_id: str) -> None:
+    try:
+        DeepResearchWaitConfig.model_validate(cfg)
+    except ValidationError as exc:
+        detail = _pydantic_error_detail(exc)
+        raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
+
+
+def _deep_research_load_bundle_step_schema_base() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Loads references from a completed deep research run without returning the full bundle."
+        ),
+        "properties": {
+            "run_id": {
+                "type": "string",
+                "description": (
+                    "Templated research run ID, typically {{ deep_research_wait.run_id }}"
+                ),
+            },
+            "run": {
+                "type": "object",
+                "description": "Optional prior step output object containing run_id",
+            },
+            "save_artifact": {
+                "type": "boolean",
+                "default": True,
+                "description": "Persist deep_research_bundle_ref.json as a workflow artifact",
+            },
+        },
+        "additionalProperties": True,
+    }
+
+
+def _validate_deep_research_load_bundle_config(cfg: dict[str, Any], *, step_id: str) -> None:
+    try:
+        DeepResearchLoadBundleConfig.model_validate(cfg)
+    except ValidationError as exc:
+        detail = _pydantic_error_detail(exc)
+        raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
+
+
+def _deep_research_select_bundle_fields_step_schema_base() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Loads selected canonical bundle fields from a completed deep research run "
+            "and returns null for missing allowed fields."
+        ),
+        "properties": {
+            "run_id": {
+                "type": "string",
+                "description": (
+                    "Templated research run ID, typically {{ deep_research_wait.run_id }}"
+                ),
+            },
+            "run": {
+                "type": "object",
+                "description": "Optional prior step output object containing run_id",
+            },
+            "fields": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": list(DEEP_RESEARCH_CANONICAL_BUNDLE_FIELDS),
+                },
+                "minItems": 1,
+                "description": (
+                    "Canonical top-level bundle fields to load inline. Large selections may hit "
+                    "the inline size limit; use deep_research_load_bundle for pointer-oriented access."
+                ),
+            },
+            "save_artifact": {
+                "type": "boolean",
+                "default": True,
+                "description": "Persist deep_research_selected_fields.json as a workflow artifact",
+            },
+        },
+        "required": ["fields"],
+        "additionalProperties": False,
+    }
+
+
+def _validate_deep_research_select_bundle_fields_config(
+    cfg: dict[str, Any], *, step_id: str
+) -> None:
+    try:
+        DeepResearchSelectBundleFieldsConfig.model_validate(cfg)
     except ValidationError as exc:
         detail = _pydantic_error_detail(exc)
         raise HTTPException(status_code=422, detail=f"Invalid config for step '{step_id}': {detail}") from exc
@@ -583,6 +793,10 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
             "additionalProperties": True,
         },
         "rag_search": _rag_search_schema_base(),
+        "deep_research": _deep_research_step_schema_base(),
+        "deep_research_wait": _deep_research_wait_step_schema_base(),
+        "deep_research_load_bundle": _deep_research_load_bundle_step_schema_base(),
+        "deep_research_select_bundle_fields": _deep_research_select_bundle_fields_step_schema_base(),
         "kanban": {
             "type": "object",
             "properties": {
@@ -740,6 +954,14 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
                 raise HTTPException(status_code=422, detail=f"Step '{sid}' requires prompt or messages")
         if t == "rag_search":
             _validate_rag_search_config(cfg, step_id=sid)
+        if t == "deep_research":
+            _validate_deep_research_config(cfg, step_id=sid)
+        if t == "deep_research_wait":
+            _validate_deep_research_wait_config(cfg, step_id=sid)
+        if t == "deep_research_load_bundle":
+            _validate_deep_research_load_bundle_config(cfg, step_id=sid)
+        if t == "deep_research_select_bundle_fields":
+            _validate_deep_research_select_bundle_fields_config(cfg, step_id=sid)
         if t == "media_ingest":
             _validate_chunking_contract(cfg, step_id=sid)
         if t == "map":
@@ -3377,6 +3599,49 @@ async def list_step_types():
         "rag_search": {
             **_rag_search_schema_base(),
             "example": {"query": "large language models safety", "top_k": 8},
+            "min_engine_version": "0.1.0",
+        },
+        "deep_research": {
+            **_deep_research_step_schema_base(),
+            "example": {
+                "query": "Investigate {{ inputs.topic }}",
+                "source_policy": "balanced",
+                "autonomy_mode": "checkpointed",
+                "save_artifact": True,
+            },
+            "min_engine_version": "0.1.0",
+        },
+        "deep_research_wait": {
+            **_deep_research_wait_step_schema_base(),
+            "example": {
+                "run_id": "{{ deep_research.run_id }}",
+                "include_bundle": True,
+                "fail_on_cancelled": True,
+                "fail_on_failed": True,
+                "poll_interval_seconds": 2.0,
+                "save_artifact": True,
+            },
+            "min_engine_version": "0.1.0",
+        },
+        "deep_research_load_bundle": {
+            **_deep_research_load_bundle_step_schema_base(),
+            "example": {
+                "run_id": "{{ deep_research_wait.run_id }}",
+                "save_artifact": True,
+            },
+            "min_engine_version": "0.1.0",
+        },
+        "deep_research_select_bundle_fields": {
+            **_deep_research_select_bundle_fields_step_schema_base(),
+            "example": {
+                "run_id": "{{ deep_research_wait.run_id }}",
+                "fields": [
+                    "question",
+                    "verification_summary",
+                    "unsupported_claims",
+                ],
+                "save_artifact": True,
+            },
             "min_engine_version": "0.1.0",
         },
         "kanban": {

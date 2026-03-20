@@ -1,4 +1,5 @@
 import importlib.machinery
+import builtins
 import json
 import sys
 import time
@@ -185,6 +186,7 @@ def test_step_types_and_runs_listing(client_with_workflows_db: TestClient):
     items = st.json()
     names = [i.get("name") for i in items]
     assert "prompt" in names and "rag_search" in names
+    assert "deep_research" in names
 
     # Create two definitions: one succeeds, one fails
     ok_def = {
@@ -451,6 +453,25 @@ def test_step_types_includes_acp_stage(client_with_workflows_db: TestClient):
     assert "workspace_group_id" in properties
 
 
+def test_step_types_includes_deep_research_select_bundle_fields(client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    response = client.get("/api/v1/workflows/step-types")
+    assert response.status_code == 200
+    selector = next(
+        (
+            item
+            for item in response.json()
+            if item.get("name") == "deep_research_select_bundle_fields"
+        ),
+        None,
+    )
+    assert selector is not None
+    schema = selector.get("schema") or {}
+    properties = schema.get("properties") or {}
+    assert "fields" in properties
+    assert properties["fields"]["type"] == "array"
+
+
 def test_create_workflow_accepts_acp_stage_definition(client_with_workflows_db: TestClient):
     client = client_with_workflows_db
     definition = {
@@ -469,6 +490,1114 @@ def test_create_workflow_accepts_acp_stage_definition(client_with_workflows_db: 
     }
     resp = client.post("/api/v1/workflows", json=definition)
     assert resp.status_code in (200, 201), resp.text
+
+
+def test_create_workflow_rejects_invalid_deep_research_definition(client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-definition",
+        "version": 1,
+        "steps": [
+            {
+                "id": "r1",
+                "type": "deep_research",
+                "config": {
+                    "query": "launch research",
+                    "source_policy": "unsupported_policy",
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_wait_definition(client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-wait-definition",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rw1",
+                "type": "deep_research_wait",
+                "config": {
+                    "poll_interval_seconds": 0,
+                    "include_bundle": True,
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_wait_definition_without_jsonschema(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    original_import = builtins.__import__
+
+    def _patched_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "jsonschema":
+            raise ImportError("simulated missing jsonschema")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _patched_import)
+
+    definition = {
+        "name": "invalid-deep-research-wait-definition-no-jsonschema",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rw1",
+                "type": "deep_research_wait",
+                "config": {
+                    "run": {"console_url": "/research?run=missing"},
+                    "poll_interval_seconds": 0,
+                },
+            }
+        ],
+    }
+
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_load_bundle_definition(
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-load-bundle-definition",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rl1",
+                "type": "deep_research_load_bundle",
+                "config": {
+                    "run": {"bundle_url": "/api/v1/research/runs/missing/bundle"},
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_load_bundle_definition_without_jsonschema(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    original_import = builtins.__import__
+
+    def _patched_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "jsonschema":
+            raise ImportError("simulated missing jsonschema")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _patched_import)
+
+    definition = {
+        "name": "invalid-deep-research-load-bundle-definition-no-jsonschema",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rl1",
+                "type": "deep_research_load_bundle",
+                "config": {
+                    "run": {"bundle_url": "/api/v1/research/runs/missing/bundle"},
+                },
+            }
+        ],
+    }
+
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_select_bundle_fields_definition(
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-select-bundle-fields-definition",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rs1",
+                "type": "deep_research_select_bundle_fields",
+                "config": {
+                    "run_id": "{{ deep_research_wait.run_id }}",
+                    "fields": ["question", "not_allowed"],
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_unknown_config_key_for_deep_research_select_bundle_fields(
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    definition = {
+        "name": "invalid-deep-research-select-bundle-fields-extra-key",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rs1",
+                "type": "deep_research_select_bundle_fields",
+                "config": {
+                    "run_id": "{{ deep_research_wait.run_id }}",
+                    "fields": ["question"],
+                    "unknown_flag": True,
+                },
+            }
+        ],
+    }
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_create_workflow_rejects_invalid_deep_research_select_bundle_fields_definition_without_jsonschema(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    original_import = builtins.__import__
+
+    def _patched_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "jsonschema":
+            raise ImportError("simulated missing jsonschema")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _patched_import)
+
+    definition = {
+        "name": "invalid-deep-research-select-bundle-fields-no-jsonschema",
+        "version": 1,
+        "steps": [
+            {
+                "id": "rs1",
+                "type": "deep_research_select_bundle_fields",
+                "config": {
+                    "run": {"run_id": "research-session-8"},
+                    "fields": ["question"],
+                    "unknown_flag": True,
+                },
+            }
+        ],
+    }
+
+    resp = client.post("/api/v1/workflows", json=definition)
+    assert resp.status_code == 422
+
+
+def test_run_workflow_launches_deep_research_session(monkeypatch, client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        id = "research-session-1"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _FakeResearchService:
+        def create_session(self, **kwargs):
+            captured["create_session_kwargs"] = kwargs
+            return _FakeSession()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _FakeResearchService(),
+    )
+
+    definition = {
+        "name": "launch-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "r1",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                    "source_policy": "balanced",
+                    "autonomy_mode": "checkpointed",
+                },
+            }
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 5
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "succeeded"
+    assert (data.get("outputs") or {}) == {
+        "run_id": "research-session-1",
+        "status": "queued",
+        "phase": "drafting_plan",
+        "control_state": "running",
+        "console_url": "/research?run=research-session-1",
+        "bundle_url": "/api/v1/research/runs/research-session-1/bundle",
+        "query": "evidence-backed forecasting",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+    }
+    assert captured["create_session_kwargs"] == {
+        "owner_user_id": "1",
+        "query": "evidence-backed forecasting",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+        "limits_json": None,
+        "provider_overrides": None,
+    }
+
+
+def test_run_workflow_waits_for_deep_research_completion(monkeypatch, client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    captured: dict[str, object] = {}
+
+    class _LaunchSession:
+        id = "research-session-2"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CompletedSession:
+        id = "research-session-2"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T13:30:00+00:00"
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            captured["create_session_kwargs"] = kwargs
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            captured["get_session_kwargs"] = kwargs
+            return _CompletedSession()
+
+        def get_bundle(self, **kwargs):
+            captured["get_bundle_kwargs"] = kwargs
+            return {"concise_answer": "Bundle ready"}
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+
+    definition = {
+        "name": "launch-and-wait-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": True,
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 5
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "succeeded"
+    assert (data.get("outputs") or {}) == {
+        "run_id": "research-session-2",
+        "status": "completed",
+        "phase": "completed",
+        "control_state": "running",
+        "completed_at": "2026-03-07T13:30:00+00:00",
+        "bundle_url": "/api/v1/research/runs/research-session-2/bundle",
+        "bundle": {"concise_answer": "Bundle ready"},
+    }
+    assert captured["create_session_kwargs"] == {
+        "owner_user_id": "1",
+        "query": "evidence-backed forecasting",
+        "source_policy": "balanced",
+        "autonomy_mode": "checkpointed",
+        "limits_json": None,
+        "provider_overrides": None,
+    }
+    assert captured["get_session_kwargs"] == {
+        "owner_user_id": "1",
+        "session_id": "research-session-2",
+    }
+    assert captured["get_bundle_kwargs"] == {
+        "owner_user_id": "1",
+        "session_id": "research-session-2",
+    }
+
+
+def test_run_workflow_pauses_for_deep_research_checkpoint(monkeypatch, client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+
+    class _LaunchSession:
+        id = "research-session-12"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CheckpointSession:
+        id = "research-session-12"
+        status = "waiting_human"
+        phase = "awaiting_source_review"
+        control_state = "running"
+        completed_at = None
+        latest_checkpoint_id = "checkpoint-6"
+
+    class _CheckpointSnapshot:
+        checkpoint = {
+            "checkpoint_id": "checkpoint-6",
+            "checkpoint_type": "sources_review",
+        }
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            return _CheckpointSession()
+
+        def get_stream_snapshot(self, **kwargs):
+            return _CheckpointSnapshot()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+
+    definition = {
+        "name": "launch-and-pause-on-deep-research-checkpoint",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": False,
+                    "poll_interval_seconds": 0.1,
+                    "timeout_seconds": 1,
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 3
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("waiting_human", "waiting_approval", "failed", "cancelled", "succeeded"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "waiting_human"
+    assert (data.get("outputs") or {}) == {
+        "__status__": "waiting_human",
+        "reason": "research_checkpoint",
+        "run_id": "research-session-12",
+        "research_phase": "awaiting_source_review",
+        "research_control_state": "running",
+        "research_checkpoint_id": "checkpoint-6",
+        "research_checkpoint_type": "sources_review",
+        "research_console_url": "/research?run=research-session-12",
+        "active_poll_seconds": pytest.approx(0.0, rel=0.5),
+    }
+
+
+@pytest.mark.asyncio
+async def test_resume_workflows_waiting_on_research_checkpoint_resumes_only_matching_links(
+    tmp_path,
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Workflows import research_wait_bridge
+
+    db = WorkflowsDatabase(str(tmp_path / "workflow-research-waits.db"))
+
+    definition = {
+        "name": "resume-bridge",
+        "version": 1,
+        "steps": [
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {"run_id": "{{ inputs.run_id }}"},
+            }
+        ],
+    }
+
+    def _seed_waiting_run(run_id: str, research_run_id: str, checkpoint_id: str) -> None:
+        db.create_run(
+            run_id=run_id,
+            tenant_id="default",
+            user_id="1",
+            inputs={"run_id": research_run_id},
+            workflow_id=None,
+            definition_version=1,
+            definition_snapshot=definition,
+        )
+        db.update_run_status(run_id, status="waiting_human", status_reason="awaiting_review")
+        step_run_id = f"{run_id}:wait:1"
+        db.create_step_run(
+            step_run_id=step_run_id,
+            tenant_id="default",
+            run_id=run_id,
+            step_id="wait",
+            name="wait",
+            step_type="deep_research_wait",
+        )
+        wait_payload = {
+            "__status__": "waiting_human",
+            "reason": "research_checkpoint",
+            "run_id": research_run_id,
+            "research_checkpoint_id": checkpoint_id,
+            "research_checkpoint_type": "sources_review",
+            "active_poll_seconds": 1.25,
+        }
+        db.complete_step_run(
+            step_run_id=step_run_id,
+            status="waiting_human",
+            outputs=wait_payload,
+        )
+        db.update_run_status(
+            run_id,
+            status="waiting_human",
+            status_reason="awaiting_review",
+            outputs=wait_payload,
+        )
+        db.upsert_research_wait_link(
+            wait_id=f"{run_id}:wait",
+            tenant_id="default",
+            workflow_run_id=run_id,
+            step_id="wait",
+            research_run_id=research_run_id,
+            checkpoint_id=checkpoint_id,
+            checkpoint_type="sources_review",
+            wait_status="waiting",
+            wait_payload=wait_payload,
+            active_poll_seconds=1.25,
+        )
+
+    _seed_waiting_run("wf-match", "research-session-21", "checkpoint-21")
+    _seed_waiting_run("wf-other", "research-session-22", "checkpoint-22")
+
+    scheduled: list[dict[str, object]] = []
+
+    monkeypatch.setattr(research_wait_bridge, "_build_workflows_db", lambda: db)
+    monkeypatch.setattr(
+        research_wait_bridge,
+        "_schedule_resume",
+        lambda **kwargs: scheduled.append(kwargs),
+    )
+
+    resumed = await research_wait_bridge.resume_workflows_waiting_on_research_checkpoint(
+        research_run_id="research-session-21",
+        checkpoint_id="checkpoint-21",
+    )
+
+    assert resumed == 1
+    assert len(scheduled) == 1
+    assert scheduled[0]["workflow_run_id"] == "wf-match"
+    assert scheduled[0]["step_id"] == "wait"
+    assert scheduled[0]["wait_payload"]["research_checkpoint_id"] == "checkpoint-21"
+
+    matched_link = db.get_research_wait_link(workflow_run_id="wf-match", step_id="wait")
+    other_link = db.get_research_wait_link(workflow_run_id="wf-other", step_id="wait")
+    assert matched_link is not None
+    assert matched_link["wait_status"] == "resumed"
+    assert other_link is not None
+    assert other_link["wait_status"] == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_resume_workflows_waiting_on_research_checkpoint_keeps_failed_schedule_retryable(
+    tmp_path,
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.Workflows import research_wait_bridge
+
+    db = WorkflowsDatabase(str(tmp_path / "workflow-research-waits-retry.db"))
+
+    definition = {
+        "name": "resume-bridge-retry",
+        "version": 1,
+        "steps": [
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {"run_id": "{{ inputs.run_id }}"},
+            }
+        ],
+    }
+
+    db.create_run(
+        run_id="wf-retry",
+        tenant_id="default",
+        user_id="1",
+        inputs={"run_id": "research-session-31"},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot=definition,
+    )
+    db.update_run_status("wf-retry", status="waiting_human", status_reason="awaiting_review")
+    step_run_id = "wf-retry:wait:1"
+    db.create_step_run(
+        step_run_id=step_run_id,
+        tenant_id="default",
+        run_id="wf-retry",
+        step_id="wait",
+        name="wait",
+        step_type="deep_research_wait",
+    )
+    wait_payload = {
+        "__status__": "waiting_human",
+        "reason": "research_checkpoint",
+        "run_id": "research-session-31",
+        "research_checkpoint_id": "checkpoint-31",
+        "research_checkpoint_type": "sources_review",
+        "active_poll_seconds": 1.25,
+    }
+    db.complete_step_run(
+        step_run_id=step_run_id,
+        status="waiting_human",
+        outputs=wait_payload,
+    )
+    db.upsert_research_wait_link(
+        wait_id="wf-retry:wait",
+        tenant_id="default",
+        workflow_run_id="wf-retry",
+        step_id="wait",
+        research_run_id="research-session-31",
+        checkpoint_id="checkpoint-31",
+        checkpoint_type="sources_review",
+        wait_status="waiting",
+        wait_payload=wait_payload,
+        active_poll_seconds=1.25,
+    )
+
+    monkeypatch.setattr(research_wait_bridge, "_build_workflows_db", lambda: db)
+
+    def _boom(**_kwargs):
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr(research_wait_bridge, "_schedule_resume", _boom)
+
+    resumed = await research_wait_bridge.resume_workflows_waiting_on_research_checkpoint(
+        research_run_id="research-session-31",
+        checkpoint_id="checkpoint-31",
+    )
+
+    assert resumed == 0
+    link = db.get_research_wait_link(workflow_run_id="wf-retry", step_id="wait")
+    assert link is not None
+    assert link["wait_status"] == "waiting"
+    claimed_again = db.claim_research_waits_for_resume(
+        research_run_id="research-session-31",
+        checkpoint_id="checkpoint-31",
+    )
+    assert [row["wait_id"] for row in claimed_again] == ["wf-retry:wait"]
+
+
+def test_research_checkpoint_approval_auto_resumes_waiting_workflow(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+    from tldw_Server_API.app.api.v1.endpoints import research_runs
+    from tldw_Server_API.app.core.Workflows import research_wait_bridge
+
+    db = client.app.dependency_overrides[wf_mod._get_db]()
+    state = {"approved": False}
+
+    class _LaunchSession:
+        id = "research-session-31"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CheckpointSession:
+        id = "research-session-31"
+        status = "waiting_human"
+        phase = "awaiting_source_review"
+        control_state = "running"
+        completed_at = None
+        latest_checkpoint_id = "checkpoint-31"
+
+    class _CompletedSession:
+        id = "research-session-31"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T16:00:00+00:00"
+        latest_checkpoint_id = "checkpoint-31"
+
+    class _CheckpointSnapshot:
+        checkpoint = {
+            "checkpoint_id": "checkpoint-31",
+            "checkpoint_type": "sources_review",
+        }
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            if state["approved"]:
+                return _CompletedSession()
+            return _CheckpointSession()
+
+        def get_stream_snapshot(self, **kwargs):
+            return _CheckpointSnapshot()
+
+    class _ApproveResearchService:
+        def approve_checkpoint(self, **kwargs):
+            state["approved"] = True
+            return {
+                "id": kwargs["session_id"],
+                "status": "queued",
+                "phase": "collecting",
+                "control_state": "running",
+                "progress_percent": 45.0,
+                "progress_message": "collecting sources",
+                "active_job_id": "job-31",
+                "latest_checkpoint_id": kwargs["checkpoint_id"],
+            }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+    monkeypatch.setattr(research_wait_bridge, "_build_workflows_db", lambda: db)
+    client.app.dependency_overrides[research_runs.get_research_service] = (
+        lambda: _ApproveResearchService()
+    )
+
+    definition = {
+        "name": "launch-pause-resume-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": False,
+                    "poll_interval_seconds": 0.1,
+                    "timeout_seconds": 2,
+                },
+            },
+            {
+                "id": "prompt",
+                "type": "prompt",
+                "config": {
+                    "template": "checkpoint cleared",
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    workflow_id = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{workflow_id}/run",
+        json={"inputs": {"topic": "checkpoint-aware waiting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 3
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("waiting_human", "failed", "cancelled", "succeeded"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "waiting_human"
+
+    approve_resp = client.post(
+        "/api/v1/research/runs/research-session-31/checkpoints/checkpoint-31/patch-and-approve",
+        json={},
+    )
+    assert approve_resp.status_code == 200, approve_resp.text
+
+    deadline = time.time() + 5
+    resumed = {}
+    while time.time() < deadline:
+        resumed = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if resumed["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert resumed["status"] == "succeeded"
+    assert (resumed.get("outputs") or {}) == {"text": "checkpoint cleared"}
+
+    wait_link = db.get_research_wait_link(workflow_run_id=run_id, step_id="wait")
+    assert wait_link is not None
+    assert wait_link["wait_status"] == "resumed"
+    wait_step = db.get_latest_step_run(run_id=run_id, step_id="wait")
+    assert wait_step is not None
+    assert wait_step["status"] == "succeeded"
+    wait_outputs = json.loads(wait_step["outputs_json"] or "{}")
+    assert wait_outputs["run_id"] == "research-session-31"
+    assert wait_outputs["status"] == "completed"
+
+
+def test_run_workflow_loads_bundle_refs_after_wait(monkeypatch, client_with_workflows_db: TestClient):
+    client = client_with_workflows_db
+    captured: dict[str, object] = {}
+
+    class _LaunchSession:
+        id = "research-session-8"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CompletedSession:
+        id = "research-session-8"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-07T14:30:00+00:00"
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            captured["create_session_kwargs"] = kwargs
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            captured["wait_get_session_kwargs"] = kwargs
+            return _CompletedSession()
+
+    class _LoadBundleSnapshot:
+        artifacts = [
+            {
+                "artifact_name": "bundle.json",
+                "artifact_version": 1,
+                "content_type": "application/json",
+                "phase": "packaging",
+                "job_id": "job-99",
+            }
+        ]
+
+    class _LoadBundleResearchService:
+        def get_session(self, **kwargs):
+            captured["load_get_session_kwargs"] = kwargs
+            return _CompletedSession()
+
+        def get_bundle(self, **kwargs):
+            captured["load_get_bundle_kwargs"] = kwargs
+            return {
+                "question": "Investigate evidence-backed forecasting",
+                "outline": {"sections": [{"title": "Overview"}, {"title": "Findings"}]},
+                "claims": [
+                    {"text": "Claim A", "citations": [{"source_id": "src_1"}]},
+                    {"text": "Claim B", "citations": [{"source_id": "src_2"}]},
+                ],
+                "source_inventory": [
+                    {"source_id": "src_1", "title": "Source 1"},
+                    {"source_id": "src_2", "title": "Source 2"},
+                ],
+                "unresolved_questions": ["Need more contradictory evidence"],
+            }
+
+        def get_stream_snapshot(self, **kwargs):
+            captured["load_get_stream_snapshot_kwargs"] = kwargs
+            return _LoadBundleSnapshot()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.load_bundle._build_research_service",
+        lambda: _LoadBundleResearchService(),
+    )
+
+    definition = {
+        "name": "launch-wait-load-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": False,
+                },
+            },
+            {
+                "id": "load",
+                "type": "deep_research_load_bundle",
+                "config": {
+                    "run_id": "{{ wait.run_id }}",
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 5
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "succeeded"
+    assert (data.get("outputs") or {}) == {
+        "run_id": "research-session-8",
+        "status": "completed",
+        "phase": "completed",
+        "control_state": "running",
+        "completed_at": "2026-03-07T14:30:00+00:00",
+        "bundle_url": "/api/v1/research/runs/research-session-8/bundle",
+        "bundle_summary": {
+            "question": "Investigate evidence-backed forecasting",
+            "outline_titles": ["Overview", "Findings"],
+            "claim_count": 2,
+            "source_count": 2,
+            "unresolved_question_count": 1,
+        },
+        "artifacts": [
+            {
+                "artifact_name": "bundle.json",
+                "artifact_version": 1,
+                "content_type": "application/json",
+                "phase": "packaging",
+                "job_id": "job-99",
+            }
+        ],
+    }
+    assert "bundle" not in (data.get("outputs") or {})
+    assert captured["load_get_session_kwargs"] == {
+        "owner_user_id": "1",
+        "session_id": "research-session-8",
+    }
+    assert captured["load_get_bundle_kwargs"] == {
+        "owner_user_id": "1",
+        "session_id": "research-session-8",
+    }
+    assert captured["load_get_stream_snapshot_kwargs"] == {
+        "owner_user_id": "1",
+        "session_id": "research-session-8",
+    }
+
+
+def test_run_workflow_launches_waits_selects_research_bundle_fields_and_uses_them_downstream(
+    monkeypatch,
+    client_with_workflows_db: TestClient,
+):
+    client = client_with_workflows_db
+
+    class _LaunchSession:
+        id = "research-session-9"
+        status = "queued"
+        phase = "drafting_plan"
+        control_state = "running"
+
+    class _CompletedSession:
+        id = "research-session-9"
+        status = "completed"
+        phase = "completed"
+        control_state = "running"
+        completed_at = "2026-03-08T09:00:00+00:00"
+
+    class _LaunchResearchService:
+        def create_session(self, **kwargs):
+            return _LaunchSession()
+
+    class _WaitResearchService:
+        def get_session(self, **kwargs):
+            return _CompletedSession()
+
+    class _SelectResearchService:
+        def get_session(self, **kwargs):
+            return _CompletedSession()
+
+        def get_bundle(self, **kwargs):
+            return {
+                "question": "Investigate evidence-backed forecasting",
+                "verification_summary": {"supported_claim_count": 2},
+                "unsupported_claims": [{"text": "Claim X"}],
+            }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.launch._build_research_service",
+        lambda: _LaunchResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.wait._build_research_service",
+        lambda: _WaitResearchService(),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields._build_research_service",
+        lambda: _SelectResearchService(),
+    )
+
+    definition = {
+        "name": "launch-wait-select-deep-research",
+        "version": 1,
+        "steps": [
+            {
+                "id": "launch",
+                "type": "deep_research",
+                "config": {
+                    "query": "{{ inputs.topic }}",
+                },
+            },
+            {
+                "id": "wait",
+                "type": "deep_research_wait",
+                "config": {
+                    "run_id": "{{ launch.run_id }}",
+                    "include_bundle": False,
+                },
+            },
+            {
+                "id": "select",
+                "type": "deep_research_select_bundle_fields",
+                "config": {
+                    "run_id": "{{ wait.run_id }}",
+                    "fields": ["question", "verification_summary", "unsupported_claims"],
+                },
+            },
+            {
+                "id": "prompt",
+                "type": "prompt",
+                "config": {
+                    "template": "{{ select.selected_fields.question }} :: {{ select.selected_fields.verification_summary.supported_claim_count }}",
+                },
+            },
+        ],
+    }
+
+    create = client.post("/api/v1/workflows", json=definition)
+    assert create.status_code == 201, create.text
+    wid = create.json()["id"]
+
+    run_id = client.post(
+        f"/api/v1/workflows/{wid}/run",
+        json={"inputs": {"topic": "evidence-backed forecasting"}},
+    ).json()["run_id"]
+
+    deadline = time.time() + 5
+    data = {}
+    while time.time() < deadline:
+        data = client.get(f"/api/v1/workflows/runs/{run_id}").json()
+        if data["status"] in ("succeeded", "failed", "cancelled"):
+            break
+        time.sleep(0.05)
+
+    assert data["status"] == "succeeded"
+    assert (data.get("outputs") or {}) == {
+        "text": "Investigate evidence-backed forecasting :: 2"
+    }
 
 
 def test_artifact_manifest_verify_mismatch(monkeypatch, client_with_workflows_db: TestClient):

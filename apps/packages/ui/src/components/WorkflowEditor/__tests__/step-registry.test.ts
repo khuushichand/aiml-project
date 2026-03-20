@@ -122,6 +122,10 @@ const ALL_STEP_TYPES: Record<StepCategory, string[]> = {
     "context_build"
   ],
   research: [
+    "deep_research",
+    "deep_research_wait",
+    "deep_research_load_bundle",
+    "deep_research_select_bundle_fields",
     "arxiv_search",
     "arxiv_download",
     "pubmed_search",
@@ -156,6 +160,7 @@ const ALL_STEP_TYPES: Record<StepCategory, string[]> = {
     "subtitle_burn"
   ],
   control: [
+    "acp_stage",
     "branch",
     "map",
     "batch",
@@ -321,6 +326,10 @@ describe("workflow step registry", () => {
       "webhook",
       "tts",
       "stt_transcribe",
+      "deep_research",
+      "deep_research_wait",
+      "deep_research_load_bundle",
+      "deep_research_select_bundle_fields",
       "delay",
       "log",
       "start",

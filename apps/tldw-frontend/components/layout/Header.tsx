@@ -3,15 +3,13 @@ import { useRouter } from 'next/router';
 import { cn } from '@web/lib/utils';
 import { useAuth } from '@web/hooks/useAuth';
 import { useIsAdmin } from '@web/hooks/useIsAdmin';
-import { toBool } from '@web/lib/authz';
 
 /**
  * Render the application's top navigation header with logo, primary links, and user controls.
  *
  * The rendered header includes a logo linking to home, a set of navigation links, and a user area that
- * shows the signed-in username or a Login link. The "Runs" navigation link is included only when the
- * NEXT_PUBLIC_ENABLE_RUNS_LINK environment flag is enabled and, if NEXT_PUBLIC_RUNS_REQUIRE_ADMIN is set,
- * only when the current user is determined to be an admin (checks multiple user fields and roles).
+ * shows the signed-in username or a Login link. The "Research" navigation link is included only when the
+ * legacy NEXT_PUBLIC_ENABLE_RUNS_LINK environment flag is enabled.
  *
  * @returns The header element containing the logo, navigation links, and user session controls.
  */
@@ -23,8 +21,7 @@ export function Header() {
     logout();
   };
 
-  const showRunsEnv = (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== '0' && (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== 'false';
-  const runsRequireAdmin = toBool(process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN);
+  const showResearchLink = (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== '0' && (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== 'false';
   const userIsAdmin = useIsAdmin();
   const canReviewClaims = (() => {
     if (userIsAdmin) return true;
@@ -35,14 +32,13 @@ export function Header() {
     const normalizedPerms = perms.map((p) => String(p).toLowerCase());
     return normalizedRoles.includes('reviewer') || normalizedPerms.includes('claims.review') || normalizedPerms.includes('claims.admin');
   })();
-  const showRuns = showRunsEnv && (!runsRequireAdmin || userIsAdmin);
   const navLinks = [
     { href: '/', label: 'Home' },
     { href: '/media', label: 'Media' },
     { href: '/items', label: 'Items' },
     { href: '/reading', label: 'Reading' },
     { href: '/watchlists', label: 'Watchlists' },
-    ...(showRuns ? [{ href: '/admin/watchlists-runs', label: 'Runs' } as const] : []),
+    ...(showResearchLink ? [{ href: '/research', label: 'Research' } as const] : []),
     { href: '/chat', label: 'Chat' },
     { href: '/search', label: 'Search' },
     { href: '/audio', label: 'Audio' },

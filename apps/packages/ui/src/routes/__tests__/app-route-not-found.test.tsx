@@ -64,6 +64,7 @@ vi.mock("~/components/Layouts/Layout", () => ({
 vi.mock("@/routes/route-registry", () => ({
   optionRoutes: [
     { path: "/", element: <div data-testid="home-route">Home</div> },
+    { path: "/research", element: <div data-testid="research-route">Research</div> },
     { path: "/knowledge", element: <div data-testid="knowledge-route">Knowledge</div> },
     { path: "/media", element: <div data-testid="media-route">Media</div> },
     { path: "/settings", element: <div data-testid="settings-route">Settings</div> }
@@ -87,6 +88,7 @@ describe("RouteShell unknown-route recovery", () => {
     expect(screen.getByRole("heading", { name: "We could not find that route" })).toBeVisible()
     expect(screen.getByTestId("not-found-recovery-panel")).toBeVisible()
     expect(screen.getByText("/missing-route?foo=bar")).toBeVisible()
+    expect(screen.getByTestId("not-found-open-research")).toBeVisible()
   })
 
   it("supports primary recovery navigation from the fallback panel", async () => {

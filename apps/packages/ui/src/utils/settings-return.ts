@@ -1,6 +1,7 @@
 const SETTINGS_RETURN_TO_KEY = "tldw:settingsReturnTo"
 export const SETTINGS_HISTORY_ID_PARAM = "settingsHistoryId"
 export const SETTINGS_SERVER_CHAT_ID_PARAM = "settingsServerChatId"
+export const RESEARCH_RETURN_RUN_ID_PARAM = "researchReturnRunId"
 
 const isSettingsPath = (path: string) => path.startsWith("/settings")
 const SETTINGS_RETURN_URL_BASE = "https://tldw.local"

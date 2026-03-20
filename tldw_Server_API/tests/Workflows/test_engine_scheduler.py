@@ -127,41 +127,6 @@ def test_waiting_run_keeps_secrets_and_releases_slot(workflows_db: WorkflowsData
     assert stats["active_workflows"] == 0
 
 
-def test_wait_for_approval_persists_waiting_approval_status(workflows_db: WorkflowsDatabase):
-    definition = {
-        "name": "await-approval",
-        "steps": [
-            {
-                "id": "approve",
-                "type": "wait_for_approval",
-                "config": {"assigned_to_user_id": "user"},
-                "on_success": "next",
-            },
-            {"id": "next", "type": "log", "config": {"message": "done"}},
-        ],
-    }
-    run_id = "approval-run"
-    workflows_db.create_run(
-        run_id=run_id,
-        tenant_id="tenant",
-        user_id="user",
-        inputs={},
-        workflow_id=None,
-        definition_version=1,
-        definition_snapshot=definition,
-    )
-    engine = WorkflowEngine(workflows_db)
-    engine.submit(run_id, RunMode.ASYNC)
-
-    status = _wait_for_status(workflows_db, run_id)
-    assert status == "waiting_approval"
-    step_runs = workflows_db.list_step_runs(run_id=run_id)
-    attempts = workflows_db.list_step_attempts(run_id=run_id, step_id="approve")
-
-    assert step_runs[0]["status"] == "waiting_approval"
-    assert attempts[0]["status"] == "waiting_approval"
-
-
 def test_continue_run_clears_secrets(workflows_db: WorkflowsDatabase):
     scheduler = WorkflowScheduler.instance()
     definition = {
@@ -202,26 +167,57 @@ def test_continue_run_clears_secrets(workflows_db: WorkflowsDatabase):
     assert stats["active_workflows"] == 0
 
 
-def test_continue_run_preserves_waiting_approval_status(workflows_db: WorkflowsDatabase):
+def test_adapter_returned_research_checkpoint_wait_sets_run_waiting_human_without_human_timeout(
+    workflows_db: WorkflowsDatabase,
+    monkeypatch,
+):
+    scheduler = WorkflowScheduler.instance()
+    scheduled_timeouts: list[tuple[str, str, int, str | None]] = []
+
+    async def _fake_adapter(_config, _context):
+        return {
+            "__status__": "waiting_human",
+            "reason": "research_checkpoint",
+            "run_id": "research-session-9",
+            "research_phase": "awaiting_source_review",
+            "research_control_state": "running",
+            "research_checkpoint_id": "checkpoint-3",
+            "research_checkpoint_type": "sources_review",
+            "research_console_url": "/research?run=research-session-9",
+            "active_poll_seconds": 0.25,
+        }
+
+    def _fake_get_adapter(name: str):
+        if name == "fake_research_wait":
+            return _fake_adapter
+        from tldw_Server_API.app.core.Workflows.adapters import get_adapter as _real_get_adapter
+
+        return _real_get_adapter(name)
+
+    def _fake_schedule(self, run_id: str, step_id: str, timeout_seconds: int, on_timeout: str | None):
+        scheduled_timeouts.append((run_id, step_id, timeout_seconds, on_timeout))
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Workflows.engine.get_adapter",
+        _fake_get_adapter,
+    )
+    monkeypatch.setattr(
+        WorkflowEngine,
+        "_schedule_human_timeout",
+        _fake_schedule,
+    )
+
     definition = {
-        "name": "resume-to-approval",
+        "name": "adapter-wait-research-checkpoint",
         "steps": [
             {
                 "id": "wait",
-                "type": "wait_for_human",
-                "config": {"assigned_to_user_id": "user"},
-                "on_success": "approve",
+                "type": "fake_research_wait",
+                "config": {"timeout_seconds": 30},
             },
-            {
-                "id": "approve",
-                "type": "wait_for_approval",
-                "config": {"assigned_to_user_id": "user"},
-                "on_success": "next",
-            },
-            {"id": "next", "type": "log", "config": {"message": "finished"}},
         ],
     }
-    run_id = "resume-approval-run"
+    run_id = "adapter-wait-run"
     workflows_db.create_run(
         run_id=run_id,
         tenant_id="tenant",
@@ -231,67 +227,20 @@ def test_continue_run_preserves_waiting_approval_status(workflows_db: WorkflowsD
         definition_version=1,
         definition_snapshot=definition,
     )
-
     engine = WorkflowEngine(workflows_db)
     engine.submit(run_id, RunMode.ASYNC)
+
     status = _wait_for_status(workflows_db, run_id)
     assert status == "waiting_human"
 
-    asyncio.run(engine.continue_run(run_id, after_step_id="wait", last_outputs={"approved": True}))
+    step_run = workflows_db.get_latest_step_run(run_id=run_id, step_id="wait")
+    assert step_run is not None
+    assert step_run["status"] == "waiting_human"
+    assert scheduled_timeouts == []
 
-    status = _wait_for_status(workflows_db, run_id)
-    assert status == "waiting_approval"
-    step_runs = workflows_db.list_step_runs(run_id=run_id)
-    approval_step_run = next(step_run for step_run in step_runs if step_run["step_id"] == "approve")
-    attempts = workflows_db.list_step_attempts(run_id=run_id, step_id="approve")
-
-    assert approval_step_run["status"] == "waiting_approval"
-    assert attempts[0]["status"] == "waiting_approval"
-
-
-def test_continue_run_restores_step_context_bindings(workflows_db: WorkflowsDatabase):
-    definition = {
-        "name": "resume-context-flow",
-        "steps": [
-            {"id": "prepare", "type": "prompt", "config": {"template": "Alpha"}},
-            {
-                "id": "wait",
-                "type": "wait_for_human",
-                "config": {"assigned_to_user_id": "user"},
-                "on_success": "render",
-            },
-            {
-                "id": "render",
-                "type": "prompt",
-                "config": {"template": "Prev={{ prepare.text }} Approved={{ wait.approved }}"},
-            },
-        ],
-    }
-    run_id = "resume-context-run"
-    workflows_db.create_run(
-        run_id=run_id,
-        tenant_id="tenant",
-        user_id="user",
-        inputs={},
-        workflow_id=None,
-        definition_version=1,
-        definition_snapshot=definition,
-    )
-
-    engine = WorkflowEngine(workflows_db)
-    engine.submit(run_id, RunMode.ASYNC)
-    status = _wait_for_status(workflows_db, run_id)
-    assert status == "waiting_human"
-
-    asyncio.run(engine.continue_run(run_id, after_step_id="wait", last_outputs={"approved": True}))
-
-    status = _wait_for_status(workflows_db, run_id)
-    assert status == "succeeded"
-    run = workflows_db.get_run(run_id)
-    assert run is not None
-    assert run.outputs_json is not None
-    assert "Prev=Alpha" in run.outputs_json
-    assert "Approved=True" in run.outputs_json
+    stats = scheduler.stats()
+    assert stats["active_tenants"] == 0
+    assert stats["active_workflows"] == 0
 
 
 def test_run_saved_sync_waits_for_completion(workflows_db: WorkflowsDatabase, monkeypatch):

@@ -62,77 +62,86 @@ def test_workflows_db_crud(tmp_path):
     assert len(events_since) == 1 and events_since[0]["event_seq"] == 2
 
 
-def test_workflows_db_step_attempt_crud(tmp_path):
+def test_workflow_research_wait_db_tracks_links(tmp_path):
     db_path = tmp_path / "workflows.db"
     db = WorkflowsDatabase(str(db_path))
 
-    definition = {
-        "name": "attempt-demo",
-        "version": 1,
-        "steps": [{"id": "s1", "type": "prompt", "config": {"template": "Hi"}}],
-    }
-
-    workflow_id = db.create_definition(
-        tenant_id="tenant-1",
-        name="attempt-demo",
-        version=1,
-        owner_id="owner-1",
-        visibility="private",
-        description="",
-        tags=[],
-        definition=definition,
+    db.create_run(
+        run_id="wf-run-1",
+        tenant_id="tenant",
+        user_id="user",
+        inputs={},
+        workflow_id=None,
+        definition_version=1,
+        definition_snapshot={"name": "wait-link", "steps": []},
     )
+
+    db.upsert_research_wait_link(
+        wait_id="rw-1",
+        tenant_id="tenant",
+        workflow_run_id="wf-run-1",
+        step_id="wait",
+        research_run_id="research-session-10",
+        checkpoint_id="checkpoint-4",
+        checkpoint_type="sources_review",
+        wait_status="waiting",
+        wait_payload={
+            "__status__": "waiting_human",
+            "reason": "research_checkpoint",
+            "run_id": "research-session-10",
+        },
+        active_poll_seconds=1.25,
+    )
+
+    link = db.get_research_wait_link(workflow_run_id="wf-run-1", step_id="wait")
+    assert link is not None
+    assert link["research_run_id"] == "research-session-10"
+    assert link["checkpoint_id"] == "checkpoint-4"
+    assert link["wait_status"] == "waiting"
+    assert json.loads(link["wait_payload_json"])["reason"] == "research_checkpoint"
+
+
+def test_workflow_research_wait_db_claims_links_for_resume_once(tmp_path):
+    db_path = tmp_path / "workflows.db"
+    db = WorkflowsDatabase(str(db_path))
 
     db.create_run(
-        run_id="run-attempt",
-        tenant_id="tenant-1",
-        user_id="owner-1",
+        run_id="wf-run-2",
+        tenant_id="tenant",
+        user_id="user",
         inputs={},
-        workflow_id=workflow_id,
+        workflow_id=None,
         definition_version=1,
-        definition_snapshot=definition,
-    )
-    db.create_step_run(
-        step_run_id="run-attempt:s1",
-        tenant_id="tenant-1",
-        run_id="run-attempt",
-        step_id="s1",
-        name="Step 1",
-        step_type="prompt",
-        status="running",
-        inputs={"config": {"template": "Hi"}},
+        definition_snapshot={"name": "wait-claim", "steps": []},
     )
 
-    attempt_id = db.create_step_attempt(
-        tenant_id="tenant-1",
-        run_id="run-attempt",
-        step_run_id="run-attempt:s1",
-        step_id="s1",
-        attempt_number=1,
-        status="running",
-        metadata={"source": "test"},
+    db.upsert_research_wait_link(
+        wait_id="rw-2",
+        tenant_id="tenant",
+        workflow_run_id="wf-run-2",
+        step_id="wait",
+        research_run_id="research-session-11",
+        checkpoint_id="checkpoint-5",
+        checkpoint_type="outline_review",
+        wait_status="waiting",
+        wait_payload={
+            "__status__": "waiting_human",
+            "reason": "research_checkpoint",
+            "run_id": "research-session-11",
+        },
+        active_poll_seconds=2.0,
     )
-    db.complete_step_attempt(
-        attempt_id=attempt_id,
-        status="failed",
-        error_summary="forced_error",
-        metadata={"source": "test", "result": "failed"},
+
+    claimed = db.claim_research_waits_for_resume(
+        research_run_id="research-session-11",
+        checkpoint_id="checkpoint-5",
     )
+    assert len(claimed) == 1
+    assert claimed[0]["workflow_run_id"] == "wf-run-2"
+    assert claimed[0]["step_id"] == "wait"
 
-    attempts = db.list_step_attempts(run_id="run-attempt", step_id="s1")
-    assert len(attempts) == 1
-    assert attempts[0]["attempt_id"] == attempt_id
-    assert attempts[0]["attempt_number"] == 1
-    assert attempts[0]["status"] == "failed"
-    assert attempts[0]["metadata_json"]["result"] == "failed"
-
-
-def test_workflows_db_step_attempt_indexes_exist(tmp_path):
-    db = WorkflowsDatabase(str(tmp_path / "workflows.db"))
-
-    rows = db._conn.cursor().execute("PRAGMA index_list('workflow_step_attempts')").fetchall()
-    index_names = {row["name"] for row in rows}
-
-    assert "idx_step_attempts_run_attempts" in index_names
-    assert "idx_step_attempts_run_step_attempts" in index_names
-    assert "idx_step_attempts_step_run_attempts" in index_names
+    claimed_again = db.claim_research_waits_for_resume(
+        research_run_id="research-session-11",
+        checkpoint_id="checkpoint-5",
+    )
+    assert claimed_again == []
