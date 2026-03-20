@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from enum import Enum
 from typing import Any
 
@@ -46,6 +47,58 @@ class AudioResourceProfile(BaseModel):
     verification_targets: list[str] = Field(default_factory=list)
     estimated_disk_gb: float | None = None
     resource_class: str | None = None
+
+    class CuratedTTSChoice(BaseModel):
+        """Curated TTS engine choice metadata for a profile."""
+
+        choice_id: str
+        label: str
+        description: str | None = None
+        tts_plan: list[dict[str, Any]] = Field(default_factory=list)
+
+    tts_choices: list[CuratedTTSChoice] = Field(default_factory=list)
+    default_tts_choice: str | None = None
+
+    @model_validator(mode="after")
+    def populate_default_tts_choice_plan(self) -> "AudioResourceProfile":
+        """Keep legacy tts_plan aligned to the stable default curated choice."""
+
+        if not self.tts_choices:
+            return self
+
+        choice_ids = [choice.choice_id for choice in self.tts_choices]
+        if len(choice_ids) != len(set(choice_ids)):
+            raise ValueError(
+                f"Duplicate curated TTS choice IDs for profile '{self.profile_id}'"
+            )
+
+        available_choices = {choice.choice_id: choice for choice in self.tts_choices}
+        selected_choice = self.default_tts_choice or self.tts_choices[0].choice_id
+        try:
+            choice = available_choices[selected_choice]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unknown curated TTS choice '{selected_choice}' for profile '{self.profile_id}'"
+            ) from exc
+
+        self.default_tts_choice = selected_choice
+        self.tts_plan = deepcopy(choice.tts_plan)
+        return self
+
+
+def _build_curated_cpu_tts_choices() -> list[AudioResourceProfile.CuratedTTSChoice]:
+    return [
+        AudioResourceProfile.CuratedTTSChoice(
+            choice_id="kokoro",
+            label="Kokoro",
+            tts_plan=[{"engine": "kokoro", "variants": []}],
+        ),
+        AudioResourceProfile.CuratedTTSChoice(
+            choice_id="kitten_tts",
+            label="KittenTTS",
+            tts_plan=[{"engine": "kitten_tts", "variants": []}],
+        ),
+    ]
 
 
 class AudioBundle(BaseModel):
@@ -161,6 +214,8 @@ def _local_resource_profiles(
             description="Lowest-footprint local speech profile.",
             stt_plan=[{"engine": "faster_whisper", "models": [light_model]}],
             tts_plan=[{"engine": "kokoro", "variants": []}],
+            tts_choices=_build_curated_cpu_tts_choices(),
+            default_tts_choice="kokoro",
             verification_targets=["stt_default", "tts_default"],
             estimated_disk_gb=disk_estimates_gb[0],
             resource_class="low",
@@ -171,6 +226,8 @@ def _local_resource_profiles(
             description="Default local speech profile for most machines.",
             stt_plan=[{"engine": "faster_whisper", "models": [balanced_model]}],
             tts_plan=[{"engine": "kokoro", "variants": []}],
+            tts_choices=_build_curated_cpu_tts_choices(),
+            default_tts_choice="kokoro",
             verification_targets=["stt_default", "tts_default"],
             estimated_disk_gb=disk_estimates_gb[1],
             resource_class="medium",
