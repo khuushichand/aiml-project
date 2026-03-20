@@ -1082,4 +1082,3 @@ class GovernancePackTrustPolicyResponse(BaseModel):
     allowed_git_ref_kinds: list[str] = Field(default_factory=list)
     require_git_signature_verification: bool = False
     trusted_signers: list[GovernancePackTrustedSignerBinding] = Field(default_factory=list)
-    trusted_git_key_fingerprints: list[str] = Field(default_factory=list)

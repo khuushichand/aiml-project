@@ -362,7 +362,6 @@ class _FakeGovernancePackTrustService:
             "allowed_git_repositories": ["github.com/example/researcher-pack"],
             "allowed_git_ref_kinds": ["commit", "tag"],
             "require_git_signature_verification": True,
-            "trusted_git_key_fingerprints": ["ABCD1234"],
             "trusted_signers": [
                 {
                     "fingerprint": "ABCD1234",
@@ -413,7 +412,7 @@ class _FakeGovernancePackTrustService:
                 }
             )
             seen_fingerprints.add(fingerprint)
-        for fingerprint in self.policy.get("trusted_git_key_fingerprints", []):
+        for fingerprint in policy.get("trusted_git_key_fingerprints", []):
             cleaned = str(fingerprint or "").strip().upper()
             if not cleaned or cleaned in seen_fingerprints:
                 continue
@@ -427,7 +426,7 @@ class _FakeGovernancePackTrustService:
             )
             seen_fingerprints.add(cleaned)
         self.policy["trusted_signers"] = normalized_signers
-        self.policy["trusted_git_key_fingerprints"] = [signer["fingerprint"] for signer in normalized_signers]
+        self.policy.pop("trusted_git_key_fingerprints", None)
         return dict(self.policy)
 
 
@@ -1202,6 +1201,7 @@ def test_governance_pack_trust_policy_round_trip() -> None:
 
     assert get_resp.status_code == 200
     assert get_resp.json()["allowed_local_roots"] == ["/srv/packs"]
+    assert "trusted_git_key_fingerprints" not in get_resp.json()
 
     assert put_resp.status_code == 200
     payload = put_resp.json()
@@ -1216,7 +1216,7 @@ def test_governance_pack_trust_policy_round_trip() -> None:
     ]
     assert payload["trusted_signers"][1]["fingerprint"] == "IJKL9012"
     assert payload["trusted_signers"][1]["repo_bindings"] == []
-    assert payload["trusted_git_key_fingerprints"] == ["EFGH5678", "IJKL9012"]
+    assert "trusted_git_key_fingerprints" not in payload
     assert trust_service.update_calls[0]["actor_id"] == 7
 
 

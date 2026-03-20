@@ -168,6 +168,32 @@ def _normalize_trusted_signers(
     return normalized
 
 
+def _repo_binding_matches(canonical_repository: str, repo_binding: str) -> bool:
+    """Return whether a canonical repository matches an exact or prefix repo binding."""
+    binding = str(repo_binding or "").strip()
+    if not binding:
+        return False
+    if binding.endswith("/"):
+        return canonical_repository.startswith(binding)
+    return canonical_repository == binding
+
+
+def _match_trusted_signers_for_repository(
+    trusted_signers: list[dict[str, Any]],
+    canonical_repository: str,
+) -> list[dict[str, Any]]:
+    """Filter trusted signers by canonical repository while preserving global legacy-compatible entries."""
+    matched: list[dict[str, Any]] = []
+    for signer in trusted_signers:
+        repo_bindings = list(signer.get("repo_bindings") or [])
+        if not repo_bindings or any(
+            _repo_binding_matches(canonical_repository, binding)
+            for binding in repo_bindings
+        ):
+            matched.append(dict(signer))
+    return matched
+
+
 class McpHubGovernancePackTrustService:
     """Deployment-wide trust-policy storage and evaluation for governance-pack sources."""
 
@@ -186,7 +212,6 @@ class McpHubGovernancePackTrustService:
             "allowed_git_ref_kinds": [],
             "require_git_signature_verification": False,
             "trusted_signers": [],
-            "trusted_git_key_fingerprints": [],
         }
 
     def _normalize_policy(self, policy: dict[str, Any] | None) -> dict[str, Any]:
@@ -212,7 +237,6 @@ class McpHubGovernancePackTrustService:
             "allowed_git_ref_kinds": ref_kinds,
             "require_git_signature_verification": bool(raw.get("require_git_signature_verification", False)),
             "trusted_signers": trusted_signers,
-            "trusted_git_key_fingerprints": [signer["fingerprint"] for signer in trusted_signers],
         }
 
     async def get_policy(self) -> dict[str, Any]:
@@ -247,14 +271,19 @@ class McpHubGovernancePackTrustService:
         canonical_repository = _canonicalize_git_repository(repo_url)
         host = _canonicalize_git_host(repo_url)
         normalized_ref_kind = str(ref_kind or "").strip().lower()
+        matched_signers = _match_trusted_signers_for_repository(
+            list(policy.get("trusted_signers") or []),
+            canonical_repository,
+        )
+        matched_fingerprints = [signer["fingerprint"] for signer in matched_signers]
         if not policy["allow_git_sources"]:
             return {
                 "allowed": False,
                 "reason": "git_source_disabled",
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
-                "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
-                "trusted_signers": list(policy["trusted_signers"]),
+                "trusted_git_key_fingerprints": matched_fingerprints,
+                "trusted_signers": matched_signers,
             }
         if host not in set(policy["allowed_git_hosts"]):
             return {
@@ -262,8 +291,8 @@ class McpHubGovernancePackTrustService:
                 "reason": "host_not_allowed",
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
-                "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
-                "trusted_signers": list(policy["trusted_signers"]),
+                "trusted_git_key_fingerprints": matched_fingerprints,
+                "trusted_signers": matched_signers,
             }
         if canonical_repository not in set(policy["allowed_git_repositories"]):
             return {
@@ -271,8 +300,8 @@ class McpHubGovernancePackTrustService:
                 "reason": "repository_not_allowed",
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
-                "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
-                "trusted_signers": list(policy["trusted_signers"]),
+                "trusted_git_key_fingerprints": matched_fingerprints,
+                "trusted_signers": matched_signers,
             }
         if normalized_ref_kind not in set(policy["allowed_git_ref_kinds"]):
             return {
@@ -280,14 +309,14 @@ class McpHubGovernancePackTrustService:
                 "reason": "ref_kind_not_allowed",
                 "canonical_repository": canonical_repository,
                 "verification_required": bool(policy["require_git_signature_verification"]),
-                "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
-                "trusted_signers": list(policy["trusted_signers"]),
+                "trusted_git_key_fingerprints": matched_fingerprints,
+                "trusted_signers": matched_signers,
             }
         return {
             "allowed": True,
             "reason": None,
             "canonical_repository": canonical_repository,
             "verification_required": bool(policy["require_git_signature_verification"]),
-            "trusted_git_key_fingerprints": list(policy["trusted_git_key_fingerprints"]),
-            "trusted_signers": list(policy["trusted_signers"]),
+            "trusted_git_key_fingerprints": matched_fingerprints,
+            "trusted_signers": matched_signers,
         }

@@ -269,7 +269,10 @@ async def test_governance_pack_trust_service_normalizes_structured_signers_and_l
     assert policy["trusted_signers"][2]["fingerprint"] == "LEGACY789"
     assert policy["trusted_signers"][2]["repo_bindings"] == []
     assert policy["trusted_signers"][2]["status"] == "active"
-    assert policy["trusted_git_key_fingerprints"] == ["ABC123", "DEF456", "LEGACY789"]
+    assert "trusted_git_key_fingerprints" not in policy
+
+    stored = await repo.get_governance_pack_trust_policy()
+    assert "trusted_git_key_fingerprints" not in stored["policy_document"]
 
 
 @pytest.mark.asyncio
@@ -311,7 +314,82 @@ async def test_governance_pack_trust_service_keeps_structured_signer_status_auth
             "status": "revoked",
         }
     ]
-    assert policy["trusted_git_key_fingerprints"] == ["ABC123"]
+    assert "trusted_git_key_fingerprints" not in policy
+
+
+@pytest.mark.asyncio
+async def test_governance_pack_trust_service_filters_signers_by_repo_bindings_when_evaluating_git_sources(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    await service.update_policy(
+        {
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": [
+                "github.com/example/researcher-pack",
+                "github.com/example/other-pack",
+            ],
+            "allowed_git_ref_kinds": ["tag"],
+            "require_git_signature_verification": True,
+            "trusted_signers": [
+                {
+                    "fingerprint": "EXACT123",
+                    "repo_bindings": ["github.com/example/researcher-pack"],
+                    "status": "active",
+                },
+                {
+                    "fingerprint": "PREFIX123",
+                    "repo_bindings": ["github.com/example/"],
+                    "status": "active",
+                },
+                {
+                    "fingerprint": "OTHER123",
+                    "repo_bindings": ["github.com/example/other-pack"],
+                    "status": "active",
+                },
+            ],
+            "trusted_git_key_fingerprints": ["legacy999"],
+        },
+        actor_id=3,
+    )
+
+    researcher_pack = await service.evaluate_git_source(
+        "https://github.com/example/researcher-pack.git",
+        ref_kind="tag",
+    )
+    other_pack = await service.evaluate_git_source(
+        "https://github.com/example/other-pack.git",
+        ref_kind="tag",
+    )
+
+    assert [signer["fingerprint"] for signer in researcher_pack["trusted_signers"]] == [
+        "EXACT123",
+        "PREFIX123",
+        "LEGACY999",
+    ]
+    assert researcher_pack["trusted_git_key_fingerprints"] == [
+        "EXACT123",
+        "PREFIX123",
+        "LEGACY999",
+    ]
+    assert [signer["fingerprint"] for signer in other_pack["trusted_signers"]] == [
+        "PREFIX123",
+        "OTHER123",
+        "LEGACY999",
+    ]
+    assert other_pack["trusted_git_key_fingerprints"] == [
+        "PREFIX123",
+        "OTHER123",
+        "LEGACY999",
+    ]
 
 
 @pytest.mark.asyncio
