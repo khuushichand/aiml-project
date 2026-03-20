@@ -231,6 +231,8 @@ type Props = {
   metadataExtra?: Record<string, unknown>
   onUseInChat?: () => void
   onFollowUp?: () => void
+  researchReviewReason?: string
+  researchReviewHref?: string
   onRegenerateImage?: (payload: {
     messageId?: string
     imageIndex: number
@@ -2451,9 +2453,22 @@ export const PlaygroundMessage = (props: Props) => {
               </div>
             )}
 
-          {(showUseInChat || showFollowUp) && (
+          {(showUseInChat || showFollowUp || props.researchReviewHref) && (
             <div className="mt-3 flex">
               <div className="flex items-center gap-2">
+                {props.researchReviewReason && (
+                  <span className="text-sm text-text-subtle">
+                    {props.researchReviewReason}
+                  </span>
+                )}
+                {props.researchReviewHref && (
+                  <a
+                    href={props.researchReviewHref}
+                    className="rounded-full border border-border/70 bg-surface px-3 py-1 text-sm font-medium text-primary transition hover:border-primary/50 hover:text-primary"
+                  >
+                    Review in Research
+                  </a>
+                )}
                 {showUseInChat && (
                   <button
                     type="button"

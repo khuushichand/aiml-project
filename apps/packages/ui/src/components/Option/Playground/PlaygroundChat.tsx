@@ -24,7 +24,12 @@ import {
 } from "./compare-normalized-preview"
 import { computeResponseDiffPreview } from "./compare-response-diff"
 import { ResearchRunStatusStack } from "./ResearchRunStatusStack"
-import { getChatLinkedResearchRefetchInterval } from "./research-run-status"
+import {
+  buildChatLinkedResearchPath,
+  getChatLinkedResearchRefetchInterval,
+  getChatLinkedResearchReviewReason,
+  isCheckpointReviewRun
+} from "./research-run-status"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
@@ -329,7 +334,7 @@ export const PlaygroundChat = ({
     },
     [onAttachResearchContext]
   )
-  const buildMessageUseInChatHandler = React.useCallback(
+  const getMessageResearchHandoffState = React.useCallback(
     (metadataExtra?: Record<string, unknown>) => {
       const completion = isDeepResearchCompletionMetadata(
         metadataExtra?.deep_research_completion
@@ -337,32 +342,67 @@ export const PlaygroundChat = ({
         ? metadataExtra.deep_research_completion
         : null
       if (!completion) {
+        return null
+      }
+      const currentRun = linkedResearchRuns.find(
+        (run) => run.run_id === completion.run_id
+      ) ?? null
+      const checkpointReview =
+        currentRun !== null && isCheckpointReviewRun(currentRun)
+      return {
+        completion,
+        currentRun,
+        checkpointReview,
+        reviewReason:
+          checkpointReview && currentRun
+            ? getChatLinkedResearchReviewReason(currentRun)
+            : null,
+        reviewHref: checkpointReview
+          ? buildChatLinkedResearchPath(completion.run_id)
+          : null
+      }
+    },
+    [linkedResearchRuns]
+  )
+  const buildMessageUseInChatHandler = React.useCallback(
+    (metadataExtra?: Record<string, unknown>) => {
+      const handoff = getMessageResearchHandoffState(metadataExtra)
+      if (!handoff || handoff.checkpointReview) {
         return undefined
       }
       return () => {
-        void handleAttachResearchRun(completion.run_id, completion.query)
+        void handleAttachResearchRun(
+          handoff.completion.run_id,
+          handoff.completion.query
+        )
       }
     },
-    [handleAttachResearchRun]
+    [getMessageResearchHandoffState, handleAttachResearchRun]
   )
   const buildMessageFollowUpHandler = React.useCallback(
     (metadataExtra?: Record<string, unknown>) => {
-      const completion = isDeepResearchCompletionMetadata(
-        metadataExtra?.deep_research_completion
-      )
-        ? metadataExtra.deep_research_completion
-        : null
-      if (!completion || !onPrepareResearchFollowUp) {
+      const handoff = getMessageResearchHandoffState(metadataExtra)
+      if (!handoff || handoff.checkpointReview || !onPrepareResearchFollowUp) {
         return undefined
       }
       return () => {
         onPrepareResearchFollowUp({
-          run_id: completion.run_id,
-          query: completion.query
+          run_id: handoff.completion.run_id,
+          query: handoff.completion.query
         })
       }
     },
-    [onPrepareResearchFollowUp]
+    [getMessageResearchHandoffState, onPrepareResearchFollowUp]
+  )
+  const buildMessageReviewReason = React.useCallback(
+    (metadataExtra?: Record<string, unknown>) =>
+      getMessageResearchHandoffState(metadataExtra)?.reviewReason ?? undefined,
+    [getMessageResearchHandoffState]
+  )
+  const buildMessageReviewHref = React.useCallback(
+    (metadataExtra?: Record<string, unknown>) =>
+      getMessageResearchHandoffState(metadataExtra)?.reviewHref ?? undefined,
+    [getMessageResearchHandoffState]
   )
   const showSelectedServerChatLoadFailure =
     messages.length === 0 &&
@@ -1066,6 +1106,8 @@ export const PlaygroundChat = ({
                 metadataExtra={message.metadataExtra}
                 onUseInChat={buildMessageUseInChatHandler(message.metadataExtra)}
                 onFollowUp={buildMessageFollowUpHandler(message.metadataExtra)}
+                researchReviewReason={buildMessageReviewReason(message.metadataExtra)}
+                researchReviewHref={buildMessageReviewHref(message.metadataExtra)}
                 discoSkillComment={message.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -1365,6 +1407,8 @@ export const PlaygroundChat = ({
                 metadataExtra={userMessage.metadataExtra}
                 onUseInChat={buildMessageUseInChatHandler(userMessage.metadataExtra)}
                 onFollowUp={buildMessageFollowUpHandler(userMessage.metadataExtra)}
+                researchReviewReason={buildMessageReviewReason(userMessage.metadataExtra)}
+                researchReviewHref={buildMessageReviewHref(userMessage.metadataExtra)}
                 discoSkillComment={userMessage.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -1983,6 +2027,8 @@ export const PlaygroundChat = ({
                         metadataExtra={message.metadataExtra}
                         onUseInChat={buildMessageUseInChatHandler(message.metadataExtra)}
                         onFollowUp={buildMessageFollowUpHandler(message.metadataExtra)}
+                        researchReviewReason={buildMessageReviewReason(message.metadataExtra)}
+                        researchReviewHref={buildMessageReviewHref(message.metadataExtra)}
                         discoSkillComment={message.discoSkillComment}
                         historyId={stableHistoryId ?? undefined}
                         conversationInstanceId={conversationInstanceId}
