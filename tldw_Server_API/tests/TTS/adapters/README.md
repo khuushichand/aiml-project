@@ -177,10 +177,10 @@ pytest tests/TTS/adapters/test_*_integration.py -v -m integration
 For local models (Kokoro, Higgs, etc.), download models first:
 ```bash
 # Kokoro
-huggingface-cli download hexgrad/kokoro-v0_19 --local-dir ~/.cache/kokoro/
+hf download hexgrad/kokoro-v0_19 --local-dir ~/.cache/kokoro/
 
 # Higgs
-huggingface-cli download bosonai/higgs-audio-v2 --local-dir ./models/higgs/
+hf download bosonai/higgs-audio-v2 --local-dir ./models/higgs/
 ```
 
 ## Coverage

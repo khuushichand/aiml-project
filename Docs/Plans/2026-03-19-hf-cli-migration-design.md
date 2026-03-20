@@ -4,11 +4,11 @@
 
 ## Goal
 
-Replace outdated `huggingface-cli` references with the current `hf` CLI across repo-facing guidance and user-facing runtime help text, while keeping Python package and import names unchanged.
+Replace the legacy Hugging Face CLI name with the current `hf` CLI across repo-facing guidance and user-facing runtime help text, while keeping Python package and import names unchanged.
 
 ## Problem
 
-The repository currently documents and surfaces `huggingface-cli` commands in multiple setup guides, READMEs, and error messages. Hugging Face now documents `hf` as the supported CLI interface. Leaving the old command in place makes setup instructions stale and increases the chance that users follow outdated guidance during model download workflows.
+The repository currently documents and surfaces the old Hugging Face CLI naming in multiple setup guides, READMEs, and error messages. Hugging Face now documents `hf` as the supported CLI interface. Leaving the old name in place makes setup instructions stale and increases the chance that users follow outdated guidance during model download workflows.
 
 ## Decision
 
@@ -31,19 +31,19 @@ Also modernize adjacent installation guidance where it is part of the same workf
 
 ### Runtime Text
 
-- Update user-facing help and error messages that currently instruct users to run `huggingface-cli`.
+- Update user-facing help and error messages that currently instruct users to run the legacy Hugging Face CLI name.
 - Update matching unit tests that assert on those messages.
 
 ### Documentation
 
-- Update command examples from `huggingface-cli download` to `hf download`.
-- Update nearby prose that says to use `huggingface-cli`.
+- Update command examples to `hf download`.
+- Update nearby prose that says to use the older CLI name.
 - Refresh adjacent install snippets so they prefer `pip install -U "huggingface_hub"` where the doc is already describing CLI setup.
 - Add brief authentication guidance when the workflow may involve gated repos.
 
 ### Verification
 
-- Confirm no `huggingface-cli` or `huggingface_cli` references remain in the repository after the migration.
+- Confirm no legacy CLI references remain in the repository after the migration.
 - Run targeted tests for the touched runtime string change.
 - Run Bandit on the touched Python files because user-facing code text changes still touch runtime Python modules.
 

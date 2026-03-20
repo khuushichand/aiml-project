@@ -230,10 +230,10 @@ pip install onnxruntime kokoro-onnx phonemizer espeak-phonemizer
 # Create model directory
 mkdir -p models/kokoro
 
-# Use huggingface-cli to fetch the model and voices
-pip install huggingface-hub
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+# Use hf to fetch the model and voices
+pip install -U "huggingface_hub"
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
 
 # Optional: choose an alternate ONNX (fp16/quantized) by replacing onnx/model.onnx
 # e.g., onnx/model_fp16.onnx or onnx/model_quantized.onnx
@@ -253,9 +253,9 @@ kokoro:
 #### PyTorch Variant (optional)
 ```bash
 # Download from hexgrad/Kokoro-82M
-huggingface-cli download hexgrad/Kokoro-82M kokoro-v1_0.pth --local-dir models/kokoro/
-huggingface-cli download hexgrad/Kokoro-82M config.json     --local-dir models/kokoro/
-huggingface-cli download hexgrad/Kokoro-82M voices          --local-dir models/kokoro/
+hf download hexgrad/Kokoro-82M kokoro-v1_0.pth --local-dir models/kokoro/
+hf download hexgrad/Kokoro-82M config.json     --local-dir models/kokoro/
+hf download hexgrad/Kokoro-82M voices          --local-dir models/kokoro/
 
 # YAML
 kokoro:
@@ -291,12 +291,12 @@ The installer updates `tts_providers_config.yaml` by default and checks that `po
 
 #### Download Models (Manual)
 ```bash
-pip install huggingface-hub
-huggingface-cli download KevinAHM/pocket-tts-onnx onnx --local-dir models/pocket_tts_onnx
-huggingface-cli download KevinAHM/pocket-tts-onnx tokenizer.model --local-dir models/pocket_tts_onnx
+pip install -U "huggingface_hub"
+hf download KevinAHM/pocket-tts-onnx onnx --local-dir models/pocket_tts_onnx
+hf download KevinAHM/pocket-tts-onnx tokenizer.model --local-dir models/pocket_tts_onnx
 # If present in the repo, also fetch the Python module:
-huggingface-cli download KevinAHM/pocket-tts-onnx pocket_tts_onnx --local-dir models/pocket_tts_onnx
-huggingface-cli download KevinAHM/pocket-tts-onnx pocket_tts_onnx.py --local-dir models/pocket_tts_onnx
+hf download KevinAHM/pocket-tts-onnx pocket_tts_onnx --local-dir models/pocket_tts_onnx
+hf download KevinAHM/pocket-tts-onnx pocket_tts_onnx.py --local-dir models/pocket_tts_onnx
 ```
 If you store the module elsewhere, set `module_path` to that directory in the config.
 
@@ -388,7 +388,7 @@ pip install -e .
 ```bash
 # Download model
 mkdir -p models/chatterbox
-huggingface-cli download resemble-ai/chatterbox --local-dir models/chatterbox/
+hf download resemble-ai/chatterbox --local-dir models/chatterbox/
 ```
 
 #### Configuration
@@ -433,7 +433,7 @@ python -m spacy download en_core_web_sm
 ```bash
 # Download Dia model
 mkdir -p models/dia
-huggingface-cli download nari-labs/dia --local-dir models/dia/
+hf download nari-labs/dia --local-dir models/dia/
 
 # Or auto-download on first use
 ```

@@ -549,6 +549,61 @@ _CREATE_MCP_HUB_TABLES = [
         (),
     ),
     (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_type TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_location TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_ref_requested TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_ref_kind TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_subpath TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_commit_resolved TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS pack_content_digest TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_verified BOOLEAN NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_verification_mode TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS source_fetched_at TIMESTAMPTZ NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_packs "
+        "ADD COLUMN IF NOT EXISTS fetched_by INTEGER NULL",
+        (),
+    ),
+    (
         """
         DO $$
         BEGIN
@@ -636,6 +691,53 @@ _CREATE_MCP_HUB_TABLES = [
     (
         "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_upgrades_scope "
         "ON mcp_governance_pack_upgrades(pack_id, owner_scope_type, owner_scope_id)",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_source_candidates (
+            id SERIAL PRIMARY KEY,
+            source_type TEXT NOT NULL,
+            source_location TEXT NOT NULL,
+            source_ref_requested TEXT NULL,
+            source_ref_kind TEXT NULL,
+            source_subpath TEXT NULL,
+            source_commit_resolved TEXT NULL,
+            pack_content_digest TEXT NOT NULL,
+            pack_document_json TEXT NOT NULL DEFAULT '{}',
+            source_verified BOOLEAN NULL,
+            source_verification_mode TEXT NULL,
+            source_fetched_at TIMESTAMPTZ NULL,
+            fetched_by INTEGER NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_mcp_governance_pack_source_candidates_source "
+        "ON mcp_governance_pack_source_candidates(source_type, source_location)",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS source_ref_kind TEXT NULL",
+        (),
+    ),
+    (
+        "ALTER TABLE mcp_governance_pack_source_candidates "
+        "ADD COLUMN IF NOT EXISTS pack_document_json TEXT NOT NULL DEFAULT '{}'",
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS mcp_governance_pack_trust_policy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            policy_document_json TEXT NOT NULL DEFAULT '{}',
+            updated_by INTEGER NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
         (),
     ),
     (

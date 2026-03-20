@@ -131,7 +131,7 @@ providers:
   - Global: `TTS_AUTO_DOWNLOAD=0`
   - VibeVoice-only: `VIBEVOICE_AUTO_DOWNLOAD=0`
 
-Behavior when disabled: If models are missing locally and downloads are disabled, the adapter will not attempt to fetch from the network and will report as unavailable with a clear error. Pre-download models via `huggingface-cli download` or set `vibevoice_auto_download = true` to enable automatic fetches.
+Behavior when disabled: If models are missing locally and downloads are disabled, the adapter will not attempt to fetch from the network and will report as unavailable with a clear error. Pre-download models via `hf download` or set `vibevoice_auto_download = true` to enable automatic fetches.
 
 ## Verify Installation
 
@@ -230,13 +230,13 @@ vibevoice_use_quantization = False
 **Solution**: Manually download models
 ```bash
 # Download 1.5B model
-huggingface-cli download microsoft/VibeVoice-1.5B --local-dir ./models/vibevoice
+hf download microsoft/VibeVoice-1.5B --local-dir ./models/vibevoice
 
 # Or download 7B model (official)
-huggingface-cli download vibevoice/VibeVoice-7B --local-dir ./models/vibevoice
+hf download vibevoice/VibeVoice-7B --local-dir ./models/vibevoice
 
 # Optional: Community 8-bit quantized 7B variant
-huggingface-cli download FabioSarracino/VibeVoice-Large-Q8 --local-dir ./models/vibevoice-q8
+hf download FabioSarracino/VibeVoice-Large-Q8 --local-dir ./models/vibevoice-q8
 ```
 
 ## Voice Cloning Setup

@@ -118,6 +118,16 @@ class _FakeGovernancePackService:
                 "owner_scope_type": "user",
                 "owner_scope_id": 7,
                 "bundle_digest": "a" * 64,
+                "source_type": "git",
+                "source_location": "https://github.com/example/researcher-pack.git",
+                "source_ref_requested": "main",
+                "source_subpath": "packs/researcher",
+                "source_commit_resolved": "abc123",
+                "pack_content_digest": "b" * 64,
+                "source_verified": True,
+                "source_verification_mode": "git-commit",
+                "source_fetched_at": datetime.now(timezone.utc).isoformat(),
+                "fetched_by": 7,
                 "manifest": {
                     "pack_id": "researcher-pack",
                     "pack_version": "1.0.0",
@@ -256,6 +266,7 @@ class _FakeGovernancePackService:
         owner_scope_type: str,
         owner_scope_id: int | None,
         actor_id: int | None,
+        source_metadata: dict[str, object] | None = None,
     ) -> dict[str, object]:
         self.import_calls.append(
             {
@@ -263,6 +274,7 @@ class _FakeGovernancePackService:
                 "owner_scope_type": owner_scope_type,
                 "owner_scope_id": owner_scope_id,
                 "actor_id": actor_id,
+                "source_metadata": dict(source_metadata or {}),
             }
         )
         return {
@@ -340,11 +352,172 @@ class _FakeGovernancePackService:
         return list(self.upgrade_history)
 
 
+class _FakeGovernancePackTrustService:
+    def __init__(self) -> None:
+        self.policy = {
+            "allow_local_path_sources": True,
+            "allowed_local_roots": ["/srv/packs"],
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/researcher-pack"],
+            "allowed_git_ref_kinds": ["commit", "tag"],
+            "require_git_signature_verification": True,
+            "trusted_git_key_fingerprints": ["ABCD1234"],
+        }
+        self.update_calls: list[dict[str, object]] = []
+
+    async def get_policy(self) -> dict[str, object]:
+        return dict(self.policy)
+
+    async def update_policy(self, policy: dict[str, object], *, actor_id: int | None) -> dict[str, object]:
+        self.update_calls.append({"policy": dict(policy), "actor_id": actor_id})
+        self.policy = {
+            **self.policy,
+            **dict(policy),
+        }
+        return dict(self.policy)
+
+
+class _FakeGovernancePackDistributionService:
+    def __init__(self) -> None:
+        self.prepare_calls: list[dict[str, object]] = []
+        self.update_check_calls: list[int] = []
+        self.prepare_upgrade_calls: list[dict[str, object]] = []
+        self.validate_upgrade_calls: list[dict[str, object]] = []
+        self.load_calls: list[dict[str, object]] = []
+        self.candidate = {
+            "id": 501,
+            "source_type": "local_path",
+            "source_location": "/srv/packs/researcher-pack",
+            "source_ref_requested": None,
+            "source_ref_kind": None,
+            "source_subpath": None,
+            "source_commit_resolved": None,
+            "pack_content_digest": "c" * 64,
+            "source_verified": None,
+            "source_verification_mode": None,
+            "source_fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_by": 7,
+        }
+        self.upgrade_candidate = {
+            "id": 502,
+            "source_type": "git",
+            "source_location": "https://github.com/example/researcher-pack.git",
+            "source_ref_requested": "main",
+            "source_ref_kind": "branch",
+            "source_subpath": "packs/researcher",
+            "source_commit_resolved": "def456",
+            "pack_content_digest": "d" * 64,
+            "source_verified": True,
+            "source_verification_mode": "git_signature",
+            "source_fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_by": 7
+        }
+        self.update_check = {
+            "governance_pack_id": 81,
+            "status": "newer_version_available",
+            "installed_manifest": {
+                "pack_id": "researcher-pack",
+                "pack_version": "1.0.0",
+                "title": "Researcher Pack"
+            },
+            "candidate_manifest": {
+                "pack_id": "researcher-pack",
+                "pack_version": "1.1.0",
+                "title": "Researcher Pack"
+            },
+            "source_commit_resolved": "def456",
+            "pack_content_digest": "d" * 64
+        }
+
+    async def prepare_source_candidate(
+        self,
+        *,
+        source: dict[str, object],
+        actor_id: int | None,
+    ) -> dict[str, object]:
+        self.prepare_calls.append({"source": dict(source), "actor_id": actor_id})
+        return {
+            "candidate": dict(self.candidate),
+            "manifest": dict(_minimal_pack_document()["manifest"]),
+        }
+
+    async def load_prepared_candidate(
+        self,
+        candidate_id: int,
+        *,
+        actor_id: int | None = None,
+        revalidate_trust: bool = False,
+    ) -> dict[str, object]:
+        self.load_calls.append(
+            {
+                "candidate_id": int(candidate_id),
+                "actor_id": actor_id,
+                "revalidate_trust": revalidate_trust,
+            }
+        )
+        if int(candidate_id) == 501:
+            return {
+                "candidate": dict(self.candidate),
+                "pack_document": _minimal_pack_document()
+            }
+        assert int(candidate_id) == 502
+        upgraded_pack_document = _minimal_pack_document()
+        upgraded_pack_document["manifest"]["pack_version"] = "1.1.0"
+        return {
+            "candidate": dict(self.upgrade_candidate),
+            "pack_document": upgraded_pack_document,
+        }
+
+    async def check_for_updates(self, governance_pack_id: int) -> dict[str, object]:
+        self.update_check_calls.append(int(governance_pack_id))
+        return dict(self.update_check)
+
+    async def prepare_upgrade_candidate(
+        self,
+        *,
+        governance_pack_id: int,
+        actor_id: int | None,
+    ) -> dict[str, object]:
+        self.prepare_upgrade_calls.append(
+            {"governance_pack_id": int(governance_pack_id), "actor_id": actor_id}
+        )
+        return {
+            "status": "newer_version_available",
+            "installed_manifest": dict(self.update_check["installed_manifest"]),
+            "candidate_manifest": dict(self.update_check["candidate_manifest"]),
+            "candidate": dict(self.upgrade_candidate),
+            "manifest": dict(self.update_check["candidate_manifest"]),
+        }
+
+    async def validate_prepared_upgrade_candidate(
+        self,
+        *,
+        governance_pack_id: int,
+        candidate_id: int,
+        actor_id: int | None = None,
+    ) -> dict[str, object]:
+        self.validate_upgrade_calls.append(
+            {
+                "governance_pack_id": int(governance_pack_id),
+                "candidate_id": int(candidate_id),
+                "actor_id": actor_id,
+            }
+        )
+        return await self.load_prepared_candidate(
+            candidate_id,
+            actor_id=actor_id,
+            revalidate_trust=True,
+        )
+
+
 def _build_app(
     principal: AuthPrincipal,
     *,
     policy_service: _FakePolicyService | None = None,
     governance_service: _FakeGovernancePackService | None = None,
+    trust_service: _FakeGovernancePackTrustService | None = None,
+    distribution_service: _FakeGovernancePackDistributionService | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_hub_management.router, prefix="/api/v1")
@@ -358,6 +531,12 @@ def _build_app(
     )
     app.dependency_overrides[mcp_hub_management.get_mcp_hub_governance_pack_service] = (
         lambda: governance_service or _FakeGovernancePackService()
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_governance_pack_trust_service] = (
+        lambda: trust_service or _FakeGovernancePackTrustService()
+    )
+    app.dependency_overrides[mcp_hub_management.get_mcp_hub_governance_pack_distribution_service] = (
+        lambda: distribution_service or _FakeGovernancePackDistributionService()
     )
     return app
 
@@ -458,6 +637,140 @@ def test_governance_pack_import_returns_import_result() -> None:
     assert payload["governance_pack_id"] == 81
     assert payload["imported_object_counts"]["permission_profiles"] == 1
     assert governance_service.import_calls
+
+
+def test_governance_pack_source_prepare_dry_run_and_import_round_trip() -> None:
+    governance_service = _FakeGovernancePackService()
+    distribution_service = _FakeGovernancePackDistributionService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=governance_service,
+        distribution_service=distribution_service,
+    )
+
+    with TestClient(app) as client:
+        prepare_resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/source/prepare",
+            json={
+                "source": {
+                    "source_type": "local_path",
+                    "local_path": "/srv/packs/researcher-pack",
+                }
+            },
+        )
+        dry_run_resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/source/dry-run",
+            json={
+                "owner_scope_type": "user",
+                "candidate_id": 501,
+            },
+        )
+        import_resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/source/import",
+            json={
+                "owner_scope_type": "user",
+                "candidate_id": 501,
+            },
+        )
+
+    assert prepare_resp.status_code == 201
+    assert prepare_resp.json()["candidate"]["source_location"] == "/srv/packs/researcher-pack"
+
+    assert dry_run_resp.status_code == 200
+    assert dry_run_resp.json()["report"]["manifest"]["pack_id"] == "researcher-pack"
+
+    assert import_resp.status_code == 201
+    assert import_resp.json()["governance_pack_id"] == 81
+    assert distribution_service.prepare_calls[0]["actor_id"] == 7
+    assert distribution_service.load_calls == [
+        {"candidate_id": 501, "actor_id": 7, "revalidate_trust": True},
+        {"candidate_id": 501, "actor_id": 7, "revalidate_trust": True},
+    ]
+    assert governance_service.import_calls[0]["source_metadata"]["source_location"] == "/srv/packs/researcher-pack"
+
+
+def test_governance_pack_git_update_check_and_candidate_upgrade_round_trip() -> None:
+    governance_service = _FakeGovernancePackService()
+    distribution_service = _FakeGovernancePackDistributionService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=governance_service,
+        distribution_service=distribution_service,
+    )
+
+    with TestClient(app) as client:
+        check_resp = client.post("/api/v1/mcp/hub/governance-packs/81/check-updates")
+        prepare_resp = client.post("/api/v1/mcp/hub/governance-packs/81/prepare-upgrade-candidate")
+        dry_run_resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/source/dry-run-upgrade",
+            json={
+                "source_governance_pack_id": 81,
+                "owner_scope_type": "user",
+                "candidate_id": 502,
+            },
+        )
+        execute_resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/source/execute-upgrade",
+            json={
+                "source_governance_pack_id": 81,
+                "owner_scope_type": "user",
+                "candidate_id": 502,
+                "planner_inputs_fingerprint": "plan-fingerprint",
+                "adapter_state_fingerprint": "adapter-fingerprint",
+            },
+        )
+
+    assert check_resp.status_code == 200
+    assert check_resp.json()["status"] == "newer_version_available"
+    assert prepare_resp.status_code == 201
+    assert prepare_resp.json()["candidate"]["source_commit_resolved"] == "def456"
+
+    assert dry_run_resp.status_code == 200
+    assert dry_run_resp.json()["plan"]["target_manifest"]["pack_version"] == "1.1.0"
+    assert execute_resp.status_code == 200
+    assert execute_resp.json()["target_governance_pack_id"] == 82
+
+    assert distribution_service.update_check_calls == [81]
+    assert distribution_service.prepare_upgrade_calls == [{"governance_pack_id": 81, "actor_id": 7}]
+    assert distribution_service.validate_upgrade_calls == [
+        {"governance_pack_id": 81, "candidate_id": 502, "actor_id": 7}
+    ]
+    assert governance_service.upgrade_dry_run_calls[0]["source_governance_pack_id"] == 81
+    assert governance_service.upgrade_execute_calls[0]["source_governance_pack_id"] == 81
+
+
+def test_governance_pack_source_execute_upgrade_rejects_stale_candidate() -> None:
+    class _StaleCandidateDistributionService(_FakeGovernancePackDistributionService):
+        async def validate_prepared_upgrade_candidate(
+            self,
+            *,
+            governance_pack_id: int,
+            candidate_id: int,
+            actor_id: int | None = None,
+        ) -> dict[str, object]:
+            del governance_pack_id, candidate_id, actor_id
+            raise ValueError("Prepared governance-pack upgrade candidate is stale")
+
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE, "grant.filesystem.read", "grant.tool.invoke"]),
+        governance_service=_FakeGovernancePackService(),
+        distribution_service=_StaleCandidateDistributionService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/mcp/hub/governance-packs/source/execute-upgrade",
+            json={
+                "source_governance_pack_id": 81,
+                "owner_scope_type": "user",
+                "candidate_id": 502,
+                "planner_inputs_fingerprint": "plan-fingerprint",
+                "adapter_state_fingerprint": "adapter-fingerprint",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "stale" in resp.json()["detail"].lower()
 
 
 def test_governance_pack_upgrade_dry_run_returns_plan() -> None:
@@ -783,8 +1096,52 @@ def test_governance_pack_list_and_detail_include_provenance() -> None:
 
     assert list_resp.status_code == 200
     assert list_resp.json()[0]["pack_id"] == "researcher-pack"
+    assert list_resp.json()[0]["source_type"] == "git"
+    assert list_resp.json()[0]["source_location"] == "https://github.com/example/researcher-pack.git"
+    assert list_resp.json()[0]["source_commit_resolved"] == "abc123"
+    assert list_resp.json()[0]["pack_content_digest"] == "b" * 64
 
     assert detail_resp.status_code == 200
     detail_payload = detail_resp.json()
+    assert detail_payload["source_type"] == "git"
+    assert detail_payload["source_location"] == "https://github.com/example/researcher-pack.git"
+    assert detail_payload["source_ref_requested"] == "main"
+    assert detail_payload["source_subpath"] == "packs/researcher"
+    assert detail_payload["source_commit_resolved"] == "abc123"
+    assert detail_payload["pack_content_digest"] == "b" * 64
     assert detail_payload["imported_objects"][0]["source_object_id"] == "researcher.profile"
     assert detail_payload["imported_objects"][1]["object_type"] == "policy_assignment"
+
+
+def test_governance_pack_trust_policy_round_trip() -> None:
+    trust_service = _FakeGovernancePackTrustService()
+    app = _build_app(
+        _make_principal(permissions=[SYSTEM_CONFIGURE]),
+        trust_service=trust_service,
+    )
+
+    with TestClient(app) as client:
+        get_resp = client.get("/api/v1/mcp/hub/governance-packs/trust-policy")
+        put_resp = client.put(
+            "/api/v1/mcp/hub/governance-packs/trust-policy",
+            json={
+                "allow_local_path_sources": True,
+                "allowed_local_roots": ["/srv/trusted-packs"],
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/researcher-pack"],
+                "allowed_git_ref_kinds": ["tag"],
+                "require_git_signature_verification": True,
+                "trusted_git_key_fingerprints": ["EFGH5678"],
+            },
+        )
+
+    assert get_resp.status_code == 200
+    assert get_resp.json()["allowed_local_roots"] == ["/srv/packs"]
+
+    assert put_resp.status_code == 200
+    payload = put_resp.json()
+    assert payload["allowed_local_roots"] == ["/srv/trusted-packs"]
+    assert payload["allowed_git_ref_kinds"] == ["tag"]
+    assert payload["require_git_signature_verification"] is True
+    assert trust_service.update_calls[0]["actor_id"] == 7
