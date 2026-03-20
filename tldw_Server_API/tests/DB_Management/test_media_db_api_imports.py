@@ -168,6 +168,45 @@ def test_media_db_api_create_media_database_uses_runtime_factory(monkeypatch, tm
     assert captured["runtime"].postgres_content_mode is True
 
 
+def test_media_db_api_check_media_exists_delegates_to_legacy_state(monkeypatch):
+    captured = {}
+
+    def _fake_check_media_exists(*, db_instance, media_id):
+        captured["db_instance"] = db_instance
+        captured["media_id"] = media_id
+        return True
+
+    monkeypatch.setattr(media_db_state, "check_media_exists", _fake_check_media_exists)
+
+    sentinel_db = object()
+    assert media_db_api.check_media_exists(sentinel_db, 99) is True
+    assert captured == {"db_instance": sentinel_db, "media_id": 99}
+
+
+def test_media_db_api_get_document_version_delegates_to_legacy_wrappers(monkeypatch):
+    captured = {}
+
+    def _fake_get_document_version(*, db_instance, media_id, version_number, include_content):
+        captured["db_instance"] = db_instance
+        captured["media_id"] = media_id
+        captured["version_number"] = version_number
+        captured["include_content"] = include_content
+        return {"version_number": version_number}
+
+    monkeypatch.setattr(legacy_wrappers, "get_document_version", _fake_get_document_version)
+
+    sentinel_db = object()
+    result = media_db_api.get_document_version(sentinel_db, 77, 3, False)
+
+    assert result == {"version_number": 3}
+    assert captured == {
+        "db_instance": sentinel_db,
+        "media_id": 77,
+        "version_number": 3,
+        "include_content": False,
+    }
+
+
 def test_media_db_api_no_longer_mentions_media_db_v2_in_source() -> None:
     assert "Media_DB_v2" not in inspect.getsource(media_db_api)
 
@@ -331,15 +370,22 @@ def test_media_versions_imports_errors_and_state_helpers_outside_media_db_v2(mon
     monkeypatch.setattr(legacy_media_db, "DatabaseError", object(), raising=False)
     monkeypatch.setattr(legacy_media_db, "InputError", object(), raising=False)
     monkeypatch.setattr(legacy_media_db, "MediaDatabase", object(), raising=False)
-    monkeypatch.setattr(legacy_media_db, "check_media_exists", object(), raising=False)
 
     module = importlib.reload(media_versions)
 
     assert module.ConflictError is media_db_errors.ConflictError
     assert module.DatabaseError is media_db_errors.DatabaseError
     assert module.InputError is media_db_errors.InputError
-    assert module.check_media_exists is media_db_state.check_media_exists
+    assert module.check_media_exists is media_db_api.check_media_exists
+    assert module.get_document_version is media_db_api.get_document_version
     assert "MediaDatabase" not in module.__dict__
+
+
+def test_media_versions_no_longer_mentions_legacy_state_or_wrappers_in_source() -> None:
+    source = inspect.getsource(media_versions)
+
+    assert "legacy_state" not in source
+    assert "legacy_wrappers" not in source
 
 
 def test_items_imports_db_errors_from_media_db_errors(monkeypatch):

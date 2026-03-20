@@ -11,6 +11,7 @@ import {
   isCharacterPromptPresetId,
   type CharacterPromptPresetId
 } from "@/data/character-prompt-presets"
+export { resolveCharacterSelectionId } from "@/utils/default-character-preference"
 import { CHARACTER_TEMPLATES } from "@/data/character-templates"
 import { extractAvatarValues } from "./AvatarField"
 import { validateAndCreateImageDataUrl } from "@/utils/image-utils"

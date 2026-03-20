@@ -451,6 +451,7 @@ class TestTTSAdapterFactory:
         assert factory.get_provider_for_model("kitten_tts") == TTSProvider.KITTEN_TTS
         assert factory.get_provider_for_model("kitten-tts") == TTSProvider.KITTEN_TTS
         assert factory.get_provider_for_model("KittenML/kitten-tts-nano-0.8") == TTSProvider.KITTEN_TTS
+        assert factory.get_provider_for_model("KittenML/kitten-tts-nano-0.8-fp32") == TTSProvider.KITTEN_TTS
 
     async def test_get_best_adapter(self):
         """Test getting best adapter for requirements"""

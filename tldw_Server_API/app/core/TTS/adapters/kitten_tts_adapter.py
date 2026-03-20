@@ -20,6 +20,7 @@ from ..vendors.kittentts_compat import (
     KittenRuntime,
     download_model_assets,
     normalize_repo_id,
+    resolve_model_revision,
 )
 from .base import AudioFormat, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
 
@@ -95,12 +96,14 @@ class KittenTTSAdapter(TTSAdapter):
                 return self._runtime
 
             try:
+                configured_revision = self.model_revision if model_name == self.model_name else None
+                resolved_revision = resolve_model_revision(model_name, configured_revision)
                 assets = await asyncio.to_thread(
                     download_model_assets,
                     model_name,
                     cache_dir=self.cache_dir,
                     auto_download=self.auto_download,
-                    revision=self.model_revision,
+                    revision=resolved_revision,
                 )
                 runtime = await asyncio.to_thread(KittenRuntime, assets)
             except Exception as exc:
@@ -146,17 +149,18 @@ class KittenTTSAdapter(TTSAdapter):
 
     async def generate(self, request: TTSRequest) -> TTSResponse:
         requested_model = self._resolve_model_name(request.model)
-        if not self._initialized:
-            self.model_name = requested_model
-
-        if not await self.ensure_initialized():
-            raise TTSProviderNotConfiguredError(
-                "KittenTTS adapter not initialized",
-                provider=self.PROVIDER_KEY,
-            )
-
         validate_tts_request(request, provider=self.PROVIDER_KEY)
-        runtime = await self._load_runtime_for_model(requested_model)
+        if not self._initialized:
+            runtime = await self._load_runtime_for_model(requested_model)
+            self._initialized = True
+            self.sample_rate = int(getattr(runtime, "sample_rate", self.sample_rate))
+        else:
+            if not await self.ensure_initialized():
+                raise TTSProviderNotConfiguredError(
+                    "KittenTTS adapter not initialized",
+                    provider=self.PROVIDER_KEY,
+                )
+            runtime = await self._load_runtime_for_model(requested_model)
         clean_text = parse_bool(
             (request.extra_params or {}).get("clean_text"),
             default=self.clean_text,

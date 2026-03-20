@@ -8,6 +8,27 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+def test_missing_dependency_helpers_preserve_context_and_log(monkeypatch):
+    from tldw_Server_API.app.core.TTS.vendors import kittentts_compat as mod
+
+    warnings: list[str] = []
+
+    def fake_warning(message, *args, **_kwargs):
+        warnings.append(str(message).format(*args))
+
+    monkeypatch.setattr(mod.logger, "warning", fake_warning)
+
+    exc = ImportError("broken optional dependency")
+    mod._log_optional_dependency_fallback("onnxruntime", exc)
+    missing = mod._missing_dependency_callable("onnxruntime", "runtime sessions", exc)
+
+    with pytest.raises(ImportError, match="onnxruntime is required for KittenTTS runtime sessions"):
+        missing()
+
+    assert warnings
+    assert "onnxruntime" in warnings[0]
+
+
 def test_initialize_espeak_paths_uses_espeakng_loader(monkeypatch):
     from tldw_Server_API.app.core.TTS.vendors import kittentts_compat as mod
 
@@ -138,8 +159,14 @@ def test_download_model_assets_accepts_explicit_commit_revision(monkeypatch, tmp
     )
 
 
-def test_download_model_assets_rejects_branch_revision():
+def test_download_model_assets_rejects_branch_revision(monkeypatch):
     from tldw_Server_API.app.core.TTS.vendors import kittentts_compat as mod
+
+    monkeypatch.setattr(
+        mod,
+        "hf_hub_download",
+        lambda **_kwargs: pytest.fail("revision validation should happen before downloads"),
+    )
 
     with pytest.raises(ValueError, match="immutable Hugging Face commit hash"):
         mod.download_model_assets(

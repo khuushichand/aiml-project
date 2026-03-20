@@ -10,15 +10,15 @@ Recommended default:
 
 Canonical base profiles:
 
-1. [Local single-user](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/Profile_Local_Single_User.md)
-2. [Docker single-user](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/Profile_Docker_Single_User.md)
-3. [Docker multi-user + Postgres](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
+1. [Local single-user](./Profile_Local_Single_User.md)
+2. [Docker single-user](./Profile_Docker_Single_User.md)
+3. [Docker multi-user + Postgres](./Profile_Docker_Multi_User_Postgres.md)
 
 Optional add-ons:
 
-- [First-time audio setup: CPU systems](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/First_Time_Audio_Setup_CPU.md)
-- [First-time audio setup: GPU/accelerated systems](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md)
-- [GPU/STT Add-on](https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/GPU_STT_Addon.md) (legacy pointer to the accelerated guide)
+- [First-time audio setup: CPU systems](./First_Time_Audio_Setup_CPU.md)
+- [First-time audio setup: GPU/accelerated systems](./First_Time_Audio_Setup_GPU_Accelerated.md)
+- [GPU/STT Add-on](./GPU_STT_Addon.md) (legacy pointer to the accelerated guide)
 
 ## How To Use These Guides
 

@@ -290,8 +290,8 @@ def _cuda_available() -> bool:
             text=True,
             timeout=3,
         )
-    except (OSError, subprocess.SubprocessError):
-        logger.debug("CUDA probe via nvidia-smi failed", exc_info=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("CUDA probe via nvidia-smi failed: {}", exc)
         return False
 
     if probe.returncode != 0:
@@ -306,6 +306,25 @@ def _cuda_available() -> bool:
         logger.debug("CUDA probe via nvidia-smi did not report any GPUs")
         return False
     return True
+
+
+def _resolve_kitten_tts_prefetch_settings() -> dict[str, str | None]:
+    cache_dir = "cache/kitten_tts"
+
+    try:
+        from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
+
+        cfg = get_tts_config()
+        provider_cfg = getattr(cfg, "providers", {}).get("kitten_tts")
+        if provider_cfg:
+            extra_params = getattr(provider_cfg, "extra_params", {}) or {}
+            configured_cache_dir = extra_params.get("cache_dir")
+            if configured_cache_dir:
+                cache_dir = str(configured_cache_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Unable to load KittenTTS prefetch settings from config: {}", exc)
+
+    return {"cache_dir": cache_dir, "revision": None}
 
 
 def _resolve_primary_stt_target(selected_profile: Any) -> tuple[str | None, str | None]:
@@ -837,20 +856,14 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
         remediation_items.append(
             _remediation_item(
                 "STT_UNUSABLE",
-                (
-                    f"Primary STT path ({primary_stt_engine}) is not usable. "
-                    "Rerun provisioning or inspect model downloads."
-                ),
+                "Primary STT path is not usable. Rerun provisioning or inspect model downloads.",
             )
         )
     if not tts_usable:
         remediation_items.append(
             _remediation_item(
                 "TTS_UNHEALTHY",
-                (
-                    f"Primary TTS path ({primary_tts_engine}) is not healthy. "
-                    "Rerun provisioning or inspect TTS logs."
-                ),
+                "Primary TTS path is not healthy. Rerun provisioning or inspect TTS logs.",
             )
         )
 
@@ -880,7 +893,6 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
         "bundle_id": bundle_id,
         "selected_resource_profile": resource_profile,
         "selection_key": selection_key,
-        "targets_checked": list(selected_profile.verification_targets),
         "status": status,
         "machine_profile": machine_profile.model_dump(),
         "stt_health": stt_health,
@@ -900,7 +912,6 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
             "bundle_id": bundle_id,
             "selected_resource_profile": resource_profile,
             "selection_key": selection_key,
-            "targets_checked": list(selected_profile.verification_targets),
             "verified_at": verified_at,
             "stt_health": stt_health,
             "tts_health": tts_health,
@@ -1158,20 +1169,29 @@ def _install_kitten_tts(variants: list[str]) -> None:
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError('KittenTTS compatibility runtime is required for asset downloads.') from exc
 
+    settings = _resolve_kitten_tts_prefetch_settings()
     variant_to_repo = {
         'nano': 'KittenML/kitten-tts-nano-0.8',
         'nano-int8': 'KittenML/kitten-tts-nano-0.8-int8',
         'micro': 'KittenML/kitten-tts-micro-0.8',
         'mini': 'KittenML/kitten-tts-mini-0.8',
     }
-    selected = variants or ['nano']
+    selected = [str(variant).strip().lower() for variant in (variants or ['nano']) if str(variant).strip()]
+    if not selected:
+        selected = ['nano']
+    unknown = [variant for variant in selected if variant not in variant_to_repo]
+    if unknown:
+        raise ValueError(f"Unsupported KittenTTS variants: {', '.join(unknown)}")
     for variant in selected:
-        repo_id = variant_to_repo.get(str(variant).strip().lower(), str(variant).strip())
-        if not repo_id:
-            continue
+        repo_id = variant_to_repo[variant]
         logger.info('Prefetching KittenTTS assets for {}', repo_id)
         try:
-            download_model_assets(repo_id, auto_download=True)
+            download_model_assets(
+                repo_id,
+                cache_dir=settings.get("cache_dir"),
+                auto_download=True,
+                revision=settings.get("revision"),
+            )
         except Exception as exc:  # noqa: BLE001
             if _is_httpx_network_error(exc) or _is_requests_network_error(exc):
                 raise DownloadBlockedError(f'Network unavailable while downloading {repo_id}.') from exc
@@ -1407,7 +1427,7 @@ TTS_DEPENDENCIES: dict[str, list[PipRequirement]] = {
     ],
     'kitten_tts': [
         PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
-        PipRequirement(package='phonemizer-fork~=3.3.2', import_name='phonemizer'),
+        PipRequirement(package='phonemizer-fork~=3.3.2'),
         PipRequirement(package='espeakng_loader', import_name='espeakng_loader'),
         PipRequirement(package='huggingface_hub>=0.23.0', import_name='huggingface_hub'),
     ],

@@ -238,11 +238,22 @@ cd tldw_server
 make quickstart-docker</code></pre>
             <p class="code-note">Use this when you want the production-style API path without the WebUI layer.</p>
           </article>
+          <article class="code-block">
+            <div class="code-bar">
+              <span>Development: local API install</span>
+              <button class="copy-button" type="button" data-copy-target="quickstart-local-dev">Copy</button>
+            </div>
+            <pre id="quickstart-local-dev"><code>git clone https://github.com/rmusser01/tldw_server.git
+cd tldw_server
+make quickstart-install</code></pre>
+            <p class="code-note">Use this when you want the local development path without Docker. The default recommendation remains <code>make quickstart</code>.</p>
+          </article>
         </div>
-        <p class="section-copy">
-          Contributing locally instead of using Docker? Run <code>make quickstart-install</code> for the API development setup,
-          then follow the development guide for the WebUI workflow. Teams validating the production-style multi-user path should
-          start with <a href="../Getting_Started/Profile_Docker_Multi_User_Postgres.md">Profile_Docker_Multi_User_Postgres.md</a>.
+        <p class="section-footnote">
+          Need a multi-user deployment instead of the default single-user path?
+          <a href="https://github.com/rmusser01/tldw_server/blob/main/Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md" target="_blank" rel="noreferrer">
+            Start with the Docker multi-user + Postgres guide
+          </a>.
         </p>
       </div>
     </section>

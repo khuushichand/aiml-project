@@ -139,10 +139,10 @@ def test_verify_audio_bundle_uses_selected_profile_targets(mocker, tmp_path):
 
     assert result["bundle_id"] == "apple_silicon_local"
     assert result["selected_resource_profile"] == "balanced"
-    assert result["targets_checked"] == ["stt_default", "tts_default"]
+    assert "targets_checked" not in result
 
 
-def test_verification_remediation_references_selected_profile_engines(mocker, tmp_path):
+def test_verification_remediation_uses_stable_codes_for_primary_paths(mocker, tmp_path):
     store = AudioReadinessStore(tmp_path / "audio_readiness.json")
 
     mocker.patch.object(
@@ -181,13 +181,10 @@ def test_verification_remediation_references_selected_profile_engines(mocker, tm
     )
 
     result = install_manager.verify_audio_bundle("nvidia_local", resource_profile="performance")
-    messages = [item["message"] for item in result["remediation_items"]]
-    profile = get_audio_bundle_catalog().bundle_by_id("nvidia_local").profile_by_id("performance")
-    expected_stt_engine = profile.stt_plan[0]["engine"]
-    expected_tts_engine = profile.tts_plan[0]["engine"]
+    remediation_codes = {item["code"] for item in result["remediation_items"]}
 
-    assert any(expected_stt_engine in message for message in messages)
-    assert any(expected_tts_engine in message for message in messages)
+    assert "STT_UNUSABLE" in remediation_codes
+    assert "TTS_UNHEALTHY" in remediation_codes
 
 
 def test_cuda_available_ignores_cuda_env_without_verified_gpu(mocker):

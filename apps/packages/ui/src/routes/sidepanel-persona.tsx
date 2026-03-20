@@ -32,11 +32,11 @@ import {
 import { SetupStarterCommandsStep } from "@/components/PersonaGarden/SetupStarterCommandsStep"
 import {
   SetupTestAndFinishStep,
-  type TestLabDryRunCompletedResult,
 } from "@/components/PersonaGarden/SetupTestAndFinishStep"
 import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import {
   TestLabPanel,
+  type TestLabDryRunCompletedResult,
 } from "@/components/PersonaGarden/TestLabPanel"
 import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import { useConnectionUxState } from "@/hooks/useConnectionState"
