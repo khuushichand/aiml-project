@@ -433,12 +433,12 @@ Recommended: run the installer from the repo root (downloads v1.0 ONNX + voices 
 python Helper_Scripts/TTS_Installers/install_tts_kokoro.py
 ```
 
-Manual alternative using `huggingface-cli`:
+Manual alternative using the `hf` CLI:
 ```bash
-pip install huggingface-hub
+pip install -U "huggingface_hub"
 mkdir -p models/kokoro
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
-huggingface-cli download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped onnx/model.onnx --local-dir models/kokoro/
+hf download onnx-community/Kokoro-82M-v1.0-ONNX-timestamped voices          --local-dir models/kokoro/
 ```
 
 Update `tts_providers_config.yaml` if you use custom paths. For the PyTorch variant, set `use_onnx: false`, provide a `.pth` path, and point `voice_dir` to the `voices/` directory.

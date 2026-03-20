@@ -13,9 +13,9 @@ Key features:
 - Lazy model loading with thread-safe caching
 
 Models must be manually downloaded before use:
-    huggingface-cli download Qwen/Qwen3-ASR-1.7B --local-dir ./models/qwen3_asr/1.7B
-    huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir ./models/qwen3_asr/0.6B
-    huggingface-cli download Qwen/Qwen3-ForcedAligner-0.6B --local-dir ./models/qwen3_asr/aligner
+    hf download Qwen/Qwen3-ASR-1.7B --local-dir ./models/qwen3_asr/1.7B
+    hf download Qwen/Qwen3-ASR-0.6B --local-dir ./models/qwen3_asr/0.6B
+    hf download Qwen/Qwen3-ForcedAligner-0.6B --local-dir ./models/qwen3_asr/aligner
 """
 
 from __future__ import annotations
@@ -236,7 +236,7 @@ def _validate_model_path(model_path: str, allow_download: bool) -> Path:
         raise BadRequestError(
             f"Qwen3-ASR model path does not exist: {model_path}. "
             "Download the model first with: "
-            f"huggingface-cli download Qwen/Qwen3-ASR-1.7B --local-dir {model_path}"
+            f"hf download Qwen/Qwen3-ASR-1.7B --local-dir {model_path}"
         )
     return path
 
@@ -315,7 +315,7 @@ def _load_forced_aligner(settings: dict[str, Any]) -> tuple[Any, Any]:
             raise BadRequestError(
                 f"Qwen3-ForcedAligner path does not exist: {aligner_path}. "
                 "Download the aligner first with: "
-                f"huggingface-cli download Qwen/Qwen3-ForcedAligner-0.6B --local-dir {aligner_path}"
+                f"hf download Qwen/Qwen3-ForcedAligner-0.6B --local-dir {aligner_path}"
             )
 
         try:
