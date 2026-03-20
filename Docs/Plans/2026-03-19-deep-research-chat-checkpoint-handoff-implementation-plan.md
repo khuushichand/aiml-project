@@ -218,3 +218,21 @@ Add:
 git add Docs/Plans/2026-03-19-deep-research-chat-checkpoint-handoff-implementation-plan.md
 git commit -m "docs(research): finalize checkpoint handoff plan"
 ```
+
+---
+
+## Execution Notes
+
+- Task 1 extended [PlaygroundChat.research-status.integration.test.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx) with red coverage for plan, sources, outline, and unknown review fallback states, plus a completed-run regression check. The red test commit is `db6121535` (`test(chat): cover checkpoint handoff status rows`).
+- Task 2 added helper coverage in [research-run-status.test.ts](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/__tests__/research-run-status.test.ts) and centralized checkpoint helpers in [research-run-status.ts](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/research-run-status.ts). The helper commit is `a86cb6deb` (`feat(chat): derive checkpoint review reasons`).
+- Task 3 updated [ResearchRunStatusStack.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/deep-research-collecting-dev-pr/apps/packages/ui/src/components/Option/Playground/ResearchRunStatusStack.tsx) to render compact review reasons, switch checkpoint-needed rows to `Review in Research`, and suppress completion-only actions for those rows. The row-rendering commit is `52d50db96` (`feat(chat): improve checkpoint handoff rows`).
+- Focused verification commands run:
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx`
+  - Result: red at Task 1 with `4` expected failures around missing checkpoint-specific labels and action text
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/research-run-status.test.ts`
+  - Result: `6/6` passed
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/research-run-status.test.ts`
+  - Result: `19/19` passed
+  - `./apps/packages/ui/node_modules/.bin/vitest run apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-status.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/research-run-status.test.ts apps/packages/ui/src/components/Option/Playground/__tests__/Playground.research-context.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundChat.research-use-in-chat.integration.test.tsx apps/packages/ui/src/components/Option/Playground/__tests__/PlaygroundForm.follow-up-research.test.tsx`
+  - Result: `42/42` passed
+- Bandit was not run for this slice because the change set is frontend/package TypeScript and docs only.
