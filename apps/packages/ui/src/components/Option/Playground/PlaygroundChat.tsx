@@ -354,7 +354,6 @@ export const PlaygroundChat = ({
           : null
       return {
         completion,
-        currentRun,
         actionPolicy,
         reviewReason: actionPolicy?.needsReview ? actionPolicy.reasonLabel : null,
         reviewHref: actionPolicy?.needsReview ? actionPolicy.researchHref : null
@@ -362,46 +361,16 @@ export const PlaygroundChat = ({
     },
     [linkedResearchRuns]
   )
-  const buildMessageUseInChatHandler = React.useCallback(
-    (metadataExtra?: Record<string, unknown>) => {
-      const handoff = getMessageResearchHandoffState(metadataExtra)
-      if (!handoff || handoff.actionPolicy?.canUseInChat === false) {
-        return undefined
-      }
-      return () => {
-        void handleAttachResearchRun(
-          handoff.completion.run_id,
-          handoff.completion.query
-        )
-      }
-    },
-    [getMessageResearchHandoffState, handleAttachResearchRun]
-  )
-  const buildMessageFollowUpHandler = React.useCallback(
-    (metadataExtra?: Record<string, unknown>) => {
-      const handoff = getMessageResearchHandoffState(metadataExtra)
-      if (
-        !handoff ||
-        handoff.actionPolicy?.canFollowUp === false ||
-        !onPrepareResearchFollowUp
-      ) {
-        return undefined
-      }
-      return () => {
-        onPrepareResearchFollowUp({
-          run_id: handoff.completion.run_id,
-          query: handoff.completion.query
-        })
-      }
-    },
-    [getMessageResearchHandoffState, onPrepareResearchFollowUp]
-  )
   const buildMessageResearchActions = React.useCallback(
     (metadataExtra?: Record<string, unknown>): MessageResearchActions | undefined => {
       const handoff = getMessageResearchHandoffState(metadataExtra)
       if (!handoff) {
         return undefined
       }
+      const canUseInChat = handoff.actionPolicy?.canUseInChat !== false
+      const canFollowUp =
+        handoff.actionPolicy?.canFollowUp !== false &&
+        Boolean(onPrepareResearchFollowUp)
       return {
         reasonLabel: handoff.reviewReason ?? undefined,
         primaryLink: handoff.reviewHref
@@ -410,15 +379,25 @@ export const PlaygroundChat = ({
               label: "Review in Research"
             }
           : undefined,
-        onUseInChat: buildMessageUseInChatHandler(metadataExtra),
-        onFollowUp: buildMessageFollowUpHandler(metadataExtra)
+        onUseInChat: canUseInChat
+          ? () => {
+              void handleAttachResearchRun(
+                handoff.completion.run_id,
+                handoff.completion.query
+              )
+            }
+          : undefined,
+        onFollowUp: canFollowUp
+          ? () => {
+              onPrepareResearchFollowUp?.({
+                run_id: handoff.completion.run_id,
+                query: handoff.completion.query
+              })
+            }
+          : undefined
       }
     },
-    [
-      buildMessageFollowUpHandler,
-      buildMessageUseInChatHandler,
-      getMessageResearchHandoffState
-    ]
+    [getMessageResearchHandoffState, handleAttachResearchRun, onPrepareResearchFollowUp]
   )
   const showSelectedServerChatLoadFailure =
     messages.length === 0 &&
