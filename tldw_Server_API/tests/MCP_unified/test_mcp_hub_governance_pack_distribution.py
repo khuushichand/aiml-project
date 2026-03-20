@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -306,6 +307,67 @@ async def test_governance_pack_trust_service_normalizes_structured_signers_and_l
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_trust_service_updates_legacy_policy_rows_without_false_stale_conflicts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    legacy_policy = {
+        "allow_git_sources": True,
+        "allowed_git_hosts": ["github.com"],
+        "allowed_git_repositories": ["github.com/example/packs"],
+        "allowed_git_ref_kinds": ["tag"],
+        "require_git_signature_verification": True,
+        "trusted_git_key_fingerprints": ["legacy789"],
+    }
+    await repo.db_pool.execute(
+        """
+        INSERT INTO mcp_governance_pack_trust_policy (id, policy_document_json, updated_by, updated_at)
+        VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        (json.dumps(legacy_policy), 99),
+    )
+
+    current = await service.get_policy()
+    updated = await service.update_policy(
+        {
+            "policy_fingerprint": current["policy_fingerprint"],
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/packs"],
+            "allowed_git_ref_kinds": ["tag"],
+            "require_git_signature_verification": True,
+            "trusted_signers": [
+                {
+                    "fingerprint": "ABC123",
+                    "repo_bindings": ["github.com/example/packs"],
+                    "status": "active",
+                }
+            ],
+        },
+        actor_id=7,
+    )
+
+    assert updated["trusted_signers"] == [
+        {
+            "fingerprint": "ABC123",
+            "display_name": None,
+            "repo_bindings": ["github.com/example/packs"],
+            "status": "active",
+        }
+    ]
+    stored = await repo.get_governance_pack_trust_policy()
+    assert "trusted_git_key_fingerprints" not in stored["policy_document"]
+    assert stored["updated_by"] == 7
+
+
+@pytest.mark.asyncio
 async def test_governance_pack_trust_service_keeps_structured_signer_status_authoritative_over_legacy_fingerprints(
     tmp_path,
     monkeypatch,
@@ -502,6 +564,32 @@ async def test_governance_pack_trust_service_rejects_blank_legacy_fingerprint(
                 "allowed_git_repositories": ["github.com/example/packs"],
                 "allowed_git_ref_kinds": ["tag"],
                 "trusted_git_key_fingerprints": ["   "],
+            },
+            actor_id=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_governance_pack_trust_service_rejects_invalid_legacy_fingerprint_type(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    with pytest.raises(ValueError, match="fingerprint must be a string or list/tuple/set of strings"):
+        await _update_trust_policy(
+            service,
+            {
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/packs"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_git_key_fingerprints": 123,
             },
             actor_id=1,
         )
@@ -951,7 +1039,9 @@ async def test_distribution_service_verify_git_revision_uses_thread_offload(
         McpHubGovernancePackDistributionService,
     )
 
-    service = McpHubGovernancePackDistributionService(trust_service=_FakeGitTrustService())
+    service = McpHubGovernancePackDistributionService(
+        trust_service=_FakeGitTrustService(trusted_git_key_fingerprints=["ABCD1234"])
+    )
     calls: list[str] = []
 
     async def _fake_to_thread(func: Any, /, *args: Any, **kwargs: Any) -> Any:
@@ -998,6 +1088,57 @@ async def test_distribution_service_verify_git_revision_uses_thread_offload(
     assert verified["verified"] is True
     assert verified["result_code"] == "verified_and_trusted"
     assert calls == ["_fake_verify_sync"]
+
+
+@pytest.mark.asyncio
+async def test_distribution_service_verify_git_revision_awaits_async_signer_trust(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
+        McpHubGovernancePackDistributionService,
+    )
+
+    class _Trust:
+        async def evaluate_signer_for_repository(self, signer_fingerprint: str, repo_url: str) -> dict[str, Any]:
+            assert signer_fingerprint == "ABCD1234"
+            assert repo_url == "https://example.com/researcher-pack.git"
+            return {
+                "allowed": True,
+                "reason": None,
+                "result_code": "signer_trusted_for_repo",
+                "canonical_repository": "github.com/example/researcher-pack",
+                "signer_fingerprint": signer_fingerprint,
+            }
+
+    service = McpHubGovernancePackDistributionService(trust_service=_Trust())
+
+    def _fake_verify_sync(**kwargs: Any) -> dict[str, Any]:
+        assert kwargs["trusted_git_key_fingerprints"] == ["ABCD1234"]
+        return {
+            "verified": True,
+            "verification_mode": "git_signature",
+            "verified_object_type": "tag",
+            "signer_fingerprint": "ABCD1234",
+            "signer_identity": "Release Bot <bot@example.com>",
+            "result_code": "verified_locally",
+            "warning_code": None,
+        }
+
+    monkeypatch.setattr(service, "_verify_git_revision_sync", _fake_verify_sync)
+
+    result = await service._verify_git_revision(
+        checkout_root=tmp_path / "checkout",
+        repo_url="https://example.com/researcher-pack.git",
+        ref="v1.0.0",
+        ref_kind="tag",
+        commit="abc123",
+        trusted_git_key_fingerprints=["ABCD1234"],
+    )
+
+    assert result["verified"] is True
+    assert result["result_code"] == "verified_and_trusted"
+    assert result["signer_fingerprint"] == "ABCD1234"
 
 
 def test_distribution_service_verify_git_revision_sync_returns_structured_result_for_signed_tag(

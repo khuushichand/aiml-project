@@ -469,6 +469,7 @@ class McpHubRepo:
         if row is None:
             return None
         out = dict(row)
+        out["policy_document_json_raw"] = str(out.get("policy_document_json") or "").strip() or "{}"
         out["policy_document"] = _load_json_dict(out.pop("policy_document_json", None))
         return out
 
@@ -1021,6 +1022,7 @@ class McpHubRepo:
             return {
                 "id": 1,
                 "policy_document": {},
+                "policy_document_json_raw": "{}",
                 "updated_by": None,
                 "updated_at": None,
             }
@@ -1031,14 +1033,14 @@ class McpHubRepo:
         *,
         policy_document: dict[str, Any],
         actor_id: int | None,
-        expected_policy_document: dict[str, Any] | None = None,
+        expected_policy_document_json: str | None = None,
         conn: Any | None = None,
     ) -> dict[str, Any] | None:
         """Insert or replace the deployment-wide governance-pack trust policy."""
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
         policy_json = _dump_canonical_json_dict(policy_document)
-        if expected_policy_document is None:
+        if expected_policy_document_json is None:
             query = """
                 INSERT INTO mcp_governance_pack_trust_policy (
                     id, policy_document_json, updated_by, updated_at
@@ -1068,13 +1070,13 @@ class McpHubRepo:
                 policy_json,
                 actor_id,
                 ts,
-                _dump_canonical_json_dict(expected_policy_document),
+                str(expected_policy_document_json),
             )
         if conn is None:
             result = await self.db_pool.execute(query, params)
         else:
             result = await self._conn_execute(conn, query, params)
-        if expected_policy_document is not None and not self._command_touched_rows(result):
+        if expected_policy_document_json is not None and not self._command_touched_rows(result):
             return None
         return await self.get_governance_pack_trust_policy()
 

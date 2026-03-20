@@ -53,7 +53,7 @@ def _normalize_required_string_list(value: Any, *, field_name: str) -> list[str]
     elif isinstance(value, (list, tuple, set)):
         items = list(value)
     else:
-        return []
+        raise ValueError(f"{field_name} must be a string or list/tuple/set of strings")
     out: list[str] = []
     seen: set[str] = set()
     for item in items:
@@ -286,34 +286,40 @@ class McpHubGovernancePackTrustService:
             "trusted_signers": trusted_signers,
         }
 
-    async def get_policy(self) -> dict[str, Any]:
-        """Load and normalize the deployment-wide governance-pack trust policy."""
+    async def _load_policy_state(self) -> tuple[dict[str, Any], str]:
+        """Load the normalized policy plus the raw stored JSON used for optimistic locking."""
         row = await self.repo.get_governance_pack_trust_policy()
         try:
             policy = self._normalize_policy(row.get("policy_document"), for_write=False)
-            policy["policy_fingerprint"] = _stable_policy_fingerprint(policy)
-            return policy
         except ValueError as exc:
             raise ValueError(f"invalid persisted governance pack trust policy: {exc}") from exc
+        raw_policy_json = str(row.get("policy_document_json_raw") or "").strip()
+        if not raw_policy_json:
+            raw_policy_json = json.dumps(row.get("policy_document") or {}, sort_keys=True, separators=(",", ":"))
+        return policy, raw_policy_json
+
+    async def get_policy(self) -> dict[str, Any]:
+        """Load and normalize the deployment-wide governance-pack trust policy."""
+        policy, _ = await self._load_policy_state()
+        policy["policy_fingerprint"] = _stable_policy_fingerprint(policy)
+        return policy
 
     async def update_policy(self, policy: dict[str, Any], *, actor_id: int | None) -> dict[str, Any]:
         """Persist a normalized deployment-wide trust policy."""
         requested_fingerprint = str(policy.get("policy_fingerprint") or "").strip()
         if not requested_fingerprint:
             raise GovernancePackTrustPolicyStaleError("policy_fingerprint is required for trust policy updates")
-        current_policy = await self.get_policy()
-        current_fingerprint = str(current_policy.get("policy_fingerprint") or "").strip()
+        current_policy, current_policy_json_raw = await self._load_policy_state()
+        current_fingerprint = _stable_policy_fingerprint(current_policy)
         if current_fingerprint and requested_fingerprint != current_fingerprint:
             raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")
-        expected_policy_document = dict(current_policy)
-        expected_policy_document.pop("policy_fingerprint", None)
         normalized = self._normalize_policy(policy, for_write=True)
         response_payload = dict(normalized)
         response_payload["policy_fingerprint"] = _stable_policy_fingerprint(normalized)
         stored_row = await self.repo.upsert_governance_pack_trust_policy(
             policy_document=normalized,
             actor_id=actor_id,
-            expected_policy_document=expected_policy_document,
+            expected_policy_document_json=current_policy_json_raw,
         )
         if stored_row is None:
             raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")

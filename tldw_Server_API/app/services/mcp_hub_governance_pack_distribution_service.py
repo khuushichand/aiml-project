@@ -203,13 +203,13 @@ class McpHubGovernancePackDistributionService:
             "warning_code": warning_code,
         }
 
-    def _evaluate_signer_trust_sync(self, *, signer_fingerprint: str, repo_url: str) -> dict[str, Any] | None:
+    async def _evaluate_signer_trust(self, *, signer_fingerprint: str, repo_url: str) -> dict[str, Any] | None:
         evaluator = getattr(self.trust_service, "evaluate_signer_for_repository", None)
         if not callable(evaluator):
             return None
         result = evaluator(signer_fingerprint, repo_url)
         if inspect.isawaitable(result):
-            return asyncio.run(result)
+            result = await result
         if isinstance(result, dict):
             return result
         return None
@@ -568,26 +568,6 @@ class McpHubGovernancePackDistributionService:
                 signer_identity=signer_identity,
                 result_code="signer_not_allowed_for_repo",
             )
-        signer_decision = self._evaluate_signer_trust_sync(
-            signer_fingerprint=signer_fingerprint,
-            repo_url=repo_url,
-        )
-        if isinstance(signer_decision, dict):
-            if bool(signer_decision.get("allowed")):
-                return self._verification_result(
-                    verified=True,
-                    verified_object_type=verified_object_type,
-                    signer_fingerprint=signer_fingerprint,
-                    signer_identity=signer_identity,
-                    result_code="verified_and_trusted",
-                )
-            return self._verification_result(
-                verified=False,
-                verified_object_type=verified_object_type,
-                signer_fingerprint=signer_fingerprint,
-                signer_identity=signer_identity,
-                result_code=str(signer_decision.get("result_code") or "signer_not_allowed_for_repo"),
-            )
         return self._verification_result(
             verified=True,
             verified_object_type=verified_object_type,
@@ -607,7 +587,7 @@ class McpHubGovernancePackDistributionService:
         trusted_git_key_fingerprints: list[str] | None = None,
     ) -> dict[str, Any]:
         """Verify the checked-out Git revision and return a structured trust result."""
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self._verify_git_revision_sync,
             checkout_root=checkout_root,
             repo_url=repo_url,
@@ -616,6 +596,23 @@ class McpHubGovernancePackDistributionService:
             commit=commit,
             trusted_git_key_fingerprints=trusted_git_key_fingerprints,
         )
+        if not bool(result.get("verified")):
+            return result
+        signer_fingerprint = str(result.get("signer_fingerprint") or "").strip()
+        if not signer_fingerprint:
+            return result
+        signer_decision = await self._evaluate_signer_trust(
+            signer_fingerprint=signer_fingerprint,
+            repo_url=repo_url,
+        )
+        if not isinstance(signer_decision, dict):
+            return result
+        if bool(signer_decision.get("allowed")):
+            result["result_code"] = "verified_and_trusted"
+            return result
+        result["verified"] = False
+        result["result_code"] = str(signer_decision.get("result_code") or "signer_not_allowed_for_repo")
+        return result
 
     async def resolve_local_path(self, path: str) -> GovernancePack:
         """Resolve a governance pack from a trusted local filesystem path."""
