@@ -16,6 +16,7 @@ from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.services.telegram_delivery_service import TelegramDeliveryService
 
 
 def _b64_key(byte_char: bytes) -> str:
@@ -231,3 +232,83 @@ def test_linked_ask_job_payload_includes_owner_and_session_mapping(
     assert session_payload["tenant_id"] == "team:22"
     assert session_payload["session_key"] == "team:22:dm:77"
     assert uuid.UUID(session_payload["assistant_conversation_id"])
+
+
+class _DummyResponse:
+    def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
+def test_send_message_wraps_telegram_api_and_returns_delivery_correlation() -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_transport(**kwargs):
+        captured.update(kwargs)
+        return _DummyResponse(
+            200,
+            {
+                "ok": True,
+                "result": {
+                    "message_id": 501,
+                },
+            },
+        )
+
+    service = TelegramDeliveryService(job_manager=None, transport=_fake_transport)
+
+    result = service.send_message(
+        bot_token="123:abc",
+        chat_id=100,
+        text="queued reply",
+        request_id="req-telegram-1",
+        message_thread_id=55,
+        reply_to_message_id=42,
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://api.telegram.org/bot123:abc/sendMessage"
+    assert captured["json"] == {
+        "chat_id": 100,
+        "text": "queued reply",
+        "message_thread_id": 55,
+        "reply_to_message_id": 42,
+    }
+    assert result["status"] == "sent"
+    assert result["telegram_message_id"] == 501
+    assert uuid.UUID(result["delivery_correlation_id"])
+
+
+def test_send_message_reuses_delivery_correlation_across_retries() -> None:
+    attempts: list[int] = []
+
+    def _fake_transport(**_kwargs):
+        attempts.append(1)
+        return _DummyResponse(500, {"ok": False, "description": "retry"})
+
+    service = TelegramDeliveryService(job_manager=None, transport=_fake_transport)
+
+    first = service.send_message(
+        bot_token="123:abc",
+        chat_id=100,
+        text="queued reply",
+        request_id="req-telegram-2",
+        attempt=1,
+    )
+    second = service.send_message(
+        bot_token="123:abc",
+        chat_id=100,
+        text="queued reply",
+        request_id="req-telegram-2",
+        attempt=2,
+    )
+
+    assert len(attempts) == 2
+    assert first["status"] == "failed"
+    assert second["status"] == "failed"
+    assert first["attempt"] == 1
+    assert second["attempt"] == 2
+    assert first["delivery_correlation_id"] == second["delivery_correlation_id"]
