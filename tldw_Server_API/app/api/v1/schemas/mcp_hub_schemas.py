@@ -1076,7 +1076,7 @@ class GovernancePackTrustedSignerBinding(BaseModel):
         elif isinstance(value, (list, tuple, set)):
             values = list(value)
         else:
-            raise TypeError("repo_bindings must be a list of strings")
+            raise ValueError("repo_bindings must be a list of strings")
         cleaned_values: list[str] = []
         for item in values:
             cleaned = str(item or "").strip()
@@ -1101,7 +1101,7 @@ def _validate_non_blank_string_list(value: Any, *, field_name: str) -> list[str]
     elif isinstance(value, (list, tuple, set)):
         values = list(value)
     else:
-        raise TypeError(f"{field_name} must be a list of strings")
+        raise ValueError(f"{field_name} must be a list of strings")
     cleaned_values: list[str] = []
     for item in values:
         cleaned = str(item or "").strip()
