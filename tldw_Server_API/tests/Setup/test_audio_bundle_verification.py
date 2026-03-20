@@ -94,3 +94,93 @@ def test_verification_marks_ready_when_primary_paths_are_usable(mocker, tmp_path
     assert result["remediation_items"] == []
     assert store.load()["status"] == "ready"
     assert store.load()["selected_resource_profile"] == "performance"
+
+
+def test_verify_audio_bundle_uses_selected_profile_targets(mocker, tmp_path):
+    store = AudioReadinessStore(tmp_path / "audio_readiness.json")
+
+    mocker.patch.object(
+        install_manager.audio_health,
+        "collect_setup_stt_health",
+        return_value={"usable": True, "model": None},
+    )
+    mocker.patch.object(
+        install_manager.audio_health,
+        "collect_setup_tts_health",
+        return_value={
+            "status": "healthy",
+            "providers": {
+                "kokoro": {"espeak_lib_exists": True},
+            },
+        },
+    )
+    mocker.patch.object(
+        install_manager.audio_profile_service,
+        "detect_machine_profile",
+        return_value=MachineProfile(
+            platform="darwin",
+            arch="arm64",
+            apple_silicon=True,
+            cuda_available=False,
+            ffmpeg_available=True,
+            espeak_available=True,
+            free_disk_gb=64.0,
+            network_available_for_downloads=True,
+        ),
+    )
+    mocker.patch.object(
+        install_manager.audio_readiness_store,
+        "get_audio_readiness_store",
+        return_value=store,
+    )
+
+    result = install_manager.verify_audio_bundle("apple_silicon_local", resource_profile="balanced")
+
+    assert result["bundle_id"] == "apple_silicon_local"
+    assert result["selected_resource_profile"] == "balanced"
+    assert result["targets_checked"] == ["stt_default", "tts_default"]
+
+
+def test_verification_remediation_references_selected_profile_engines(mocker, tmp_path):
+    store = AudioReadinessStore(tmp_path / "audio_readiness.json")
+
+    mocker.patch.object(
+        install_manager.audio_health,
+        "collect_setup_stt_health",
+        return_value={"usable": False, "model": None},
+    )
+    mocker.patch.object(
+        install_manager.audio_health,
+        "collect_setup_tts_health",
+        return_value={
+            "status": "failed",
+            "providers": {
+                "dia": {"status": "failed"},
+            },
+        },
+    )
+    mocker.patch.object(
+        install_manager.audio_profile_service,
+        "detect_machine_profile",
+        return_value=MachineProfile(
+            platform="linux",
+            arch="x86_64",
+            apple_silicon=False,
+            cuda_available=True,
+            ffmpeg_available=True,
+            espeak_available=True,
+            free_disk_gb=128.0,
+            network_available_for_downloads=True,
+        ),
+    )
+    mocker.patch.object(
+        install_manager.audio_readiness_store,
+        "get_audio_readiness_store",
+        return_value=store,
+    )
+
+    result = install_manager.verify_audio_bundle("nvidia_local", resource_profile="performance")
+    messages = [item["message"] for item in result["remediation_items"]]
+
+    assert any("nemo_parakeet_standard" in message for message in messages)
+    assert any("dia" in message for message in messages)
