@@ -6,6 +6,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, re
 from tldw_Server_API.app.api.v1.endpoints.telegram_support import (
     telegram_admin_get_bot_impl,
     telegram_admin_put_bot_impl,
+    telegram_webhook_impl,
 )
 from tldw_Server_API.app.api.v1.schemas.telegram_schemas import (
     TelegramBotConfigResponse,
@@ -31,3 +32,8 @@ async def telegram_admin_get_bot(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> TelegramBotConfigResponse:
     return await telegram_admin_get_bot_impl(principal=principal, request=request)
+
+
+@router.post("/webhook")
+async def telegram_webhook(request: Request):
+    return await telegram_webhook_impl(request=request)

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from fastapi import HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.endpoints._in_memory_limits import TTLReceiptStore
 from tldw_Server_API.app.api.v1.schemas.telegram_schemas import (
     TelegramBotConfigResponse,
     TelegramBotConfigUpdate,
@@ -27,6 +31,8 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
 _PROVIDER = "telegram"
 _DEFAULT_BOT_USERNAME = "example_bot"
 _CREDENTIAL_VERSION = 1
+_WEBHOOK_REPLAY_WINDOW_SECONDS = 3600
+_WEBHOOK_RECEIPTS = TTLReceiptStore()
 
 
 @dataclass(frozen=True)
@@ -154,6 +160,122 @@ def _resolve_shared_scope(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="An active org/team scope is required",
     )
+
+
+def _reset_telegram_webhook_state_for_tests() -> None:
+    """Reset webhook dedupe receipts for deterministic tests."""
+    _WEBHOOK_RECEIPTS.clear()
+
+
+def _telegram_webhook_error(
+    status_code: int,
+    error: str,
+    *,
+    detail: str | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ok": False,
+            "error": error,
+            **({"detail": detail} if detail else {}),
+        },
+    )
+
+
+async def _resolve_webhook_scope_from_secret(
+    *,
+    repo: AuthnzOrgProviderSecretsRepo,
+    webhook_secret: str,
+) -> TelegramScope | None:
+    try:
+        rows = await repo.list_secrets(provider=_PROVIDER)
+    except Exception as exc:
+        logger.error("Failed to list Telegram bot configs for webhook resolution: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Telegram bot configuration is unavailable",
+        ) from exc
+
+    matches: list[TelegramScope] = []
+    for row in rows:
+        scope_type = str(row.get("scope_type") or "").strip().lower()
+        scope_id = _coerce_int(row.get("scope_id"))
+        if scope_type not in {"org", "team"} or scope_id is None:
+            continue
+        try:
+            secret_row = await repo.fetch_secret(scope_type, scope_id, _PROVIDER)
+        except Exception as exc:
+            logger.error(
+                "Failed to load Telegram bot config for webhook resolution at {}:{}: {}",
+                scope_type,
+                scope_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Telegram bot configuration is unavailable",
+            ) from exc
+        if not secret_row:
+            continue
+        payload = _decrypt_telegram_payload(secret_row.get("encrypted_blob"))
+        if not isinstance(payload, dict):
+            continue
+        stored_secret = _coerce_nonempty_string(payload.get("webhook_secret"))
+        if not stored_secret or not secrets.compare_digest(stored_secret, webhook_secret):
+            continue
+        if not bool(payload.get("enabled")):
+            continue
+        matches.append(TelegramScope(scope_type=scope_type, scope_id=scope_id))
+        if len(matches) > 1:
+            logger.warning("Ambiguous Telegram webhook secret matched multiple scopes; rejecting request")
+            return None
+
+    return matches[0] if matches else None
+
+
+async def telegram_webhook_impl(
+    *,
+    request: Request,
+    get_org_secret_repo: Callable[[], Awaitable[Any]] = _get_org_secret_repo,
+    dedupe_receipts: TTLReceiptStore = _WEBHOOK_RECEIPTS,
+    dedupe_ttl_seconds: int = _WEBHOOK_REPLAY_WINDOW_SECONDS,
+) -> JSONResponse:
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "invalid_json")
+
+    if not isinstance(payload, dict):
+        return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "invalid_payload")
+
+    update_id = payload.get("update_id")
+    if not isinstance(update_id, int) or isinstance(update_id, bool):
+        return _telegram_webhook_error(
+            status.HTTP_400_BAD_REQUEST,
+            "invalid_payload",
+            detail="update_id is required",
+        )
+    update_id_int = update_id
+
+    webhook_secret = _coerce_nonempty_string(request.headers.get("X-Telegram-Bot-Api-Secret-Token"))
+    if not webhook_secret:
+        return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
+
+    repo = await get_org_secret_repo()
+    scope = await _resolve_webhook_scope_from_secret(
+        repo=repo,
+        webhook_secret=webhook_secret,
+    )
+    if scope is None:
+        return _telegram_webhook_error(status.HTTP_401_UNAUTHORIZED, "invalid_secret")
+
+    dedupe_key = f"{scope.scope_type}:{scope.scope_id}:{update_id_int}"
+    if dedupe_receipts.seen_or_store(dedupe_key, dedupe_ttl_seconds):
+        return JSONResponse(status_code=200, content={"ok": True, "status": "duplicate"})
+
+    return JSONResponse(status_code=200, content={"ok": True, "status": "accepted"})
 
 
 async def telegram_admin_put_bot_impl(
