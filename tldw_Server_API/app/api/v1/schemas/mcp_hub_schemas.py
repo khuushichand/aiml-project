@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ScopeType = Literal["global", "org", "team", "user"]
 CapabilityAdapterScopeType = Literal["global", "org", "team"]
@@ -36,6 +36,7 @@ WorkspaceSourceMode = Literal["inline", "named"]
 WorkspaceTrustSource = Literal["user_local", "shared_registry"]
 ExternalAuthTemplateTargetType = Literal["header", "env"]
 CredentialSlotPrivilegeClass = Literal["read", "write", "admin"]
+TrustSignerBindingStatus = Literal["active", "inactive", "revoked"]
 
 
 class ACPProfileCreateRequest(BaseModel):
@@ -809,6 +810,11 @@ class GovernancePackSourceCandidateResponse(BaseModel):
     pack_content_digest: str
     source_verified: bool | None = None
     source_verification_mode: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
     source_fetched_at: datetime | str | None = None
     fetched_by: int | None = None
 
@@ -844,6 +850,11 @@ class GovernancePackSourceUpdateCheckResponse(BaseModel):
     candidate_manifest: GovernancePackReportManifestResponse | None = None
     source_commit_resolved: str | None = None
     pack_content_digest: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
 
 
 class GovernancePackSourceUpgradePrepareResponse(BaseModel):
@@ -852,6 +863,11 @@ class GovernancePackSourceUpgradePrepareResponse(BaseModel):
     candidate_manifest: GovernancePackReportManifestResponse | None = None
     candidate: GovernancePackSourceCandidateResponse
     manifest: GovernancePackReportManifestResponse
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
 
 
 class GovernancePackSourceUpgradeDryRunRequest(BaseModel):
@@ -1027,6 +1043,11 @@ class GovernancePackSummaryResponse(BaseModel):
     pack_content_digest: str | None = None
     source_verified: bool | None = None
     source_verification_mode: str | None = None
+    signer_fingerprint: str | None = None
+    signer_identity: str | None = None
+    verified_object_type: str | None = None
+    verification_result_code: str | None = None
+    verification_warning_code: str | None = None
     source_fetched_at: datetime | str | None = None
     fetched_by: int | None = None
     manifest: dict[str, Any] = Field(default_factory=dict)
@@ -1051,6 +1072,65 @@ class GovernancePackImportResponse(BaseModel):
     report: GovernancePackDryRunReportResponse
 
 
+class GovernancePackTrustedSignerBinding(BaseModel):
+    fingerprint: str = Field(..., min_length=1, max_length=256)
+    display_name: str | None = Field(default=None, max_length=200)
+    repo_bindings: list[str] = Field(default_factory=list)
+    status: TrustSignerBindingStatus = "active"
+
+    @field_validator("fingerprint", mode="before")
+    @classmethod
+    def _validate_fingerprint(cls, value: Any) -> str:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            raise ValueError("fingerprint is required")
+        return cleaned
+
+    @field_validator("repo_bindings", mode="before")
+    @classmethod
+    def _validate_repo_bindings(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, (list, tuple, set)):
+            values = list(value)
+        else:
+            raise ValueError("repo_bindings must be a list of strings")
+        cleaned_values: list[str] = []
+        for item in values:
+            cleaned = str(item or "").strip()
+            if not cleaned:
+                raise ValueError("repo binding is required")
+            cleaned_values.append(cleaned)
+        return cleaned_values
+
+    @model_validator(mode="after")
+    def _require_repo_bindings(self) -> GovernancePackTrustedSignerBinding:
+        if not self.repo_bindings:
+            raise ValueError("trusted signer repo_bindings must not be empty")
+        return self
+
+
+def _validate_non_blank_string_list(value: Any, *, field_name: str) -> list[str]:
+    """Normalize a string collection while rejecting whitespace-only entries."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple, set)):
+        values = list(value)
+    else:
+        raise ValueError(f"{field_name} must be a list of strings")
+    cleaned_values: list[str] = []
+    for item in values:
+        cleaned = str(item or "").strip()
+        if not cleaned:
+            raise ValueError(f"{field_name} entries cannot be blank")
+        cleaned_values.append(cleaned)
+    return cleaned_values
+
+
 class GovernancePackTrustPolicyRequest(BaseModel):
     """Request payload for updating the deployment-wide governance-pack trust policy."""
     allow_local_path_sources: bool = False
@@ -1060,7 +1140,14 @@ class GovernancePackTrustPolicyRequest(BaseModel):
     allowed_git_repositories: list[str] = Field(default_factory=list)
     allowed_git_ref_kinds: list[str] = Field(default_factory=list)
     require_git_signature_verification: bool = False
+    trusted_signers: list[GovernancePackTrustedSignerBinding] = Field(default_factory=list)
     trusted_git_key_fingerprints: list[str] = Field(default_factory=list)
+    policy_fingerprint: str = Field(..., min_length=1)
+
+    @field_validator("trusted_git_key_fingerprints", mode="before")
+    @classmethod
+    def _validate_trusted_git_key_fingerprints(cls, value: Any) -> list[str]:
+        return _validate_non_blank_string_list(value, field_name="fingerprint")
 
 
 class GovernancePackTrustPolicyResponse(BaseModel):
@@ -1072,4 +1159,5 @@ class GovernancePackTrustPolicyResponse(BaseModel):
     allowed_git_repositories: list[str] = Field(default_factory=list)
     allowed_git_ref_kinds: list[str] = Field(default_factory=list)
     require_git_signature_verification: bool = False
-    trusted_git_key_fingerprints: list[str] = Field(default_factory=list)
+    trusted_signers: list[GovernancePackTrustedSignerBinding] = Field(default_factory=list)
+    policy_fingerprint: str | None = None

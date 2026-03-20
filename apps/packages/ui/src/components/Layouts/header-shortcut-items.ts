@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react"
 import {
+  BrainCircuit,
   BookMarked,
   BookOpen,
   BookText,
@@ -120,6 +121,13 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelKey: "option:header.modePromptStudio",
         labelDefault: "Prompt Studio",
         shortcutIndex: 3
+      },
+      {
+        id: "deep-research",
+        to: "/research",
+        icon: BrainCircuit,
+        labelKey: "option:header.deepResearch",
+        labelDefault: "Deep Research"
       },
       {
         id: "workspace-playground",

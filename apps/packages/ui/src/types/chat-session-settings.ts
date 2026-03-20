@@ -1,3 +1,5 @@
+import type { ChatResearchContext } from "@/services/tldw/TldwApiClient"
+
 export const CHAT_SETTINGS_SCHEMA_VERSION = 2
 
 export type CharacterMemoryEntry = {
@@ -19,6 +21,11 @@ export type ChatSummary = {
   content?: string
   sourceRange?: { fromMessageId?: string; toMessageId?: string }
   updatedAt?: string
+}
+
+export type DeepResearchAttachment = ChatResearchContext & {
+  attached_at: string
+  updatedAt: string
 }
 
 export type AuthorNotePosition =
@@ -53,4 +60,7 @@ export type ChatSettingsRecord = {
   chatGenerationOverride?: ChatGenerationOverride | null
   summary?: ChatSummary | null
   imageEventSyncMode?: "off" | "on"
-} & Record<string, unknown>
+  deepResearchAttachment?: DeepResearchAttachment | null
+  deepResearchPinnedAttachment?: DeepResearchAttachment | null
+  deepResearchAttachmentHistory?: DeepResearchAttachment[]
+}

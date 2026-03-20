@@ -108,6 +108,7 @@ from tldw_Server_API.app.services.mcp_hub_governance_pack_service import (
 )
 from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
     McpHubGovernancePackTrustService,
+    GovernancePackTrustPolicyStaleError,
 )
 from tldw_Server_API.app.services.mcp_hub_governance_pack_distribution_service import (
     McpHubGovernancePackDistributionService,
@@ -2015,7 +2016,10 @@ async def get_governance_pack_trust_policy(
 ) -> GovernancePackTrustPolicyResponse:
     """Return the deployment-wide governance-pack trust policy."""
     _require_mutation_permission(principal)
-    return GovernancePackTrustPolicyResponse.model_validate(await svc.get_policy())
+    try:
+        return GovernancePackTrustPolicyResponse.model_validate(await svc.get_policy())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.put(
@@ -2029,7 +2033,12 @@ async def update_governance_pack_trust_policy(
 ) -> GovernancePackTrustPolicyResponse:
     """Update the deployment-wide governance-pack trust policy."""
     _require_mutation_permission(principal)
-    updated = await svc.update_policy(payload.model_dump(), actor_id=principal.user_id)
+    try:
+        updated = await svc.update_policy(payload.model_dump(), actor_id=principal.user_id)
+    except GovernancePackTrustPolicyStaleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return GovernancePackTrustPolicyResponse.model_validate(updated)
 
 

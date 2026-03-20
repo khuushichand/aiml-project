@@ -66,6 +66,11 @@ describe("GovernancePacksTab", () => {
         pack_content_digest: "c".repeat(64),
         source_verified: true,
         source_verification_mode: "git_signature",
+        signer_fingerprint: "ABCD1234",
+        signer_identity: "Release Bot <bot@example.com>",
+        verified_object_type: "commit",
+        verification_result_code: "verified_and_trusted",
+        verification_warning_code: null,
         is_active_install: true,
         manifest: {
           pack_id: "researcher-pack",
@@ -110,6 +115,11 @@ describe("GovernancePacksTab", () => {
       pack_content_digest: "c".repeat(64),
       source_verified: true,
       source_verification_mode: "git_signature",
+      signer_fingerprint: "ABCD1234",
+      signer_identity: "Release Bot <bot@example.com>",
+      verified_object_type: "commit",
+      verification_result_code: "verified_and_trusted",
+      verification_warning_code: "signer_revoked",
       is_active_install: true,
       manifest: {
         pack_id: "researcher-pack",
@@ -308,7 +318,12 @@ describe("GovernancePacksTab", () => {
         description: "Portable research governance pack"
       },
       source_commit_resolved: "def456",
-      pack_content_digest: "d".repeat(64)
+      pack_content_digest: "d".repeat(64),
+      signer_fingerprint: "BBBB2222",
+      signer_identity: "Backup Bot <backup@example.com>",
+      verified_object_type: "commit",
+      verification_result_code: "verified_and_trusted",
+      verification_warning_code: "signer_rotated_trusted"
     })
     mocks.prepareGovernancePackUpgradeCandidate.mockResolvedValue({
       status: "newer_version_available",
@@ -333,7 +348,12 @@ describe("GovernancePacksTab", () => {
         source_commit_resolved: "def456",
         pack_content_digest: "d".repeat(64),
         source_verified: true,
-        source_verification_mode: "git_signature"
+        source_verification_mode: "git_signature",
+        signer_fingerprint: "BBBB2222",
+        signer_identity: "Backup Bot <backup@example.com>",
+        verified_object_type: "commit",
+        verification_result_code: "verified_and_trusted",
+        verification_warning_code: "signer_rotated_trusted"
       },
       manifest: {
         pack_id: "researcher-pack",
@@ -455,12 +475,17 @@ describe("GovernancePacksTab", () => {
   })
 
   it("renders install state badges and upgrade history for the selected pack", async () => {
+    const user = userEvent.setup()
     render(<GovernancePacksTab />)
 
     expect(await screen.findByText("Active install")).toBeTruthy()
     expect(await screen.findByText("Inactive install")).toBeTruthy()
     expect(await screen.findByText("Git Source")).toBeTruthy()
     expect(await screen.findByText("Verified Commit")).toBeTruthy()
+    await user.click(await screen.findByText("Verification details"))
+    expect(await screen.findByText("ABCD1234")).toBeTruthy()
+    expect(await screen.findByText("verified_and_trusted")).toBeTruthy()
+    expect(await screen.findByText(/signer revoked/i)).toBeTruthy()
     expect(await screen.findByText("Upgrade History")).toBeTruthy()
     expect(screen.getByText("0.9.0 -> 1.0.0")).toBeTruthy()
   })
@@ -503,6 +528,7 @@ describe("GovernancePacksTab", () => {
     await user.click(screen.getByRole("button", { name: /check for updates/i }))
 
     expect(await screen.findByText(/newer version available/i)).toBeTruthy()
+    expect(await screen.findByText(/signer rotated/i)).toBeTruthy()
     expect(screen.getByRole("button", { name: /preview source upgrade/i })).toBeTruthy()
 
     await user.click(screen.getByRole("button", { name: /preview source upgrade/i }))
@@ -510,6 +536,9 @@ describe("GovernancePacksTab", () => {
     expect(await screen.findByRole("dialog")).toBeTruthy()
     expect(await screen.findByText("Prepared source candidate")).toBeTruthy()
     expect(screen.getByText("def456")).toBeTruthy()
+    const verificationDetails = await screen.findAllByText("Verification details")
+    await user.click(verificationDetails[verificationDetails.length - 1]!)
+    expect(screen.getByText("BBBB2222")).toBeTruthy()
     expect(mocks.prepareGovernancePackUpgradeCandidate).toHaveBeenCalledWith(81)
     expect(mocks.dryRunGovernancePackSourceUpgrade).toHaveBeenCalledWith({
       source_governance_pack_id: 81,
@@ -549,7 +578,8 @@ describe("GovernancePacksTab", () => {
           description: "Portable research governance pack"
         },
         source_commit_resolved: "fedcba",
-        pack_content_digest: "e".repeat(64)
+        pack_content_digest: "e".repeat(64),
+        verification_warning_code: "unknown_previous_signer"
       })
 
     const user = userEvent.setup()
@@ -561,6 +591,7 @@ describe("GovernancePacksTab", () => {
 
     await user.click(screen.getByRole("button", { name: /check for updates/i }))
     expect(await screen.findByText(/source drift detected at the same version/i)).toBeTruthy()
+    expect(await screen.findByText(/previous signer unknown/i)).toBeTruthy()
   })
 
   it("opens the upgrade modal and renders dry-run object diffs", async () => {

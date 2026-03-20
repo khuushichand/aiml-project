@@ -34,6 +34,12 @@ type AudioResourceProfile = {
   resource_class?: string | null
   stt_plan?: Array<Record<string, unknown>>
   tts_plan?: Array<Record<string, unknown>>
+  tts_choices?: Array<{
+    choice_id: string
+    label: string
+    description?: string | null
+  }>
+  default_tts_choice?: string | null
 }
 
 type AudioBundle = {
@@ -66,6 +72,7 @@ type InstallStatusSnapshot = {
   errors?: unknown[]
   bundle_id?: string
   resource_profile?: string
+  tts_choice?: string | null
   safe_rerun?: boolean
 }
 
@@ -73,6 +80,7 @@ type VerificationResult = {
   status?: string
   bundle_id?: string
   selected_resource_profile?: string
+  tts_choice?: string | null
   targets_checked?: string[]
   remediation_items?: Array<{ code?: string; action?: string; message?: string } | string>
 }
@@ -157,14 +165,53 @@ const deriveSelection = (
   }
 }
 
+const deriveDefaultTtsChoice = (profile: AudioResourceProfile | null | undefined): string | null => {
+  if (!profile) {
+    return null
+  }
+  if (profile.default_tts_choice && String(profile.default_tts_choice).trim().length > 0) {
+    return profile.default_tts_choice
+  }
+  const firstChoice = Array.isArray(profile.tts_choices) ? profile.tts_choices[0] : null
+  return firstChoice?.choice_id || null
+}
+
+const resolveSelectedTtsChoice = (
+  profile: AudioResourceProfile | null | undefined,
+  currentTtsChoice: string | null
+): string | null => {
+  const availableChoices = Array.isArray(profile?.tts_choices) ? profile.tts_choices : []
+  if (
+    currentTtsChoice &&
+    availableChoices.some((choice) => choice.choice_id === currentTtsChoice)
+  ) {
+    return currentTtsChoice
+  }
+  return deriveDefaultTtsChoice(profile)
+}
+
 const logNonFatalRefreshError = (context: string, err: unknown) => {
   console.warn(`Audio installer status refresh failed during ${context}.`, err)
 }
+
+const buildBundleRequestBody = (
+  bundleId: string,
+  resourceProfile: string,
+  ttsChoice: string | null,
+  extra: Record<string, unknown> = {}
+) => ({
+  bundle_id: bundleId,
+  resource_profile: resourceProfile,
+  ...(ttsChoice ? { tts_choice: ttsChoice } : {}),
+  ...extra
+})
+
 export const useAudioInstaller = () => {
   const selectionRef = React.useRef<{
     bundleId: string | null
     resourceProfile: string | null
-  }>({ bundleId: null, resourceProfile: null })
+    ttsChoice: string | null
+  }>({ bundleId: null, resourceProfile: null, ttsChoice: null })
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [adminGuard, setAdminGuard] = React.useState<AdminGuardState>(null)
@@ -173,6 +220,7 @@ export const useAudioInstaller = () => {
   const [catalog, setCatalog] = React.useState<AudioBundle[]>([])
   const [selectedBundleId, setSelectedBundleId] = React.useState<string | null>(null)
   const [selectedResourceProfile, setSelectedResourceProfile] = React.useState<string | null>(null)
+  const [selectedTtsChoice, setSelectedTtsChoice] = React.useState<string | null>(null)
   const [installStatus, setInstallStatus] = React.useState<InstallStatusSnapshot | null>(null)
   const [verification, setVerification] = React.useState<VerificationResult | null>(null)
   const [provisioning, setProvisioning] = React.useState(false)
@@ -181,9 +229,10 @@ export const useAudioInstaller = () => {
   React.useEffect(() => {
     selectionRef.current = {
       bundleId: selectedBundleId,
-      resourceProfile: selectedResourceProfile
+      resourceProfile: selectedResourceProfile,
+      ttsChoice: selectedTtsChoice
     }
-  }, [selectedBundleId, selectedResourceProfile])
+  }, [selectedBundleId, selectedResourceProfile, selectedTtsChoice])
 
   const refreshInstallStatus = React.useCallback(async () => {
     const snapshot = await requestJson<InstallStatusSnapshot>(INSTALL_STATUS_PATH)
@@ -209,6 +258,19 @@ export const useAudioInstaller = () => {
       setCatalog(nextCatalog)
       setSelectedBundleId(nextSelection.bundleId)
       setSelectedResourceProfile(nextSelection.resourceProfile)
+      const nextBundle =
+        nextRecommendations.find((entry) => entry.bundle_id === nextSelection.bundleId)?.bundle ||
+        nextCatalog.find((entry) => entry.bundle_id === nextSelection.bundleId) ||
+        null
+      const nextProfile =
+        nextRecommendations.find(
+          (entry) =>
+            entry.bundle_id === nextSelection.bundleId &&
+            entry.resource_profile === nextSelection.resourceProfile
+        )?.profile ||
+        (nextBundle?.resource_profiles || {})[nextSelection.resourceProfile || ""] ||
+        null
+      setSelectedTtsChoice(resolveSelectedTtsChoice(nextProfile, selectionRef.current.ttsChoice))
       setAdminGuard(null)
       setError(null)
 
@@ -299,6 +361,17 @@ export const useAudioInstaller = () => {
     [selectedBundle]
   )
 
+  const ttsChoiceOptions = React.useMemo(
+    () =>
+      Array.isArray(selectedProfile?.tts_choices)
+        ? selectedProfile.tts_choices.map((choice) => ({
+            value: choice.choice_id,
+            label: choice.label
+          }))
+        : [],
+    [selectedProfile]
+  )
+
   const handleBundleChange = React.useCallback(
     (bundleId: string) => {
       const bundle =
@@ -309,19 +382,28 @@ export const useAudioInstaller = () => {
         (entry) => entry.bundle_id === bundleId
       )?.resource_profile
       setSelectedBundleId(bundleId)
-      setSelectedResourceProfile(
+      const nextProfileId =
         recommendedProfile ||
-          bundle?.default_resource_profile ||
-          Object.keys(bundle?.resource_profiles || {})[0] ||
-          null
-      )
+        bundle?.default_resource_profile ||
+        Object.keys(bundle?.resource_profiles || {})[0] ||
+        null
+      const nextProfile = (bundle?.resource_profiles || {})[nextProfileId || ""]
+      setSelectedResourceProfile(nextProfileId)
+      setSelectedTtsChoice(resolveSelectedTtsChoice(nextProfile, null))
       setVerification(null)
     },
     [catalog, recommendations]
   )
 
   const handleResourceProfileChange = React.useCallback((profileId: string) => {
+    const nextProfile = (selectedBundle?.resource_profiles || {})[profileId]
     setSelectedResourceProfile(profileId)
+    setSelectedTtsChoice(resolveSelectedTtsChoice(nextProfile, null))
+    setVerification(null)
+  }, [selectedBundle])
+
+  const handleTtsChoiceChange = React.useCallback((ttsChoice: string) => {
+    setSelectedTtsChoice(ttsChoice)
     setVerification(null)
   }, [])
 
@@ -334,11 +416,11 @@ export const useAudioInstaller = () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           timeoutMs: PROVISION_TIMEOUT_MS,
-          body: JSON.stringify({
-            bundle_id: selectedBundleId,
-            resource_profile: selectedResourceProfile,
-            safe_rerun: safeRerun
-          })
+          body: JSON.stringify(
+            buildBundleRequestBody(selectedBundleId, selectedResourceProfile, selectedTtsChoice, {
+              safe_rerun: safeRerun
+            })
+          )
         })
         setInstallStatus(result)
         setVerification(null)
@@ -358,7 +440,7 @@ export const useAudioInstaller = () => {
         setProvisioning(false)
       }
     },
-    [refreshInstallStatus, selectedBundleId, selectedResourceProfile]
+    [refreshInstallStatus, selectedBundleId, selectedResourceProfile, selectedTtsChoice]
   )
 
   const handleVerify = React.useCallback(async () => {
@@ -368,10 +450,9 @@ export const useAudioInstaller = () => {
       const result = await requestJson<VerificationResult>(VERIFY_PATH, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bundle_id: selectedBundleId,
-          resource_profile: selectedResourceProfile
-        })
+        body: JSON.stringify(
+          buildBundleRequestBody(selectedBundleId, selectedResourceProfile, selectedTtsChoice)
+        )
       })
       setVerification(result)
       setAdminGuard(null)
@@ -384,7 +465,7 @@ export const useAudioInstaller = () => {
     } finally {
       setVerifying(false)
     }
-  }, [selectedBundleId, selectedResourceProfile])
+  }, [selectedBundleId, selectedResourceProfile, selectedTtsChoice])
 
   return {
     adminGuard,
@@ -401,12 +482,15 @@ export const useAudioInstaller = () => {
     selectedBundleId,
     selectedProfile,
     selectedResourceProfile,
+    selectedTtsChoice,
     setSelectedResourceProfile,
     handleBundleChange,
     handleResourceProfileChange,
+    handleTtsChoiceChange,
     handleProvision,
     handleVerify,
     refresh: load,
+    ttsChoiceOptions,
     verification,
     verifying
   }

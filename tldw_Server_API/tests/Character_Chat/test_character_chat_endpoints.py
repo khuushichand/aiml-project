@@ -296,6 +296,73 @@ async def test_message_placeholders_and_length_guard(monkeypatch):
             _ = None
 
 
+@pytest.mark.asyncio
+async def test_chat_endpoint_lists_linked_research_runs():
+    tmpdir = tempfile.mkdtemp(prefix="chacha_research_runs_")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+
+    try:
+        from tldw_Server_API.app.main import app
+        from tldw_Server_API.app.core.Research.service import ResearchService
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+        class DummyJobs:
+            def create_job(self, **kwargs):
+                return {"id": 31, "uuid": "job-31", "status": "queued"}
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            chars = (await client.get("/api/v1/characters/", headers=headers)).json()
+            character_id = chars[0]["id"]
+
+            chat_resp = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": character_id, "title": "Research-linked chat"},
+            )
+            assert chat_resp.status_code == 201
+            chat_id = chat_resp.json()["id"]
+
+            service = ResearchService(
+                research_db_path=None,
+                outputs_dir=None,
+                job_manager=DummyJobs(),
+            )
+            session = service.create_session(
+                owner_user_id="1",
+                query="Investigate linked run visibility in chat",
+                source_policy="balanced",
+                autonomy_mode="checkpointed",
+                chat_handoff={"chat_id": chat_id},
+            )
+
+            response = await client.get(f"/api/v1/chats/{chat_id}/research-runs", headers=headers)
+
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload == {
+                "runs": [
+                    {
+                        "run_id": session.id,
+                        "query": "Investigate linked run visibility in chat",
+                        "status": "queued",
+                        "phase": "drafting_plan",
+                        "control_state": "running",
+                        "latest_checkpoint_id": None,
+                        "updated_at": payload["runs"][0]["updated_at"],
+                    }
+                ]
+            }
+    finally:
+        try:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            _ = None
+
+
 # --- Unit Tests for Helper Functions (Regression Tests) ---
 
 

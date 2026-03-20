@@ -1,4 +1,5 @@
 import { ChatTldw } from "./ChatTldw"
+import type { ChatResearchContext } from "@/services/tldw/TldwApiClient"
 import {
   getAllDefaultModelSettings,
   getModelSettings
@@ -28,6 +29,7 @@ type PageAssistModelOptions = {
   apiProvider?: string
   extraHeaders?: string
   extraBody?: string
+  researchContext?: ChatResearchContext
 }
 
 const parseJsonObject = (value?: string) => {
@@ -67,7 +69,8 @@ export const pageAssistModel = async ({
   slashCommandInjectionMode,
   apiProvider,
   extraHeaders,
-  extraBody
+  extraBody,
+  researchContext
 }: PageAssistModelOptions): Promise<ChatTldw> => {
   const currentChatModelSettings = useStoreChatModelSettings.getState()
   const {
@@ -267,6 +270,7 @@ export const pageAssistModel = async ({
     slashCommandInjectionMode: normalizedSlashInjectionMode,
     apiProvider: normalizedApiProvider,
     extraHeaders: resolvedExtraHeaders,
-    extraBody: resolvedExtraBody
+    extraBody: resolvedExtraBody,
+    researchContext
   })
 }

@@ -39,6 +39,37 @@ def test_build_call_params_excludes_extension_fields() -> None:
 
 
 @pytest.mark.unit
+def test_build_call_params_excludes_research_context() -> None:
+    """Ensure attached research context stays out of raw provider call params."""
+    req = ChatCompletionRequest(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        research_context={
+            "run_id": "run_123",
+            "query": "battery recycling supply chain",
+            "question": "What changed in the battery recycling market?",
+            "outline": [{"title": "Overview"}],
+            "key_claims": [{"text": "Claim one"}],
+            "unresolved_questions": ["What changed in Europe?"],
+            "verification_summary": {"unsupported_claim_count": 0},
+            "source_trust_summary": {"high_trust_count": 3},
+            "research_url": "/research?run=run_123",
+        },
+    )
+
+    params = build_call_params_from_request(
+        request_data=req,
+        target_api_provider="openai",
+        provider_api_key="test-key",
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        final_system_message=None,
+        app_config=None,
+    )
+
+    assert "research_context" not in params
+
+
+@pytest.mark.unit
 def test_build_call_params_negotiates_structured_response_format(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

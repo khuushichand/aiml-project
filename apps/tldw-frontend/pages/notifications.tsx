@@ -13,14 +13,7 @@ import {
 import { formatRelativeTime } from '@web/lib/utils';
 
 const POLL_INTERVAL_MS = 30_000;
-const TOAST_COALESCE_MS = 800;
 const DEFAULT_SNOOZE_MINUTES = 15;
-
-function severityToVariant(severity?: string): 'info' | 'success' | 'warning' | 'danger' {
-  if (severity === 'error') return 'danger';
-  if (severity === 'warning') return 'warning';
-  return 'info';
-}
 
 function toNotificationFromStream(payload: unknown): NotificationItem | null {
   if (!payload || typeof payload !== 'object') return null;
@@ -46,9 +39,6 @@ export default function NotificationsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const cursorRef = useRef(0);
-  const pendingToastCountRef = useRef(0);
-  const latestToastItemRef = useRef<NotificationItem | null>(null);
-  const toastTimerRef = useRef<number | null>(null);
 
   const refreshInbox = useCallback(async () => {
     try {
@@ -90,44 +80,6 @@ export default function NotificationsPage() {
     [show]
   );
 
-  const flushQueuedToast = useCallback(() => {
-    const burstCount = pendingToastCountRef.current;
-    const latestItem = latestToastItemRef.current;
-    pendingToastCountRef.current = 0;
-    latestToastItemRef.current = null;
-    toastTimerRef.current = null;
-    if (burstCount <= 0) return;
-
-    if (burstCount === 1 && latestItem) {
-      show({
-        title: latestItem.title || 'New notification',
-        description: latestItem.message || 'A new notification is available.',
-        variant: severityToVariant(String(latestItem.severity)),
-        actionLabel: `Snooze ${DEFAULT_SNOOZE_MINUTES}m`,
-        onAction: () => handleSnooze(latestItem.id, DEFAULT_SNOOZE_MINUTES),
-      });
-      return;
-    }
-
-    show({
-      title: `${burstCount} new notifications`,
-      description: 'Your inbox has been updated.',
-      variant: 'info',
-    });
-  }, [handleSnooze, show]);
-
-  const queueToast = useCallback(
-    (item: NotificationItem | null, incrementBy: number = 1) => {
-      if (item) {
-        latestToastItemRef.current = item;
-      }
-      pendingToastCountRef.current += Math.max(1, incrementBy);
-      if (toastTimerRef.current !== null) return;
-      toastTimerRef.current = window.setTimeout(() => flushQueuedToast(), TOAST_COALESCE_MS);
-    },
-    [flushQueuedToast]
-  );
-
   const applyIncomingNotification = useCallback(
     (incoming: NotificationItem) => {
       setItems((previous) => {
@@ -138,9 +90,8 @@ export default function NotificationsPage() {
       });
       setUnreadCount((count) => count + 1);
       cursorRef.current = Math.max(cursorRef.current, incoming.id);
-      queueToast(incoming, 1);
     },
-    [queueToast]
+    []
   );
 
   useEffect(() => {
@@ -169,11 +120,6 @@ export default function NotificationsPage() {
           return;
         }
         if (event.event === 'notifications_coalesced') {
-          const payload = event.payload as Record<string, unknown> | undefined;
-          const count = Number(payload?.count ?? 0);
-          if (Number.isFinite(count) && count > 0) {
-            queueToast(latestToastItemRef.current, count);
-          }
           void refreshInbox();
           return;
         }
@@ -188,15 +134,7 @@ export default function NotificationsPage() {
     return () => {
       unsubscribe();
     };
-  }, [applyIncomingNotification, queueToast, refreshInbox]);
-
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current !== null) {
-        window.clearTimeout(toastTimerRef.current);
-      }
-    };
-  }, []);
+  }, [applyIncomingNotification, refreshInbox]);
 
   const handleMarkRead = useCallback(async (notificationId: number) => {
     try {

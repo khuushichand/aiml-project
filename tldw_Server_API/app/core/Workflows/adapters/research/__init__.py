@@ -1,6 +1,9 @@
 """Research and academic adapters.
 
 This module includes adapters for research operations:
+- deep_research: Launch a deep research session
+- deep_research_wait: Wait for a deep research session
+- deep_research_load_bundle: Load references from a completed deep research session
 - arxiv_search: Search arXiv
 - arxiv_download: Download from arXiv
 - pubmed_search: Search PubMed
@@ -19,6 +22,18 @@ from tldw_Server_API.app.core.Workflows.adapters.research.bibliography import (
     run_literature_review_adapter,
     run_reference_parse_adapter,
 )
+from tldw_Server_API.app.core.Workflows.adapters.research.launch import (
+    run_deep_research_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.research.wait import (
+    run_deep_research_wait_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.research.load_bundle import (
+    run_deep_research_load_bundle_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.research.select_bundle_fields import (
+    run_deep_research_select_bundle_fields_adapter,
+)
 from tldw_Server_API.app.core.Workflows.adapters.research.search import (
     run_arxiv_download_adapter,
     run_arxiv_search_adapter,
@@ -29,6 +44,10 @@ from tldw_Server_API.app.core.Workflows.adapters.research.search import (
 )
 
 __all__ = [
+    "run_deep_research_adapter",
+    "run_deep_research_wait_adapter",
+    "run_deep_research_load_bundle_adapter",
+    "run_deep_research_select_bundle_fields_adapter",
     "run_arxiv_search_adapter",
     "run_arxiv_download_adapter",
     "run_pubmed_search_adapter",

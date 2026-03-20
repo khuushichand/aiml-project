@@ -540,6 +540,234 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     ]
   },
 
+  deep_research: {
+    type: "deep_research",
+    label: "Deep Research Run",
+    description:
+      "Launch a deep research session and return its run reference without waiting for completion",
+    category: "research",
+    icon: "FileSearch",
+    color: "bg-violet-600",
+    inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
+    outputs: [{ id: "run", label: "Run", dataType: "object" }],
+    configSchema: [
+      {
+        key: "query",
+        type: "template-editor",
+        label: "Query",
+        description: "Templated research query resolved from workflow context",
+        required: true
+      },
+      {
+        key: "source_policy",
+        type: "select",
+        label: "Source Policy",
+        description: "How local and external sources should be balanced",
+        default: "balanced",
+        options: [
+          { value: "balanced", label: "Balanced" },
+          { value: "local_first", label: "Local First" },
+          { value: "external_first", label: "External First" },
+          { value: "local_only", label: "Local Only" },
+          { value: "external_only", label: "External Only" }
+        ]
+      },
+      {
+        key: "autonomy_mode",
+        type: "select",
+        label: "Autonomy Mode",
+        description: "Whether the run pauses at checkpoints or runs autonomously",
+        default: "checkpointed",
+        options: [
+          { value: "checkpointed", label: "Checkpointed" },
+          { value: "autonomous", label: "Autonomous" }
+        ]
+      },
+      {
+        key: "limits_json",
+        type: "json-editor",
+        label: "Limits",
+        description: "Optional run limits for the launched research session"
+      },
+      {
+        key: "provider_overrides",
+        type: "json-editor",
+        label: "Provider Overrides",
+        description: "Optional per-run provider override configuration"
+      },
+      {
+        key: "save_artifact",
+        type: "checkbox",
+        label: "Save Artifact",
+        description: "Persist deep_research_launch.json as a workflow artifact",
+        default: true
+      },
+      {
+        key: "timeout_seconds",
+        type: "number",
+        label: "Launch Timeout",
+        description: "Bounds only the launch step, not the research session lifetime",
+        validation: { min: 1 }
+      }
+    ]
+  },
+
+  deep_research_wait: {
+    type: "deep_research_wait",
+    label: "Deep Research Wait",
+    description:
+      "Wait for a launched deep research run to finish and optionally return the final bundle",
+    category: "research",
+    icon: "Clock",
+    color: "bg-violet-700",
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }],
+    configSchema: [
+      {
+        key: "run_id",
+        type: "template-editor",
+        label: "Run ID",
+        description: "Primary chaining field, typically {{ deep_research.run_id }}"
+      },
+      {
+        key: "run",
+        type: "json-editor",
+        label: "Run",
+        description: "Optional full launch output object containing run_id"
+      },
+      {
+        key: "include_bundle",
+        type: "checkbox",
+        label: "Include Bundle",
+        description: "Include the final bundle in step outputs when the run completes",
+        default: true
+      },
+      {
+        key: "fail_on_cancelled",
+        type: "checkbox",
+        label: "Fail on Cancelled",
+        description: "Mark the step as failed when the research run is cancelled",
+        default: true
+      },
+      {
+        key: "fail_on_failed",
+        type: "checkbox",
+        label: "Fail on Failed",
+        description: "Mark the step as failed when the research run fails",
+        default: true
+      },
+      {
+        key: "poll_interval_seconds",
+        type: "number",
+        label: "Poll Interval",
+        description: "How often the workflow polls the research run for terminal status",
+        default: 2,
+        validation: { min: 0.1, max: 60 }
+      },
+      {
+        key: "save_artifact",
+        type: "checkbox",
+        label: "Save Artifact",
+        description: "Persist deep_research_wait.json as a workflow artifact",
+        default: true
+      },
+      {
+        key: "timeout_seconds",
+        type: "number",
+        label: "Wait Timeout",
+        description: "Bounds how long the workflow waits for terminal research status",
+        validation: { min: 1 }
+      }
+    ]
+  },
+
+  deep_research_load_bundle: {
+    type: "deep_research_load_bundle",
+    label: "Deep Research Load Bundle",
+    description:
+      "Loads references from a completed deep research run without returning the full bundle",
+    category: "research",
+    icon: "BookText",
+    color: "bg-violet-800",
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }],
+    configSchema: [
+      {
+        key: "run_id",
+        type: "template-editor",
+        label: "Run ID",
+        description: "Primary chaining field, typically {{ deep_research_wait.run_id }}"
+      },
+      {
+        key: "run",
+        type: "json-editor",
+        label: "Run",
+        description: "Optional full wait output object containing run_id"
+      },
+      {
+        key: "save_artifact",
+        type: "checkbox",
+        label: "Save Artifact",
+        description: "Persist deep_research_bundle_ref.json as a workflow artifact",
+        default: true
+      }
+    ]
+  },
+
+  deep_research_select_bundle_fields: {
+    type: "deep_research_select_bundle_fields",
+    label: "Deep Research Select Bundle Fields",
+    description:
+      "Loads selected canonical bundle fields from a completed deep research run and returns null for missing allowed fields",
+    category: "research",
+    icon: "ListChecks",
+    color: "bg-violet-900",
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }],
+    configSchema: [
+      {
+        key: "run_id",
+        type: "template-editor",
+        label: "Run ID",
+        description: "Primary chaining field, typically {{ deep_research_wait.run_id }}"
+      },
+      {
+        key: "run",
+        type: "json-editor",
+        label: "Run",
+        description: "Optional full wait output object containing run_id"
+      },
+      {
+        key: "fields",
+        type: "multiselect",
+        label: "Fields",
+        description:
+          "Canonical top-level bundle fields to load inline. Large selections may hit the inline size limit; use deep_research_load_bundle for pointer-oriented access.",
+        required: true,
+        options: [
+          { value: "question", label: "Question" },
+          { value: "brief", label: "Brief" },
+          { value: "outline", label: "Outline" },
+          { value: "report_markdown", label: "Report Markdown" },
+          { value: "claims", label: "Claims" },
+          { value: "source_inventory", label: "Source Inventory" },
+          { value: "unresolved_questions", label: "Unresolved Questions" },
+          { value: "verification_summary", label: "Verification Summary" },
+          { value: "unsupported_claims", label: "Unsupported Claims" },
+          { value: "contradictions", label: "Contradictions" },
+          { value: "source_trust", label: "Source Trust" }
+        ]
+      },
+      {
+        key: "save_artifact",
+        type: "checkbox",
+        label: "Save Artifact",
+        description: "Persist deep_research_selected_fields.json as a workflow artifact",
+        default: true
+      }
+    ]
+  },
+
   // ─── Utility Steps ───────────────────────────────────────────────────────
 
   delay: {
@@ -763,6 +991,22 @@ const PORT_OVERRIDES: Record<
       { id: "rejected", label: "Rejected", dataType: "any" }
     ]
   },
+  deep_research: {
+    inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
+    outputs: [{ id: "run", label: "Run", dataType: "object" }]
+  },
+  deep_research_wait: {
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }]
+  },
+  deep_research_load_bundle: {
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }]
+  },
+  deep_research_select_bundle_fields: {
+    inputs: [{ id: "run", label: "Run", dataType: "object", required: true }],
+    outputs: [{ id: "result", label: "Result", dataType: "object" }]
+  },
   // Audio
   tts: {
     inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
@@ -964,7 +1208,11 @@ export const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   entity_extract: "text",
   context_build: "text",
 
-  // Research & Academic (9 types)
+  // Research & Academic (10 types)
+  deep_research: "research",
+  deep_research_wait: "research",
+  deep_research_load_bundle: "research",
+  deep_research_select_bundle_fields: "research",
   arxiv_search: "research",
   arxiv_download: "research",
   pubmed_search: "research",
@@ -999,6 +1247,7 @@ export const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   subtitle_burn: "video",
 
   // Control Flow (10 types)
+  acp_stage: "control",
   branch: "control",
   map: "control",
   batch: "control",
@@ -1112,6 +1361,10 @@ export const ICON_OVERRIDES: Record<string, string> = {
   context_build: "Layers",
 
   // Research & Academic
+  deep_research: "FileSearch",
+  deep_research_wait: "Clock",
+  deep_research_load_bundle: "BookText",
+  deep_research_select_bundle_fields: "ListChecks",
   arxiv_search: "GraduationCap",
   arxiv_download: "Download",
   pubmed_search: "FlaskConical",
@@ -1146,6 +1399,7 @@ export const ICON_OVERRIDES: Record<string, string> = {
   subtitle_burn: "Captions",
 
   // Control Flow
+  acp_stage: "Bot",
   branch: "GitBranch",
   map: "Layers",
   batch: "Layers",

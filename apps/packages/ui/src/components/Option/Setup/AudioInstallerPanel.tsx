@@ -47,12 +47,15 @@ export const AudioInstallerPanel: React.FC = () => {
     selectedBundleId,
     selectedProfile,
     selectedResourceProfile,
+    selectedTtsChoice,
     setSelectedResourceProfile,
     handleBundleChange,
     handleResourceProfileChange,
+    handleTtsChoiceChange,
     handleProvision,
     handleVerify,
     refresh,
+    ttsChoiceOptions,
     verification,
     verifying
   } = useAudioInstaller()
@@ -174,6 +177,24 @@ export const AudioInstallerPanel: React.FC = () => {
             </Space>
           )}
         </Space>
+
+        {ttsChoiceOptions.length > 0 && (
+          <Space orientation="vertical" size="small" className="w-full">
+            <Text strong>{t("settings:audioInstaller.ttsChoiceLabel", "Curated TTS")}</Text>
+            <Radio.Group
+              value={selectedTtsChoice || undefined}
+              onChange={(event) => handleTtsChoiceChange(event.target.value)}
+            >
+              <Space wrap>
+                {ttsChoiceOptions.map((option) => (
+                  <Radio.Button key={option.value} value={option.value}>
+                    {option.label}
+                  </Radio.Button>
+                ))}
+              </Space>
+            </Radio.Group>
+          </Space>
+        )}
 
         <Space wrap>
           <Button

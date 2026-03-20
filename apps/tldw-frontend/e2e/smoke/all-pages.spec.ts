@@ -678,7 +678,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
 
     expect(controlOrder).toEqual([
       'not-found-go-chat',
-      'not-found-open-knowledge',
+      'not-found-open-research',
       'not-found-open-media',
       'not-found-open-settings',
       'not-found-go-back',
@@ -688,7 +688,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
     await goChatButton.focus();
     await expect(goChatButton).toBeFocused();
     await page.keyboard.press('Tab');
-    await expect(page.getByTestId('not-found-open-knowledge')).toBeFocused();
+    await expect(page.getByTestId('not-found-open-research')).toBeFocused();
 
     const issues = getCriticalIssues(diagnostics);
     const classifiedIssues = classifySmokeIssues(WAYFINDING_404_PATH, issues);

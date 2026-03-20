@@ -13,7 +13,7 @@ import { LandingCard } from "./LandingCard"
  *
  * The main landing page shown after login, presenting 4 primary actions:
  * 1. Get Started with a Workflow - Opens workflow modal
- * 2. Do Research - Navigate to workspace playground
+ * 2. Do Research - Navigate to the deep research console
  * 3. Perform Analysis - Navigate to media-multi
  * 4. Start Chatting - Navigate to chat playground
  *
@@ -37,7 +37,7 @@ export const LandingHub: React.FC = () => {
   }, [setShowLanding])
 
   const handleResearchClick = useCallback(() => {
-    navigate("/knowledge")
+    navigate("/research")
   }, [navigate])
 
   const handleAnalysisClick = useCallback(() => {
@@ -102,7 +102,7 @@ export const LandingHub: React.FC = () => {
           title={t("common:landingHub.research.title", "Do Research")}
           description={t(
             "common:landingHub.research.description",
-            "Deep-dive into your sources with RAG-powered chat"
+            "Launch the deep research console for long-form cited runs"
           )}
           onClick={handleResearchClick}
         />

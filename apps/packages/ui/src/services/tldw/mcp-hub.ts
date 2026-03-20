@@ -853,10 +853,35 @@ export type McpHubGovernancePackObjectProvenance = {
 
 export type McpHubGovernancePackSourceType = "local_path" | "git"
 export type McpHubGovernancePackGitRefKind = "branch" | "tag" | "commit"
+export type McpHubGovernancePackTrustedSignerStatus = "active" | "inactive" | "revoked"
 export type McpHubGovernancePackSourceUpdateStatus =
   | "newer_version_available"
   | "no_update"
   | "source_drift_same_version"
+
+export type McpHubGovernancePackTrustedSignerBinding = {
+  fingerprint: string
+  display_name?: string | null
+  repo_bindings: string[]
+  status: McpHubGovernancePackTrustedSignerStatus
+}
+
+export type McpHubGovernancePackTrustPolicy = {
+  allow_local_path_sources: boolean
+  allowed_local_roots: string[]
+  allow_git_sources: boolean
+  allowed_git_hosts: string[]
+  allowed_git_repositories: string[]
+  allowed_git_ref_kinds: string[]
+  require_git_signature_verification: boolean
+  trusted_signers: McpHubGovernancePackTrustedSignerBinding[]
+  policy_fingerprint?: string | null
+}
+
+export type McpHubGovernancePackTrustPolicyUpdateInput = McpHubGovernancePackTrustPolicy & {
+  policy_fingerprint: string
+  trusted_git_key_fingerprints?: string[]
+}
 
 export type McpHubGovernancePackSourceRequest = {
   source_type: McpHubGovernancePackSourceType
@@ -878,6 +903,11 @@ export type McpHubGovernancePackSourceCandidate = {
   pack_content_digest: string
   source_verified?: boolean | null
   source_verification_mode?: string | null
+  signer_fingerprint?: string | null
+  signer_identity?: string | null
+  verified_object_type?: string | null
+  verification_result_code?: string | null
+  verification_warning_code?: string | null
   source_fetched_at?: string | null
   fetched_by?: number | null
 }
@@ -894,6 +924,11 @@ export type McpHubGovernancePackSourceUpdateCheck = {
   candidate_manifest?: McpHubGovernancePackDryRunReport["manifest"] | null
   source_commit_resolved?: string | null
   pack_content_digest?: string | null
+  signer_fingerprint?: string | null
+  signer_identity?: string | null
+  verified_object_type?: string | null
+  verification_result_code?: string | null
+  verification_warning_code?: string | null
 }
 
 export type McpHubGovernancePackSourceUpgradePrepareResponse = {
@@ -902,6 +937,11 @@ export type McpHubGovernancePackSourceUpgradePrepareResponse = {
   candidate_manifest?: McpHubGovernancePackDryRunReport["manifest"] | null
   candidate: McpHubGovernancePackSourceCandidate
   manifest: McpHubGovernancePackDryRunReport["manifest"]
+  signer_fingerprint?: string | null
+  signer_identity?: string | null
+  verified_object_type?: string | null
+  verification_result_code?: string | null
+  verification_warning_code?: string | null
 }
 
 export type McpHubGovernancePackSummary = {
@@ -922,6 +962,11 @@ export type McpHubGovernancePackSummary = {
   pack_content_digest?: string | null
   source_verified?: boolean | null
   source_verification_mode?: string | null
+  signer_fingerprint?: string | null
+  signer_identity?: string | null
+  verified_object_type?: string | null
+  verification_result_code?: string | null
+  verification_warning_code?: string | null
   source_fetched_at?: string | null
   fetched_by?: number | null
   manifest: Record<string, unknown>
@@ -972,6 +1017,23 @@ export const listAcpProfiles = async (params: {
       owner_scope_id: params.owner_scope_id
     }),
     method: "GET"
+  })
+}
+
+export const getGovernancePackTrustPolicy = async (): Promise<McpHubGovernancePackTrustPolicy> => {
+  return await bgRequestClient<McpHubGovernancePackTrustPolicy>({
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/trust-policy"),
+    method: "GET"
+  })
+}
+
+export const updateGovernancePackTrustPolicy = async (
+  payload: McpHubGovernancePackTrustPolicyUpdateInput
+): Promise<McpHubGovernancePackTrustPolicy> => {
+  return await bgRequestClient<McpHubGovernancePackTrustPolicy>({
+    path: asClientPath("/api/v1/mcp/hub/governance-packs/trust-policy"),
+    method: "PUT",
+    body: payload
   })
 }
 

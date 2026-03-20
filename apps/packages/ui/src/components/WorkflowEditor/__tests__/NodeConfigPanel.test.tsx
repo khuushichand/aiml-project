@@ -46,24 +46,28 @@ vi.mock("antd", async () => {
   }
 })
 
-const setupStore = (schema: WorkflowStepSchema) => {
+const setupStore = (
+  stepType: string,
+  schema: WorkflowStepSchema,
+  config: Record<string, unknown> = {}
+) => {
   useWorkflowEditorStore.setState({
     nodes: [
       {
         id: "node-1",
-        type: "llm",
+        type: stepType,
         position: { x: 0, y: 0 },
         data: {
-          label: "LLM",
-          stepType: "llm",
-          config: {}
+          label: stepType,
+          stepType,
+          config
         }
       }
     ],
     edges: [],
     selectedNodeIds: ["node-1"],
     stepRegistry: buildStepRegistry([]),
-    stepSchemas: { llm: schema }
+    stepSchemas: { [stepType]: schema }
   })
 }
 
@@ -87,7 +91,7 @@ describe("NodeConfigPanel selectors", () => {
         model: { type: "string" }
       }
     }
-    setupStore(schema)
+    setupStore("llm", schema)
 
     vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
       optionsByKey: {},
@@ -109,7 +113,7 @@ describe("NodeConfigPanel selectors", () => {
         model: { type: "string" }
       }
     }
-    setupStore(schema)
+    setupStore("llm", schema)
 
     vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
       optionsByKey: {
@@ -137,7 +141,7 @@ describe("NodeConfigPanel selectors", () => {
         model: { type: "string" }
       }
     }
-    setupStore(schema)
+    setupStore("llm", schema)
 
     vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
       optionsByKey: {},
@@ -151,6 +155,162 @@ describe("NodeConfigPanel selectors", () => {
     ).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: "Delete node" })
+    ).toBeInTheDocument()
+  })
+
+  it("merges deep research metadata with server schema fields", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Templated research query resolved from workflow context" },
+        source_policy: {
+          type: "string",
+          enum: ["balanced", "local_first", "external_first", "local_only", "external_only"]
+        },
+        autonomy_mode: {
+          type: "string",
+          enum: ["checkpointed", "autonomous"]
+        },
+        save_artifact: { type: "boolean", default: true }
+      },
+      required: ["query"]
+    }
+    setupStore("deep_research", schema, {
+      query: "{{ inputs.topic }}",
+      source_policy: "balanced",
+      autonomy_mode: "checkpointed",
+      save_artifact: true
+    })
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByText("Use {{variable}} for template placeholders")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Balanced")).toBeInTheDocument()
+    expect(screen.getByText("Checkpointed")).toBeInTheDocument()
+    expect(screen.getByText("Save Artifact")).toBeInTheDocument()
+  })
+
+  it("merges deep research wait metadata with server schema fields", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        run_id: { type: "string", description: "Templated research run ID" },
+        run: { type: "object", description: "Optional launch output object" },
+        include_bundle: { type: "boolean", default: true },
+        fail_on_cancelled: { type: "boolean", default: true }
+      },
+      required: ["run_id"]
+    }
+    setupStore("deep_research_wait", schema, {
+      run_id: "{{ deep_research.run_id }}",
+      include_bundle: true,
+      fail_on_cancelled: true
+    })
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByText("Use {{variable}} for template placeholders")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Include Bundle")).toBeInTheDocument()
+    expect(screen.getByText("Fail on Cancelled")).toBeInTheDocument()
+    expect(screen.getAllByText("Run").length).toBeGreaterThan(0)
+  })
+
+  it("merges deep research load-bundle metadata with server schema fields", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "Templated research run ID, typically {{ deep_research_wait.run_id }}"
+        },
+        run: { type: "object", description: "Optional prior step output object containing run_id" },
+        save_artifact: { type: "boolean", default: true }
+      }
+    }
+    setupStore("deep_research_load_bundle", schema, {
+      run_id: "{{ deep_research_wait.run_id }}",
+      save_artifact: true
+    })
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByText("Use {{variable}} for template placeholders")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Save Artifact")).toBeInTheDocument()
+    expect(screen.getByText("Run ID")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Loads references from a completed deep research run without returning the full bundle"
+      )
+    ).toBeInTheDocument()
+  })
+
+  it("merges deep research select-bundle-fields metadata with server schema fields", () => {
+    const schema: WorkflowStepSchema = {
+      type: "object",
+      properties: {
+        run_id: {
+          type: "string",
+          description: "Templated research run ID, typically {{ deep_research_wait.run_id }}"
+        },
+        run: { type: "object", description: "Optional prior step output object containing run_id" },
+        fields: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["question", "verification_summary", "unsupported_claims"]
+          },
+          minItems: 1,
+          description: "Canonical top-level bundle fields to load inline"
+        },
+        save_artifact: { type: "boolean", default: true }
+      },
+      required: ["fields"]
+    }
+    setupStore("deep_research_select_bundle_fields", schema, {
+      run_id: "{{ deep_research_wait.run_id }}",
+      fields: ["question", "verification_summary"],
+      save_artifact: true
+    })
+
+    vi.mocked(useWorkflowDynamicOptions).mockReturnValue({
+      optionsByKey: {},
+      loadingByKey: {}
+    })
+
+    render(<NodeConfigPanel />)
+
+    expect(
+      screen.getByText("Use {{variable}} for template placeholders")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Fields")).toBeInTheDocument()
+    expect(screen.getByText("Question")).toBeInTheDocument()
+    expect(screen.getByText("Verification Summary")).toBeInTheDocument()
+    expect(screen.getByText("Save Artifact")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Loads selected canonical bundle fields from a completed deep research run and returns null for missing allowed fields"
+      )
     ).toBeInTheDocument()
   })
 })

@@ -586,18 +586,29 @@ def execute_install_plan(plan_payload: dict[str, Any]) -> None:
 def build_install_plan_from_bundle(
     bundle_id: str,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    tts_choice: str | None = None,
 ) -> InstallPlan:
     """Expand a curated bundle into the existing installer plan schema."""
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
     selected_profile = bundle.profile_by_id(resource_profile)
+    canonical_tts_choice = _resolve_curated_tts_choice(selected_profile, tts_choice)
     return InstallPlan.model_validate(
         {
             "stt": selected_profile.stt_plan,
-            "tts": selected_profile.tts_plan,
+            "tts": selected_profile.tts_plan_for_choice(canonical_tts_choice),
             "embeddings": selected_profile.embeddings_plan,
         }
     )
+
+
+def _resolve_curated_tts_choice(selected_profile: Any, tts_choice: str | None) -> str | None:
+    """Normalize a curated TTS choice and treat invalid choices as request errors."""
+
+    try:
+        return selected_profile.canonical_tts_choice(tts_choice)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _entry_suffix(entry: Any, attribute: str, default: str = "default") -> str:
@@ -611,10 +622,16 @@ def _plan_step_names(
     *,
     bundle_id: str,
     resource_profile: str,
+    tts_choice: str | None = None,
     catalog_version: str = AUDIO_BUNDLE_CATALOG_VERSION,
 ) -> set[str]:
     step_names: set[str] = set()
-    selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
+    selection_key = build_audio_selection_key(
+        bundle_id,
+        resource_profile,
+        catalog_version,
+        tts_choice=tts_choice,
+    )
 
     for entry in plan.stt:
         step_names.add(f"{selection_key}:deps:stt:{entry.engine}")
@@ -670,9 +687,15 @@ def _qualify_install_step_name(
     *,
     bundle_id: str,
     resource_profile: str,
+    tts_choice: str | None,
     catalog_version: str,
 ) -> str:
-    selection_key = build_audio_selection_key(bundle_id, resource_profile, catalog_version)
+    selection_key = build_audio_selection_key(
+        bundle_id,
+        resource_profile,
+        catalog_version,
+        tts_choice=tts_choice,
+    )
     if name.startswith("deps:") or name.startswith("embeddings:") or name == "stt:silero_vad":
         return f"{selection_key}:{name}"
     if name.startswith("stt:"):
@@ -692,6 +715,7 @@ def _qualify_install_result(
     *,
     bundle_id: str,
     resource_profile: str,
+    tts_choice: str | None,
     catalog_version: str,
 ) -> dict[str, Any]:
     qualified = json.loads(json.dumps(install_result))
@@ -703,6 +727,7 @@ def _qualify_install_result(
                 plan,
                 bundle_id=bundle_id,
                 resource_profile=resource_profile,
+                tts_choice=tts_choice,
                 catalog_version=catalog_version,
             ),
         }
@@ -715,20 +740,33 @@ def execute_audio_bundle(
     bundle_id: str,
     *,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    tts_choice: str | None = None,
     safe_rerun: bool = False,
 ) -> dict[str, Any]:
     """Provision a curated audio bundle using the existing installer substrate."""
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
-    plan = build_install_plan_from_bundle(bundle_id, resource_profile=resource_profile)
+    selected_profile = bundle.profile_by_id(resource_profile)
+    canonical_tts_choice = _resolve_curated_tts_choice(selected_profile, tts_choice)
+    plan = build_install_plan_from_bundle(
+        bundle_id,
+        resource_profile=resource_profile,
+        tts_choice=canonical_tts_choice,
+    )
     plan_payload = model_dump_compat(plan)
     machine_profile = audio_profile_service.detect_machine_profile()
     readiness = audio_readiness_store.get_audio_readiness_store()
-    selection_key = build_audio_selection_key(bundle_id, resource_profile, bundle.catalog_version)
+    selection_key = build_audio_selection_key(
+        bundle_id,
+        resource_profile,
+        bundle.catalog_version,
+        tts_choice=canonical_tts_choice,
+    )
     readiness.update(
         status="provisioning",
         selected_bundle_id=bundle_id,
         selected_resource_profile=resource_profile,
+        tts_choice=canonical_tts_choice,
         catalog_version=bundle.catalog_version,
         selection_key=selection_key,
         machine_profile=machine_profile.model_dump(),
@@ -751,6 +789,7 @@ def execute_audio_bundle(
         plan,
         bundle_id=bundle_id,
         resource_profile=resource_profile,
+        tts_choice=canonical_tts_choice,
         catalog_version=bundle.catalog_version,
     )
     completed_steps = _completed_step_names(get_install_status_snapshot()) if safe_rerun else set()
@@ -770,6 +809,7 @@ def execute_audio_bundle(
         return {
             "bundle_id": bundle_id,
             "resource_profile": resource_profile,
+            "tts_choice": canonical_tts_choice,
             "selection_key": selection_key,
             "safe_rerun": True,
             "install_plan": plan_payload,
@@ -783,6 +823,7 @@ def execute_audio_bundle(
         plan,
         bundle_id=bundle_id,
         resource_profile=resource_profile,
+        tts_choice=canonical_tts_choice,
         catalog_version=bundle.catalog_version,
     )
     if qualified_install_result:
@@ -792,6 +833,7 @@ def execute_audio_bundle(
     return {
         "bundle_id": bundle_id,
         "resource_profile": resource_profile,
+        "tts_choice": canonical_tts_choice,
         "selection_key": selection_key,
         "safe_rerun": safe_rerun,
         "install_plan": plan_payload,
@@ -814,18 +856,30 @@ def _remediation_item(code: str, message: str, *, action: str = "safe_rerun") ->
     }
 
 
-async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: Any) -> dict[str, Any]:
+async def verify_audio_bundle_async_for_profile(
+    bundle: Any,
+    selected_profile: Any,
+    *,
+    tts_choice: str | None = None,
+) -> dict[str, Any]:
     """Verify the primary STT/TTS paths for a selected bundle profile."""
 
     bundle_id = bundle.bundle_id
     resource_profile = selected_profile.profile_id
     machine_profile = audio_profile_service.detect_machine_profile()
-    selection_key = build_audio_selection_key(bundle_id, resource_profile, bundle.catalog_version)
+    canonical_tts_choice = _resolve_curated_tts_choice(selected_profile, tts_choice)
+    selection_key = build_audio_selection_key(
+        bundle_id,
+        resource_profile,
+        bundle.catalog_version,
+        tts_choice=canonical_tts_choice,
+    )
     primary_stt_engine, primary_stt_target = _resolve_primary_stt_target(selected_profile)
     stt_health = await _resolve_health_call(audio_health.collect_setup_stt_health(model=primary_stt_target))
     tts_health = await _resolve_health_call(audio_health.collect_setup_tts_health())
 
-    primary_tts_engine = selected_profile.tts_plan[0]["engine"] if selected_profile.tts_plan else None
+    primary_tts_plan = selected_profile.tts_plan_for_choice(canonical_tts_choice)
+    primary_tts_engine = primary_tts_plan[0]["engine"] if primary_tts_plan else None
     remediation_items: list[dict[str, str]] = []
     warning_items: list[dict[str, str]] = []
 
@@ -892,6 +946,7 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
     result = {
         "bundle_id": bundle_id,
         "selected_resource_profile": resource_profile,
+        "tts_choice": canonical_tts_choice,
         "selection_key": selection_key,
         "status": status,
         "machine_profile": machine_profile.model_dump(),
@@ -905,12 +960,14 @@ async def verify_audio_bundle_async_for_profile(bundle: Any, selected_profile: A
         status=status,
         selected_bundle_id=bundle_id,
         selected_resource_profile=resource_profile,
+        tts_choice=canonical_tts_choice,
         catalog_version=bundle.catalog_version,
         selection_key=selection_key,
         machine_profile=machine_profile.model_dump(),
         last_verification={
             "bundle_id": bundle_id,
             "selected_resource_profile": resource_profile,
+            "tts_choice": canonical_tts_choice,
             "selection_key": selection_key,
             "verified_at": verified_at,
             "stt_health": stt_health,
@@ -925,22 +982,34 @@ async def verify_audio_bundle_async(
     bundle_id: str,
     *,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    tts_choice: str | None = None,
 ) -> dict[str, Any]:
     """Verify the primary STT/TTS paths for a curated audio bundle."""
 
     bundle = get_audio_bundle_catalog().bundle_by_id(bundle_id)
     selected_profile = bundle.profile_by_id(resource_profile)
-    return await verify_audio_bundle_async_for_profile(bundle, selected_profile)
+    return await verify_audio_bundle_async_for_profile(
+        bundle,
+        selected_profile,
+        tts_choice=tts_choice,
+    )
 
 
 def verify_audio_bundle(
     bundle_id: str,
     *,
     resource_profile: str = DEFAULT_AUDIO_RESOURCE_PROFILE,
+    tts_choice: str | None = None,
 ) -> dict[str, Any]:
     """Synchronous wrapper for setup verification tests and scripts."""
 
-    return asyncio.run(verify_audio_bundle_async(bundle_id, resource_profile=resource_profile))
+    return asyncio.run(
+        verify_audio_bundle_async(
+            bundle_id,
+            resource_profile=resource_profile,
+            tts_choice=tts_choice,
+        )
+    )
 
 def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     any_stt = False
