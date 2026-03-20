@@ -25,10 +25,8 @@ import {
 import { computeResponseDiffPreview } from "./compare-response-diff"
 import { ResearchRunStatusStack } from "./ResearchRunStatusStack"
 import {
-  buildChatLinkedResearchPath,
+  getChatLinkedResearchActionPolicy,
   getChatLinkedResearchRefetchInterval,
-  getChatLinkedResearchReviewReason,
-  isCheckpointReviewRun
 } from "./research-run-status"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -347,19 +345,16 @@ export const PlaygroundChat = ({
       const currentRun = linkedResearchRuns.find(
         (run) => run.run_id === completion.run_id
       ) ?? null
-      const checkpointReview =
-        currentRun !== null && isCheckpointReviewRun(currentRun)
+      const actionPolicy =
+        currentRun !== null
+          ? getChatLinkedResearchActionPolicy(currentRun)
+          : null
       return {
         completion,
         currentRun,
-        checkpointReview,
-        reviewReason:
-          checkpointReview && currentRun
-            ? getChatLinkedResearchReviewReason(currentRun)
-            : null,
-        reviewHref: checkpointReview
-          ? buildChatLinkedResearchPath(completion.run_id)
-          : null
+        actionPolicy,
+        reviewReason: actionPolicy?.needsReview ? actionPolicy.reasonLabel : null,
+        reviewHref: actionPolicy?.needsReview ? actionPolicy.researchHref : null
       }
     },
     [linkedResearchRuns]
@@ -367,7 +362,7 @@ export const PlaygroundChat = ({
   const buildMessageUseInChatHandler = React.useCallback(
     (metadataExtra?: Record<string, unknown>) => {
       const handoff = getMessageResearchHandoffState(metadataExtra)
-      if (!handoff || handoff.checkpointReview) {
+      if (!handoff || handoff.actionPolicy?.canUseInChat === false) {
         return undefined
       }
       return () => {
@@ -382,7 +377,11 @@ export const PlaygroundChat = ({
   const buildMessageFollowUpHandler = React.useCallback(
     (metadataExtra?: Record<string, unknown>) => {
       const handoff = getMessageResearchHandoffState(metadataExtra)
-      if (!handoff || handoff.checkpointReview || !onPrepareResearchFollowUp) {
+      if (
+        !handoff ||
+        handoff.actionPolicy?.canFollowUp === false ||
+        !onPrepareResearchFollowUp
+      ) {
         return undefined
       }
       return () => {
