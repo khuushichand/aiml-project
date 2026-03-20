@@ -29,6 +29,13 @@ async def _make_repo(tmp_path: Path, monkeypatch: Any):
     return repo
 
 
+async def _update_trust_policy(service: Any, payload: dict[str, Any], *, actor_id: int) -> dict[str, Any]:
+    current_policy = await service.get_policy()
+    request_payload = dict(payload)
+    request_payload["policy_fingerprint"] = current_policy["policy_fingerprint"]
+    return await service.update_policy(request_payload, actor_id=actor_id)
+
+
 def _fixture_pack_path() -> Path:
     return (
         Path(__file__).resolve().parent
@@ -119,7 +126,8 @@ async def test_governance_pack_trust_service_enforces_local_root_allowlist(
     outside = tmp_path / "outside" / "researcher"
     outside.mkdir(parents=True)
 
-    await service.update_policy(
+    await _update_trust_policy(
+        service,
         {
             "allow_local_path_sources": True,
             "allowed_local_roots": [str(allowed_root)],
@@ -148,7 +156,8 @@ async def test_governance_pack_trust_service_enforces_git_repo_and_ref_policy(
     repo = await _make_repo(tmp_path, monkeypatch)
     service = McpHubGovernancePackTrustService(repo=repo)
 
-    await service.update_policy(
+    await _update_trust_policy(
+        service,
         {
             "allow_git_sources": True,
             "allowed_git_hosts": ["github.com"],
@@ -194,7 +203,8 @@ async def test_governance_pack_trust_policy_persists_as_deployment_wide_config(
     repo = await _make_repo(tmp_path, monkeypatch)
     service = McpHubGovernancePackTrustService(repo=repo)
 
-    updated = await service.update_policy(
+    updated = await _update_trust_policy(
+        service,
         {
             "allow_local_path_sources": True,
             "allowed_local_roots": ["/srv/packs"],
@@ -228,7 +238,8 @@ async def test_governance_pack_trust_service_normalizes_structured_signers_and_l
     repo = await _make_repo(tmp_path, monkeypatch)
     service = McpHubGovernancePackTrustService(repo=repo)
 
-    policy = await service.update_policy(
+    policy = await _update_trust_policy(
+        service,
         {
             "allow_git_sources": True,
             "allowed_git_hosts": ["github.com"],
@@ -287,7 +298,8 @@ async def test_governance_pack_trust_service_keeps_structured_signer_status_auth
     repo = await _make_repo(tmp_path, monkeypatch)
     service = McpHubGovernancePackTrustService(repo=repo)
 
-    policy = await service.update_policy(
+    policy = await _update_trust_policy(
+        service,
         {
             "allow_git_sources": True,
             "allowed_git_hosts": ["github.com"],
@@ -330,7 +342,8 @@ async def test_governance_pack_trust_service_rejects_duplicate_structured_signer
     service = McpHubGovernancePackTrustService(repo=repo)
 
     with pytest.raises(ValueError, match="duplicate trusted signer fingerprint"):
-        await service.update_policy(
+        await _update_trust_policy(
+            service,
             {
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
@@ -366,7 +379,8 @@ async def test_governance_pack_trust_service_rejects_invalid_structured_signer_s
     service = McpHubGovernancePackTrustService(repo=repo)
 
     with pytest.raises(ValueError, match="invalid signer status"):
-        await service.update_policy(
+        await _update_trust_policy(
+            service,
             {
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
@@ -397,7 +411,8 @@ async def test_governance_pack_trust_service_rejects_blank_repo_binding(
     service = McpHubGovernancePackTrustService(repo=repo)
 
     with pytest.raises(ValueError, match="repo binding entries cannot be blank"):
-        await service.update_policy(
+        await _update_trust_policy(
+            service,
             {
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
@@ -428,7 +443,8 @@ async def test_governance_pack_trust_service_rejects_empty_structured_repo_bindi
     service = McpHubGovernancePackTrustService(repo=repo)
 
     with pytest.raises(ValueError, match="trusted signer repo_bindings must not be empty"):
-        await service.update_policy(
+        await _update_trust_policy(
+            service,
             {
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
@@ -459,7 +475,8 @@ async def test_governance_pack_trust_service_rejects_blank_legacy_fingerprint(
     service = McpHubGovernancePackTrustService(repo=repo)
 
     with pytest.raises(ValueError, match="fingerprint entries cannot be blank"):
-        await service.update_policy(
+        await _update_trust_policy(
+            service,
             {
                 "allow_git_sources": True,
                 "allowed_git_hosts": ["github.com"],
@@ -507,6 +524,85 @@ async def test_governance_pack_trust_service_denies_git_evaluation_when_persiste
 
 
 @pytest.mark.asyncio
+async def test_governance_pack_trust_service_rejects_stale_write_after_precheck_race(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.services.mcp_hub_governance_pack_trust_service import (
+        GovernancePackTrustPolicyStaleError,
+        McpHubGovernancePackTrustService,
+    )
+
+    repo = await _make_repo(tmp_path, monkeypatch)
+    service = McpHubGovernancePackTrustService(repo=repo)
+
+    initial = await _update_trust_policy(
+        service,
+        {
+            "allow_git_sources": True,
+            "allowed_git_hosts": ["github.com"],
+            "allowed_git_repositories": ["github.com/example/packs"],
+            "allowed_git_ref_kinds": ["tag"],
+            "trusted_signers": [
+                {
+                    "fingerprint": "abc123",
+                    "repo_bindings": ["github.com/example/packs"],
+                    "status": "active",
+                }
+            ],
+        },
+        actor_id=1,
+    )
+
+    original_upsert = repo.upsert_governance_pack_trust_policy
+    raced = False
+
+    async def _racing_upsert(**kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            await original_upsert(
+                policy_document={
+                    "allow_git_sources": True,
+                    "allowed_git_hosts": ["github.com"],
+                    "allowed_git_repositories": ["github.com/example/packs"],
+                    "allowed_git_ref_kinds": ["tag"],
+                    "require_git_signature_verification": False,
+                    "trusted_signers": [
+                        {
+                            "fingerprint": "race999",
+                            "repo_bindings": ["github.com/example/packs"],
+                            "status": "active",
+                        }
+                    ],
+                },
+                actor_id=99,
+            )
+        return await original_upsert(**kwargs)
+
+    repo.upsert_governance_pack_trust_policy = _racing_upsert  # type: ignore[method-assign]
+
+    with pytest.raises(GovernancePackTrustPolicyStaleError, match="stale governance pack trust policy write"):
+        await service.update_policy(
+            {
+                "policy_fingerprint": initial["policy_fingerprint"],
+                "allow_git_sources": True,
+                "allowed_git_hosts": ["github.com"],
+                "allowed_git_repositories": ["github.com/example/packs"],
+                "allowed_git_ref_kinds": ["tag"],
+                "trusted_signers": [
+                    {
+                        "fingerprint": "def456",
+                        "repo_bindings": ["github.com/example/packs"],
+                        "status": "active",
+                    }
+                ],
+            },
+            actor_id=2,
+        )
+
+
+@pytest.mark.asyncio
 async def test_governance_pack_trust_service_filters_signers_by_repo_bindings_when_evaluating_git_sources(
     tmp_path,
     monkeypatch,
@@ -518,7 +614,8 @@ async def test_governance_pack_trust_service_filters_signers_by_repo_bindings_wh
     repo = await _make_repo(tmp_path, monkeypatch)
     service = McpHubGovernancePackTrustService(repo=repo)
 
-    await service.update_policy(
+    await _update_trust_policy(
+        service,
         {
             "allow_git_sources": True,
             "allowed_git_hosts": ["github.com"],
@@ -593,7 +690,8 @@ async def test_governance_pack_trust_service_excludes_inactive_and_revoked_signe
     repo = await _make_repo(tmp_path, monkeypatch)
     service = McpHubGovernancePackTrustService(repo=repo)
 
-    await service.update_policy(
+    await _update_trust_policy(
+        service,
         {
             "allow_git_sources": True,
             "allowed_git_hosts": ["github.com"],
@@ -655,7 +753,8 @@ async def test_distribution_service_resolves_allowed_local_pack_and_digest(
     pack_path = allowed_root / "researcher-pack"
     allowed_root.mkdir()
     shutil.copytree(_fixture_pack_path(), pack_path)
-    await trust_service.update_policy(
+    await _update_trust_policy(
+        trust_service,
         {
             "allow_local_path_sources": True,
             "allowed_local_roots": [str(allowed_root)],
@@ -691,7 +790,8 @@ async def test_distribution_service_resolve_local_path_uses_thread_offload(
     pack_path = allowed_root / "researcher-pack"
     allowed_root.mkdir()
     shutil.copytree(_fixture_pack_path(), pack_path)
-    await trust_service.update_policy(
+    await _update_trust_policy(
+        trust_service,
         {
             "allow_local_path_sources": True,
             "allowed_local_roots": [str(allowed_root)],
@@ -734,7 +834,8 @@ async def test_distribution_service_rejects_local_pack_outside_allowlist(
     outside_root.mkdir()
     pack_path = outside_root / "researcher-pack"
     shutil.copytree(_fixture_pack_path(), pack_path)
-    await trust_service.update_policy(
+    await _update_trust_policy(
+        trust_service,
         {
             "allow_local_path_sources": True,
             "allowed_local_roots": [str(allowed_root)],
@@ -882,7 +983,8 @@ async def test_distribution_service_uses_canonicalized_repo_for_trust_matching(
 
     repo = await _make_repo(tmp_path, monkeypatch)
     trust_service = McpHubGovernancePackTrustService(repo=repo)
-    await trust_service.update_policy(
+    await _update_trust_policy(
+        trust_service,
         {
             "allow_git_sources": True,
             "allowed_git_hosts": ["github.com"],

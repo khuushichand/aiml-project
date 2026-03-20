@@ -177,6 +177,10 @@ def _load_json_list(raw: Any) -> list[Any]:
     return []
 
 
+def _dump_canonical_json_dict(value: dict[str, Any] | None) -> str:
+    return json.dumps(value or {}, sort_keys=True, separators=(",", ":"))
+
+
 def _normalize_string_list(values: Any) -> list[str]:
     if values is None:
         return []
@@ -991,29 +995,51 @@ class McpHubRepo:
         *,
         policy_document: dict[str, Any],
         actor_id: int | None,
+        expected_policy_document: dict[str, Any] | None = None,
         conn: Any | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Insert or replace the deployment-wide governance-pack trust policy."""
         now = datetime.now(timezone.utc)
         ts = now if getattr(self.db_pool, "pool", None) is not None else now.isoformat()
-        query = """
-            INSERT INTO mcp_governance_pack_trust_policy (
-                id, policy_document_json, updated_by, updated_at
-            ) VALUES (1, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                policy_document_json = excluded.policy_document_json,
-                updated_by = excluded.updated_by,
-                updated_at = excluded.updated_at
-            """
-        params = (
-            json.dumps(policy_document or {}),
-            actor_id,
-            ts,
-        )
-        if conn is None:
-            await self.db_pool.execute(query, params)
+        policy_json = _dump_canonical_json_dict(policy_document)
+        if expected_policy_document is None:
+            query = """
+                INSERT INTO mcp_governance_pack_trust_policy (
+                    id, policy_document_json, updated_by, updated_at
+                ) VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    policy_document_json = excluded.policy_document_json,
+                    updated_by = excluded.updated_by,
+                    updated_at = excluded.updated_at
+                """
+            params = (
+                policy_json,
+                actor_id,
+                ts,
+            )
         else:
-            await self._conn_execute(conn, query, params)
+            query = """
+                INSERT INTO mcp_governance_pack_trust_policy (
+                    id, policy_document_json, updated_by, updated_at
+                ) VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    policy_document_json = excluded.policy_document_json,
+                    updated_by = excluded.updated_by,
+                    updated_at = excluded.updated_at
+                WHERE mcp_governance_pack_trust_policy.policy_document_json = ?
+                """
+            params = (
+                policy_json,
+                actor_id,
+                ts,
+                _dump_canonical_json_dict(expected_policy_document),
+            )
+        if conn is None:
+            result = await self.db_pool.execute(query, params)
+        else:
+            result = await self._conn_execute(conn, query, params)
+        if expected_policy_document is not None and not self._command_touched_rows(result):
+            return None
         return await self.get_governance_pack_trust_policy()
 
     async def create_governance_pack_upgrade(

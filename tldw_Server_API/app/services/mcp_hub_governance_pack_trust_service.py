@@ -305,13 +305,18 @@ class McpHubGovernancePackTrustService:
         current_fingerprint = str(current_policy.get("policy_fingerprint") or "").strip()
         if current_fingerprint and requested_fingerprint != current_fingerprint:
             raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")
+        expected_policy_document = dict(current_policy)
+        expected_policy_document.pop("policy_fingerprint", None)
         normalized = self._normalize_policy(policy, for_write=True)
         response_payload = dict(normalized)
         response_payload["policy_fingerprint"] = _stable_policy_fingerprint(normalized)
-        await self.repo.upsert_governance_pack_trust_policy(
+        stored_row = await self.repo.upsert_governance_pack_trust_policy(
             policy_document=normalized,
             actor_id=actor_id,
+            expected_policy_document=expected_policy_document,
         )
+        if stored_row is None:
+            raise GovernancePackTrustPolicyStaleError("stale governance pack trust policy write")
         return response_payload
 
     async def evaluate_local_path(self, path: str) -> dict[str, Any]:
