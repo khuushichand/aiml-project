@@ -24,6 +24,9 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
     AuthnzOrgProviderSecretsRepo,
 )
+from tldw_Server_API.app.core.AuthNZ.repos.telegram_approvals_repo import (
+    get_telegram_approvals_repo,
+)
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     decrypt_byok_payload,
     dumps_envelope,
@@ -50,8 +53,6 @@ _TELEGRAM_APPROVAL_CALLBACK_MAX_LENGTH = 64
 _TELEGRAM_PENDING_APPROVAL_TTL_SECONDS = 300
 _WEBHOOK_REPLAY_WINDOW_SECONDS = 3600
 _WEBHOOK_RECEIPTS = TTLReceiptStore()
-_TELEGRAM_PENDING_APPROVAL_LOCK = threading.Lock()
-_TELEGRAM_PENDING_APPROVALS: dict[str, dict[str, Any]] = {}
 _TELEGRAM_LINK_LOCK = threading.Lock()
 _TELEGRAM_PAIRING_CODES: dict[str, dict[str, Any]] = {}
 _TELEGRAM_ACTOR_LINKS: dict[tuple[str, int, int], dict[str, Any]] = {}
@@ -131,17 +132,7 @@ def _coerce_datetime(value: Any) -> datetime | None:
     return None
 
 
-def _prune_pending_telegram_approvals_locked(now: datetime) -> None:
-    stale_tokens: list[str] = []
-    for approval_token, record in _TELEGRAM_PENDING_APPROVALS.items():
-        expires_at = _coerce_datetime(record.get("expires_at"))
-        if expires_at is None or expires_at <= now:
-            stale_tokens.append(approval_token)
-    for approval_token in stale_tokens:
-        _TELEGRAM_PENDING_APPROVALS.pop(approval_token, None)
-
-
-def _store_pending_telegram_approval(
+async def build_telegram_approval_callback_data(
     *,
     approval_policy_id: int | None,
     context_key: str,
@@ -150,64 +141,36 @@ def _store_pending_telegram_approval(
     tool_args: Any,
     scope: TelegramScope,
     initiating_auth_user_id: int,
+    scope_payload: dict[str, Any] | None = None,
+    scope_key: str | None = None,
     expires_at: datetime | None = None,
     ttl_seconds: int = _TELEGRAM_PENDING_APPROVAL_TTL_SECONDS,
-) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    repo: Any | None = None,
+) -> str:
+    """Build short callback data and persist the pending approval server-side."""
+    approval_token = secrets.token_urlsafe(12)
+    repo = repo if repo is not None else await get_telegram_approvals_repo()
     expiry = _coerce_datetime(expires_at)
+    now = datetime.now(timezone.utc)
     if expiry is None:
         expiry = now + timedelta(seconds=max(1, int(ttl_seconds)))
-    initiating_user_id = _coerce_int(initiating_auth_user_id)
-    if initiating_user_id is None:
-        raise ValueError("initiating_auth_user_id is required")
-    scope_fingerprint = _scope_key_for_tool_call(tool_name, tool_args)
-    with _TELEGRAM_PENDING_APPROVAL_LOCK:
-        _prune_pending_telegram_approvals_locked(now)
-        while True:
-            approval_token = secrets.token_urlsafe(12)
-            if approval_token not in _TELEGRAM_PENDING_APPROVALS:
-                break
-        record = {
-            "approval_token": approval_token,
-            "approval_policy_id": _coerce_int(approval_policy_id),
-            "context_key": str(context_key).strip(),
-            "conversation_id": _coerce_nonempty_string(conversation_id),
-            "tool_name": str(tool_name).strip(),
-            "scope_fingerprint": scope_fingerprint,
-            "scope_type": scope.scope_type,
-            "scope_id": scope.scope_id,
-            "initiating_auth_user_id": initiating_user_id,
-            "expires_at": expiry,
-            "created_at": now,
-            "reserved_at": None,
-        }
-        _TELEGRAM_PENDING_APPROVALS[approval_token] = record
-        return dict(record)
-
-
-def build_telegram_approval_callback_data(
-    *,
-    approval_policy_id: int | None,
-    context_key: str,
-    conversation_id: str | None,
-    tool_name: str,
-    tool_args: Any,
-    scope: TelegramScope,
-    initiating_auth_user_id: int,
-    expires_at: datetime | None = None,
-    ttl_seconds: int = _TELEGRAM_PENDING_APPROVAL_TTL_SECONDS,
-) -> str:
-    """Build short callback data and register the approval server-side."""
-    record = _store_pending_telegram_approval(
+    scope_key_value = _coerce_nonempty_string(scope_key) or _scope_key_for_tool_call(
+        tool_name,
+        tool_args,
+        scope_payload=scope_payload,
+    )
+    record = await repo.create_pending_approval(
+        approval_token=approval_token,
+        scope_type=scope.scope_type,
+        scope_id=scope.scope_id,
         approval_policy_id=approval_policy_id,
         context_key=context_key,
         conversation_id=conversation_id,
         tool_name=tool_name,
-        tool_args=tool_args,
-        scope=scope,
+        scope_key=scope_key_value,
         initiating_auth_user_id=initiating_auth_user_id,
-        expires_at=expires_at,
-        ttl_seconds=ttl_seconds,
+        expires_at=expiry,
+        now=now,
     )
     callback_data = f"{_TELEGRAM_APPROVAL_CALLBACK_PREFIX}{record['approval_token']}"
     if len(callback_data) > _TELEGRAM_APPROVAL_CALLBACK_MAX_LENGTH:
@@ -225,48 +188,11 @@ def _parse_telegram_approval_callback_data(callback_data: Any) -> dict[str, Any]
     return {"approval_token": approval_token}
 
 
-def _peek_pending_telegram_approval(approval_token: str, *, now: datetime | None = None) -> dict[str, Any] | None:
-    current = now or datetime.now(timezone.utc)
-    with _TELEGRAM_PENDING_APPROVAL_LOCK:
-        _prune_pending_telegram_approvals_locked(current)
-        record = _TELEGRAM_PENDING_APPROVALS.get(str(approval_token).strip())
-        return dict(record) if record else None
-
-
-def _reserve_pending_telegram_approval(approval_token: str, *, now: datetime | None = None) -> dict[str, Any] | None:
-    current = now or datetime.now(timezone.utc)
-    token = str(approval_token).strip()
-    with _TELEGRAM_PENDING_APPROVAL_LOCK:
-        _prune_pending_telegram_approvals_locked(current)
-        record = _TELEGRAM_PENDING_APPROVALS.get(token)
-        if not record:
-            return None
-        if record.get("reserved_at") is not None:
-            return None
-        record["reserved_at"] = current
-        return dict(record)
-
-
-def _release_pending_telegram_approval(approval_token: str) -> None:
-    token = str(approval_token).strip()
-    with _TELEGRAM_PENDING_APPROVAL_LOCK:
-        record = _TELEGRAM_PENDING_APPROVALS.get(token)
-        if not record:
-            return
-        record["reserved_at"] = None
-
-
-def _consume_pending_telegram_approval(approval_token: str) -> None:
-    token = str(approval_token).strip()
-    with _TELEGRAM_PENDING_APPROVAL_LOCK:
-        _TELEGRAM_PENDING_APPROVALS.pop(token, None)
-
-
-def _peek_pending_telegram_approval_for_tests(callback_data: Any) -> dict[str, Any] | None:
+async def _peek_pending_telegram_approval_for_tests(callback_data: Any, *, repo: Any) -> dict[str, Any] | None:
     parsed = _parse_telegram_approval_callback_data(callback_data)
     if parsed is None:
         return None
-    return _peek_pending_telegram_approval(parsed["approval_token"])
+    return await repo.get_pending_approval_by_token(parsed["approval_token"])
 
 
 def _telegram_actor_link_key(scope: TelegramScope, telegram_user_id: int) -> tuple[str, int, int]:
@@ -683,6 +609,7 @@ async def _handle_telegram_approval_callback_query(
     *,
     scope: TelegramScope,
     payload: dict[str, Any],
+    get_telegram_approvals_repo: Callable[[], Awaitable[Any]],
     get_approval_service: Callable[[], Awaitable[Any]],
 ) -> JSONResponse:
     callback_data = _extract_callback_query_data(payload)
@@ -691,14 +618,22 @@ async def _handle_telegram_approval_callback_query(
         return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "invalid_payload")
 
     now = datetime.now(timezone.utc)
-    pending_approval = _reserve_pending_telegram_approval(
+    try:
+        approvals_repo = await get_telegram_approvals_repo()
+    except Exception as exc:
+        logger.error("Failed to resolve Telegram approvals repo: {}", exc)
+        return _telegram_webhook_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "approval_service_unavailable",
+        )
+
+    pending_approval = await approvals_repo.get_pending_approval_by_token(
         parsed_callback["approval_token"],
         now=now,
     )
     if pending_approval is None:
         return _telegram_webhook_error(status.HTTP_409_CONFLICT, "approval_unavailable")
 
-    should_release = True
     telegram_user_id = _extract_callback_query_actor_id(payload)
     if telegram_user_id is None:
         return _telegram_webhook_error(status.HTTP_400_BAD_REQUEST, "invalid_payload")
@@ -723,6 +658,13 @@ async def _handle_telegram_approval_callback_query(
         ):
             return _telegram_webhook_error(status.HTTP_403_FORBIDDEN, "approval_not_authorized")
 
+        consumed_pending = await approvals_repo.consume_pending_approval(
+            parsed_callback["approval_token"],
+            now=now,
+        )
+        if consumed_pending is None:
+            return _telegram_webhook_error(status.HTTP_409_CONFLICT, "approval_unavailable")
+
         try:
             approval_service = await get_approval_service()
         except Exception as exc:
@@ -739,26 +681,24 @@ async def _handle_telegram_approval_callback_query(
             )
 
         decision = await approval_service.record_decision(
-            approval_policy_id=_coerce_int(pending_approval.get("approval_policy_id")),
-            context_key=str(pending_approval.get("context_key") or ""),
-            conversation_id=_coerce_nonempty_string(pending_approval.get("conversation_id")),
-            tool_name=str(pending_approval.get("tool_name") or ""),
-            scope_key=str(pending_approval.get("scope_fingerprint") or ""),
+            approval_policy_id=_coerce_int(consumed_pending.get("approval_policy_id")),
+            context_key=str(consumed_pending.get("context_key") or ""),
+            conversation_id=_coerce_nonempty_string(consumed_pending.get("conversation_id")),
+            tool_name=str(consumed_pending.get("tool_name") or ""),
+            scope_key=str(consumed_pending.get("scope_key") or ""),
             decision="approved",
             consume_on_match=True,
-            expires_at=_coerce_datetime(pending_approval.get("expires_at")),
+            expires_at=None,
             actor_id=linked_auth_user_id,
         )
-        should_release = False
-        _consume_pending_telegram_approval(parsed_callback["approval_token"])
         return JSONResponse(
             status_code=200,
             content={
                 "ok": True,
                 "status": "approved",
                 "approval_decision_id": decision.get("id") if isinstance(decision, dict) else None,
-                "approval_policy_id": pending_approval.get("approval_policy_id"),
-                "scope_key": pending_approval.get("scope_fingerprint"),
+                "approval_policy_id": consumed_pending.get("approval_policy_id"),
+                "scope_key": consumed_pending.get("scope_key"),
             },
         )
     except Exception as exc:
@@ -767,20 +707,11 @@ async def _handle_telegram_approval_callback_query(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "approval_service_unavailable",
         )
-    finally:
-        if should_release:
-            _release_pending_telegram_approval(parsed_callback["approval_token"])
 
 
 def _reset_telegram_webhook_state_for_tests() -> None:
     """Reset webhook dedupe receipts for deterministic tests."""
     _WEBHOOK_RECEIPTS.clear()
-
-
-def _reset_telegram_approval_state_for_tests() -> None:
-    """Reset Telegram approval callback state for deterministic tests."""
-    with _TELEGRAM_PENDING_APPROVAL_LOCK:
-        _TELEGRAM_PENDING_APPROVALS.clear()
 
 
 def _reset_telegram_link_state_for_tests() -> None:
@@ -879,6 +810,7 @@ async def telegram_webhook_impl(
     request: Request,
     job_manager: JobManager | None = None,
     get_org_secret_repo: Callable[[], Awaitable[Any]] = _get_org_secret_repo,
+    get_telegram_approvals_repo: Callable[[], Awaitable[Any]] = get_telegram_approvals_repo,
     get_approval_service: Callable[[], Awaitable[Any]] = get_mcp_hub_approval_service,
     dedupe_receipts: TTLReceiptStore = _WEBHOOK_RECEIPTS,
     dedupe_ttl_seconds: int = _WEBHOOK_REPLAY_WINDOW_SECONDS,
@@ -924,6 +856,7 @@ async def telegram_webhook_impl(
         return await _handle_telegram_approval_callback_query(
             scope=scope,
             payload=payload,
+            get_telegram_approvals_repo=get_telegram_approvals_repo,
             get_approval_service=get_approval_service,
         )
 
