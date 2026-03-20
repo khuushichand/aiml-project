@@ -241,7 +241,7 @@ export const useAudioInstaller = () => {
     return () => {
       window.clearTimeout(timeout)
     }
-  }, [installStatus?.status, refreshInstallStatus])
+  }, [installStatus, refreshInstallStatus])
 
   const selectedBundle = React.useMemo(
     () =>
@@ -304,6 +304,11 @@ export const useAudioInstaller = () => {
     },
     [catalog, recommendations]
   )
+
+  const handleResourceProfileChange = React.useCallback((profileId: string) => {
+    setSelectedResourceProfile(profileId)
+    setVerification(null)
+  }, [])
 
   const handleProvision = React.useCallback(
     async (safeRerun = false) => {
@@ -382,6 +387,7 @@ export const useAudioInstaller = () => {
     selectedResourceProfile,
     setSelectedResourceProfile,
     handleBundleChange,
+    handleResourceProfileChange,
     handleProvision,
     handleVerify,
     refresh: load,
