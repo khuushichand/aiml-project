@@ -11,6 +11,7 @@ IntegrationProvider = Literal["slack", "discord", "telegram"]
 IntegrationScope = Literal["personal", "workspace"]
 IntegrationStatus = Literal["connected", "disconnected", "disabled", "degraded", "needs_config"]
 IntegrationCommand = Literal["help", "ask", "rag", "summarize", "status"]
+PersonalIntegrationProvider = Literal["slack", "discord"]
 
 
 class IntegrationConnection(BaseModel):
@@ -34,6 +35,31 @@ class IntegrationOverviewResponse(BaseModel):
 
     scope: IntegrationScope
     items: list[IntegrationConnection] = Field(default_factory=list)
+
+
+class PersonalIntegrationConnectResponse(BaseModel):
+    """OAuth start payload for a personal integration connect or reconnect flow."""
+
+    provider: PersonalIntegrationProvider
+    connection_id: str
+    status: Literal["ready"]
+    auth_url: str
+    auth_session_id: str
+    expires_at: datetime
+
+
+class PersonalIntegrationUpdateRequest(BaseModel):
+    """Provider-level enable or disable action for a personal integration."""
+
+    enabled: bool
+
+
+class PersonalIntegrationDeleteResponse(BaseModel):
+    """Delete response for a provider-level personal integration removal."""
+
+    deleted: bool = True
+    provider: PersonalIntegrationProvider
+    connection_id: str
 
 
 class SlackWorkspacePolicy(BaseModel):

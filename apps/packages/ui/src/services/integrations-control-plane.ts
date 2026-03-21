@@ -6,6 +6,7 @@ import { bgRequest } from "@/services/background-proxy"
 import { toAllowedPath } from "@/services/tldw/path-utils"
 
 export type IntegrationProvider = "slack" | "discord" | "telegram"
+export type PersonalIntegrationProvider = "slack" | "discord"
 export type IntegrationScope = "personal" | "workspace"
 export type IntegrationStatus = "connected" | "disconnected" | "disabled" | "degraded" | "needs_config"
 export type IntegrationCommand = "help" | "ask" | "rag" | "summarize" | "status"
@@ -27,6 +28,25 @@ export interface IntegrationConnection {
 export interface IntegrationOverviewResponse {
   scope: IntegrationScope
   items: IntegrationConnection[]
+}
+
+export interface PersonalIntegrationConnectResponse {
+  provider: PersonalIntegrationProvider
+  connection_id: string
+  status: "ready"
+  auth_url: string
+  auth_session_id: string
+  expires_at: string
+}
+
+export interface PersonalIntegrationUpdatePayload {
+  enabled: boolean
+}
+
+export interface PersonalIntegrationDeleteResponse {
+  deleted: boolean
+  provider: PersonalIntegrationProvider
+  connection_id: string
 }
 
 export interface SlackWorkspacePolicy {
@@ -121,6 +141,21 @@ const assertNoNullPolicyFields = (payload: Record<string, unknown>): void => {
   }
 }
 
+const normalizePersonalConnectionId = (
+  provider: PersonalIntegrationProvider,
+  connectionId: string
+): string => {
+  const normalized = String(connectionId || "").trim()
+  const expected = `personal:${provider}`
+  if (!normalized) {
+    throw new Error("connectionId is required")
+  }
+  if (normalized === provider || normalized === expected) {
+    return expected
+  }
+  throw new Error(`connectionId must target ${expected}`)
+}
+
 export interface TelegramLinkedActorItem {
   id: number
   scope_type: "org" | "team"
@@ -159,6 +194,44 @@ export async function listPersonalIntegrations(): Promise<IntegrationOverviewRes
   return await bgRequest<IntegrationOverviewResponse>({
     path: "/api/v1/integrations/personal",
     method: "GET"
+  })
+}
+
+export async function connectPersonalIntegration(
+  provider: PersonalIntegrationProvider
+): Promise<PersonalIntegrationConnectResponse> {
+  return await bgRequest<PersonalIntegrationConnectResponse>({
+    path: `/api/v1/integrations/personal/${provider}/connect`,
+    method: "POST"
+  })
+}
+
+export async function updatePersonalIntegration(
+  provider: PersonalIntegrationProvider,
+  connectionId: string,
+  payload: PersonalIntegrationUpdatePayload
+): Promise<IntegrationConnection> {
+  if (typeof payload.enabled !== "boolean") {
+    throw new Error("enabled must be set explicitly")
+  }
+  return await bgRequest<IntegrationConnection>({
+    path: toAllowedPath(
+      `/api/v1/integrations/personal/${provider}/${encodeURIComponent(normalizePersonalConnectionId(provider, connectionId))}`
+    ),
+    method: "PATCH",
+    body: payload
+  })
+}
+
+export async function deletePersonalIntegration(
+  provider: PersonalIntegrationProvider,
+  connectionId: string
+): Promise<PersonalIntegrationDeleteResponse> {
+  return await bgRequest<PersonalIntegrationDeleteResponse>({
+    path: toAllowedPath(
+      `/api/v1/integrations/personal/${provider}/${encodeURIComponent(normalizePersonalConnectionId(provider, connectionId))}`
+    ),
+    method: "DELETE"
   })
 }
 

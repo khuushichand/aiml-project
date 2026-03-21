@@ -9,7 +9,9 @@ vi.mock("@/services/background-proxy", () => ({
 }))
 
 import {
+  connectPersonalIntegration,
   createWorkspaceTelegramPairingCode,
+  deletePersonalIntegration,
   getWorkspaceDiscordPolicy,
   getWorkspaceSlackPolicy,
   getWorkspaceTelegramBot,
@@ -17,10 +19,12 @@ import {
   listWorkspaceIntegrations,
   listWorkspaceTelegramLinkedActors,
   revokeWorkspaceTelegramLinkedActor,
+  updatePersonalIntegration,
   updateWorkspaceDiscordPolicy,
   updateWorkspaceSlackPolicy,
   updateWorkspaceTelegramBot,
   type DiscordWorkspacePolicyUpdate,
+  type PersonalIntegrationUpdatePayload,
   type SlackWorkspacePolicyUpdate,
   type TelegramBotConfigUpdate
 } from "@/services/integrations-control-plane"
@@ -55,6 +59,79 @@ describe("integrations control-plane contract", () => {
       expect.objectContaining({
         method: "GET",
         path: "/api/v1/integrations/personal"
+      })
+    )
+  })
+
+  it("starts the normalized personal slack connect flow", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      provider: "slack",
+      connection_id: "personal:slack",
+      status: "ready",
+      auth_url: "https://slack.example.test/oauth",
+      auth_session_id: "session-123",
+      expires_at: "2026-03-20T22:00:00Z"
+    })
+
+    const response = await connectPersonalIntegration("slack")
+
+    expect(response.provider).toBe("slack")
+    expect(response.auth_url).toBe("https://slack.example.test/oauth")
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        path: "/api/v1/integrations/personal/slack/connect"
+      })
+    )
+  })
+
+  it("updates a personal integration using the normalized provider-level id", async () => {
+    const payload: PersonalIntegrationUpdatePayload = {
+      enabled: false
+    }
+    mocks.bgRequest.mockResolvedValue({
+      id: "personal:slack",
+      provider: "slack",
+      scope: "personal",
+      display_name: "Slack",
+      status: "disabled",
+      enabled: false,
+      metadata: {
+        installation_count: 2,
+        active_installation_count: 0
+      },
+      actions: ["reconnect", "enable", "remove"]
+    })
+
+    const response = await updatePersonalIntegration("slack", "personal:slack", payload)
+
+    expect(response.status).toBe("disabled")
+    expect(response.enabled).toBe(false)
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "PATCH",
+        path: "/api/v1/integrations/personal/slack/personal%3Aslack",
+        body: {
+          enabled: false
+        }
+      })
+    )
+  })
+
+  it("deletes a personal integration using the normalized provider-level id", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      deleted: true,
+      provider: "discord",
+      connection_id: "personal:discord"
+    })
+
+    const response = await deletePersonalIntegration("discord", "personal:discord")
+
+    expect(response.deleted).toBe(true)
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "DELETE",
+        path: "/api/v1/integrations/personal/discord/personal%3Adiscord"
       })
     )
   })
@@ -225,6 +302,20 @@ describe("integrations control-plane contract", () => {
         })
       })
     )
+  })
+
+  it("rejects personal integration mutations when the connection id does not match the provider", async () => {
+    await expect(
+      updatePersonalIntegration("slack", "personal:discord", {
+        enabled: false
+      })
+    ).rejects.toThrow("connectionId must target personal:slack")
+
+    await expect(
+      deletePersonalIntegration("discord", "personal:slack")
+    ).rejects.toThrow("connectionId must target personal:discord")
+
+    expect(mocks.bgRequest).not.toHaveBeenCalled()
   })
 
   it("requires an explicit enabled flag when updating the telegram bot", async () => {

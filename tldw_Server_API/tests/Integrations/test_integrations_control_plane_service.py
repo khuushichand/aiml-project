@@ -21,6 +21,23 @@ class _FakeUserSecretsRepo:
         ]
 
 
+class _FakeDisabledUserSecretsRepo:
+    async def list_secrets_for_user(self, user_id: int, *, include_revoked: bool = False) -> list[dict]:
+        assert user_id == 7  # nosec B101 - pytest assertion
+        assert include_revoked is False  # nosec B101 - pytest assertion
+        return [
+            {
+                "provider": "slack",
+                "metadata": {
+                    "installation_count": 2,
+                    "active_installation_count": 0,
+                },
+                "created_at": "2026-03-20T18:00:00+00:00",
+                "updated_at": "2026-03-20T19:00:00+00:00",
+            }
+        ]
+
+
 class _FakeOrgSecretsRepo:
     async def fetch_secret(
         self,
@@ -120,3 +137,19 @@ async def test_personal_integrations_service_only_exposes_slack_and_discord():
     assert by_provider["slack"].metadata["installation_count"] == 2  # nosec B101
     assert by_provider["discord"].status == "disconnected"  # nosec B101
     assert by_provider["discord"].enabled is False  # nosec B101
+
+
+@pytest.mark.asyncio
+async def test_personal_integrations_service_marks_provider_disabled_when_all_installations_are_disabled():
+    service = IntegrationsControlPlaneService(
+        user_provider_secrets_repo=_FakeDisabledUserSecretsRepo(),
+        org_provider_secrets_repo=_FakeOrgSecretsRepo(),
+        workspace_installations_repo=_FakeWorkspaceInstallationsRepo(),
+    )
+
+    payload = await service.build_personal_overview(user_id=7)
+    by_provider = {item.provider: item for item in payload.items}
+
+    assert by_provider["slack"].status == "disabled"  # nosec B101
+    assert by_provider["slack"].enabled is False  # nosec B101
+    assert by_provider["slack"].actions == ["reconnect", "enable", "remove"]  # nosec B101

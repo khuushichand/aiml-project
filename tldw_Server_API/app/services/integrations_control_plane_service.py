@@ -20,6 +20,14 @@ _PROVIDER_LABELS = {
 }
 
 
+def _coerce_nonnegative_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
 def _coerce_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -119,17 +127,31 @@ class IntegrationsControlPlaneService:
             )
 
         metadata = _coerce_metadata(row.get("metadata"))
+        installation_count = _coerce_nonnegative_int(metadata.get("installation_count"))
+        active_installation_count = _coerce_nonnegative_int(metadata.get("active_installation_count"))
+        if installation_count is not None:
+            metadata["installation_count"] = installation_count
+        if active_installation_count is not None:
+            metadata["active_installation_count"] = active_installation_count
+
+        enabled = not (
+            installation_count is not None
+            and installation_count > 0
+            and active_installation_count is not None
+            and active_installation_count == 0
+        )
+        actions = ["reconnect", "disable", "remove"] if enabled else ["reconnect", "enable", "remove"]
         return IntegrationConnection(
             id=f"personal:{provider}",
             provider=provider,
             scope="personal",
             display_name=_PROVIDER_LABELS[provider],
-            status="connected",
-            enabled=True,
+            status="connected" if enabled else "disabled",
+            enabled=enabled,
             connected_at=_coerce_datetime(row.get("created_at")),
             updated_at=_coerce_datetime(row.get("updated_at")),
             metadata=metadata,
-            actions=["disconnect"],
+            actions=actions,
         )
 
     async def _build_workspace_registry_item(self, *, org_id: int, provider: str) -> IntegrationConnection:
