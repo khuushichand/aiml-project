@@ -1697,7 +1697,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         title={t("watchlists:tabs.settings", "Settings")}
         open={settingsDrawerOpen}
         onClose={() => setSettingsDrawerOpen(false)}
-        width={isMobile ? "100%" : 520}
+        size={isMobile ? "100%" : 520}
         data-testid="watchlists-settings-drawer"
       >
         <SettingsTab />

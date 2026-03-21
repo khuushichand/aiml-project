@@ -157,7 +157,6 @@ export const PAGES: PageEntry[] = [
   { path: "/for/journalists", name: "For Journalists", category: "other" },
   { path: "/for/osint", name: "For OSINT", category: "other" },
   { path: "/for/researchers", name: "For Researchers", category: "other" },
-  { path: "/__debug__/authz.spec", name: "Debug Authz Redirect", category: "other" },
   { path: "/__debug__/sidepanel-error-boundary", name: "Debug Error Boundary", category: "other" },
   { path: "/__debug__/sidepanel-chat", name: "Debug Sidepanel Chat", category: "other" },
   { path: "/404", name: "Not Found", category: "other" },

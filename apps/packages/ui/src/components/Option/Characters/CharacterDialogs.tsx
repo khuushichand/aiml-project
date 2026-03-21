@@ -1197,7 +1197,7 @@ export const CharacterDialogs: React.FC<CharacterDialogsProps> = (props) => {
             }, 0)
           }
         }}
-        width={520}
+        size={520}
         placement="right"
         rootClassName="characters-motion-modal">
         <p className="text-sm text-text-muted mb-4">
@@ -1390,7 +1390,7 @@ export const CharacterDialogs: React.FC<CharacterDialogsProps> = (props) => {
             }, 0)
           }
         }}
-        width={520}
+        size={520}
         placement="right"
         rootClassName="characters-motion-modal">
         <p className="text-sm text-text-muted mb-4">

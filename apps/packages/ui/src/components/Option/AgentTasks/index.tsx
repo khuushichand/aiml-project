@@ -407,13 +407,13 @@ export const AgentTasksPage: React.FC = () => {
       {isUnsupported && (
         <Alert
           type="warning"
-          message={AGENT_ORCHESTRATION_UNSUPPORTED_MESSAGE}
+          title={AGENT_ORCHESTRATION_UNSUPPORTED_MESSAGE}
           description={AGENT_ORCHESTRATION_UNSUPPORTED_DESCRIPTION}
           showIcon
         />
       )}
       {error && (
-        <Alert type="error" message={error} closable onClose={() => setError(null)} />
+        <Alert type="error" title={error} closable onClose={() => setError(null)} />
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

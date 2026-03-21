@@ -5,8 +5,8 @@
  *   /admin/server    - Server status, users, roles, media budget
  *   /admin/llamacpp  - Llama.cpp inference server management
  *   /admin/mlx       - MLX LM model management
- *   /admin/orgs      - Organization management (placeholder)
- *   /admin/data-ops  - Data operations (placeholder)
+ *   /admin/orgs      - Organization management
+ *   /admin/data-ops  - Data operations
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
@@ -48,6 +48,21 @@ export class AdminPage extends BasePage {
   /** MLX LM Admin heading (h2) */
   get mlxHeading(): Locator {
     return this.page.getByRole("heading", { name: /MLX LM Admin/i })
+  }
+
+  /** Organizations & Teams heading (h2) */
+  get orgsHeading(): Locator {
+    return this.page.getByRole("heading", { name: /Organizations & Teams/i })
+  }
+
+  /** Data Operations heading (h2) */
+  get dataOpsHeading(): Locator {
+    return this.page.getByRole("heading", { name: /Data Operations/i })
+  }
+
+  /** Maintenance Console heading (h2) */
+  get maintenanceHeading(): Locator {
+    return this.page.getByRole("heading", { name: /Maintenance Console/i })
   }
 
   /** "Coming Soon" text in placeholder pages */
@@ -201,11 +216,21 @@ export class AdminPage extends BasePage {
     const hasServerHeading = await this.serverHeading.isVisible().catch(() => false)
     const hasLlamacppHeading = await this.llamacppHeading.isVisible().catch(() => false)
     const hasMlxHeading = await this.mlxHeading.isVisible().catch(() => false)
+    const hasOrgsHeading = await this.orgsHeading.isVisible().catch(() => false)
+    const hasDataOpsHeading = await this.dataOpsHeading.isVisible().catch(() => false)
+    const hasMaintenanceHeading = await this.maintenanceHeading.isVisible().catch(() => false)
     const hasPlaceholder = await this.placeholderPanel.isVisible().catch(() => false)
     const hasAdminGuard = await this.adminGuardAlert.isVisible().catch(() => false)
 
     const anyReady =
-      hasServerHeading || hasLlamacppHeading || hasMlxHeading || hasPlaceholder || hasAdminGuard
+      hasServerHeading ||
+      hasLlamacppHeading ||
+      hasMlxHeading ||
+      hasOrgsHeading ||
+      hasDataOpsHeading ||
+      hasMaintenanceHeading ||
+      hasPlaceholder ||
+      hasAdminGuard
     if (!anyReady) {
       throw new Error(
         "AdminPage.assertPageReady(): No admin heading, placeholder, or admin guard alert found."
@@ -236,10 +261,18 @@ export class AdminPage extends BasePage {
         expect(visible || guarded).toBe(true)
         break
       }
-      case "orgs":
-      case "data-ops":
-        await expect(this.placeholderPanel).toBeVisible({ timeout: 10_000 })
+      case "orgs": {
+        const visible = await this.orgsHeading.isVisible().catch(() => false)
+        const guarded = await this.adminGuardAlert.isVisible().catch(() => false)
+        expect(visible || guarded).toBe(true)
         break
+      }
+      case "data-ops": {
+        const visible = await this.dataOpsHeading.isVisible().catch(() => false)
+        const guarded = await this.adminGuardAlert.isVisible().catch(() => false)
+        expect(visible || guarded).toBe(true)
+        break
+      }
     }
   }
 

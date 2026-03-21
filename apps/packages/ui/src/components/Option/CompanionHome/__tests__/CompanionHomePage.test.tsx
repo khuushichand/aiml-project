@@ -270,10 +270,16 @@ describe("CompanionHomePage", () => {
 
     expect(await screen.findByText("Companion setup required")).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "Inbox Preview" })).toBeInTheDocument()
-    expect(screen.getByText("Unread reflection")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Companion inbox items unlock once personalization is available for this workspace."
+      )
+    ).toBeInTheDocument()
     expect(
       screen.queryByText("Companion unavailable")
     ).not.toBeInTheDocument()
+    expect(mocks.fetchCompanionHomeSnapshot).not.toHaveBeenCalled()
+    expect(mocks.fetchPersonalizationProfile).not.toHaveBeenCalled()
   })
 
   it("renders the default core dashboard cards", async () => {

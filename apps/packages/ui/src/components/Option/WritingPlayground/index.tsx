@@ -9,7 +9,6 @@ import {
   Empty,
   Input,
   InputNumber,
-  List,
   Modal,
   Select,
   Segmented,
@@ -1945,10 +1944,8 @@ export const WritingPlayground = () => {
         ) : sortedSessions.length === 0 ? (
           <Empty description={t("option:writingPlayground.sessionsEmpty", "Create your first session to start writing.")} />
         ) : (
-          <List
-            dataSource={sortedSessions}
-            rowKey={(item) => item.session.id}
-            renderItem={({ session, lastUsedAt }) => {
+          <div className="flex flex-col gap-1">
+            {sortedSessions.map(({ session, lastUsedAt }) => {
               const isActive = activeSessionId === session.id
               const lastUsedLabel = lastUsedAt
                 ? t("option:writingPlayground.lastOpenedLabel", "Last opened {{time}}", { time: formatRelativeTime(new Date(lastUsedAt).toISOString(), t) })
@@ -1961,7 +1958,8 @@ export const WritingPlayground = () => {
                 { key: "delete", icon: <Trash2 className="h-4 w-4" />, label: t("option:writingPlayground.deleteSession", "Delete session"), danger: true, onClick: () => confirmDeleteSession(session) }
               ]
               return (
-                <List.Item
+                <div
+                  key={session.id}
                   className={`cursor-pointer rounded-md px-2 py-3 transition ${isActive ? "bg-surface-hover" : "hover:bg-surface-hover/60"}`}
                   role="button" tabIndex={0}
                   onClick={() => handleSelectSession(session)}
@@ -1978,10 +1976,10 @@ export const WritingPlayground = () => {
                       </Dropdown>
                     </div>
                   </div>
-                </List.Item>
+                </div>
               )
-            }}
-          />
+            })}
+          </div>
         )}
       </div>
     </div>
@@ -2285,17 +2283,19 @@ export const WritingPlayground = () => {
             <div className="flex flex-col gap-2">
               <span className="text-xs text-text-muted">{t("option:writingPlayground.templateListTitle", "Templates")}</span>
               {templatesLoading ? (<Skeleton active />) : templatesError ? (<Alert type="error" showIcon title={t("option:writingPlayground.templateError", "Unable to load templates.")} />) : templates.length === 0 ? (<Empty description={t("option:writingPlayground.templateListEmpty", "No templates yet.")} />) : (
-                <List dataSource={templates} rowKey={(template) => template.name} renderItem={(template) => {
+                <div className="flex flex-col gap-1">
+                  {templates.map((template) => {
                   const isSelected = editingTemplate?.name === template.name
                   return (
-                    <List.Item className={`cursor-pointer rounded-md px-2 py-2 transition ${isSelected ? "bg-surface-hover" : "hover:bg-surface-hover/60"}`} role="button" tabIndex={0} onClick={() => handleTemplateSelect(template)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleTemplateSelect(template) } }}>
+                    <div key={template.name} className={`cursor-pointer rounded-md px-2 py-2 transition ${isSelected ? "bg-surface-hover" : "hover:bg-surface-hover/60"}`} role="button" tabIndex={0} onClick={() => handleTemplateSelect(template)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleTemplateSelect(template) } }}>
                       <div className="flex w-full items-center justify-between gap-2">
                         <span className="text-sm font-medium text-text">{template.name}</span>
                         {template.is_default ? (<Tag color="blue">{t("option:writingPlayground.templateDefaultTag", "Default")}</Tag>) : null}
                       </div>
-                    </List.Item>
+                    </div>
                   )
-                }} />
+                })}
+                </div>
               )}
             </div>
             <div className="flex flex-col gap-3">
@@ -2342,17 +2342,19 @@ export const WritingPlayground = () => {
             <div className="flex flex-col gap-2">
               <span className="text-xs text-text-muted">{t("option:writingPlayground.themeListTitle", "Themes")}</span>
               {themesLoading ? (<Skeleton active />) : themesError ? (<Alert type="error" showIcon title={t("option:writingPlayground.themeError", "Unable to load themes.")} />) : themes.length === 0 ? (<Empty description={t("option:writingPlayground.themeListEmpty", "No themes yet.")} />) : (
-                <List dataSource={themes} rowKey={(theme) => theme.name} renderItem={(theme) => {
+                <div className="flex flex-col gap-1">
+                  {themes.map((theme) => {
                   const isSelected = editingTheme?.name === theme.name
                   return (
-                    <List.Item className={`cursor-pointer rounded-md px-2 py-2 transition ${isSelected ? "bg-surface-hover" : "hover:bg-surface-hover/60"}`} role="button" tabIndex={0} onClick={() => handleThemeSelect(theme)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleThemeSelect(theme) } }}>
+                    <div key={theme.name} className={`cursor-pointer rounded-md px-2 py-2 transition ${isSelected ? "bg-surface-hover" : "hover:bg-surface-hover/60"}`} role="button" tabIndex={0} onClick={() => handleThemeSelect(theme)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleThemeSelect(theme) } }}>
                       <div className="flex w-full items-center justify-between gap-2">
                         <span className="text-sm font-medium text-text">{theme.name}</span>
                         {theme.is_default ? (<Tag color="blue">{t("option:writingPlayground.themeDefaultTag", "Default")}</Tag>) : null}
                       </div>
-                    </List.Item>
+                    </div>
                   )
-                }} />
+                })}
+                </div>
               )}
             </div>
             <div className="flex flex-col gap-3">

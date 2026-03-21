@@ -391,7 +391,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
       title={t("acp.create.title", "Create ACP Session")}
       footer={null}
       width={560}
-      destroyOnClose
+      destroyOnHidden
       maskClosable={!isPending}
       closable={!isPending}
     >

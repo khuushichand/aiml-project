@@ -76,6 +76,16 @@ export const useCompanionHomeData = ({
     setError(null)
     setProfileLoaded(false)
 
+    if (!hasPersonalization) {
+      setSnapshot(createEmptySnapshot(surface))
+      setProfile(null)
+      setProfileLoaded(true)
+      setLoading(false)
+      return () => {
+        cancelled = true
+      }
+    }
+
     const load = async () => {
       const [snapshotResult, profileResult] = await Promise.allSettled([
         fetchCompanionHomeSnapshot(surface),

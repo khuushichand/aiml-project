@@ -2,12 +2,7 @@ import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from ".
 import { expectApiCall } from "../../utils/api-assertions"
 import { SettingsPage } from "../../utils/page-objects"
 
-/**
- * All known settings subsections — both those accessible via the SettingsPage
- * page object and those that require direct URL navigation.
- */
-const ALL_SETTINGS_SECTIONS = [
-  // Via SettingsPage.gotoSection()
+const SETTINGS_SHELL_SECTIONS = [
   "tldw",
   "model",
   "chat",
@@ -23,17 +18,28 @@ const ALL_SETTINGS_SECTIONS = [
   "speech",
   "evaluations",
   "characters",
-  "health",
-  // Direct URL navigation
   "chatbooks",
   "world-books",
   "prompt-studio",
-  "mcp-hub",
   "share",
   "about",
-  "processed",
   "family-guardrails",
   "chat-dictionaries",
+] as const
+
+const SETTINGS_STANDALONE_PAGES = [
+  {
+    section: "health",
+    heading: /health status/i,
+  },
+  {
+    section: "mcp-hub",
+    heading: /^mcp hub$/i,
+  },
+  {
+    section: "processed",
+    heading: /processed items \(local\)/i,
+  },
 ] as const
 
 test.describe("Settings Full — All Subsections", () => {
@@ -41,7 +47,7 @@ test.describe("Settings Full — All Subsections", () => {
     skipIfServerUnavailable(serverInfo)
   })
 
-  for (const section of ALL_SETTINGS_SECTIONS) {
+  for (const section of SETTINGS_SHELL_SECTIONS) {
     test(`settings/${section} loads and renders interactive elements`, async ({
       authedPage,
       diagnostics,
@@ -51,6 +57,29 @@ test.describe("Settings Full — All Subsections", () => {
       await settings.waitForReady()
 
       // Every settings subsection should render at least one interactive element
+      const interactiveElements = authedPage.locator(
+        "button, input, select, textarea, a[href]"
+      )
+      await expect(interactiveElements.first()).toBeVisible({ timeout: 15_000 })
+      expect(await interactiveElements.count()).toBeGreaterThan(0)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  }
+
+  for (const page of SETTINGS_STANDALONE_PAGES) {
+    test(`settings/${page.section} loads and renders interactive elements`, async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      await authedPage.goto(`/settings/${page.section}`, {
+        waitUntil: "domcontentloaded",
+      })
+
+      await expect(
+        authedPage.getByRole("heading", { name: page.heading }).first()
+      ).toBeVisible({ timeout: 20_000 })
+
       const interactiveElements = authedPage.locator(
         "button, input, select, textarea, a[href]"
       )
