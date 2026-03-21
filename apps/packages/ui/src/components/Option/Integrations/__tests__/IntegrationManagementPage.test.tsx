@@ -2,12 +2,16 @@
 
 import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
   listPersonalIntegrations: vi.fn(),
   listWorkspaceIntegrations: vi.fn(),
+  connectPersonalIntegration: vi.fn(),
+  updatePersonalIntegration: vi.fn(),
+  deletePersonalIntegration: vi.fn(),
   getWorkspaceSlackPolicy: vi.fn(),
   getWorkspaceDiscordPolicy: vi.fn(),
   getWorkspaceTelegramBot: vi.fn(),
@@ -22,6 +26,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/services/integrations-control-plane", () => ({
   listPersonalIntegrations: (...args: unknown[]) => mocks.listPersonalIntegrations(...args),
   listWorkspaceIntegrations: (...args: unknown[]) => mocks.listWorkspaceIntegrations(...args),
+  connectPersonalIntegration: (...args: unknown[]) => mocks.connectPersonalIntegration(...args),
+  updatePersonalIntegration: (...args: unknown[]) => mocks.updatePersonalIntegration(...args),
+  deletePersonalIntegration: (...args: unknown[]) => mocks.deletePersonalIntegration(...args),
   getWorkspaceSlackPolicy: (...args: unknown[]) => mocks.getWorkspaceSlackPolicy(...args),
   getWorkspaceDiscordPolicy: (...args: unknown[]) => mocks.getWorkspaceDiscordPolicy(...args),
   getWorkspaceTelegramBot: (...args: unknown[]) => mocks.getWorkspaceTelegramBot(...args),
@@ -94,6 +101,97 @@ describe("IntegrationManagementPage", () => {
     expect(await screen.findByText("Slack")).toBeInTheDocument()
     expect(screen.getByText("Discord")).toBeInTheDocument()
     expect(screen.queryByText("Telegram")).not.toBeInTheDocument()
+  })
+
+  it("starts the personal connect flow from the management drawer", async () => {
+    const user = userEvent.setup()
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null)
+
+    mocks.listPersonalIntegrations.mockResolvedValue({
+      scope: "personal",
+      items: [
+        {
+          id: "personal:slack",
+          provider: "slack",
+          scope: "personal",
+          display_name: "Slack",
+          status: "disconnected",
+          enabled: false,
+          metadata: {},
+          actions: ["connect"]
+        }
+      ]
+    })
+    mocks.connectPersonalIntegration.mockResolvedValue({
+      provider: "slack",
+      connection_id: "personal:slack",
+      status: "ready",
+      auth_url: "https://slack.example.test/oauth",
+      auth_session_id: "session-123",
+      expires_at: "2026-03-20T22:00:00+00:00"
+    })
+
+    renderWithQueryClient(<IntegrationManagementPage scope="personal" />)
+
+    await user.click(await screen.findByRole("button", { name: "Manage" }))
+    await user.click(await screen.findByRole("button", { name: "Connect" }))
+
+    await waitFor(() => {
+      expect(mocks.connectPersonalIntegration).toHaveBeenCalledWith("slack")
+    })
+    expect(openSpy).toHaveBeenCalledWith("https://slack.example.test/oauth", "_blank", "noopener,noreferrer")
+
+    openSpy.mockRestore()
+  })
+
+  it("updates and removes a personal integration from the management drawer", async () => {
+    const user = userEvent.setup()
+
+    mocks.listPersonalIntegrations.mockResolvedValue({
+      scope: "personal",
+      items: [
+        {
+          id: "personal:slack",
+          provider: "slack",
+          scope: "personal",
+          display_name: "Slack",
+          status: "connected",
+          enabled: true,
+          metadata: {},
+          actions: ["disable", "remove"]
+        }
+      ]
+    })
+    mocks.updatePersonalIntegration.mockResolvedValue({
+      id: "personal:slack",
+      provider: "slack",
+      scope: "personal",
+      display_name: "Slack",
+      status: "disabled",
+      enabled: false,
+      metadata: {},
+      actions: ["enable", "remove"]
+    })
+    mocks.deletePersonalIntegration.mockResolvedValue({
+      deleted: true,
+      provider: "slack",
+      connection_id: "personal:slack"
+    })
+
+    renderWithQueryClient(<IntegrationManagementPage scope="personal" />)
+
+    await user.click(await screen.findByRole("button", { name: "Manage" }))
+    await user.click(await screen.findByRole("button", { name: "Disable" }))
+
+    await waitFor(() => {
+      expect(mocks.updatePersonalIntegration).toHaveBeenCalledWith("slack", "personal:slack", { enabled: false })
+    })
+
+    await user.click(await screen.findByRole("button", { name: "Remove" }))
+
+    await waitFor(() => {
+      expect(mocks.deletePersonalIntegration).toHaveBeenCalledWith("slack", "personal:slack")
+    })
   })
 
   it("renders workspace slack, discord, and telegram controls", async () => {
