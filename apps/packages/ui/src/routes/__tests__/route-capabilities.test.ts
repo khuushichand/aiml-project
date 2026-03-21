@@ -97,14 +97,15 @@ describe("route capability gating", () => {
     expect(isRouteEnabledForCapabilities(PERSONA_DOCK_PATH, caps)).toBe(true)
   })
 
-  it("hides the companion workspace when personalization capability is missing", () => {
+  it("keeps the companion workspace available even when personalization capability is missing", () => {
     const caps = makeCapabilities({
       hasPersonalization: false
     })
-    expect(isRouteEnabledForCapabilities(COMPANION_PATH, caps)).toBe(false)
+    expect(isCompanionAvailable(caps)).toBe(true)
+    expect(isRouteEnabledForCapabilities(COMPANION_PATH, caps)).toBe(true)
   })
 
-  it("enables the companion workspace when personalization capability is present", () => {
+  it("keeps the companion workspace available when personalization capability is present", () => {
     const caps = makeCapabilities({
       hasPersonalization: true
     })

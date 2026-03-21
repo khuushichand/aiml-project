@@ -24,8 +24,8 @@ export const isPersonaDockAvailable = (
 ): boolean => Boolean(capabilities?.hasPersona)
 
 export const isCompanionAvailable = (
-  capabilities: ServerCapabilities | null | undefined
-): boolean => Boolean(capabilities?.hasPersonalization)
+  _capabilities: ServerCapabilities | null | undefined
+): boolean => true
 
 export const isCompanionConversationAvailable = (
   capabilities: ServerCapabilities | null | undefined

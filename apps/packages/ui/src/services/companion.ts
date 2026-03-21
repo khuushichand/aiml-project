@@ -1,4 +1,9 @@
 import { bgRequest } from "@/services/background-proxy"
+import {
+  listNotifications,
+  type NotificationItem,
+  type NotificationsListResponse
+} from "@/services/notifications"
 
 export type CompanionActivityItem = {
   id: string
@@ -117,19 +122,7 @@ export type CompanionReflectionDetail = {
   goals: CompanionGoal[]
 }
 
-export type CompanionNotification = {
-  id: number
-  user_id?: string
-  kind: string
-  title: string
-  message: string
-  severity: string
-  link_type?: string | null
-  link_id?: string | null
-  created_at: string
-  read_at?: string | null
-  dismissed_at?: string | null
-}
+export type CompanionNotification = NotificationItem
 
 export type PersonalizationProfile = {
   enabled: boolean
@@ -179,11 +172,6 @@ type CompanionGoalListResponse = {
   total: number
 }
 
-type NotificationsListResponse = {
-  items: CompanionNotification[]
-  total: number
-}
-
 export type CompanionConversationPromptsResponse = {
   prompt_source_kind: string
   prompt_source_id?: string | null
@@ -198,6 +186,7 @@ export type CompanionWorkspaceSnapshot = {
   goals: CompanionGoal[]
   activeGoalCount: number
   reflections: CompanionReflection[]
+  inbox: CompanionNotification[]
   reflectionNotifications: CompanionNotification[]
 }
 
@@ -449,11 +438,7 @@ export const fetchCompanionReflectionNotifications = async (params?: {
   limit?: number
   offset?: number
 }): Promise<NotificationsListResponse> => {
-  const qs = buildQuery(params || {})
-  return bgRequest<NotificationsListResponse>({
-    path: `/api/v1/notifications${qs}` as any,
-    method: "GET"
-  })
+  return listNotifications(params)
 }
 
 export const fetchCompanionWorkspaceSnapshot = async (
@@ -492,6 +477,7 @@ export const fetchCompanionWorkspaceSnapshot = async (
     activeGoalCount: goalsResponse.items.filter((goal) => goal.status === "active")
       .length,
     reflections,
+    inbox: notificationsResponse.items,
     reflectionNotifications: notificationsResponse.items.filter(
       (item) => item.kind === "companion_reflection"
     )

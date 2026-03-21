@@ -61,16 +61,34 @@ vi.mock("~/components/Layouts/Layout", () => ({
   )
 }))
 
-vi.mock("@/routes/route-registry", () => ({
-  optionRoutes: [
-    { path: "/", element: <div data-testid="home-route">Home</div> },
-    { path: "/research", element: <div data-testid="research-route">Research</div> },
-    { path: "/knowledge", element: <div data-testid="knowledge-route">Knowledge</div> },
-    { path: "/media", element: <div data-testid="media-route">Media</div> },
-    { path: "/settings", element: <div data-testid="settings-route">Settings</div> }
-  ],
-  sidepanelRoutes: [{ path: "/chat", element: <div data-testid="sidepanel-chat">Chat</div> }]
-}))
+vi.mock("@/routes/route-registry", async () => {
+  const { createElement } = await import("react")
+
+  return {
+    optionRoutes: [
+      { path: "/", element: createElement("div", { "data-testid": "home-route" }, "Home") },
+      {
+        path: "/research",
+        element: createElement("div", { "data-testid": "research-route" }, "Research")
+      },
+      {
+        path: "/knowledge",
+        element: createElement("div", { "data-testid": "knowledge-route" }, "Knowledge")
+      },
+      { path: "/media", element: createElement("div", { "data-testid": "media-route" }, "Media") },
+      {
+        path: "/settings",
+        element: createElement("div", { "data-testid": "settings-route" }, "Settings")
+      }
+    ],
+    sidepanelRoutes: [
+      {
+        path: "/chat",
+        element: createElement("div", { "data-testid": "sidepanel-chat" }, "Chat")
+      }
+    ]
+  }
+})
 
 const renderRouteShell = (kind: "options" | "sidepanel", path: string) =>
   render(
@@ -95,7 +113,9 @@ describe("RouteShell unknown-route recovery", () => {
     const user = userEvent.setup()
     renderRouteShell("options", "/missing-route")
 
-    await user.click(screen.getByTestId("not-found-go-chat"))
+    expect(screen.getByRole("link", { name: "Go to Home" })).toHaveAttribute("href", "/")
+
+    await user.click(screen.getByTestId("not-found-go-home"))
     expect(screen.getByTestId("home-route")).toBeVisible()
   })
 })

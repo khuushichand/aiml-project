@@ -84,9 +84,9 @@ const RouteNotFoundState = ({
           <Link
             to="/"
             className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primaryStrong"
-            data-testid="not-found-go-chat"
+            data-testid="not-found-go-home"
           >
-            Go to Chat
+            Go to Home
           </Link>
           {kind === "options" && (
             <Link

@@ -10,8 +10,8 @@ import { ConnectionPhase } from "@/types/connection"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { useDarkMode } from "@/hooks/useDarkmode"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
+import { CompanionHomeShell } from "@/components/Option/CompanionHome"
 import OptionLayout from "~/components/Layouts/Layout"
-import { LandingHub } from "~/components/Option/LandingHub"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 const OptionIndex = () => {
@@ -212,7 +212,7 @@ const OptionIndex = () => {
 
   return (
     <OptionLayout>
-      <LandingHub />
+      <CompanionHomeShell surface="options" />
     </OptionLayout>
   )
 }

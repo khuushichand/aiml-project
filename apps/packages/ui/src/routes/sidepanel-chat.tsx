@@ -66,6 +66,12 @@ import {
   type OpenHistoryDetail,
   type TimelineActionDetail
 } from "@/utils/timeline-actions"
+import {
+  getLegacyStorageKey,
+  getTabsStorageKey,
+  type LegacySidepanelChatSnapshot,
+  readSidepanelRuntimeTabId
+} from "./sidepanel-chat-resume"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -103,6 +109,12 @@ type IngestCardState = {
   canRetry: boolean
   starterQuestions: string[]
   timestampSeconds?: number
+}
+
+type SidepanelTabsState = {
+  tabs: SidepanelChatTab[]
+  activeTabId: string | null
+  snapshotsById: Record<string, SidepanelChatSnapshot>
 }
 
 const formatSecondsAsClock = (seconds: number): string => {
@@ -830,24 +842,6 @@ const SidepanelChat = () => {
   const bgMsg = useBackgroundMessage()
   const lastBgMsgRef = React.useRef<typeof bgMsg | null>(null)
 
-  const getTabsStorageKey = (id: number | null | undefined) =>
-    id != null ? `sidepanelChatTabsState:tab-${id}` : "sidepanelChatTabsState"
-  const getLegacyStorageKey = (id: number | null | undefined) =>
-    id != null ? `sidepanelChatState:tab-${id}` : "sidepanelChatState"
-
-  type LegacySidepanelChatSnapshot = {
-    history: ChatHistory
-    messages: ChatMessage[]
-    chatMode: typeof chatMode
-    historyId: string | null
-  }
-
-  type SidepanelTabsState = {
-    tabs: SidepanelChatTab[]
-    activeTabId: string | null
-    snapshotsById: Record<string, SidepanelChatSnapshot>
-  }
-
   const restoreSidepanelState = async () => {
     // Wait until we've attempted to resolve tab id so we don't
     // accidentally attach a tab-specific snapshot to the wrong key.
@@ -1045,19 +1039,8 @@ const SidepanelChat = () => {
   React.useEffect(() => {
     // Resolve the tab id associated with this sidepanel instance.
     const fetchTabId = async () => {
-      try {
-        // browser is provided by the extension runtime (see wxt config).
-        const resp: any = await browser.runtime.sendMessage({
-          type: "tldw:get-tab-id"
-        })
-        if (resp && typeof resp.tabId === "number") {
-          setTabId(resp.tabId)
-        } else {
-          setTabId(null)
-        }
-      } catch {
-        setTabId(null)
-      }
+      const resolvedTabId = await readSidepanelRuntimeTabId()
+      setTabId(resolvedTabId)
     }
     fetchTabId()
   }, [])
