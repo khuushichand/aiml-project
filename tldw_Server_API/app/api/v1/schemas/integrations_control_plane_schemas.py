@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 IntegrationProvider = Literal["slack", "discord", "telegram"]
 IntegrationScope = Literal["personal", "workspace"]
 IntegrationStatus = Literal["connected", "disconnected", "disabled", "degraded", "needs_config"]
+IntegrationCommand = Literal["help", "ask", "rag", "summarize", "status"]
 
 
 class IntegrationConnection(BaseModel):
@@ -33,3 +34,83 @@ class IntegrationOverviewResponse(BaseModel):
 
     scope: IntegrationScope
     items: list[IntegrationConnection] = Field(default_factory=list)
+
+
+class SlackWorkspacePolicy(BaseModel):
+    """Typed workspace policy for Slack integrations."""
+
+    allowed_commands: list[IntegrationCommand] = Field(default_factory=list)
+    channel_allowlist: list[str] = Field(default_factory=list)
+    channel_denylist: list[str] = Field(default_factory=list)
+    default_response_mode: Literal["ephemeral", "thread", "channel"]
+    strict_user_mapping: bool = False
+    service_user_id: str | None = None
+    user_mappings: dict[str, str] = Field(default_factory=dict)
+    workspace_quota_per_minute: int
+    user_quota_per_minute: int
+    status_scope: Literal["workspace", "workspace_and_user"]
+
+
+class SlackWorkspacePolicyUpdate(BaseModel):
+    """Typed update payload for Slack workspace policy."""
+
+    allowed_commands: list[IntegrationCommand] | None = None
+    channel_allowlist: list[str] | None = None
+    channel_denylist: list[str] | None = None
+    default_response_mode: Literal["ephemeral", "thread", "channel"] | None = None
+    strict_user_mapping: bool | None = None
+    service_user_id: str | None = None
+    user_mappings: dict[str, str] | None = None
+    workspace_quota_per_minute: int | None = None
+    user_quota_per_minute: int | None = None
+    status_scope: Literal["workspace", "workspace_and_user"] | None = None
+
+
+class SlackWorkspacePolicyResponse(BaseModel):
+    """Typed Slack workspace policy response for the control plane."""
+
+    provider: Literal["slack"] = "slack"
+    scope: Literal["workspace"] = "workspace"
+    installation_ids: list[str] = Field(default_factory=list)
+    uniform: bool = True
+    policy: SlackWorkspacePolicy
+
+
+class DiscordWorkspacePolicy(BaseModel):
+    """Typed workspace policy for Discord integrations."""
+
+    allowed_commands: list[IntegrationCommand] = Field(default_factory=list)
+    channel_allowlist: list[str] = Field(default_factory=list)
+    channel_denylist: list[str] = Field(default_factory=list)
+    default_response_mode: Literal["ephemeral", "channel"]
+    strict_user_mapping: bool = False
+    service_user_id: str | None = None
+    user_mappings: dict[str, str] = Field(default_factory=dict)
+    guild_quota_per_minute: int
+    user_quota_per_minute: int
+    status_scope: Literal["guild", "guild_and_user"]
+
+
+class DiscordWorkspacePolicyUpdate(BaseModel):
+    """Typed update payload for Discord workspace policy."""
+
+    allowed_commands: list[IntegrationCommand] | None = None
+    channel_allowlist: list[str] | None = None
+    channel_denylist: list[str] | None = None
+    default_response_mode: Literal["ephemeral", "channel"] | None = None
+    strict_user_mapping: bool | None = None
+    service_user_id: str | None = None
+    user_mappings: dict[str, str] | None = None
+    guild_quota_per_minute: int | None = None
+    user_quota_per_minute: int | None = None
+    status_scope: Literal["guild", "guild_and_user"] | None = None
+
+
+class DiscordWorkspacePolicyResponse(BaseModel):
+    """Typed Discord workspace policy response for the control plane."""
+
+    provider: Literal["discord"] = "discord"
+    scope: Literal["workspace"] = "workspace"
+    installation_ids: list[str] = Field(default_factory=list)
+    uniform: bool = True
+    policy: DiscordWorkspacePolicy
