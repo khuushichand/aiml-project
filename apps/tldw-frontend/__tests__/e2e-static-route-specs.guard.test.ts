@@ -7,6 +7,10 @@ const STATIC_ROUTE_SPECS = [
   "e2e/workflows/route-placeholder-settings.spec.ts",
   "e2e/workflows/tier-2-features/documentation.spec.ts",
   "e2e/workflows/tier-4-admin/privileges.spec.ts",
+  "e2e/workflows/tier-4-admin/profile-companion.spec.ts",
+  "e2e/workflows/tier-4-admin/settings-full.spec.ts",
+  "e2e/workflows/tier-5-specialized/model-playground.spec.ts",
+  "e2e/workflows/tier-5-specialized/skills.spec.ts",
 ]
 
 describe("static route specs", () => {

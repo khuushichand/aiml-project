@@ -26,25 +26,18 @@ test.describe("Skills", () => {
     diagnostics,
   }) => {
     await authedPage.goto("/skills", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    // Should show either the skills manager, empty state, or connection gate
-    const hasSkillsText = await authedPage
-      .getByText(/skills/i)
-      .first()
-      .isVisible()
-      .catch(() => false)
-    const hasNotAvailable = await authedPage
-      .getByText(/not available/i)
-      .isVisible()
-      .catch(() => false)
-    const hasConnect = await authedPage
-      .getByText(/connect/i)
-      .first()
-      .isVisible()
-      .catch(() => false)
+    const unsupportedHeading = authedPage.getByRole("heading", {
+      name: /skills not available/i,
+    })
+    const skillsTable = authedPage.locator("table")
+    const createButtons = authedPage.getByRole("button", {
+      name: /new skill|add skill|create/i,
+    })
 
-    expect(hasSkillsText || hasNotAvailable || hasConnect).toBe(true)
+    await expect(
+      unsupportedHeading.or(skillsTable).or(createButtons).first()
+    ).toBeVisible({ timeout: 15_000 })
 
     await assertNoCriticalErrors(diagnostics)
   })
@@ -57,11 +50,18 @@ test.describe("Skills", () => {
       url: "/api/v1/skills",
     })
     await authedPage.goto("/skills", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    const result = await apiCall.catch(() => null)
-    // API call may not fire if server doesn't support skills
-    if (result) {
+    const unsupportedHeading = authedPage.getByRole("heading", {
+      name: /skills not available/i,
+    })
+    const unsupportedVisible = await unsupportedHeading
+      .isVisible({ timeout: 5_000 })
+      .catch(() => false)
+
+    if (unsupportedVisible) {
+      await expect(unsupportedHeading).toBeVisible()
+    } else {
+      const result = await apiCall
       expect(result.response.status()).toBeLessThan(500)
     }
 
@@ -73,17 +73,25 @@ test.describe("Skills", () => {
     diagnostics,
   }) => {
     await authedPage.goto("/skills", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    const buttons = await authedPage.getByRole("button").count()
-    const tables = await authedPage.locator("table").count()
-    const inputs = await authedPage
-      .locator("input, select, textarea")
-      .count()
+    const unsupportedHeading = authedPage.getByRole("heading", {
+      name: /skills not available/i,
+    })
+    const unsupportedVisible = await unsupportedHeading
+      .isVisible({ timeout: 5_000 })
+      .catch(() => false)
 
-    // At minimum there should be some interactive element or empty state
-    // (connection gate also has buttons)
-    expect(buttons + tables + inputs).toBeGreaterThanOrEqual(0)
+    if (unsupportedVisible) {
+      await expect(
+        authedPage.getByText(/does not support the skills api/i)
+      ).toBeVisible({ timeout: 10_000 })
+    } else {
+      const interactiveElements = authedPage.locator(
+        "button, input, select, textarea, table"
+      )
+      await expect(interactiveElements.first()).toBeVisible({ timeout: 15_000 })
+      expect(await interactiveElements.count()).toBeGreaterThan(0)
+    }
 
     await assertNoCriticalErrors(diagnostics)
   })

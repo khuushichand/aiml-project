@@ -46,14 +46,16 @@ test.describe("Settings Full — All Subsections", () => {
       authedPage,
       diagnostics,
     }) => {
+      const settings = new SettingsPage(authedPage)
       await authedPage.goto(`/settings/${section}`, { waitUntil: "domcontentloaded" })
-      await authedPage.waitForLoadState("networkidle").catch(() => {})
+      await settings.waitForReady()
 
       // Every settings subsection should render at least one interactive element
-      const buttons = await authedPage.getByRole("button").count()
-      const inputs = await authedPage.locator("input, select, textarea").count()
-      const links = await authedPage.getByRole("link").count()
-      expect(buttons + inputs + links).toBeGreaterThan(0)
+      const interactiveElements = authedPage.locator(
+        "button, input, select, textarea, a[href]"
+      )
+      await expect(interactiveElements.first()).toBeVisible({ timeout: 15_000 })
+      expect(await interactiveElements.count()).toBeGreaterThan(0)
 
       await assertNoCriticalErrors(diagnostics)
     })

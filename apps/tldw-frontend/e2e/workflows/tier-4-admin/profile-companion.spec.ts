@@ -8,7 +8,6 @@ test.describe("Profile Page", () => {
 
   test("profile page loads and shows placeholder", async ({ authedPage, diagnostics }) => {
     await authedPage.goto("/profile", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
     // Profile is a RoutePlaceholder
     const panel = authedPage.getByTestId("route-placeholder-panel")
@@ -78,7 +77,6 @@ test.describe("Companion Page", () => {
 
   test("companion page loads and shows redirect panel", async ({ authedPage, diagnostics }) => {
     await authedPage.goto("/companion", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
     // Companion is a RouteRedirect — it shows a redirect panel briefly then navigates
     const redirectPanel = authedPage.getByTestId("route-redirect-panel")

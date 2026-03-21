@@ -28,16 +28,16 @@ test.describe("Model Playground", () => {
     await authedPage.goto("/model-playground", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
     // Header with "Model Playground" heading
-    const heading = authedPage.getByText("Model Playground").first()
+    const heading = authedPage.getByRole("heading", {
+      name: /model playground/i,
+    })
     await expect(heading).toBeVisible({ timeout: 10_000 })
 
     // Chat area with role="log"
-    const chatLog = authedPage.locator('[role="log"]')
-    const hasChatLog = await chatLog.isVisible().catch(() => false)
-    expect(hasChatLog).toBe(true)
+    const chatLog = authedPage.getByRole("log", { name: /chat messages/i })
+    await expect(chatLog).toBeVisible({ timeout: 10_000 })
 
     await assertNoCriticalErrors(diagnostics)
   })
@@ -49,20 +49,20 @@ test.describe("Model Playground", () => {
     await authedPage.goto("/model-playground", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
+    await expect(
+      authedPage.getByRole("heading", { name: /model playground/i })
+    ).toBeVisible({ timeout: 10_000 })
 
-    // Find the debug toggle button (Bug icon with aria-pressed)
-    const debugBtn = authedPage
-      .locator('button[aria-pressed]')
-      .filter({ has: authedPage.locator("svg") })
-      .first()
-
-    if (await debugBtn.isVisible().catch(() => false)) {
-      // Toggle debug on
-      await debugBtn.click()
-      // A short wait for the panel to appear
-      await authedPage.waitForTimeout(300)
-    }
+    const debugBtn = authedPage.locator('button[aria-pressed]').first()
+    await expect(debugBtn).toBeVisible({ timeout: 10_000 })
+    await debugBtn.click()
+    await expect(
+      authedPage.getByText(/no assistant messages yet/i)
+    ).toBeVisible({ timeout: 10_000 })
+    await debugBtn.click()
+    await expect(
+      authedPage.getByText(/no assistant messages yet/i)
+    ).toHaveCount(0)
 
     await assertNoCriticalErrors(diagnostics)
   })
@@ -74,13 +74,11 @@ test.describe("Model Playground", () => {
     await authedPage.goto("/model-playground", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
     const simpleChatBtn = authedPage.getByRole("button", {
       name: /simple chat/i,
     })
-    const isVisible = await simpleChatBtn.isVisible().catch(() => false)
-    expect(isVisible).toBe(true)
+    await expect(simpleChatBtn).toBeVisible({ timeout: 10_000 })
 
     await assertNoCriticalErrors(diagnostics)
   })
