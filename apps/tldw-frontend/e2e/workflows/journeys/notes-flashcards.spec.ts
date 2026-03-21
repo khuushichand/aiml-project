@@ -62,6 +62,12 @@ test.describe("Notes -> Flashcards journey", () => {
       // Switch to the transfer tab to access the generate feature
       await flashcardsPage.switchToTab("transfer")
 
+      const exportPreview = page.getByText(/\d+\s+cards from All decks/i).first()
+      const initialExportPreview = await exportPreview.textContent()
+      const initialCardCount = Number(
+        initialExportPreview?.match(/(\d+)\s+cards/i)?.[1] ?? "0"
+      )
+
       // Check if the generate textarea is available
       const generateVisible = await flashcardsPage.generateTextarea
         .isVisible()
@@ -106,22 +112,18 @@ test.describe("Notes -> Flashcards journey", () => {
         const { response: saveResponse } = await saveApiCall
         expect(saveResponse.status()).toBeLessThan(400)
         await expect(
-          page.getByText(/Saved \d+ generated cards/i)
+          page.getByText(/Saved \d+ (?:generated )?cards(?:; \d+ failed\.)?/i).first()
         ).toBeVisible({ timeout: 15_000 })
+        await expect
+          .poll(
+            async () => {
+              const updatedPreview = await exportPreview.textContent()
+              return Number(updatedPreview?.match(/(\d+)\s+cards/i)?.[1] ?? "0")
+            },
+            { timeout: 15_000 }
+          )
+          .toBeGreaterThan(initialCardCount)
       }
-    })
-
-    await test.step("Verify flashcards exist", async () => {
-      const flashcardsPage = new FlashcardsPage(page)
-
-      // Switch to manage tab to see the cards
-      await flashcardsPage.switchToTab("manage")
-      await page.waitForTimeout(1_000)
-
-      await expect(flashcardsPage.manageTopBar).toBeVisible({ timeout: 15_000 })
-      await expect(
-        page.getByTestId("flashcards-generate-save-button")
-      ).toHaveCount(0)
     })
   })
 })

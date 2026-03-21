@@ -5,6 +5,7 @@
 import { type Page, expect } from "@playwright/test"
 import { expectApiCall } from "./api-assertions"
 import { TEST_CONFIG, fetchWithApiKey, waitForConnection } from "./helpers"
+import { NotesPage } from "./page-objects"
 
 /**
  * Ingest content via the media page and wait until processing completes.
@@ -116,48 +117,13 @@ export async function createNote(
   page: Page,
   opts: { title: string; content: string }
 ): Promise<string> {
-  await page.goto("/notes", { waitUntil: "domcontentloaded" })
-  await waitForConnection(page)
-
-  // Wait for the notes page to be ready
-  await page.waitForTimeout(1_000)
-
-  const apiCall = expectApiCall(page, {
-    method: "POST",
-    url: "/api/v1/notes",
+  const notesPage = new NotesPage(page)
+  await notesPage.goto()
+  await notesPage.assertPageReady()
+  await notesPage.createNote({
+    title: opts.title,
+    content: opts.content,
   })
-
-  // Click "New note" button (matches NotesPage locator)
-  const newNoteBtn = page.getByRole("button", { name: /new note/i })
-  await expect(newNoteBtn).toBeVisible({ timeout: 10_000 })
-  await newNoteBtn.click()
-
-  // Fill title (placeholder "Title")
-  const titleInput = page.getByPlaceholder(/^title$/i)
-  await expect(titleInput).toBeVisible({ timeout: 10_000 })
-  await titleInput.fill(opts.title)
-
-  // Fill content (placeholder "Write your note here..." or label "Note content")
-  const contentInput = page.getByPlaceholder(/write your note here/i).or(
-    page.getByLabel(/note content/i)
-  )
-  if ((await contentInput.count()) > 0 && (await contentInput.isVisible())) {
-    await contentInput.fill(opts.content)
-  } else {
-    // WYSIWYG fallback
-    const wysiwyg = page.getByTestId("notes-wysiwyg-editor")
-    await wysiwyg.click()
-    await page.keyboard.type(opts.content)
-  }
-
-  // Save (data-testid "notes-save-button")
-  const saveBtn = page.getByTestId("notes-save-button")
-  await saveBtn.click()
-
-  // Wait for save to complete
-  await expect(saveBtn).toBeEnabled({ timeout: 15_000 })
-
-  await apiCall
   return opts.title
 }
 

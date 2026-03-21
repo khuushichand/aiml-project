@@ -504,7 +504,7 @@ test.describe("Media Ingestion Workflow", () => {
         .getByTestId("onboarding-success-ingest")
         .evaluate((el: HTMLElement) => el.click())
 
-      await expect(authedPage).toHaveURL(/\/(?:[?#].*)?$/, {
+      await expect(authedPage).toHaveURL(/\/(?:media)?(?:[?#].*)?$/, {
         timeout: 30000
       })
 
@@ -513,11 +513,14 @@ test.describe("Media Ingestion Workflow", () => {
         .first()
       await expect(modal).toBeVisible({ timeout: 30000 })
 
-      const urlsInput = modal.locator("#quick-ingest-url-input")
+      const urlsInput = modal.getByRole("textbox", { name: /paste urls input/i }).first()
       await expect(urlsInput).toBeVisible({ timeout: 20000 })
 
       const ingestUrl = `http://127.0.0.1:1/qi-web-e2e-${generateTestId("quick-ingest-web")}`
       await urlsInput.fill(ingestUrl)
+      await expect
+        .poll(async () => (await urlsInput.inputValue()).trim(), { timeout: 10000 })
+        .toBe(ingestUrl)
 
       const inspectorDialog = authedPage.getByRole("dialog", { name: /^inspector$/i })
       if (await inspectorDialog.isVisible().catch(() => false)) {
@@ -532,38 +535,46 @@ test.describe("Media Ingestion Workflow", () => {
 
       const addUrlsButton = modal.getByRole("button", { name: /add urls/i })
       await expect(addUrlsButton).toBeEnabled({ timeout: 15000 })
-      await addUrlsButton.evaluate((el: HTMLElement) => el.click())
+      await addUrlsButton.click()
 
-      await expect
-        .poll(async () => {
-          const sourceValues = await modal
-            .getByRole("textbox", { name: /source url/i })
-            .evaluateAll((elements) =>
-              elements.map((el) =>
-                (el as HTMLInputElement)?.value?.trim() || ""
-              )
-            )
-          return sourceValues.includes(ingestUrl)
-        }, { timeout: 15000 })
-        .toBeTruthy()
+      const configureButton = modal.getByRole("button", { name: /configure 1 items/i })
+      await expect(configureButton).toBeVisible({ timeout: 15000 })
+      await expect(configureButton).toBeEnabled({ timeout: 15000 })
+      await configureButton.click()
 
-      const runButton = modal.locator('[data-testid="quick-ingest-run"]')
-      await expect(runButton).toBeVisible({ timeout: 20000 })
-      await expect(runButton).toBeEnabled({ timeout: 30000 })
-      await runButton.evaluate((el: HTMLElement) => el.click())
+      const standardPresetButton = modal.getByRole("button", { name: /standard preset/i })
+      await expect(standardPresetButton).toBeVisible({ timeout: 20000 })
 
-      const resultsTab = modal.locator("#quick-ingest-tab-results")
-      await expect(resultsTab).toBeVisible({ timeout: 60000 })
-      await resultsTab.evaluate((el: HTMLElement) => el.click())
+      const nextButton = modal.getByRole("button", { name: /^next$/i })
+      await expect(nextButton).toBeEnabled({ timeout: 15000 })
+      await nextButton.click()
 
-      const completionCard = modal.locator('[data-testid="quick-ingest-complete"]')
-      await expect(completionCard).toBeVisible({ timeout: 120000 })
-      await expect(completionCard).toContainText(/quick ingest completed/i)
+      await expect(modal.getByText(/ready to process/i)).toBeVisible({ timeout: 20000 })
+
+      const startProcessingButton = modal.getByRole("button", { name: /start processing/i })
+      await expect(startProcessingButton).toBeEnabled({ timeout: 20000 })
+      await startProcessingButton.click()
+
+      const resultsStep = modal.getByTestId("wizard-results-step")
+      await expect(resultsStep).toBeVisible({ timeout: 120000 })
+      await expect(
+        modal.getByRole("region", { name: /completed items/i })
+      ).toBeVisible({ timeout: 120000 })
+      await expect(
+        modal.getByRole("heading", { name: /completed \(1\)/i })
+      ).toBeVisible({ timeout: 120000 })
+      await expect(resultsStep).toContainText(/total:\s*1 succeeded,\s*0 failed/i)
+      await expect(
+        modal.getByRole("button", { name: /start a new ingest/i })
+      ).toBeVisible()
+      await expect(
+        modal.getByRole("button", { name: /close the ingest wizard/i })
+      ).toBeVisible()
 
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should cancel quick ingest mid-process with confirmation", async ({
+    test("should confirm before closing quick ingest during processing", async ({
       authedPage,
       serverInfo,
       diagnostics
@@ -681,7 +692,7 @@ test.describe("Media Ingestion Workflow", () => {
         .getByTestId("onboarding-success-ingest")
         .evaluate((el: HTMLElement) => el.click())
 
-      await expect(authedPage).toHaveURL(/\/(?:[?#].*)?$/, {
+      await expect(authedPage).toHaveURL(/\/(?:media)?(?:[?#].*)?$/, {
         timeout: 30000
       })
 
@@ -690,11 +701,14 @@ test.describe("Media Ingestion Workflow", () => {
         .first()
       await expect(modal).toBeVisible({ timeout: 30000 })
 
-      const urlsInput = modal.locator("#quick-ingest-url-input")
+      const urlsInput = modal.getByRole("textbox", { name: /paste urls input/i }).first()
       await expect(urlsInput).toBeVisible({ timeout: 20000 })
 
       const ingestUrl = `https://example.com/qi-web-cancel-${generateTestId("quick-ingest-web-cancel")}`
       await urlsInput.fill(ingestUrl)
+      await expect
+        .poll(async () => (await urlsInput.inputValue()).trim(), { timeout: 10000 })
+        .toBe(ingestUrl)
 
       const inspectorDialog = authedPage.getByRole("dialog", { name: /^inspector$/i })
       if (await inspectorDialog.isVisible().catch(() => false)) {
@@ -709,46 +723,52 @@ test.describe("Media Ingestion Workflow", () => {
 
       const addUrlsButton = modal.getByRole("button", { name: /add urls/i })
       await expect(addUrlsButton).toBeEnabled({ timeout: 15000 })
-      await addUrlsButton.evaluate((el: HTMLElement) => el.click())
+      await addUrlsButton.click()
 
-      await expect
-        .poll(async () => {
-          const sourceValues = await modal
-            .getByRole("textbox", { name: /source url/i })
-            .evaluateAll((elements) =>
-              elements.map((el) =>
-                (el as HTMLInputElement)?.value?.trim() || ""
-              )
-            )
-          return sourceValues.includes(ingestUrl)
-        }, { timeout: 15000 })
-        .toBeTruthy()
+      const configureButton = modal.getByRole("button", { name: /configure 1 items/i })
+      await expect(configureButton).toBeVisible({ timeout: 15000 })
+      await expect(configureButton).toBeEnabled({ timeout: 15000 })
+      await configureButton.click()
 
-      const runButton = modal.getByTestId("quick-ingest-run")
-      await expect(runButton).toBeVisible({ timeout: 20000 })
-      await expect(runButton).toBeEnabled({ timeout: 30000 })
-      await runButton.evaluate((el: HTMLElement) => el.click())
+      const standardPresetButton = modal.getByRole("button", { name: /standard preset/i })
+      await expect(standardPresetButton).toBeVisible({ timeout: 20000 })
 
-      const cancelButton = modal.getByTestId("quick-ingest-cancel")
+      const nextButton = modal.getByRole("button", { name: /^next$/i })
+      await expect(nextButton).toBeEnabled({ timeout: 15000 })
+      await nextButton.click()
+
+      await expect(modal.getByText(/ready to process/i)).toBeVisible({ timeout: 20000 })
+
+      const startProcessingButton = modal.getByRole("button", { name: /start processing/i })
+      await expect(startProcessingButton).toBeEnabled({ timeout: 20000 })
+      await startProcessingButton.click()
+
+      const cancelButton = modal.getByRole("button", { name: /cancel all/i })
       await expect(cancelButton).toBeVisible({ timeout: 15000 })
 
-      await cancelButton.click()
-      const keepRunningButton = authedPage.getByRole("button", { name: /keep running/i })
-      await expect(keepRunningButton).toBeVisible({ timeout: 10000 })
-      await keepRunningButton.click()
+      const closeButton = modal.getByRole("button", { name: /^close$/i }).first()
+      await expect(closeButton).toBeVisible({ timeout: 10000 })
+      await closeButton.click()
+
+      const closeConfirm = authedPage
+        .getByRole("dialog", { name: /processing is in progress/i })
+        .first()
+      await expect(closeConfirm).toBeVisible({ timeout: 10000 })
+
+      const stayButton = closeConfirm.getByRole("button", { name: /stay/i })
+      const confirmCancelAllButton = closeConfirm.getByRole("button", {
+        name: /^cancel all$/i
+      })
+      const minimizeButton = closeConfirm.getByRole("button", {
+        name: /minimize to background/i
+      })
+      await expect(stayButton).toBeVisible({ timeout: 10000 })
+      await expect(confirmCancelAllButton).toBeVisible({ timeout: 10000 })
+      await expect(minimizeButton).toBeVisible({ timeout: 10000 })
+
+      await stayButton.click()
       await expect(cancelButton).toBeVisible()
-
-      await cancelButton.click()
-      const confirmCancelButton = authedPage.getByRole("button", { name: /cancel run/i })
-      await expect(confirmCancelButton).toBeVisible({ timeout: 10000 })
-      await confirmCancelButton.click()
-
-      const completionCard = modal.getByTestId("quick-ingest-complete")
-      await expect(completionCard).toBeVisible({ timeout: 30000 })
-      await expect(completionCard).toContainText(/cancelled/i)
-
-      await authedPage.waitForTimeout(1800)
-      await expect(completionCard).toContainText(/cancelled/i)
+      await expect(stayButton).toBeHidden({ timeout: 10000 })
 
       await assertNoCriticalErrors(diagnostics)
     })

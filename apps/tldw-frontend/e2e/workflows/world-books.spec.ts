@@ -57,7 +57,7 @@ test.describe("World Books Workflow", () => {
       const name = `${testPrefix}-create`
 
       const [apiResult] = await Promise.all([
-        wbPage.waitForApiCall("/world-books", "POST"),
+        wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/?$/, "POST"),
         wbPage.createWorldBook(name, "E2E test world book")
       ])
 
@@ -94,14 +94,14 @@ test.describe("World Books Workflow", () => {
       await wbPage.clickEditOnRow(name)
 
       // Change description
-      const modal = authedPage.locator(".ant-modal")
+      const modal = authedPage.getByRole("dialog", { name: /edit world book/i })
       const descInput = modal.getByLabel(/description/i).first()
       await descInput.fill("Updated description via E2E")
 
       // Submit
       const [apiResult] = await Promise.all([
-        wbPage.waitForApiCall(/world-books\/\d+/, "PUT"),
-        wbPage.submitWorldBookForm()
+        wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+/, "PUT"),
+        wbPage.submitWorldBookForm(/edit world book/i)
       ])
 
       expect(apiResult.status).toBeLessThan(300)
@@ -139,7 +139,7 @@ test.describe("World Books Workflow", () => {
       await wbPage.fillEntryForm("dragon, fire", "Dragons breathe fire", 50)
 
       const [addResult] = await Promise.all([
-        wbPage.waitForApiCall(/world-books\/\d+\/entries/, "POST"),
+        wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+\/entries/, "POST"),
         wbPage.submitEntry()
       ])
 

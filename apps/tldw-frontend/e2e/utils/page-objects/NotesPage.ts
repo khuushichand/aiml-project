@@ -8,6 +8,7 @@
  */
 import { type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
+import { expectApiCall } from "../api-assertions"
 import { waitForConnection } from "../helpers"
 
 export interface CreateNoteOptions {
@@ -121,10 +122,22 @@ export class NotesPage extends BasePage {
       await this.page.keyboard.type(opts.content)
     }
 
+    const createApiCall = expectApiCall(this.page, {
+      method: "POST",
+      url: /\/api\/v1\/notes\/?$/,
+      bodyContains: {
+        title: opts.title,
+        content: opts.content,
+      },
+    }, 30_000)
+
     await this.saveButton.click()
 
     // Wait for save to complete (button stops showing loading state)
     await expect(this.saveButton).toBeEnabled({ timeout: 15_000 })
+
+    const { response } = await createApiCall
+    expect(response.status()).toBeLessThan(400)
   }
 
   /**

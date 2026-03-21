@@ -13,6 +13,72 @@ export class ChatPage {
   readonly sidebar: Locator
   readonly newChatButton: Locator
   readonly modelSelector: Locator
+  private responseBaseline: {
+    totalMessages: number
+    assistantCount: number
+    lastAssistantText: string
+  } | null = null
+
+  private allMessages(): Locator {
+    return this.page.locator(
+      "article[aria-label*='message'], [data-role], [data-message-role], .message"
+    )
+  }
+
+  private assistantMessages(): Locator {
+    return this.page.locator(
+      "article[aria-label*='Assistant message'], [data-role='assistant'], [data-message-role='assistant'], .assistant-message"
+    )
+  }
+
+  private async getLastAssistantText(
+    assistantMessages: Locator,
+    assistantCount: number
+  ): Promise<string> {
+    if (assistantCount === 0) {
+      return ""
+    }
+
+    return ((await assistantMessages.last().textContent().catch(() => "")) || "")
+      .replace(/▋/g, "")
+      .trim()
+  }
+
+  private async captureResponseBaseline(): Promise<void> {
+    const allMessages = this.allMessages()
+    const assistantMessages = this.assistantMessages()
+    const [totalMessages, assistantCount] = await Promise.all([
+      allMessages.count(),
+      assistantMessages.count()
+    ])
+
+    this.responseBaseline = {
+      totalMessages,
+      assistantCount,
+      lastAssistantText: await this.getLastAssistantText(assistantMessages, assistantCount),
+    }
+  }
+
+  private async ensureModelSelected(): Promise<void> {
+    const selectModelTrigger = this.page.getByRole("button", {
+      name: /select a model/i
+    }).first()
+
+    if (!(await selectModelTrigger.isVisible().catch(() => false))) {
+      return
+    }
+
+    await selectModelTrigger.click()
+
+    const listbox = this.page.getByRole("listbox").first()
+    await expect(listbox).toBeVisible({ timeout: 10_000 })
+
+    const firstOption = listbox.getByRole("option").first()
+    await expect(firstOption).toBeVisible({ timeout: 10_000 })
+    await firstOption.click()
+
+    await expect(selectModelTrigger).not.toBeVisible({ timeout: 10_000 }).catch(() => {})
+  }
 
   constructor(page: Page) {
     this.page = page
@@ -90,13 +156,6 @@ export class ChatPage {
    * Send a message in the chat
    */
   async sendMessage(message: string): Promise<void> {
-    // Select "General chat" mode if mode selection cards are visible
-    const generalChat = this.page.getByText("General chat")
-    if (await generalChat.first().isVisible({ timeout: 2_000 }).catch(() => false)) {
-      await generalChat.first().click()
-      await this.page.waitForTimeout(1_000)
-    }
-
     const input = await this.getChatInput()
     await expect(input).toBeVisible({ timeout: 15000 })
 
@@ -105,6 +164,9 @@ export class ChatPage {
     if ((await startChat.count()) > 0 && (await startChat.isVisible())) {
       await startChat.click()
     }
+
+    await this.ensureModelSelected()
+    await this.captureResponseBaseline()
 
     await input.fill(message)
 
@@ -123,19 +185,36 @@ export class ChatPage {
    * Wait for a response to appear
    */
   async waitForResponse(timeoutMs = 60000): Promise<void> {
-    const assistantMessages = this.page.locator(
-      "article[aria-label*='Assistant message'], [data-role='assistant'], [data-message-role='assistant'], .assistant-message"
-    )
-
-    await expect(assistantMessages.last()).toBeVisible({ timeout: timeoutMs })
+    const allMessages = this.allMessages()
+    const assistantMessages = this.assistantMessages()
+    const [totalMessages, assistantCount] = await Promise.all([
+      allMessages.count(),
+      assistantMessages.count()
+    ])
+    const baseline = this.responseBaseline ?? {
+      totalMessages,
+      assistantCount,
+      lastAssistantText: await this.getLastAssistantText(assistantMessages, assistantCount),
+    }
 
     await expect
       .poll(
         async () => {
+          const totalMessages = await allMessages.count()
+          const assistantCount = await assistantMessages.count()
           const lastAssistant = assistantMessages.last()
           const text = ((await lastAssistant.textContent().catch(() => "")) || "")
             .replace(/▋/g, "")
             .trim()
+          const assistantAdvanced =
+            assistantCount > baseline.assistantCount || text !== baseline.lastAssistantText
+          if (
+            !assistantAdvanced
+            || totalMessages <= baseline.totalMessages
+          ) {
+            return false
+          }
+
           const isGenerating = await lastAssistant
             .getByText(/Generating response/i)
             .isVisible()
@@ -150,6 +229,8 @@ export class ChatPage {
         { timeout: timeoutMs, message: "Timed out waiting for a completed assistant response" }
       )
       .toBe(true)
+
+    this.responseBaseline = null
   }
 
   /**

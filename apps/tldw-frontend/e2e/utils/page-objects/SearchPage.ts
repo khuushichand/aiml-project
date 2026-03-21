@@ -173,23 +173,41 @@ export class SearchPage {
    * Check if there are no results
    */
   async hasNoResults(): Promise<boolean> {
-    const noResults = this.page.locator(
-      "[data-testid='empty-results'], .no-results, .empty-state"
-    )
-    return (await noResults.count()) > 0 && (await noResults.isVisible())
+    const signals = [
+      this.page.locator("[data-testid='empty-results'], .no-results, .empty-state").first(),
+      this.page.getByText(/search complete\.\s*0 sources found\./i),
+      this.page.getByText(/0 sources found/i),
+      this.page.getByText(/no relevant context found/i),
+      this.page.getByText(/no sources yet\./i)
+    ]
+
+    for (const signal of signals) {
+      if (await signal.isVisible().catch(() => false)) {
+        return true
+      }
+    }
+
+    return false
   }
 
   /**
    * Get the "no results" message
    */
   async getNoResultsMessage(): Promise<string | null> {
-    const noResults = this.page.locator(
-      "[data-testid='empty-results'], .no-results, .empty-state"
-    )
+    const signals = [
+      this.page.locator("[data-testid='empty-results'], .no-results, .empty-state").first(),
+      this.page.getByText(/search complete\.\s*0 sources found\./i),
+      this.page.getByText(/no relevant context found/i),
+      this.page.getByText(/no sources yet\./i)
+    ]
 
-    if ((await noResults.count()) === 0) return null
+    for (const signal of signals) {
+      if (await signal.isVisible().catch(() => false)) {
+        return (await signal.textContent()) || null
+      }
+    }
 
-    return (await noResults.textContent()) || null
+    return null
   }
 
   /**
@@ -277,7 +295,19 @@ export class SearchPage {
     const results = this.page.locator(
       "[data-testid='search-result'], .search-result, .result-item"
     )
-    await results.nth(index).click()
+
+    if ((await results.count()) > index) {
+      await results.nth(index).click()
+      return
+    }
+
+    const openInWorkspace = this.page.getByRole("button", { name: /open in workspace/i }).first()
+    if (await openInWorkspace.isVisible().catch(() => false)) {
+      await openInWorkspace.click()
+      return
+    }
+
+    throw new Error("Search result interaction target not found")
   }
 
   /**
@@ -285,9 +315,14 @@ export class SearchPage {
    */
   async backToSearch(): Promise<void> {
     const backBtn = this.page.getByRole("button", { name: /back|return/i })
+    const newSearchBtn = this.page.getByRole("button", {
+      name: /new search|start new topic/i
+    }).first()
 
     if ((await backBtn.count()) > 0) {
       await backBtn.click()
+    } else if (await newSearchBtn.isVisible().catch(() => false)) {
+      await newSearchBtn.click()
     } else {
       await this.page.goBack()
     }
