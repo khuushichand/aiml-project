@@ -437,6 +437,7 @@ const SidepanelChat = () => {
       area: "local"
     })
   )
+  const backgroundImageStorageRef = React.useRef(createSafeStorage())
   const [dropState, setDropState] = React.useState<
     "idle" | "dragging" | "error"
   >("idle")
@@ -837,7 +838,7 @@ const SidepanelChat = () => {
 
   const [chatBackgroundImage] = useStorage({
     key: CHAT_BACKGROUND_IMAGE_SETTING.key,
-    instance: createSafeStorage()
+    instance: backgroundImageStorageRef.current
   })
   const bgMsg = useBackgroundMessage()
   const lastBgMsgRef = React.useRef<typeof bgMsg | null>(null)
@@ -2419,32 +2420,34 @@ const SidepanelChat = () => {
           </div>
         </>
       )}
-      <NoteQuickSaveModal
-        open={noteModalOpen}
-        title={noteDraftTitle}
-        content={noteDraftContent}
-        suggestedTitle={noteSuggestedTitle}
-        sourceUrl={noteSourceUrl}
-        loading={noteSaving}
-        error={noteError}
-        onTitleChange={handleNoteTitleChange}
-        onContentChange={handleNoteContentChange}
-        onCancel={resetNoteModal}
-        onSave={handleNoteSave}
-        onGenerateFlashcards={handleGenerateFlashcardsFromSelection}
-        modalTitle={t("sidepanel:notes.saveToNotesTitle", "Save to Notes")}
-        saveText={t("common:save", "Save")}
-        cancelText={t("common:cancel", "Cancel")}
-        generateFlashcardsText={t(
-          "sidepanel:notes.generateFlashcards",
-          "Generate flashcards"
-        )}
-        titleLabel={t("sidepanel:notes.titleLabel", "Title")}
-        contentLabel={t("sidepanel:notes.contentLabel", "Content")}
-        titleRequiredText={t("sidepanel:notes.titleRequired", "Title is required to create a note.")}
-        helperText={t("sidepanel:notes.helperText", "Review or edit the selected text, then Save or Cancel.")}
-        sourceLabel={t("sidepanel:notes.sourceLabel", "Source")}
-      />
+      {noteModalOpen ? (
+        <NoteQuickSaveModal
+          open={noteModalOpen}
+          title={noteDraftTitle}
+          content={noteDraftContent}
+          suggestedTitle={noteSuggestedTitle}
+          sourceUrl={noteSourceUrl}
+          loading={noteSaving}
+          error={noteError}
+          onTitleChange={handleNoteTitleChange}
+          onContentChange={handleNoteContentChange}
+          onCancel={resetNoteModal}
+          onSave={handleNoteSave}
+          onGenerateFlashcards={handleGenerateFlashcardsFromSelection}
+          modalTitle={t("sidepanel:notes.saveToNotesTitle", "Save to Notes")}
+          saveText={t("common:save", "Save")}
+          cancelText={t("common:cancel", "Cancel")}
+          generateFlashcardsText={t(
+            "sidepanel:notes.generateFlashcards",
+            "Generate flashcards"
+          )}
+          titleLabel={t("sidepanel:notes.titleLabel", "Title")}
+          contentLabel={t("sidepanel:notes.contentLabel", "Content")}
+          titleRequiredText={t("sidepanel:notes.titleRequired", "Title is required to create a note.")}
+          helperText={t("sidepanel:notes.helperText", "Review or edit the selected text, then Save or Cancel.")}
+          sourceLabel={t("sidepanel:notes.sourceLabel", "Source")}
+        />
+      ) : null}
       <Suspense fallback={null}>
         <CommandPalette
           scope="sidepanel"

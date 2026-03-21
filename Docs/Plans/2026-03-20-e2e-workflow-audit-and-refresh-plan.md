@@ -20,7 +20,7 @@
 **Goal**: Re-run focused verification, capture residual gaps, and summarize which e2e areas are solid versus still shallow.
 **Success Criteria**: Updated tests pass, Bandit on touched scope is clean, and the remaining gaps are explicitly called out.
 **Tests**: Focused Playwright runs, focused Vitest if touched, Bandit on touched backend/frontend paths.
-**Status**: In Progress
+**Status**: Complete
 
 ## Audit Notes
 - Added focused coverage for the `/documentation` route and the placeholder settings-CTA contract.
@@ -36,6 +36,11 @@
   - `bunx vitest -c vitest.config.ts run __tests__/e2e-static-route-specs.guard.test.ts` passed.
   - Focused Playwright reruns passed for the refreshed tier-5 route specs (`7/7`), the full tier-5 specialized pack (`19/19`), `settings-core` (`25/25`), the refreshed admin/settings slice (`41/42` followed by the single maintenance fix passing `3/3`), and the earlier route/admin packs noted above.
   - Bandit on the touched TypeScript/e2e scope reported `0` findings and only Python-AST parse errors on `.ts/.tsx` files, which is expected for Bandit's parser.
+- Final host verification on `March 21, 2026` passed for the full `e2e/smoke/all-pages.spec.ts` pack against the stable dev server on `http://localhost:8091`: `233/233` passing in `32.8m`.
+- The last blocking smoke failure was `/__debug__/sidepanel-chat`, which turned out to be route-local render churn from passing a fresh `createSafeStorage()` instance into `useStorage(...)` on every render. The route now reuses a stable ref-backed storage instance, and the regression is pinned by `src/routes/__tests__/sidepanel-chat.background-storage-stability.guard.test.ts`.
+- With the blocking smoke regressions fixed, the remaining audit findings are non-blocking quality debt:
+  - several older workflow specs outside the refreshed smoke/admin/tier-5 packs still rely on `waitForLoadState("networkidle")` and should be migrated to visible UI readiness markers
+  - some routes still emit allowlisted Ant Design/react warnings in live smoke, including `/quiz`, `/kanban`, and `/characters`
 - New route findings from the continued walkthrough:
   - `/integrations`, `/billing`, `/account`, `/signup`, `/auth/reset-password`, and `/privileges` were traced to a stale port-3000 Next dev process rather than missing source routes. A clean server on `8091` served all of them as `200`, and restarting the live `3000` server restored the same behavior.
   - `/notifications` showed the same stale-process symptom on the original `3000` server. After the restart it served the normal page HTML instead of the Next recovery shell.
