@@ -2799,7 +2799,7 @@
     "message": "Scheduled Tasks"
   },
   "header_adminIntegrations": {
-    "message": "Admin Integrations"
+    "message": "Workspace Integrations"
   },
   "header_modeKanban": {
     "message": "Kanban Playground"

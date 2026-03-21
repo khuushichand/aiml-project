@@ -101,7 +101,7 @@
     },
     "moreActions": "More actions",
     "adminServer": "Server Admin",
-    "adminIntegrations": "Admin Integrations",
+    "adminIntegrations": "Workspace Integrations",
     "chatbooksPlayground": "Chatbooks Playground",
     "adminLlamacpp": "Llama.cpp Admin",
     "adminMlx": "MLX LM Admin",

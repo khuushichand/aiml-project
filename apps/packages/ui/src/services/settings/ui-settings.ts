@@ -374,16 +374,21 @@ export const DEFAULT_HEADER_SHORTCUT_SELECTION = [
   ...HEADER_SHORTCUT_IDS
 ] as HeaderShortcutId[]
 
+const REQUIRED_HEADER_SHORTCUT_IDS: HeaderShortcutId[] = [
+  "workflows",
+  "acp-playground",
+  "integrations",
+  "scheduled-tasks",
+  "admin-integrations"
+]
+
 const coerceHeaderShortcutSelection = (
   value: unknown,
   fallback: HeaderShortcutId[]
 ): HeaderShortcutId[] => {
   if (!Array.isArray(value)) return fallback
   const allowed = new Set<HeaderShortcutId>(HEADER_SHORTCUT_IDS)
-  const required = new Set<HeaderShortcutId>([
-    "workflows",
-    "acp-playground"
-  ])
+  const required = new Set<HeaderShortcutId>(REQUIRED_HEADER_SHORTCUT_IDS)
   const unique = new Set<HeaderShortcutId>()
   for (const entry of value) {
     if (typeof entry !== "string") continue

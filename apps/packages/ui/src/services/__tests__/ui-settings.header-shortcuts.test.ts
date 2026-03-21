@@ -1,0 +1,45 @@
+import { describe, expect, it } from "vitest"
+
+import {
+  DEFAULT_HEADER_SHORTCUT_SELECTION,
+  HEADER_SHORTCUT_SELECTION_SETTING
+} from "@/services/settings/ui-settings"
+import { normalizeSettingValue } from "@/services/settings/registry"
+
+const LEGACY_SELECTION = [
+  "chat",
+  "prompts",
+  "watchlists",
+  "workflows",
+  "acp-playground",
+  "settings"
+]
+
+describe("header shortcut defaults", () => {
+  it("includes the integrations control-plane shortcuts in the default selection", () => {
+    expect(DEFAULT_HEADER_SHORTCUT_SELECTION).toContain("integrations")
+    expect(DEFAULT_HEADER_SHORTCUT_SELECTION).toContain("scheduled-tasks")
+    expect(DEFAULT_HEADER_SHORTCUT_SELECTION).toContain("admin-integrations")
+  })
+
+  it("adds the integrations control-plane shortcuts to persisted legacy selections", () => {
+    const normalized = normalizeSettingValue(
+      HEADER_SHORTCUT_SELECTION_SETTING,
+      LEGACY_SELECTION
+    )
+
+    expect(normalized).toEqual(
+      expect.arrayContaining([
+        "chat",
+        "prompts",
+        "watchlists",
+        "workflows",
+        "acp-playground",
+        "settings",
+        "integrations",
+        "scheduled-tasks",
+        "admin-integrations"
+      ])
+    )
+  })
+})

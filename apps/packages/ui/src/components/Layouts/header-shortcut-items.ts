@@ -376,7 +376,7 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         to: "/admin/integrations",
         icon: CombineIcon,
         labelKey: "option:header.adminIntegrations",
-        labelDefault: "Admin Integrations"
+        labelDefault: "Workspace Integrations"
       },
       {
         id: "admin-llamacpp",

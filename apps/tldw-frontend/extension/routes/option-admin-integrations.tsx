@@ -4,7 +4,7 @@ import { IntegrationManagementPage } from "@/components/Option/Integrations/Inte
 
 const OptionAdminIntegrations = () => {
   return (
-    <RouteErrorBoundary routeId="admin-integrations" routeLabel="Integrations">
+    <RouteErrorBoundary routeId="admin-integrations" routeLabel="Workspace Integrations">
       <OptionLayout>
         <IntegrationManagementPage scope="workspace" />
       </OptionLayout>

@@ -114,7 +114,7 @@ describe("HeaderShortcuts launcher modal", () => {
         }),
         expect.objectContaining({
           to: "/admin/integrations",
-          labelDefault: "Admin Integrations"
+          labelDefault: "Workspace Integrations"
         })
       ])
     )

@@ -9,7 +9,24 @@ export default async function globalSetup() {
     path.resolve(projectRoot, 'build/chrome-mv3'),
     path.resolve(projectRoot, '.output/chrome-mv3')
   ]
+  const isBuiltChromeDir = (dir: string) => {
+    if (!dir || !fs.existsSync(dir)) {
+      return false
+    }
+
+    const manifestPath = path.join(dir, 'manifest.json')
+    const backgroundPath = path.join(dir, 'background.js')
+    const optionsPath = path.join(dir, 'options.html')
+    const sidepanelPath = path.join(dir, 'sidepanel.html')
+
+    return (
+      fs.existsSync(manifestPath) &&
+      fs.existsSync(backgroundPath) &&
+      (fs.existsSync(optionsPath) || fs.existsSync(sidepanelPath))
+    )
+  }
   const builtChromePath =
+    builtChromeCandidates.find((candidate) => isBuiltChromeDir(candidate)) ||
     builtChromeCandidates.find((candidate) => fs.existsSync(candidate)) ||
     builtChromeCandidates[0]
   const forceBuildChrome =
@@ -56,6 +73,7 @@ export default async function globalSetup() {
 
   if (
     fs.existsSync(builtChromePath) &&
+    isBuiltChromeDir(builtChromePath) &&
     !forceBuildChrome &&
     !isDevBuild(builtChromePath)
   ) {
