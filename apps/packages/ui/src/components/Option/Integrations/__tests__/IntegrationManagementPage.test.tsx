@@ -7,6 +7,8 @@ import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
+  useCanonicalConnectionConfig: vi.fn(),
+  getTldwConfig: vi.fn(),
   listPersonalIntegrations: vi.fn(),
   listWorkspaceIntegrations: vi.fn(),
   connectPersonalIntegration: vi.fn(),
@@ -21,6 +23,16 @@ const mocks = vi.hoisted(() => ({
   updateWorkspaceTelegramBot: vi.fn(),
   createWorkspaceTelegramPairingCode: vi.fn(),
   revokeWorkspaceTelegramLinkedActor: vi.fn()
+}))
+
+vi.mock("@/hooks/useCanonicalConnectionConfig", () => ({
+  useCanonicalConnectionConfig: (...args: unknown[]) => mocks.useCanonicalConnectionConfig(...args)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getConfig: (...args: unknown[]) => mocks.getTldwConfig(...args)
+  }
 }))
 
 vi.mock("@/services/integrations-control-plane", () => ({
@@ -40,7 +52,13 @@ vi.mock("@/services/integrations-control-plane", () => ({
   revokeWorkspaceTelegramLinkedActor: (...args: unknown[]) => mocks.revokeWorkspaceTelegramLinkedActor(...args)
 }))
 
-import { IntegrationManagementPage } from "../IntegrationManagementPage"
+import {
+  IntegrationManagementPage,
+  buildIntegrationQueryKey
+} from "../IntegrationManagementPage"
+
+const fetchMock = vi.fn()
+vi.stubGlobal("fetch", fetchMock)
 
 const renderWithQueryClient = (ui: React.ReactElement) => {
   const queryClient = new QueryClient({
@@ -68,7 +86,7 @@ const mockWorkspaceQueries = (overrides?: {
         status: "connected",
         enabled: true,
         metadata: {},
-        actions: ["refresh"]
+        actions: ["disable", "remove"]
       },
       {
         id: "workspace:discord",
@@ -78,7 +96,7 @@ const mockWorkspaceQueries = (overrides?: {
         status: "connected",
         enabled: true,
         metadata: {},
-        actions: ["refresh"]
+        actions: ["disable", "remove"]
       },
       {
         id: "workspace:telegram",
@@ -88,7 +106,7 @@ const mockWorkspaceQueries = (overrides?: {
         status: "needs_config",
         enabled: false,
         metadata: {},
-        actions: ["configure"]
+        actions: ["enable"]
       }
     ]
   })
@@ -165,6 +183,24 @@ describe("IntegrationManagementPage", () => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset()
     }
+    fetchMock.mockReset()
+    mocks.useCanonicalConnectionConfig.mockReturnValue({
+      config: {
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user",
+        apiKey: "test-key",
+        orgId: 101
+      },
+      loading: false
+    })
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        paths: {
+          "/api/v1/integrations/personal": {}
+        }
+      })
+    })
   })
 
   it("renders personal slack and discord cards and hides telegram", async () => {
@@ -179,7 +215,7 @@ describe("IntegrationManagementPage", () => {
           status: "connected",
           enabled: true,
           metadata: {},
-          actions: ["disconnect"]
+          actions: ["disable", "remove"]
         },
         {
           id: "personal:discord",
@@ -199,7 +235,7 @@ describe("IntegrationManagementPage", () => {
           status: "connected",
           enabled: true,
           metadata: {},
-          actions: ["inspect"]
+          actions: ["disable"]
         }
       ]
     })
@@ -303,11 +339,12 @@ describe("IntegrationManagementPage", () => {
   })
 
   it("shows an unsupported-state message when personal integrations are unavailable on the server", async () => {
-    mocks.listPersonalIntegrations.mockRejectedValue(
-      Object.assign(new Error("Not Found (GET /api/v1/integrations/personal)"), {
-        status: 404
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        paths: {}
       })
-    )
+    })
 
     renderWithQueryClient(<IntegrationManagementPage scope="personal" />)
 
@@ -315,6 +352,58 @@ describe("IntegrationManagementPage", () => {
     expect(
       screen.getByText("This server does not expose the personal integrations control-plane yet.")
     ).toBeInTheDocument()
+    expect(mocks.listPersonalIntegrations).not.toHaveBeenCalled()
+  })
+
+  it("keys workspace-scoped queries by the active org id", () => {
+    expect(buildIntegrationQueryKey("workspace", 101, "overview")).toEqual([
+      "integrations",
+      "workspace",
+      101,
+      "overview"
+    ])
+    expect(buildIntegrationQueryKey("workspace", 202, "slack-policy")).toEqual([
+      "integrations",
+      "workspace",
+      202,
+      "slack-policy"
+    ])
+    expect(buildIntegrationQueryKey("personal", 101, "overview")).toEqual([
+      "integrations",
+      "personal",
+      "overview"
+    ])
+  })
+
+  it("refreshes workspace-scoped queries when the active org config updates", async () => {
+    mockWorkspaceQueries()
+    mocks.useCanonicalConnectionConfig.mockReturnValue({
+      config: {
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user",
+        apiKey: "test-key",
+        orgId: 101
+      },
+      loading: false
+    })
+    mocks.getTldwConfig.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:8000",
+      authMode: "single-user",
+      apiKey: "test-key",
+      orgId: 202
+    })
+
+    renderWithQueryClient(<IntegrationManagementPage scope="workspace" />)
+
+    expect(await screen.findByText("Slack")).toBeInTheDocument()
+    expect(mocks.listWorkspaceIntegrations).toHaveBeenCalledTimes(1)
+
+    window.dispatchEvent(new Event("tldw:config-updated"))
+
+    await waitFor(() => {
+      expect(mocks.getTldwConfig).toHaveBeenCalled()
+      expect(mocks.listWorkspaceIntegrations).toHaveBeenCalledTimes(2)
+    })
   })
 
   it("renders workspace slack, discord, and telegram controls", async () => {

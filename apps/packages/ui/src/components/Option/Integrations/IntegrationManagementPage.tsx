@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from "react"
 import { Alert, Button, Card, Col, Row, Skeleton, Space, Tag, Typography, message } from "antd"
 import { useQuery } from "@tanstack/react-query"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
   connectPersonalIntegration,
   deletePersonalIntegration,
@@ -47,6 +49,7 @@ const isPersonalProvider = (provider: IntegrationProvider): provider is Personal
 const PERSONAL_INTEGRATIONS_UNSUPPORTED_TITLE = "Personal integrations unavailable"
 const PERSONAL_INTEGRATIONS_UNSUPPORTED_DESCRIPTION =
   "This server does not expose the personal integrations control-plane yet."
+const PERSONAL_INTEGRATIONS_PATH = "/api/v1/integrations/personal"
 
 const isUnsupportedOverviewError = (scope: IntegrationScope, error: unknown): boolean => {
   if (scope !== "personal" || !error || typeof error !== "object") {
@@ -62,37 +65,147 @@ const isUnsupportedOverviewError = (scope: IntegrationScope, error: unknown): bo
   return typeof maybeError.message === "string" && maybeError.message.includes("/api/v1/integrations/personal")
 }
 
+export const buildIntegrationQueryKey = (
+  scope: IntegrationScope,
+  orgId: number | null | undefined,
+  resource: "overview" | "slack-policy" | "discord-policy" | "telegram-bot" | "telegram-linked-actors"
+) => {
+  if (scope === "workspace") {
+    return ["integrations", scope, orgId ?? "unscoped", resource] as const
+  }
+
+  return ["integrations", scope, resource] as const
+}
+
 export const IntegrationManagementPage: React.FC<IntegrationManagementPageProps> = ({ scope }) => {
+  const { config: connectionConfig, loading: connectionConfigLoading } = useCanonicalConnectionConfig()
+  const [activeOrgId, setActiveOrgId] = useState<number | null>(connectionConfig?.orgId ?? null)
   const [selectedConnection, setSelectedConnection] = useState<IntegrationConnection | null>(null)
   const [activePersonalActionKey, setActivePersonalActionKey] = useState<string | null>(null)
+  const [personalIntegrationsSupported, setPersonalIntegrationsSupported] = useState<boolean | null>(
+    scope === "workspace" ? true : null
+  )
+
+  React.useEffect(() => {
+    setActiveOrgId(typeof connectionConfig?.orgId === "number" ? connectionConfig.orgId : null)
+  }, [connectionConfig?.orgId])
+
+  React.useEffect(() => {
+    if (scope !== "workspace" || typeof window === "undefined") {
+      return
+    }
+
+    let cancelled = false
+
+    const syncActiveOrgId = async () => {
+      try {
+        const refreshedConfig = await tldwClient.getConfig()
+        if (cancelled) {
+          return
+        }
+        setActiveOrgId(typeof refreshedConfig?.orgId === "number" ? refreshedConfig.orgId : null)
+      } catch {
+        if (!cancelled) {
+          setActiveOrgId(typeof connectionConfig?.orgId === "number" ? connectionConfig.orgId : null)
+        }
+      }
+    }
+
+    const handleConfigUpdated = () => {
+      void syncActiveOrgId()
+    }
+
+    window.addEventListener("tldw:config-updated", handleConfigUpdated)
+
+    return () => {
+      cancelled = true
+      window.removeEventListener("tldw:config-updated", handleConfigUpdated)
+    }
+  }, [connectionConfig?.orgId, scope])
+
+  React.useEffect(() => {
+    if (scope !== "personal") {
+      setPersonalIntegrationsSupported(true)
+      return
+    }
+
+    let cancelled = false
+
+    const checkPersonalIntegrationsSupport = async () => {
+      if (connectionConfigLoading) {
+        return
+      }
+
+      const serverUrl = connectionConfig?.serverUrl?.trim()
+      if (!serverUrl) {
+        if (!cancelled) {
+          setPersonalIntegrationsSupported(true)
+        }
+        return
+      }
+
+      setPersonalIntegrationsSupported(null)
+
+      try {
+        const response = await fetch(`${serverUrl}/openapi.json`)
+        if (!response.ok) {
+          if (!cancelled) {
+            setPersonalIntegrationsSupported(true)
+          }
+          return
+        }
+
+        const spec = await response.json()
+        const paths =
+          spec && typeof spec === "object" && spec.paths && typeof spec.paths === "object"
+            ? (spec.paths as Record<string, unknown>)
+            : null
+
+        if (!cancelled) {
+          setPersonalIntegrationsSupported(Boolean(paths && PERSONAL_INTEGRATIONS_PATH in paths))
+        }
+      } catch {
+        if (!cancelled) {
+          setPersonalIntegrationsSupported(true)
+        }
+      }
+    }
+
+    void checkPersonalIntegrationsSupport()
+
+    return () => {
+      cancelled = true
+    }
+  }, [connectionConfig?.serverUrl, connectionConfigLoading, scope])
 
   const overviewQuery = useQuery({
-    queryKey: ["integrations", scope, "overview"],
+    queryKey: buildIntegrationQueryKey(scope, activeOrgId, "overview"),
     queryFn: scope === "workspace" ? listWorkspaceIntegrations : listPersonalIntegrations,
+    enabled: scope === "workspace" || personalIntegrationsSupported === true,
     retry: (failureCount, error) =>
       !isUnsupportedOverviewError(scope, error) && failureCount < 3
   })
 
   const slackPolicyQuery = useQuery({
-    queryKey: ["integrations", "workspace", "slack-policy"],
+    queryKey: buildIntegrationQueryKey("workspace", activeOrgId, "slack-policy"),
     queryFn: getWorkspaceSlackPolicy,
     enabled: scope === "workspace"
   })
 
   const discordPolicyQuery = useQuery({
-    queryKey: ["integrations", "workspace", "discord-policy"],
+    queryKey: buildIntegrationQueryKey("workspace", activeOrgId, "discord-policy"),
     queryFn: getWorkspaceDiscordPolicy,
     enabled: scope === "workspace"
   })
 
   const telegramBotQuery = useQuery({
-    queryKey: ["integrations", "workspace", "telegram-bot"],
+    queryKey: buildIntegrationQueryKey("workspace", activeOrgId, "telegram-bot"),
     queryFn: getWorkspaceTelegramBot,
     enabled: scope === "workspace"
   })
 
   const telegramActorsQuery = useQuery({
-    queryKey: ["integrations", "workspace", "telegram-linked-actors"],
+    queryKey: buildIntegrationQueryKey("workspace", activeOrgId, "telegram-linked-actors"),
     queryFn: listWorkspaceTelegramLinkedActors,
     enabled: scope === "workspace"
   })
@@ -145,7 +258,11 @@ export const IntegrationManagementPage: React.FC<IntegrationManagementPageProps>
       : telegramActorsQuery.isError
         ? "Telegram linked actors could not be loaded."
         : null
-  const personalIntegrationsUnsupported = isUnsupportedOverviewError(scope, overviewQuery.error)
+  const personalIntegrationsUnsupported =
+    scope === "personal" &&
+    (personalIntegrationsSupported === false || isUnsupportedOverviewError(scope, overviewQuery.error))
+  const personalIntegrationsCheckingSupport =
+    scope === "personal" && (connectionConfigLoading || personalIntegrationsSupported === null)
 
   const handlePersonalAction = async (connection: IntegrationConnection, action: string) => {
     if (scope !== "personal" || !isPersonalProvider(connection.provider)) {
@@ -211,7 +328,9 @@ export const IntegrationManagementPage: React.FC<IntegrationManagementPageProps>
         </div>
       </Card>
 
-      {overviewQuery.isLoading && !overviewQuery.data ? <Skeleton active paragraph={{ rows: 6 }} /> : null}
+      {((overviewQuery.isLoading && !overviewQuery.data) || personalIntegrationsCheckingSupport) ? (
+        <Skeleton active paragraph={{ rows: 6 }} />
+      ) : null}
       {personalIntegrationsUnsupported ? (
         <Alert
           type="info"
