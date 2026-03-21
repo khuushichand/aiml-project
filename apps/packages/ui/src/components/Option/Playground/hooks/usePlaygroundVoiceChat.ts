@@ -57,7 +57,6 @@ export interface UsePlaygroundVoiceChatDeps {
   /** Callbacks */
   setMessageValue: (value: string, options?: any) => void
   submitForm: () => void
-  stopSpeechRecognition: () => void
   /** Notification API */
   notificationApi: { error: (opts: any) => void; warning: (opts: any) => void }
   isSending: boolean

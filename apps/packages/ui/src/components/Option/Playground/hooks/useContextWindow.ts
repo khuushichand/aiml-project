@@ -174,9 +174,7 @@ export function useContextWindow(deps: UseContextWindowDeps) {
 
   const systemPromptTokenEstimate = React.useMemo(() => {
     const promptSegments = [
-      String(systemPrompt || ""),
-      String(selectedQuickPrompt || ""),
-      String(selectedSystemPrompt || "")
+      String(systemPrompt || "")
     ]
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0)
@@ -185,7 +183,7 @@ export function useContextWindow(deps: UseContextWindowDeps) {
       (total, segment) => total + estimateTokensFromText(segment),
       0
     )
-  }, [selectedQuickPrompt, selectedSystemPrompt, systemPrompt])
+  }, [systemPrompt])
 
   const pinnedSourceTokenEstimate = React.useMemo(() => {
     if (!Array.isArray(ragPinnedResults) || ragPinnedResults.length === 0) return 0

@@ -11,6 +11,7 @@ import {
   projectTokenBudget
 } from "../usage-metrics"
 import type { TFunction } from "i18next"
+import type { ChatResearchContext } from "@/services/tldw/TldwApiClient"
 
 export type UsePlaygroundSubmitDeps = {
   form: any
@@ -30,6 +31,7 @@ export type UsePlaygroundSubmitDeps = {
   pinnedSourceTokenEstimate: number
   resolvedMaxContext: number
   jsonMode: boolean
+  researchContext?: ChatResearchContext
   sendMessage: (args: any) => Promise<any>
   clearSelectedDocuments: () => void
   clearUploadedFiles: () => void
@@ -63,6 +65,7 @@ export function usePlaygroundSubmit(deps: UsePlaygroundSubmitDeps) {
     pinnedSourceTokenEstimate,
     resolvedMaxContext,
     jsonMode,
+    researchContext,
     sendMessage,
     clearSelectedDocuments,
     clearUploadedFiles,
@@ -191,8 +194,8 @@ export function usePlaygroundSubmit(deps: UsePlaygroundSubmitDeps) {
         return
       }
 
-      const defaultEM = await defaultEmbeddingModelForRag()
       if (!intent.isImageCommand && webSearch) {
+        const defaultEM = await defaultEmbeddingModelForRag()
         const simpleSearch = await getIsSimpleInternetSearch()
         if (!defaultEM && !simpleSearch) {
           form.setFieldError("message", t("formError.noEmbeddingModel"))
@@ -249,7 +252,11 @@ export function usePlaygroundSubmit(deps: UsePlaygroundSubmitDeps) {
           : undefined,
         imageGenerationSource: intent.isImageCommand
           ? "slash-command"
-          : undefined
+          : undefined,
+        researchContext:
+          intent.isImageCommand || compareModeActive
+            ? undefined
+            : researchContext
       })
     })()
   }

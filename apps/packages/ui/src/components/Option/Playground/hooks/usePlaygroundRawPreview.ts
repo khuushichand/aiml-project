@@ -6,9 +6,11 @@ import {
 } from "@/services/tldw/chat-request-debug"
 import type {
   ChatCompletionRequest,
-  ChatMessage
+  ChatMessage,
+  ChatResearchContext
 } from "@/services/tldw/TldwApiClient"
 import { parseJsonObject } from "./utils"
+import { formatPinnedResults } from "@/utils/rag-format"
 
 // ---------------------------------------------------------------------------
 // Deps interface
@@ -55,7 +57,8 @@ export interface UsePlaygroundRawPreviewDeps {
   messageSteeringForceNarrate: boolean | undefined
   ragMediaIds: number[] | null
   selectedKnowledge: unknown
-  fileRetrievalEnabled: boolean
+  ragPinnedResults?: any[]
+  fileRetrievalEnabled?: boolean
   contextFiles: any[]
   documentContext: any[]
   selectedDocuments: any[]
@@ -70,6 +73,7 @@ export interface UsePlaygroundRawPreviewDeps {
   }
   formImage: string
   formMessage: string
+  researchContext?: ChatResearchContext
   notificationApi: {
     error: (opts: { message: string; description?: string }) => void
     success?: (opts: { message: string; description?: string }) => void
@@ -105,6 +109,7 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
     messageSteeringForceNarrate,
     ragMediaIds,
     selectedKnowledge,
+    ragPinnedResults,
     fileRetrievalEnabled,
     contextFiles,
     documentContext,
@@ -113,6 +118,7 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
     resolveSubmissionIntent,
     formImage,
     formMessage,
+    researchContext,
     notificationApi,
     t,
     setToolsPopoverOpen
@@ -268,7 +274,8 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
         grammar_override: currentChatModelSettings.llamaGrammarOverride,
         response_format: currentChatModelSettings.jsonMode
           ? { type: "json_object" }
-          : undefined
+          : undefined,
+        research_context: compareModeActive ? undefined : researchContext
       }
       return request
     },
@@ -287,7 +294,12 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
 
   const buildCurrentRawRequestSnapshot = React.useCallback(async () => {
     const intent = resolveSubmissionIntent(formMessage || "")
-    const draftMessage = intent.message.trim()
+    let draftMessage = intent.message.trim()
+    // Append pinned source expansion to match submitForm behavior
+    if (!intent.isImageCommand && !fileRetrievalEnabled && ragPinnedResults && ragPinnedResults.length > 0) {
+      const pinnedText = formatPinnedResults(ragPinnedResults, "markdown")
+      draftMessage = draftMessage ? `${draftMessage}\n\n${pinnedText}` : pinnedText
+    }
     const draftImage = intent.isImageCommand ? "" : String(formImage || "")
     const hasScopedRagMediaIds =
       Array.isArray(ragMediaIds) && ragMediaIds.length > 0
@@ -468,11 +480,13 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
     messageSteeringForceNarrate,
     messageSteeringMode,
     ragMediaIds,
+    ragPinnedResults,
     resolveSubmissionIntent,
     selectedCharacter?.id,
     selectedKnowledge,
     selectedModel,
     selectedDocuments,
+    researchContext,
     serverChatId,
     serverChatSource,
     serverChatState,
@@ -512,6 +526,7 @@ export function usePlaygroundRawPreview(deps: UsePlaygroundRawPreviewDeps) {
 
   const openRawRequestModal = React.useCallback(() => {
     setToolsPopoverOpen(false)
+    setRawRequestSnapshot(null)
     setRawRequestModalOpen(true)
     void refreshRawRequestSnapshot()
   }, [refreshRawRequestSnapshot, setToolsPopoverOpen])

@@ -1,8 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import React from "react"
-import useDynamicTextareaSize from "@/hooks/useDynamicTextareaSize"
-import { toBase64 } from "@/libs/to-base64"
-import { useMessageOption } from "@/hooks/useMessageOption"
+import { useMessageOption } from "~/hooks/useMessageOption"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import {
   Checkbox,
@@ -13,81 +11,47 @@ import {
   Select,
   Switch,
   Tooltip,
-  Popover,
   Modal,
-  Button,
-  Space
+  Button
 } from "antd"
-import { useWebUI } from "@/store/webui"
-import { defaultEmbeddingModelForRag } from "@/services/tldw-server"
+import { useWebUI } from "~/store/webui"
 import {
-  ChevronDown,
   ChevronRight,
-  EraserIcon,
-  GitBranch,
   ImageIcon,
-  Globe,
-  MicIcon,
   Headphones,
-  SlidersHorizontal,
-  StopCircleIcon,
   X,
-  FileIcon,
-  FileText,
-  PaperclipIcon,
-  Gauge,
-  Search,
   CornerUpLeft,
-  Settings2,
   HelpCircle,
-  ArrowRight,
-  WandSparkles
+  ArrowRight
 } from "lucide-react"
 import { getVariable } from "@/utils/select-variable"
 import { useTranslation } from "react-i18next"
-import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import type {
-  DictationErrorClass,
-  DictationModePreference,
-  DictationResolvedMode,
-  DictationServerErrorTransition
+  DictationModePreference
 } from "@/hooks/useDictationStrategy"
-import { useDictationStrategy } from "@/hooks/useDictationStrategy"
-import { useServerDictation } from "@/hooks/useServerDictation"
-import type { SttSettings } from "@/hooks/useSttSettings"
 import { isFirefoxTarget } from "@/config/platform"
 import { handleChatInputKeyDown } from "@/utils/key-down"
-import { getIsSimpleInternetSearch } from "@/services/search"
 import { getProviderDisplayName } from "@/utils/provider-registry"
-import { formatPinnedResults } from "@/utils/rag-format"
 import { useStorage } from "@plasmohq/storage/hook"
-import { useTabMentions } from "@/hooks/useTabMentions"
-import { useFocusShortcuts } from "@/hooks/keyboard"
-import { isMac } from "@/hooks/useKeyboardShortcuts"
-import { useDraftPersistence } from "@/hooks/useDraftPersistence"
+import { useTabMentions } from "~/hooks/useTabMentions"
+import { useFocusShortcuts } from "~/hooks/keyboard"
+// isMac moved to PlaygroundSendControl
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
-import { MentionsDropdown } from "./MentionsDropdown"
 import { AttachedResearchContextChip } from "./AttachedResearchContextChip"
+import { MentionsDropdown } from "./MentionsDropdown"
 import { ComposerTextarea } from "./ComposerTextarea"
-import { ComposerToolbar, type ComposerContextItem } from "./ComposerToolbar"
-import { ContextFootprintPanel } from "./ContextFootprintPanel"
+import { ComposerToolbar } from "./ComposerToolbar"
+// ContextFootprintPanel moved to PlaygroundContextWindowModal
 import { CompareToggle } from "./CompareToggle"
-import { detectCurrentPreset, getPresetByKey } from "./ParameterPresets"
-import {
-  buildCompareModelMetaById,
-  compareModelsSupportCapability as compareModelsSupportCapabilityCheck,
-  getCompareCapabilityIncompatibilities
-} from "./compare-preflight"
-import { buildCompareInteroperabilityNotices } from "./compare-interoperability"
 import { useMobileComposerViewport } from "./useMobileComposerViewport"
-import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
+import { ChatQueuePanel } from "@/components/Common/ChatQueuePanel"
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { ConnectionPhase, deriveConnectionUxState } from "@/types/connection"
 import { Link, useNavigate } from "react-router-dom"
@@ -97,16 +61,10 @@ import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { useMcpTools } from "@/hooks/useMcpTools"
 import {
   tldwClient,
-  type ConversationState,
-  type ChatCompletionRequest,
-  type ChatMessage,
   type ResearchRunCreateRequest,
   type ResearchRunFollowUpBackground
 } from "@/services/tldw/TldwApiClient"
-import {
-  captureChatRequestDebugSnapshot,
-  type ChatRequestDebugSnapshot
-} from "@/services/tldw/chat-request-debug"
+// ChatRequestDebugSnapshot moved to usePlaygroundRawPreview
 import {
   buildDiscussMediaHint,
   getMediaChatHandoffMode,
@@ -114,14 +72,14 @@ import {
   parseMediaIdAsNumber
 } from "@/services/tldw/media-chat-handoff"
 import {
-  getImageBackendConfigs,
-  normalizeImageBackendConfig,
-  resolveImageBackendConfig
-} from "@/services/image-generation"
+  normalizeWatchlistChatHandoffPayload,
+  buildWatchlistChatHint
+} from "@/services/tldw/watchlist-chat-handoff"
+// getImageBackendConfigs, normalizeImageBackendConfig, resolveImageBackendConfig moved to usePlaygroundImageGen
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { Character } from "@/types/character"
-import { KnowledgePanel, type KnowledgeTab } from "@/components/Knowledge"
+import { type KnowledgeTab } from "@/components/Knowledge"
 import { BetaTag } from "@/components/Common/Beta"
 import type { SlashCommandItem } from "@/components/Sidepanel/Chat/SlashCommandMenu"
 import { DocumentGeneratorDrawer } from "@/components/Common/Playground/DocumentGeneratorDrawer"
@@ -130,28 +88,35 @@ import {
   useStoreChatModelSettings,
   type ChatModelSettings
 } from "@/store/model"
-import type { Prompt } from "@/db/dexie/types"
 import { getAllPrompts } from "@/db/dexie/helpers"
+import { getPresetByKey } from "./ParameterPresets"
 import { TokenProgressBar } from "./TokenProgressBar"
 import { AttachmentsSummary } from "./AttachmentsSummary"
 import { VoiceChatIndicator } from "./VoiceChatIndicator"
 import { VoiceModeSelector } from "./VoiceModeSelector"
+import { PlaygroundImageGenModal } from "./PlaygroundImageGenModal"
+import { PlaygroundRawRequestModal } from "./PlaygroundRawRequestModal"
+import { PlaygroundStartupTemplateModal } from "./PlaygroundStartupTemplateModal"
+import { PlaygroundContextWindowModal } from "./PlaygroundContextWindowModal"
+import { PlaygroundMcpSettingsModal } from "./PlaygroundMcpSettingsModal"
+import { PlaygroundToolsPopover } from "./PlaygroundToolsPopover"
+import { PlaygroundModeLauncher } from "./PlaygroundModeLauncher"
+import { PlaygroundMcpControl } from "./PlaygroundMcpControl"
+import { PlaygroundSendControl, PlaygroundAttachmentButton } from "./PlaygroundSendControl"
+import { PlaygroundComposerNotices } from "./PlaygroundComposerNotices"
+import { PlaygroundKnowledgeSection } from "./PlaygroundKnowledgeSection"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { clearSetting, getSetting } from "@/services/settings/registry"
-import { DISCUSS_MEDIA_PROMPT_SETTING } from "@/services/settings/ui-settings"
-import { Button as TldwButton } from "@/components/Common/Button"
-import { useSimpleForm } from "@/hooks/useSimpleForm"
+import { DISCUSS_MEDIA_PROMPT_SETTING, DISCUSS_WATCHLIST_PROMPT_SETTING } from "@/services/settings/ui-settings"
+// TldwButton moved to extracted sub-components
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useStoreMessageOption } from "@/store/option"
-import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
-import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
-import { withTemplateFallback } from "@/utils/template-guards"
-import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import {
-  buildAvailableChatModelIds,
-  findUnavailableChatModel,
-  normalizeChatModelId
-} from "@/utils/chat-model-availability"
+  shouldEnableOptionalResource,
+  useChatSurfaceCoordinatorStore
+} from "@/store/chat-surface-coordinator"
+import { trackOnboardingChatSubmitSuccess } from "@/utils/onboarding-ingestion-telemetry"
+// resolveApiProviderForModel moved to usePlaygroundRawPreview and usePlaygroundImageGen
 import {
   DEFAULT_CHARACTER_STORAGE_KEY,
   defaultCharacterStorage,
@@ -166,7 +131,6 @@ import {
   useComposerTokens,
   useImageBackend,
   useActionBarVisibility,
-  usePersistenceMode,
   useSlashCommands,
   useMessageCollapse,
   useDeferredComposerInput,
@@ -174,38 +138,22 @@ import {
   type CollapsedRange,
   type ModelSortMode
 } from "@/hooks/playground"
+// useQueuedRequests moved to usePlaygroundQueueManagement
+import type { ChatDocuments } from "@/models/ChatTypes"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
-import { formatCost } from "@/utils/model-pricing"
 import {
-  aggregateSessionUsage,
-  projectTokenBudget,
-  resolveTokenBudgetRisk
-} from "./usage-metrics"
-import {
-  buildConversationSummaryCheckpointPrompt,
-  evaluateSummaryCheckpointSuggestion
+  buildConversationSummaryCheckpointPrompt
 } from "./conversation-summary-checkpoint"
-import { SessionInsightsPanel } from "./SessionInsightsPanel"
-import { ModelRecommendationsPanel } from "./ModelRecommendationsPanel"
-import { buildSessionInsights } from "./session-insights"
+// SessionInsightsPanel moved to PlaygroundContextWindowModal
 import {
-  buildModelRecommendations,
   type ModelRecommendationAction
 } from "./model-recommendations"
 import {
-  createStartupTemplateBundle,
   describeStartupTemplatePrompt,
-  inferStartupTemplatePromptSource,
-  parseStartupTemplateBundles,
-  removeStartupTemplateBundle,
   resolveStartupTemplatePrompt,
-  sanitizeStartupTemplateName,
-  serializeStartupTemplateBundles,
-  upsertStartupTemplateBundle,
   type StartupTemplateBundle
 } from "./startup-template-bundles"
 import {
-  IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
   PLAYGROUND_IMAGE_EVENT_SYNC_DEFAULT_STORAGE_KEY,
   resolveImageGenerationEventSyncMode,
   normalizeImageGenerationEventSyncMode,
@@ -213,27 +161,29 @@ import {
   type ImageGenerationEventSyncPolicy,
   type ImageGenerationEventSyncMode,
   type ImageGenerationRefineMetadata,
-  IMAGE_GENERATION_USER_MESSAGE_TYPE,
-  type ImageGenerationPromptMode,
   type ImageGenerationRequestSnapshot
 } from "@/utils/image-generation-chat"
+// buildImagePromptRefineMessages, extractImagePromptRefineCandidate moved to usePlaygroundImageGen
+// QueuedRequest moved to usePlaygroundQueueManagement
+// WeightedImagePromptContextEntry moved to usePlaygroundImageGen
+// CompareResponseDiff moved to usePlaygroundImageGen
 import {
-  buildImagePromptRefineMessages,
-  extractImagePromptRefineCandidate
-} from "@/utils/image-prompt-refinement"
-import {
-  createImagePromptDraftFromStrategy,
-  deriveImagePromptRawContext,
-  getImagePromptStrategies,
-  type WeightedImagePromptContextEntry
-} from "@/utils/image-prompt-strategies"
-import {
-  computeResponseDiffPreview,
-  type CompareResponseDiff
-} from "./compare-response-diff"
-import { createComposerPerfTracker } from "@/utils/perf/composer-perf"
-import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
-import { buildResearchLaunchPath } from "@/routes/route-paths"
+  useModelComparison,
+  useContextWindow,
+  usePlaygroundVoiceChat,
+  usePromptTemplates,
+  usePlaygroundAttachments,
+  useComposerInput,
+  usePlaygroundImageGen,
+  usePlaygroundPersistence,
+  usePlaygroundRawPreview,
+  usePlaygroundQueueManagement,
+  usePlaygroundSettings,
+  usePlaygroundContextItems,
+  usePlaygroundSubmit,
+  toText,
+  estimateTokensFromText
+} from "./hooks"
 import {
   applyAttachedResearchContextEdits,
   resetAttachedResearchContext,
@@ -241,8 +191,6 @@ import {
   type AttachedResearchContext,
   type ResearchFollowUpTarget
 } from "./research-chat-context"
-
-const FOLLOW_UP_RESEARCH_PROMPT_PREFIX = "Follow up on this research:"
 
 type Props = {
   droppedFiles: File[]
@@ -269,13 +217,13 @@ type DefaultCharacterPreferenceQueryResult = {
   defaultCharacterId: string | null
 }
 
-const CONTEXT_FOOTPRINT_THRESHOLD_PERCENT = 40
-
-const estimateTokensFromText = (value: string): number => {
-  const normalized = value.trim()
-  if (!normalized) return 0
-  return Math.max(1, Math.ceil(normalized.length / 4))
+type PlaygroundQueuedSourceContext = {
+  documents?: ChatDocuments
+  imageBackendOverride?: string
+  isImageCommand?: boolean
 }
+
+const FOLLOW_UP_RESEARCH_PROMPT_PREFIX = "Follow up on this research:"
 
 const buildFollowUpResearchBackground = (
   context: AttachedResearchContext
@@ -334,30 +282,6 @@ const buildFollowUpResearchBackground = (
   }
 }
 
-const collectStringSegments = (
-  value: unknown,
-  segments: string[],
-  depth = 0
-) => {
-  if (depth > 4 || value == null) return
-  if (typeof value === "string") {
-    const trimmed = value.trim()
-    if (trimmed.length > 0) {
-      segments.push(trimmed)
-    }
-    return
-  }
-  if (Array.isArray(value)) {
-    value.forEach((entry) => collectStringSegments(entry, segments, depth + 1))
-    return
-  }
-  if (typeof value === "object") {
-    Object.values(value as Record<string, unknown>).forEach((entry) =>
-      collectStringSegments(entry, segments, depth + 1)
-    )
-  }
-}
-
 const cloneAttachedResearchContext = (
   context: AttachedResearchContext | null
 ): AttachedResearchContext | null =>
@@ -404,12 +328,7 @@ export const PlaygroundForm = ({
 }: Props) => {
   const { t } = useTranslation(["playground", "common", "option"])
   const notificationApi = useAntdNotification()
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  const fileInputRef = React.useRef<HTMLInputElement>(null)
-  const processedFilesRef = React.useRef<WeakSet<File>>(new WeakSet())
   const navigate = useNavigate()
-
-  const [typing, setTyping] = React.useState<boolean>(false)
   const [attachedResearchContextDraft, setAttachedResearchContextDraft] =
     React.useState<AttachedResearchContext | null>(null)
   const [followUpResearchModalOpen, setFollowUpResearchModalOpen] =
@@ -423,6 +342,8 @@ export const PlaygroundForm = ({
   const [followUpResearchPending, setFollowUpResearchPending] =
     React.useState(false)
   const followUpResearchPendingRef = React.useRef(false)
+  const voiceChatSubmitFormRef = React.useRef<() => void>(() => undefined)
+
   const [checkWideMode] = useStorage("checkWideMode", false)
   const [allowExternalImages, setAllowExternalImages] = useStorage(
     "allowExternalImages",
@@ -431,6 +352,13 @@ export const PlaygroundForm = ({
   const [showMoodBadge, setShowMoodBadge] = useStorage(
     "chatShowMoodBadge",
     true
+  )
+  const researchContext = React.useMemo(
+    () =>
+      attachedResearchContext
+        ? toChatResearchContext(attachedResearchContext)
+        : undefined,
+    [attachedResearchContext]
   )
   const {
     onSubmit,
@@ -476,8 +404,7 @@ export const PlaygroundForm = ({
     removeUploadedFile,
     clearUploadedFiles,
     queuedMessages,
-    addQueuedMessage,
-    clearQueuedMessages,
+    setQueuedMessages,
     serverChatId,
     setServerChatId,
     serverChatState,
@@ -494,8 +421,6 @@ export const PlaygroundForm = ({
     documentContext,
     selectedKnowledge,
     ragMediaIds,
-    compareAutoDisabledFlag,
-    setCompareAutoDisabledFlag,
     chatLoopState = {
       status: "idle",
       pendingApprovals: [],
@@ -544,6 +469,11 @@ export const PlaygroundForm = ({
     apiProvider: state.apiProvider,
     extraHeaders: state.extraHeaders,
     extraBody: state.extraBody,
+    llamaThinkingBudgetTokens: state.llamaThinkingBudgetTokens,
+    llamaGrammarMode: state.llamaGrammarMode,
+    llamaGrammarId: state.llamaGrammarId,
+    llamaGrammarInline: state.llamaGrammarInline,
+    llamaGrammarOverride: state.llamaGrammarOverride,
     jsonMode: state.jsonMode
   }))
   const numCtx = useStoreChatModelSettings((state) => state.numCtx)
@@ -588,6 +518,21 @@ export const PlaygroundForm = ({
     () => deriveConnectionUxState(connectionState),
     [connectionState]
   )
+  const setOptionalPanelVisible = useChatSurfaceCoordinatorStore(
+    (state) => state.setPanelVisible
+  )
+  const markOptionalPanelEngaged = useChatSurfaceCoordinatorStore(
+    (state) => state.markPanelEngaged
+  )
+  const mcpToolsEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "mcp-tools")
+  )
+  const audioHealthEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "audio-health")
+  )
+  const modelCatalogEnabled = useChatSurfaceCoordinatorStore((state) =>
+    shouldEnableOptionalResource(state, "model-catalog")
+  )
   const isConnectionReady = isConnected && phase === ConnectionPhase.CONNECTED
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const {
@@ -607,7 +552,7 @@ export const PlaygroundForm = ({
     setToolCatalogId,
     setToolModules,
     setToolCatalogStrict
-  } = useMcpTools()
+  } = useMcpTools({ enabled: mcpToolsEnabled })
   const mcpCtrl = useMcpToolsControl({
     hasMcp,
     mcpHealthState,
@@ -637,7 +582,9 @@ export const PlaygroundForm = ({
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt)
-  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus()
+  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus({
+    enabled: audioHealthEnabled
+  })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"
   const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
@@ -670,18 +617,9 @@ export const PlaygroundForm = ({
   })
   const [hasShownConnectBanner, setHasShownConnectBanner] = React.useState(false)
   const [showConnectBanner, setShowConnectBanner] = React.useState(false)
-  const [showQueuedBanner, setShowQueuedBanner] = React.useState(true)
   const [documentGeneratorOpen, setDocumentGeneratorOpen] =
     React.useState(false)
   const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
-  const [contextWindowModalOpen, setContextWindowModalOpen] =
-    React.useState(false)
-  const [contextWindowDraftValue, setContextWindowDraftValue] = React.useState<
-    number | undefined
-  >(undefined)
-  const [sessionInsightsOpen, setSessionInsightsOpen] = React.useState(false)
-  const [dismissedRecommendationIds, setDismissedRecommendationIds] =
-    React.useState<string[]>([])
   const [modeLauncherOpen, setModeLauncherOpen] = React.useState(false)
   const [modeAnnouncement, setModeAnnouncement] = React.useState<string | null>(
     null
@@ -752,17 +690,11 @@ export const PlaygroundForm = ({
     "playgroundStartupTemplateBundles",
     "[]"
   )
-  const [startupTemplateDraftName, setStartupTemplateDraftName] =
-    React.useState("")
-  const [startupTemplatePreview, setStartupTemplatePreview] =
-    React.useState<StartupTemplateBundle | null>(null)
   const [serverPersistenceHintSeen, setServerPersistenceHintSeen] = useStorage(
     "serverPersistenceHintSeen",
     false
   )
-  const [showServerPersistenceHint, setShowServerPersistenceHint] =
-    React.useState(false)
-  const serverSaveInFlightRef = React.useRef(false)
+  // showServerPersistenceHint and serverSaveInFlightRef moved to usePlaygroundPersistence
   const uiMode = useUiModeStore((state) => state.mode)
   const isProMode = uiMode === "pro"
   const [contextToolsOpen, setContextToolsOpen] = useStorage(
@@ -959,7 +891,7 @@ export const PlaygroundForm = ({
   const { data: composerModels } = useQuery({
     queryKey: ["playground:chatModels"],
     queryFn: () => fetchChatModels({ returnEmpty: true }),
-    enabled: true
+    enabled: modelCatalogEnabled
   })
   const { data: imageModels = [] } = useQuery({
     queryKey: ["playground:imageModels"],
@@ -997,46 +929,27 @@ export const PlaygroundForm = ({
     navigate
   })
 
-  // Ensure compare selection has a sensible default when enabling compare mode
   React.useEffect(() => {
-    if (
-      compareFeatureEnabled &&
-      compareMode &&
-      compareSelectedModels.length === 0 &&
-      selectedModel
-    ) {
-      setCompareSelectedModels([selectedModel])
+    setOptionalPanelVisible("model-catalog", modelDropdownOpen)
+    if (modelDropdownOpen) {
+      markOptionalPanelEngaged("model-catalog")
     }
-  }, [
-    compareFeatureEnabled,
-    compareMode,
-    compareSelectedModels.length,
-    selectedModel,
-    setCompareSelectedModels
-  ])
+
+    return () => {
+      setOptionalPanelVisible("model-catalog", false)
+    }
+  }, [markOptionalPanelEngaged, modelDropdownOpen, setOptionalPanelVisible])
 
   React.useEffect(() => {
-    if (!compareFeatureEnabled && compareMode) {
-      setCompareMode(false)
+    setOptionalPanelVisible("audio-health", voiceChatEnabled)
+    if (voiceChatEnabled) {
+      markOptionalPanelEngaged("audio-health")
     }
-  }, [compareFeatureEnabled, compareMode, setCompareMode])
 
-  React.useEffect(() => {
-    if (compareAutoDisabledFlag) {
-      notificationApi.info({
-        message: t(
-          "playground:compareDisabledNotice",
-          "Compare mode was turned off"
-        ),
-        description: t(
-          "playground:compareDisabledNoticeDesc",
-          "The compare feature was disabled. Your model selections are saved."
-        ),
-        duration: 4
-      })
-      setCompareAutoDisabledFlag(false)
+    return () => {
+      setOptionalPanelVisible("audio-health", false)
     }
-  }, [compareAutoDisabledFlag, setCompareAutoDisabledFlag, notificationApi, t])
+  }, [markOptionalPanelEngaged, setOptionalPanelVisible, voiceChatEnabled])
 
   // Auto-select model on initial load when no model is selected
   // Priority: 1) First favorite model, 2) First available model
@@ -1060,127 +973,46 @@ export const PlaygroundForm = ({
     setSelectedModel
   ])
 
-  const compareModeActive = compareFeatureEnabled && compareMode
-  const compareModelMetaById = React.useMemo(() => {
-    return buildCompareModelMetaById((composerModels as any[]) || [])
-  }, [composerModels])
-  const availableCompareModels = React.useMemo(
+  const hasPromptContext = React.useMemo(
     () =>
-      ((composerModels as any[]) || [])
-        .filter((model) => model?.model)
-        .map((model) => ({
-          model: String(model.model),
-          nickname:
-            typeof model.nickname === "string" ? model.nickname : undefined,
-          provider:
-            typeof model.provider === "string" ? model.provider : undefined
-        })),
-    [composerModels]
+      Boolean(selectedSystemPrompt) ||
+      Boolean(selectedQuickPrompt) ||
+      String(systemPrompt || "").trim().length > 0,
+    [selectedQuickPrompt, selectedSystemPrompt, systemPrompt]
   )
-  const compareModelLabelById = React.useMemo(() => {
-    return new Map(
-      availableCompareModels.map((model) => [
-        model.model,
-        model.nickname || model.model
-      ])
-    )
-  }, [availableCompareModels])
-  const compareSelectedModelLabels = React.useMemo(
-    () =>
-      compareSelectedModels.map(
-        (modelId) => compareModelLabelById.get(modelId) || modelId
-      ),
-    [compareModelLabelById, compareSelectedModels]
-  )
-  const compareNeedsMoreModels =
-    compareModeActive && compareSelectedModels.length < 2
-  const compareModelsSupportCapability = React.useCallback(
-    (modelIds: string[], capability: string) => {
-      return compareModelsSupportCapabilityCheck(
-        modelIds,
-        capability,
-        compareModelMetaById
-      )
-    },
-    [compareModelMetaById]
-  )
-  const compareCapabilityIncompatibilities = React.useMemo(() => {
-    if (!compareModeActive || compareSelectedModels.length < 2) return []
-    return getCompareCapabilityIncompatibilities({
-      modelIds: compareSelectedModels,
-      modelMetaById: compareModelMetaById,
-      labels: {
-        vision: t(
-          "playground:composer.compareIncompatVision",
-          "Mixed vision support"
-        ),
-        tools: t(
-          "playground:composer.compareIncompatTools",
-          "Mixed tool support"
-        ),
-        streaming: t(
-          "playground:composer.compareIncompatStreaming",
-          "Mixed streaming behavior"
-        ),
-        context: t(
-          "playground:composer.compareIncompatContext",
-          "Large context-window differences"
-        )
-      }
-    })
-  }, [
+
+  const modelComparison = useModelComparison({
+    composerModels,
+    selectedModel,
+    setSelectedModel,
+    compareFeatureEnabled,
+    compareMode,
+    setCompareMode,
+    compareSelectedModels,
+    setCompareSelectedModels,
+    compareMaxModels,
+    selectedCharacterName: selectedCharacter?.name || null,
+    ragPinnedResultsLength: ragPinnedResults.length,
+    webSearch,
+    hasPromptContext,
+    jsonMode: Boolean(currentChatModelSettings.jsonMode),
+    voiceChatEnabled,
+    t
+  })
+  const {
     compareModeActive,
     compareModelMetaById,
-    compareSelectedModels,
-    t
-  ])
-  const toggleCompareMode = React.useCallback(() => {
-    if (!compareFeatureEnabled) {
-      return
-    }
-    const next = !compareModeActive
-    setCompareMode(next)
-    if (
-      next &&
-      compareSelectedModels.length === 0 &&
-      selectedModel
-    ) {
-      setCompareSelectedModels([selectedModel])
-    }
-  }, [
-    compareFeatureEnabled,
-    compareModeActive,
-    compareSelectedModels.length,
-    selectedModel,
-    setCompareMode,
-    setCompareSelectedModels
-  ])
-  const handleAddCompareModel = React.useCallback(
-    (modelId: string) => {
-      if (!modelId) return
-      if (compareSelectedModels.includes(modelId)) return
-      if (compareSelectedModels.length >= compareMaxModels) return
-      setCompareSelectedModels([...compareSelectedModels, modelId])
-    },
-    [
-      compareMaxModels,
-      compareSelectedModels,
-      setCompareSelectedModels
-    ]
-  )
-  const handleRemoveCompareModel = React.useCallback(
-    (modelId: string) => {
-      if (!modelId) return
-      setCompareSelectedModels(
-        compareSelectedModels.filter((id) => id !== modelId)
-      )
-    },
-    [compareSelectedModels, setCompareSelectedModels]
-  )
-  const availableChatModelIds = React.useMemo(
-    () => buildAvailableChatModelIds(Array.isArray(composerModels) ? (composerModels as any[]) : []),
-    [composerModels]
-  )
+    availableCompareModels,
+    compareModelLabelById,
+    compareSelectedModelLabels,
+    compareNeedsMoreModels,
+    compareModelsSupportCapability,
+    compareCapabilityIncompatibilities,
+    toggleCompareMode,
+    handleAddCompareModel,
+    handleRemoveCompareModel,
+    sendLabel
+  } = modelComparison
 
   const voiceChatModelOptions = React.useMemo(() => {
     const options = [
@@ -1204,55 +1036,46 @@ export const PlaygroundForm = ({
     return options
   }, [composerModels, t])
 
-  const sendLabel = React.useMemo(() => {
-    if (compareNeedsMoreModels) {
-      return t(
-        "playground:composer.compareAddModelToSend",
-        "Add one more model"
-      )
-    }
-    if (compareModeActive && compareSelectedModels.length > 1) {
-      return t("playground:composer.compareSendToModels", "Send to {{count}} models", {
-        count: compareSelectedModels.length
-      })
-    }
-    return t("common:send", "Send")
-  }, [
+  const promptTemplates = usePromptTemplates({
+    startupTemplatesRaw,
+    setStartupTemplatesRaw,
+    promptLibrary,
+    selectedModel,
+    systemPrompt,
+    selectedSystemPrompt,
+    selectedQuickPrompt,
+    selectedCharacter,
+    ragPinnedResults,
+    currentChatModelSettings,
+    setSelectedModel,
+    setSelectedSystemPrompt,
+    setSelectedQuickPrompt,
+    setSystemPrompt,
+    setSelectedCharacter,
+    setRagPinnedResults,
+    updateChatModelSettings,
     compareModeActive,
-    compareNeedsMoreModels,
-    compareSelectedModels.length,
+    setCompareSelectedModels,
+    setModeAnnouncement,
     t
-  ])
-
-  const promptSummaryLabel = React.useMemo(() => {
-    if (selectedSystemPrompt) {
-      return t(
-        "playground:composer.summary.systemPrompt",
-        "System prompt"
-      )
-    }
-    if (selectedQuickPrompt) {
-      return t(
-        "playground:composer.summary.customPrompt",
-        "Custom prompt"
-      )
-    }
-    return t(
-      "playground:composer.summary.noPrompt",
-      "No prompt"
-    )
-  }, [selectedQuickPrompt, selectedSystemPrompt, t])
-  const currentPresetKey = React.useMemo(
-    () =>
-      detectCurrentPreset(
-        currentChatModelSettings as unknown as ChatModelSettings
-      ),
-    [currentChatModelSettings]
-  )
-  const currentPreset = React.useMemo(
-    () => getPresetByKey(currentPresetKey),
-    [currentPresetKey]
-  )
+  })
+  const {
+    currentPresetKey,
+    currentPreset,
+    startupTemplates,
+    startupTemplateDraftName,
+    setStartupTemplateDraftName,
+    startupTemplatePreview,
+    setStartupTemplatePreview,
+    startupTemplateNameFallback,
+    selectedSystemPromptRecord,
+    handleSaveStartupTemplate,
+    handleOpenStartupTemplatePreview,
+    handleApplyStartupTemplate,
+    handleDeleteStartupTemplate,
+    handleTemplateSelect,
+    promptSummaryLabel
+  } = promptTemplates
   React.useEffect(() => {
     if (previousPresetKeyRef.current == null) {
       previousPresetKeyRef.current = currentPresetKey
@@ -1271,9 +1094,11 @@ export const PlaygroundForm = ({
           ? t(`playground:presets.${currentPreset.key}.label`, currentPreset.label)
           : currentPresetKey
         setModeAnnouncement(
-          t("playground:composer.presetChanged", "{{preset}} preset applied.", {
-            preset: presetLabel
-          } as any)
+          toText(
+            t("playground:composer.presetChanged", "{{preset}} preset applied.", {
+              preset: presetLabel
+            } as any)
+          )
         )
       }
     }
@@ -1412,281 +1237,11 @@ export const PlaygroundForm = ({
     const trimmed = raw.trim()
     return trimmed.length > 0 ? trimmed : null
   }, [selectedCharacter?.greeting])
-  const startupTemplates = React.useMemo(
-    () => parseStartupTemplateBundles(startupTemplatesRaw),
-    [startupTemplatesRaw]
-  )
-  const selectedSystemPromptRecord = React.useMemo<Prompt | null>(() => {
-    if (!selectedSystemPrompt) return null
-    return (
-      promptLibrary.find((prompt) => prompt.id === selectedSystemPrompt) || null
-    )
-  }, [promptLibrary, selectedSystemPrompt])
-  const startupTemplateNameFallback = React.useMemo(() => {
-    const nameParts = [
-      selectedCharacter?.name?.trim(),
-      currentPreset && currentPreset.key !== "custom"
-        ? t(`playground:presets.${currentPreset.key}.label`, currentPreset.label)
-        : null,
-      selectedModel
-    ].filter((part): part is string => Boolean(part && part.trim().length > 0))
-    if (nameParts.length > 0) {
-      return sanitizeStartupTemplateName(
-        `${nameParts.join(" · ")} template`,
-        "New startup template"
-      )
-    }
-    return "New startup template"
-  }, [currentPreset, selectedCharacter?.name, selectedModel, t])
-  const persistStartupTemplates = React.useCallback(
-    (nextTemplates: StartupTemplateBundle[]) => {
-      setStartupTemplatesRaw(serializeStartupTemplateBundles(nextTemplates))
-    },
-    [setStartupTemplatesRaw]
-  )
-  const handleSaveStartupTemplate = React.useCallback(() => {
-    const trimmedSystemPrompt = String(systemPrompt || "").trim()
-    const promptSource = inferStartupTemplatePromptSource(
-      selectedSystemPromptRecord,
-      trimmedSystemPrompt.length > 0
-    )
-    const templateName = sanitizeStartupTemplateName(
-      startupTemplateDraftName,
-      startupTemplateNameFallback
-    )
-    const nextTemplate = createStartupTemplateBundle({
-      name: templateName,
-      selectedModel,
-      systemPrompt: trimmedSystemPrompt,
-      selectedSystemPromptId: selectedSystemPrompt || null,
-      promptStudioPromptId:
-        selectedSystemPromptRecord?.studioPromptId ??
-        selectedSystemPromptRecord?.serverId ??
-        null,
-      promptTitle: selectedSystemPromptRecord?.title || null,
-      promptSource,
-      presetKey: currentPresetKey,
-      character: selectedCharacter || null,
-      ragPinnedResults
-    })
-    const nextTemplates = upsertStartupTemplateBundle(startupTemplates, nextTemplate)
-    persistStartupTemplates(nextTemplates)
-    setStartupTemplateDraftName(templateName)
-    setModeAnnouncement(
-      t(
-        "playground:composer.startupTemplateSavedNotice",
-        "Startup template saved."
-      )
-    )
-  }, [
-    currentPresetKey,
-    persistStartupTemplates,
-    ragPinnedResults,
-    selectedCharacter,
-    selectedModel,
-    selectedSystemPrompt,
-    selectedSystemPromptRecord,
-    startupTemplateDraftName,
-    startupTemplateNameFallback,
-    startupTemplates,
-    systemPrompt,
-    t
-  ])
-  const handleOpenStartupTemplatePreview = React.useCallback(
-    (templateId: string) => {
-      const template = startupTemplates.find((entry) => entry.id === templateId) || null
-      setStartupTemplatePreview(template)
-    },
-    [startupTemplates]
-  )
-  const handleApplyStartupTemplate = React.useCallback(() => {
-    if (!startupTemplatePreview) return
-
-    const promptResolution = resolveStartupTemplatePrompt(
-      startupTemplatePreview,
-      promptLibrary
-    )
-    const resolvedPromptContent =
-      promptResolution.prompt?.content ?? startupTemplatePreview.systemPrompt
-    const resolvedPromptId = promptResolution.prompt?.id || null
-
-    if (startupTemplatePreview.selectedModel) {
-      setSelectedModel(startupTemplatePreview.selectedModel)
-      if (compareModeActive) {
-        setCompareSelectedModels([startupTemplatePreview.selectedModel])
-      }
-    }
-
-    if (resolvedPromptId) {
-      setSelectedSystemPrompt(resolvedPromptId)
-    } else {
-      setSelectedSystemPrompt(undefined)
-    }
-    setSystemPrompt(resolvedPromptContent)
-
-    const preset = getPresetByKey(startupTemplatePreview.presetKey)
-    if (preset && preset.key !== "custom") {
-      updateChatModelSettings(preset.settings)
-    }
-
-    void setSelectedCharacter(startupTemplatePreview.character || null)
-    setRagPinnedResults(startupTemplatePreview.ragPinnedResults || [])
-    setStartupTemplatePreview(null)
-    setModeAnnouncement(
-      t(
-        "playground:composer.startupTemplateAppliedNotice",
-        "Startup template applied."
-      )
-    )
-  }, [
-    compareModeActive,
-    promptLibrary,
-    setCompareSelectedModels,
-    setRagPinnedResults,
-    setSelectedCharacter,
-    setSelectedModel,
-    setSelectedSystemPrompt,
-    setSystemPrompt,
-    startupTemplatePreview,
-    t,
-    updateChatModelSettings
-  ])
-  const handleDeleteStartupTemplate = React.useCallback(
-    (templateId: string) => {
-      const nextTemplates = removeStartupTemplateBundle(startupTemplates, templateId)
-      persistStartupTemplates(nextTemplates)
-      if (startupTemplatePreview?.id === templateId) {
-        setStartupTemplatePreview(null)
-      }
-      setModeAnnouncement(
-        t(
-          "playground:composer.startupTemplateRemovedNotice",
-          "Startup template removed."
-        )
-      )
-    },
-    [
-      persistStartupTemplates,
-      startupTemplatePreview?.id,
-      startupTemplates,
-      t
-    ]
-  )
 
   // Enable focus shortcuts (Shift+Esc to focus textarea)
   useFocusShortcuts(textareaRef, true)
 
   const [pasteLargeTextAsFile] = useStorage("pasteLargeTextAsFile", false)
-  const textAreaFocus = React.useCallback(() => {
-    const el = textareaRef.current
-    if (!el) {
-      return
-    }
-    if (el.selectionStart === el.selectionEnd) {
-      const ua =
-        typeof navigator !== "undefined" ? navigator.userAgent : ""
-      const isMobile =
-        /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-          ua
-        )
-      if (!isMobile) {
-        el.focus()
-      } else {
-        el.blur()
-      }
-    }
-  }, [])
-
-  const form = useSimpleForm({
-    initialValues: {
-      message: "",
-      image: ""
-    }
-  })
-  const { deferredInput: deferredComposerInput } = useDeferredComposerInput(
-    form.values.message || ""
-  )
-  const composerPerfTrackerRef = React.useRef(
-    createComposerPerfTracker({
-      enabled: Boolean((globalThis as any).__TLDW_CHAT_PERF__)
-    })
-  )
-  const renderPerfTrackerRef = React.useRef(
-    createRenderPerfTracker({
-      enabled: Boolean((globalThis as any).__TLDW_CHAT_PERF__)
-    })
-  )
-  const markComposerPerf = React.useCallback((label: string) => {
-    return composerPerfTrackerRef.current.start(label)
-  }, [])
-  const onComposerRenderProfile = React.useCallback<React.ProfilerOnRenderCallback>(
-    (id, phase, actualDuration, baseDuration, startTime, commitTime) => {
-      renderPerfTrackerRef.current.onRender(
-        String(id),
-        phase,
-        actualDuration,
-        baseDuration,
-        startTime,
-        commitTime
-      )
-    },
-    []
-  )
-  const measureComposerPerf = React.useCallback(
-    <T,>(label: string, fn: () => T): T => {
-      const end = markComposerPerf(label)
-      try {
-        return fn()
-      } finally {
-        end()
-      }
-    },
-    [markComposerPerf]
-  )
-  const wrapComposerProfile = React.useCallback(
-    (id: string, node: React.ReactNode): React.ReactNode => {
-      if (!renderPerfTrackerRef.current.isEnabled()) {
-        return node
-      }
-      return (
-        <React.Profiler id={id} onRender={onComposerRenderProfile}>
-          {node}
-        </React.Profiler>
-      )
-    },
-    [onComposerRenderProfile]
-  )
-
-  React.useEffect(() => {
-    const inputTracker = composerPerfTrackerRef.current
-    const renderTracker = renderPerfTrackerRef.current
-    if (!inputTracker.isEnabled() || typeof window === "undefined") {
-      return
-    }
-    ;(window as any).__TLDW_CHAT_PERF_SNAPSHOT__ = () => inputTracker.snapshot()
-    ;(window as any).__TLDW_CHAT_PERF_CLEAR__ = () => {
-      inputTracker.clear()
-      renderTracker.clear()
-    }
-    ;(window as any).__TLDW_CHAT_RENDER_PERF_SNAPSHOT__ = () =>
-      renderTracker.snapshot()
-    ;(window as any).__TLDW_CHAT_RENDER_PERF_SUMMARY__ = () =>
-      renderTracker.summarize()
-    ;(window as any).__TLDW_CHAT_RENDER_PERF_CLEAR__ = () =>
-      renderTracker.clear()
-    return () => {
-      delete (window as any).__TLDW_CHAT_PERF_SNAPSHOT__
-      delete (window as any).__TLDW_CHAT_PERF_CLEAR__
-      delete (window as any).__TLDW_CHAT_RENDER_PERF_SNAPSHOT__
-      delete (window as any).__TLDW_CHAT_RENDER_PERF_SUMMARY__
-      delete (window as any).__TLDW_CHAT_RENDER_PERF_CLEAR__
-    }
-  }, [])
-
-  const setFieldValueRef = React.useRef(form.setFieldValue)
-  React.useEffect(() => {
-    setFieldValueRef.current = form.setFieldValue
-  }, [form.setFieldValue])
 
   const msgCollapse = useMessageCollapse({ textareaRef })
   const {
@@ -1712,75 +1267,57 @@ export const PlaygroundForm = ({
     restoreMessageValue: restoreCollapseState
   } = msgCollapse
 
-  const restoreMessageValue = React.useCallback(
-    (
-      value: string,
-      metadata?: { wasExpanded?: boolean; collapsedRange?: CollapsedRange | null }
-    ) => {
-      setFieldValueRef.current("message", value)
-      restoreCollapseState(value, metadata)
-    },
-    [restoreCollapseState]
-  )
-
-  const setMessageValue = React.useCallback(
-    (
-      nextValue: string,
-      options?: {
-        collapseLarge?: boolean
-        forceCollapse?: boolean
-        collapsedRange?: CollapsedRange
-      }
-    ) => {
-      form.setFieldValue("message", nextValue)
-      if (options?.collapseLarge) {
-        collapseLargeMessage(nextValue, {
-          force: options?.forceCollapse,
-          range: options?.collapsedRange
-        })
-      }
-    },
-    [collapseLargeMessage, form.setFieldValue]
-  )
-
-  const collapsedDisplayMeta = React.useMemo(() => {
-    const message = form.values.message || ""
-    if (!message || !collapsedRange) return null
-    return getCollapsedDisplayMeta(message, collapsedRange)
-  }, [collapsedRange, form.values.message, getCollapsedDisplayMeta])
-
-  const messageDisplayValue = React.useMemo(
-    () => {
-      const message = form.values.message || ""
-      if (!message) return ""
-      if (!isMessageCollapsed || !collapsedDisplayMeta) return message
-      return collapsedDisplayMeta.display
-    },
-    [collapsedDisplayMeta, form.values.message, isMessageCollapsed]
-  )
-
-  React.useEffect(() => {
-    const message = form.values.message || ""
-    if (!message || message.length <= PASTED_TEXT_CHAR_LIMIT) {
-      setIsMessageCollapsed(false)
-      setHasExpandedLargeText(false)
-      setCollapsedRange(null)
-    }
-  }, [form.values.message])
-
-  // Draft persistence - saves/restores message draft to local-only storage
-  const { draftSaved } = useDraftPersistence({
-    storageKey: "tldw:playgroundChatDraft",
-    getValue: () => form.values.message,
-    getMetadata: () => ({
-      wasExpanded: hasExpandedLargeText,
-      collapsedRange: collapsedRange
-        ? { start: collapsedRange.start, end: collapsedRange.end }
-        : null
-    }),
-    setValue: (value) => restoreMessageValue(value),
-    setValueWithMetadata: restoreMessageValue
+  const composerInput = useComposerInput({
+    textareaRef,
+    isMessageCollapsed,
+    setIsMessageCollapsed,
+    collapsedRange,
+    setCollapsedRange,
+    hasExpandedLargeText,
+    setHasExpandedLargeText,
+    collapseLargeMessage,
+    restoreCollapseState,
+    getCollapsedDisplayMeta,
+    getDisplayCaretFromMessage,
+    getMessageCaretFromDisplay,
+    normalizeCollapsedRange,
+    expandLargeMessage,
+    pendingCaretRef,
+    lastDisplaySelectionRef,
+    pendingCollapsedStateRef,
+    pointerDownRef,
+    selectionFromPointerRef,
+    tabMentionsEnabled,
+    handleTextChange,
+    isProMode
   })
+  const {
+    form,
+    typing,
+    setMessageValue,
+    restoreMessageValue,
+    messageDisplayValue,
+    collapsedDisplayMeta,
+    textAreaFocus,
+    syncCollapsedCaret,
+    commitCollapsedEdit,
+    replaceCollapsedRange,
+    handleCompositionStart,
+    handleCompositionEnd,
+    handleTextareaMouseDown,
+    handleTextareaMouseUp,
+    handleTextareaChange,
+    handleTextareaSelect,
+    markComposerPerf,
+    measureComposerPerf,
+    onComposerRenderProfile,
+    wrapComposerProfile,
+    draftSaved
+  } = composerInput
+
+  const { deferredInput: deferredComposerInput } = useDeferredComposerInput(
+    form.values.message || ""
+  )
 
   const {
     draftTokenCount,
@@ -1800,293 +1337,67 @@ export const PlaygroundForm = ({
   const tokenUsageDisplay = isProMode
     ? tokenUsageLabel
     : tokenUsageCompactLabel
-  const sessionUsageSummary = React.useMemo(
-    () => aggregateSessionUsage(messages as any[], selectedModel, resolvedProviderKey),
-    [messages, resolvedProviderKey, selectedModel]
-  )
-  const sessionUsageLabel = React.useMemo(() => {
-    const tokenPart = t("playground:tokens.total", "tokens")
-    const base = `${sessionUsageSummary.totalTokens.toLocaleString()} ${tokenPart}`
-    if (sessionUsageSummary.estimatedCostUsd == null) {
-      return base
-    }
-    return `${base} (${formatCost(sessionUsageSummary.estimatedCostUsd)})`
-  }, [sessionUsageSummary.estimatedCostUsd, sessionUsageSummary.totalTokens, t])
-  const sessionInsights = React.useMemo(
-    () => buildSessionInsights(messages as any[]),
-    [messages]
-  )
-  const projectedBudget = React.useMemo(
-    () =>
-      projectTokenBudget({
-        conversationTokens: conversationTokenCount,
-        draftTokens: draftTokenCount,
-        maxTokens: resolvedMaxContext
-      }),
-    [conversationTokenCount, draftTokenCount, resolvedMaxContext]
-  )
-  const tokenBudgetRisk = React.useMemo(
-    () => resolveTokenBudgetRisk(projectedBudget),
-    [projectedBudget]
-  )
-  const tokenBudgetRiskLabel = React.useMemo(() => {
-    if (tokenBudgetRisk.level === "critical") {
-      return t("playground:tokens.riskCritical", "Critical risk")
-    }
-    if (tokenBudgetRisk.level === "high") {
-      return t("playground:tokens.riskHigh", "High risk")
-    }
-    if (tokenBudgetRisk.level === "medium") {
-      return t("playground:tokens.riskMedium", "Medium risk")
-    }
-    if (tokenBudgetRisk.level === "low") {
-      return t("playground:tokens.riskLow", "Low risk")
-    }
-    return t("playground:tokens.riskUnknown", "Unknown")
-  }, [t, tokenBudgetRisk.level])
-  const showTokenBudgetWarning =
-    projectedBudget.isOverLimit || projectedBudget.isNearLimit
-  const tokenBudgetWarningText = React.useMemo(() => {
-    if (!showTokenBudgetWarning) return null
-    if (projectedBudget.isOverLimit) {
-      return t(
-        "playground:tokens.preSendOverLimit",
-        "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
-      )
-    }
-    return t(
-      "playground:tokens.preSendNearLimit",
-      "Projected send is near the context window limit."
-    )
-  }, [projectedBudget.isOverLimit, showTokenBudgetWarning, t])
-  const characterContextTokenEstimate = React.useMemo(() => {
-    if (!selectedCharacter) return 0
-    const segments: string[] = []
-    collectStringSegments(selectedCharacter.name, segments)
-    collectStringSegments(selectedCharacter.title, segments)
-    collectStringSegments(selectedCharacter.system_prompt, segments)
-    collectStringSegments(selectedCharacter.greeting, segments)
-    collectStringSegments(selectedCharacter.extensions, segments)
-    const unique = Array.from(new Set(segments))
-    if (unique.length === 0) return 0
-    return unique.reduce(
-      (total, segment) => total + estimateTokensFromText(segment),
-      0
-    )
-  }, [selectedCharacter])
-  const systemPromptTokenEstimate = React.useMemo(() => {
-    const promptSegments = [
-      String(systemPrompt || ""),
-      String(selectedQuickPrompt || ""),
-      String(selectedSystemPrompt || "")
-    ]
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0)
-    if (promptSegments.length === 0) return 0
-    return promptSegments.reduce(
-      (total, segment) => total + estimateTokensFromText(segment),
-      0
-    )
-  }, [selectedQuickPrompt, selectedSystemPrompt, systemPrompt])
-  const pinnedSourceTokenEstimate = React.useMemo(() => {
-    if (!Array.isArray(ragPinnedResults) || ragPinnedResults.length === 0) {
-      return 0
-    }
-    return ragPinnedResults.reduce((total, result) => {
-      const snippet =
-        typeof result?.snippet === "string" ? result.snippet : ""
-      const title = typeof result?.title === "string" ? result.title : ""
-      const sourceLine = typeof result?.source === "string" ? result.source : ""
-      const payload = [title, snippet, sourceLine].filter(Boolean).join("\n")
-      return total + estimateTokensFromText(payload)
-    }, 0)
-  }, [ragPinnedResults])
-  const historyTokenEstimate = React.useMemo(() => {
-    if (!Array.isArray(messages) || messages.length === 0) return 0
-    return messages.reduce((total, entry) => {
-      const text =
-        typeof entry?.message === "string" ? entry.message : ""
-      return total + estimateTokensFromText(text)
-    }, 0)
-  }, [messages])
-  const summaryCheckpointSuggestion = React.useMemo(
-    () =>
-      evaluateSummaryCheckpointSuggestion({
-        messageCount: messages.length,
-        projectedBudget
-      }),
-    [messages.length, projectedBudget]
-  )
-  const modelRecommendations = React.useMemo(
-    () =>
-      measureComposerPerf("derive:model-recommendations", () =>
-        buildModelRecommendations({
-          draftText: deferredComposerInput,
-          selectedModel,
-          modelCapabilities,
-          webSearch,
-          jsonMode: Boolean(currentChatModelSettings.jsonMode),
-          hasImageAttachment: Boolean(form.values.image),
-          tokenBudgetRiskLevel: tokenBudgetRisk.level,
-          sessionInsights
-        })
-      ),
-    [
-      currentChatModelSettings.jsonMode,
-      deferredComposerInput,
-      form.values.image,
-      measureComposerPerf,
-      modelCapabilities,
-      selectedModel,
-      sessionInsights,
-      tokenBudgetRisk.level,
-      webSearch
-    ]
-  )
-  const visibleModelRecommendations = React.useMemo(
-    () =>
-      modelRecommendations.filter(
-        (recommendation) =>
-          !dismissedRecommendationIds.includes(recommendation.id)
-      ),
-    [dismissedRecommendationIds, modelRecommendations]
-  )
-  React.useEffect(() => {
-    setDismissedRecommendationIds((previous) => {
-      if (previous.length === 0) return previous
-      const availableIds = new Set(
-        modelRecommendations.map((recommendation) => recommendation.id)
-      )
-      const next = previous.filter((id) => availableIds.has(id))
-      if (next.length === previous.length) return previous
-      return next
-    })
-  }, [modelRecommendations])
-  const contextFootprintRows = React.useMemo(
-    () => [
-      {
-        id: "character",
-        label: t("playground:tokens.breakdown.character", "Character + world book"),
-        tokens: characterContextTokenEstimate
-      },
-      {
-        id: "prompt",
-        label: t("playground:tokens.breakdown.prompt", "System/prompt steering"),
-        tokens: systemPromptTokenEstimate
-      },
-      {
-        id: "pinned",
-        label: t("playground:tokens.breakdown.pinned", "Pinned sources"),
-        tokens: pinnedSourceTokenEstimate
-      },
-      {
-        id: "history",
-        label: t("playground:tokens.breakdown.history", "Chat history"),
-        tokens: historyTokenEstimate
-      },
-      {
-        id: "draft",
-        label: t("playground:tokens.breakdown.draft", "Current draft"),
-        tokens: draftTokenCount
-      }
-    ],
-    [
-      characterContextTokenEstimate,
-      draftTokenCount,
-      historyTokenEstimate,
-      pinnedSourceTokenEstimate,
-      systemPromptTokenEstimate,
-      t
-    ]
-  )
-  const nonMessageContextTokenEstimate = React.useMemo(
-    () =>
-      characterContextTokenEstimate +
-      systemPromptTokenEstimate +
-      pinnedSourceTokenEstimate,
-    [
-      characterContextTokenEstimate,
-      pinnedSourceTokenEstimate,
-      systemPromptTokenEstimate
-    ]
-  )
-  const nonMessageContextPercent = React.useMemo(() => {
-    if (
-      typeof resolvedMaxContext !== "number" ||
-      !Number.isFinite(resolvedMaxContext) ||
-      resolvedMaxContext <= 0
-    ) {
-      return null
-    }
-    return (nonMessageContextTokenEstimate / resolvedMaxContext) * 100
-  }, [nonMessageContextTokenEstimate, resolvedMaxContext])
-  const showNonMessageContextWarning =
-    typeof nonMessageContextPercent === "number" &&
-    nonMessageContextPercent > CONTEXT_FOOTPRINT_THRESHOLD_PERCENT
-  const largestContextContributor = React.useMemo(() => {
-    return contextFootprintRows
-      .filter((entry) => entry.tokens > 0)
-      .sort((left, right) => right.tokens - left.tokens)[0]
-  }, [contextFootprintRows])
-  const contextWindowFormatter = React.useMemo(() => new Intl.NumberFormat(), [])
-  const formatContextWindowValue = React.useCallback(
-    (value: number | null | undefined) => {
-      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-        return t("common:unknown", "Unknown")
-      }
-      return contextWindowFormatter.format(Math.round(value))
-    },
-    [contextWindowFormatter, t]
-  )
-  const isContextWindowOverrideActive =
-    typeof numCtx === "number" && Number.isFinite(numCtx) && numCtx > 0
-  const requestedContextWindowOverride = isContextWindowOverrideActive
-    ? Math.round(numCtx)
-    : null
-  const isContextWindowOverrideClamped =
-    typeof requestedContextWindowOverride === "number" &&
-    typeof modelContextLength === "number" &&
-    modelContextLength > 0 &&
-    requestedContextWindowOverride > modelContextLength
-  const openContextWindowModal = React.useCallback(() => {
-    const startingValue =
-      typeof numCtx === "number" && Number.isFinite(numCtx) && numCtx > 0
-        ? Math.round(numCtx)
-        : typeof resolvedMaxContext === "number" &&
-            Number.isFinite(resolvedMaxContext) &&
-            resolvedMaxContext > 0
-          ? Math.round(resolvedMaxContext)
-          : undefined
-    setContextWindowDraftValue(startingValue)
-    setContextWindowModalOpen(true)
-  }, [numCtx, resolvedMaxContext])
-  const saveContextWindowSetting = React.useCallback(() => {
-    if (
-      typeof contextWindowDraftValue === "number" &&
-      Number.isFinite(contextWindowDraftValue) &&
-      contextWindowDraftValue > 0
-    ) {
-      updateChatModelSetting("numCtx", Math.round(contextWindowDraftValue))
-    } else {
-      updateChatModelSetting("numCtx", undefined)
-    }
-    setContextWindowModalOpen(false)
-  }, [contextWindowDraftValue, updateChatModelSetting])
-  const resetContextWindowSetting = React.useCallback(() => {
-    updateChatModelSetting("numCtx", undefined)
-    if (
-      typeof modelContextLength === "number" &&
-      Number.isFinite(modelContextLength) &&
-      modelContextLength > 0
-    ) {
-      setContextWindowDraftValue(Math.round(modelContextLength))
-      return
-    }
-    setContextWindowDraftValue(undefined)
-  }, [modelContextLength, updateChatModelSetting])
-  const openSessionInsightsModal = React.useCallback(() => {
-    setSessionInsightsOpen(true)
-  }, [])
+
+  const contextWindow = useContextWindow({
+    draftTokenCount,
+    conversationTokenCount,
+    resolvedMaxContext,
+    modelContextLength,
+    numCtx,
+    updateChatModelSetting,
+    selectedCharacter,
+    systemPrompt,
+    selectedQuickPrompt,
+    selectedSystemPrompt,
+    ragPinnedResults,
+    messages,
+    selectedModel,
+    resolvedProviderKey,
+    deferredComposerInput,
+    modelCapabilities,
+    webSearch,
+    jsonMode: Boolean(currentChatModelSettings.jsonMode),
+    hasImageAttachment: Boolean(form.values.image),
+    measureComposerPerf,
+    t
+  })
+  const {
+    contextWindowModalOpen,
+    setContextWindowModalOpen,
+    contextWindowDraftValue,
+    setContextWindowDraftValue,
+    sessionInsightsOpen,
+    setSessionInsightsOpen,
+    sessionUsageSummary,
+    sessionUsageLabel,
+    sessionInsights,
+    projectedBudget,
+    tokenBudgetRisk,
+    tokenBudgetRiskLabel,
+    showTokenBudgetWarning,
+    tokenBudgetWarningText,
+    characterContextTokenEstimate,
+    systemPromptTokenEstimate,
+    pinnedSourceTokenEstimate,
+    historyTokenEstimate,
+    summaryCheckpointSuggestion,
+    modelRecommendations,
+    visibleModelRecommendations,
+    dismissModelRecommendation,
+    contextFootprintRows,
+    nonMessageContextTokenEstimate,
+    nonMessageContextPercent,
+    showNonMessageContextWarning,
+    largestContextContributor,
+    formatContextWindowValue,
+    isContextWindowOverrideActive,
+    requestedContextWindowOverride,
+    isContextWindowOverrideClamped,
+    openContextWindowModal,
+    saveContextWindowSetting,
+    resetContextWindowSetting,
+    openSessionInsightsModal
+  } = contextWindow
   const handleModelRecommendationAction = React.useCallback(
     (action: ModelRecommendationAction) => {
       if (action === "open_model_settings") {
@@ -2116,11 +1427,6 @@ export const PlaygroundForm = ({
       updateChatModelSetting
     ]
   )
-  const dismissModelRecommendation = React.useCallback((id: string) => {
-    setDismissedRecommendationIds((previous) =>
-      previous.includes(id) ? previous : [...previous, id]
-    )
-  }, [])
   const openModelApiSelector = React.useCallback(() => {
     setModelDropdownOpen(true)
   }, [setModelDropdownOpen])
@@ -2462,6 +1768,55 @@ export const PlaygroundForm = ({
     }
   }, [applyDiscussMediaPayload])
 
+  const applyDiscussWatchlistPayload = React.useCallback(
+    (
+      rawPayload: unknown,
+      options?: { clearAfterUse?: boolean }
+    ) => {
+      const payload = normalizeWatchlistChatHandoffPayload(rawPayload)
+      if (!payload) {
+        if (options?.clearAfterUse) {
+          void clearSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+        }
+        return
+      }
+      if (options?.clearAfterUse) {
+        void clearSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+      }
+      setChatMode("normal")
+      setRagMediaIds(null)
+      const hint = buildWatchlistChatHint(payload)
+      if (!hint) return
+      setMessageValue(hint, { collapseLarge: true, forceCollapse: true })
+      textAreaFocus()
+    },
+    [setChatMode, setMessageValue, setRagMediaIds, textAreaFocus]
+  )
+
+  // Seed composer when a watchlist item requests discussion
+  React.useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const payload = await getSetting(DISCUSS_WATCHLIST_PROMPT_SETTING)
+      if (cancelled || !payload) return
+      applyDiscussWatchlistPayload(payload, { clearAfterUse: true })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [applyDiscussWatchlistPayload])
+
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail
+      applyDiscussWatchlistPayload(detail)
+    }
+    window.addEventListener("tldw:discuss-watchlist", handler as any)
+    return () => {
+      window.removeEventListener("tldw:discuss-watchlist", handler as any)
+    }
+  }, [applyDiscussWatchlistPayload])
+
   React.useEffect(() => {
     textAreaFocus()
   }, [textAreaFocus])
@@ -2479,11 +1834,6 @@ export const PlaygroundForm = ({
     }
   }, [isConnectionReady])
 
-  React.useEffect(() => {
-    const next = queuedMessages.length > 0
-    setShowQueuedBanner((prev) => (prev === next ? prev : next))
-  }, [queuedMessages.length])
-
   const notifyImageAttachmentDisabled = React.useCallback(() => {
     notificationApi.warning({
       message: t(
@@ -2497,243 +1847,24 @@ export const PlaygroundForm = ({
     })
   }, [notificationApi, t])
 
-  const onFileInputChange = React.useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files && e.target.files[0]) {
-        const file = e.target.files[0]
+  const attachments = usePlaygroundAttachments({
+    chatMode,
+    setFieldValue: form.setFieldValue,
+    handleFileUpload,
+    notifyImageAttachmentDisabled
+  })
+  const {
+    inputRef,
+    fileInputRef,
+    onFileInputChange,
+    onInputChange,
+    handleImageUpload,
+    handleDocumentUpload,
+    useDroppedFiles
+  } = attachments
 
-        const isUnsupported = otherUnsupportedTypes.includes(file.type)
-
-        if (isUnsupported) {
-          console.error("File type not supported:", file.type)
-          return
-        }
-
-        const isImage = file.type.startsWith("image/")
-        if (isImage) {
-          if (chatMode === "rag") {
-            notifyImageAttachmentDisabled()
-            return
-          }
-          const base64 = await toBase64(file)
-          form.setFieldValue("image", base64)
-        } else {
-          await handleFileUpload(file)
-        }
-      }
-    },
-    [
-      chatMode,
-      form,
-      handleFileUpload,
-      notifyImageAttachmentDisabled,
-      otherUnsupportedTypes,
-      toBase64
-    ]
-  )
-
-  const onInputChange = React.useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement> | File) => {
-      if (e instanceof File) {
-        const isUnsupported = otherUnsupportedTypes.includes(e.type)
-
-        if (isUnsupported) {
-          console.error("File type not supported:", e.type)
-          return
-        }
-
-        const isImage = e.type.startsWith("image/")
-        if (isImage) {
-          if (chatMode === "rag") {
-            notifyImageAttachmentDisabled()
-            return
-          }
-          const base64 = await toBase64(e)
-          form.setFieldValue("image", base64)
-        } else {
-          await handleFileUpload(e)
-        }
-      } else {
-        if (e.target.files) {
-          onFileInputChange(e)
-        }
-      }
-    },
-    [
-      chatMode,
-      form,
-      handleFileUpload,
-      notifyImageAttachmentDisabled,
-      onFileInputChange,
-      otherUnsupportedTypes,
-      toBase64
-    ]
-  )
-
-  const syncCollapsedCaret = React.useCallback(
-    (options?: {
-      message?: string
-      range?: CollapsedRange | null
-      caret?: number
-    }) => {
-      if (!isMessageCollapsed) return
-      const pendingState = pendingCollapsedStateRef.current
-      const message =
-        options?.message ?? pendingState?.message ?? form.values.message ?? ""
-      const range = options?.range ?? pendingState?.range ?? collapsedRange
-      if (!range) return
-      if (!message) return
-      requestAnimationFrame(() => {
-        const el = textareaRef.current
-        if (!el) return
-        const meta = getCollapsedDisplayMeta(message, range)
-        const selection =
-          lastDisplaySelectionRef.current ??
-          (el.selectionStart !== null
-            ? {
-                start: el.selectionStart ?? 0,
-                end: el.selectionEnd ?? el.selectionStart ?? 0
-              }
-            : null)
-        const hasSelection =
-          selection ? selection.start !== selection.end : false
-        let caret =
-          options?.caret ?? pendingState?.caret ?? pendingCaretRef.current
-        if (caret === undefined || caret === null) {
-          if (selection && hasSelection) {
-            const start = Math.max(
-              0,
-              Math.min(selection.start, meta.display.length)
-            )
-            const end = Math.max(0, Math.min(selection.end, meta.display.length))
-            el.focus()
-            el.setSelectionRange(start, end)
-            pendingCollapsedStateRef.current = null
-            return
-          }
-          if (selection) {
-            const displayCaret = Math.max(
-              0,
-              Math.min(selection.start, meta.display.length)
-            )
-            const prefer =
-              displayCaret > meta.labelStart && displayCaret < meta.labelEnd
-                ? "after"
-                : undefined
-            caret = getMessageCaretFromDisplay(displayCaret, meta, { prefer })
-          } else {
-            caret = meta.messageLength
-          }
-        }
-        if (caret > meta.rangeStart && caret < meta.rangeEnd) {
-          caret = meta.rangeEnd
-        }
-        caret = Math.max(0, Math.min(caret, meta.messageLength))
-        pendingCaretRef.current = caret
-        pendingCollapsedStateRef.current = null
-        const displayCaret = getDisplayCaretFromMessage(caret, meta)
-        el.focus()
-        el.setSelectionRange(displayCaret, displayCaret)
-      })
-    },
-    [
-      collapsedRange,
-      form.values.message,
-      getDisplayCaretFromMessage,
-      getCollapsedDisplayMeta,
-      isMessageCollapsed,
-      textareaRef
-    ]
-  )
-
-  React.useEffect(() => {
-    if (!isMessageCollapsed || !collapsedRange) return
-    if (!pendingCollapsedStateRef.current && pendingCaretRef.current === null) {
-      const el = textareaRef.current
-      if (el) {
-        lastDisplaySelectionRef.current = {
-          start: el.selectionStart ?? 0,
-          end: el.selectionEnd ?? el.selectionStart ?? 0
-        }
-      }
-    }
-    syncCollapsedCaret()
-  }, [
-    collapsedRange,
-    form.values.message,
-    isMessageCollapsed,
-    syncCollapsedCaret
-  ])
-
-  const commitCollapsedEdit = React.useCallback(
-    (
-      nextValue: string,
-      nextCaret: number,
-      nextRange: CollapsedRange | null
-    ) => {
-      const shouldCollapse = nextValue.length > PASTED_TEXT_CHAR_LIMIT
-      const range = shouldCollapse
-        ? normalizeCollapsedRange(
-            nextRange ?? { start: 0, end: nextValue.length },
-            nextValue.length
-          )
-        : null
-      pendingCaretRef.current = nextCaret
-      pendingCollapsedStateRef.current = range
-        ? { message: nextValue, range, caret: nextCaret }
-        : null
-      setMessageValue(nextValue, {
-        collapseLarge: shouldCollapse,
-        forceCollapse: shouldCollapse,
-        collapsedRange: range ?? undefined
-      })
-      if (range) {
-        syncCollapsedCaret({ message: nextValue, range, caret: nextCaret })
-        return
-      }
-      requestAnimationFrame(() => {
-        const el = textareaRef.current
-        if (!el) return
-        el.focus()
-        el.setSelectionRange(nextCaret, nextCaret)
-      })
-    },
-    [normalizeCollapsedRange, setMessageValue, syncCollapsedCaret, textareaRef]
-  )
-
-  const replaceCollapsedRange = React.useCallback(
-    (
-      currentValue: string,
-      meta: ReturnType<typeof getCollapsedDisplayMeta>,
-      editStart: number,
-      editEnd: number,
-      replacement: string
-    ) => {
-      const safeStart = Math.max(0, Math.min(editStart, currentValue.length))
-      const safeEnd = Math.max(safeStart, Math.min(editEnd, currentValue.length))
-      const nextValue =
-        currentValue.slice(0, safeStart) +
-        replacement +
-        currentValue.slice(safeEnd)
-      const nextCaret = safeStart + replacement.length
-      const overlapsBlock =
-        safeStart < meta.rangeEnd && safeEnd > meta.rangeStart
-      if (overlapsBlock) {
-        commitCollapsedEdit(nextValue, nextCaret, null)
-        return
-      }
-      const delta = replacement.length - (safeEnd - safeStart)
-      const nextRange =
-        safeEnd <= meta.rangeStart
-          ? {
-              start: meta.rangeStart + delta,
-              end: meta.rangeEnd + delta
-            }
-          : { start: meta.rangeStart, end: meta.rangeEnd }
-      commitCollapsedEdit(nextValue, nextCaret, nextRange)
-    },
-    [commitCollapsedEdit]
-  )
+  // Process dropped files
+  useDroppedFiles(droppedFiles)
 
   const handlePaste = React.useCallback(
     async (e: React.ClipboardEvent) => {
@@ -2871,63 +2002,12 @@ export const PlaygroundForm = ({
       textareaRef
     ]
   )
-  React.useEffect(() => {
-    if (droppedFiles.length === 0) return
-    let cancelled = false
-    const run = async () => {
-      for (const file of droppedFiles) {
-        if (cancelled) return
-        if (processedFilesRef.current.has(file)) continue
-        try {
-          processedFilesRef.current.add(file)
-          await onInputChange(file)
-        } catch (error) {
-          processedFilesRef.current.delete(file)
-          console.error("Failed to process dropped file:", file.name, error)
-        }
-      }
-    }
-    void run()
-    return () => {
-      cancelled = true
-    }
-  }, [droppedFiles, onInputChange])
-
-  const handleDisconnectedFocus = () => {
+  const handleDisconnectedFocus = React.useCallback(() => {
     if (!isConnectionReady && !hasShownConnectBanner) {
       setShowConnectBanner(true)
       setHasShownConnectBanner(true)
     }
-  }
-
-  // --- ComposerTextarea callback handlers (extracted from inline JSX) ---
-  const handleCompositionStart = React.useCallback(() => {
-    if (!isFirefoxTarget) {
-      setTyping(true)
-    }
-  }, [])
-
-  const handleCompositionEnd = React.useCallback(() => {
-    if (!isFirefoxTarget) {
-      setTyping(false)
-    }
-  }, [])
-
-  const handleTextareaMouseDown = React.useCallback(() => {
-    if (isMessageCollapsed) {
-      pointerDownRef.current = true
-      selectionFromPointerRef.current = true
-    }
-  }, [isMessageCollapsed])
-
-  const handleTextareaMouseUp = React.useCallback(() => {
-    pointerDownRef.current = false
-    if (selectionFromPointerRef.current) {
-      requestAnimationFrame(() => {
-        selectionFromPointerRef.current = false
-      })
-    }
-  }, [])
+  }, [hasShownConnectBanner, isConnectionReady])
 
   const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (handleCollapsedKeyDown(e)) return
@@ -2950,100 +2030,6 @@ export const PlaygroundForm = ({
     syncCollapsedCaret()
   }, [handleDisconnectedFocus, isMessageCollapsed, syncCollapsedCaret, textareaRef])
 
-  const handleTextareaChange = React.useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const endPerf = markComposerPerf("input:textarea-change")
-      try {
-        if (isMessageCollapsed) return
-        form.getInputProps("message").onChange(e)
-        if (tabMentionsEnabled && textareaRef.current) {
-          handleTextChange(
-            e.target.value,
-            textareaRef.current.selectionStart || 0
-          )
-        }
-      } finally {
-        endPerf()
-      }
-    },
-    [
-      isMessageCollapsed,
-      form,
-      tabMentionsEnabled,
-      textareaRef,
-      handleTextChange,
-      markComposerPerf
-    ]
-  )
-
-  const handleTextareaSelect = React.useCallback(() => {
-    const textarea = textareaRef.current
-    if (textarea) {
-      lastDisplaySelectionRef.current = {
-        start: textarea.selectionStart ?? 0,
-        end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
-      }
-    }
-    if (isMessageCollapsed && collapsedRange) {
-      const message = form.values.message || ""
-      if (!message || !textarea) return
-      const meta =
-        collapsedDisplayMeta ??
-        getCollapsedDisplayMeta(message, collapsedRange)
-      const selectionStart = textarea.selectionStart ?? meta.labelStart
-      const selectionEnd = textarea.selectionEnd ?? selectionStart
-      const displayStart = Math.min(selectionStart, selectionEnd)
-      const displayEnd = Math.max(selectionStart, selectionEnd)
-      const hasSelection = displayStart !== displayEnd
-      const selectionTouchesLabel =
-        displayStart < meta.labelEnd && displayEnd > meta.labelStart
-      const fromPointer = selectionFromPointerRef.current
-      selectionFromPointerRef.current = false
-      if (hasSelection) {
-        pendingCaretRef.current = null
-        return
-      }
-      const caretInsideLabel =
-        displayStart > meta.labelStart && displayStart < meta.labelEnd
-      if (selectionTouchesLabel && fromPointer && caretInsideLabel) {
-        pendingCaretRef.current = meta.rangeEnd
-        expandLargeMessage({ force: true })
-        return
-      }
-      const prefer =
-        caretInsideLabel &&
-        (pendingCaretRef.current ?? meta.rangeEnd) <= meta.rangeStart
-          ? "before"
-          : "after"
-      const caret = getMessageCaretFromDisplay(displayStart, meta, {
-        prefer: caretInsideLabel ? prefer : undefined
-      })
-      pendingCaretRef.current = caret
-      if (caretInsideLabel) {
-        syncCollapsedCaret({ caret })
-      }
-      return
-    }
-    if (tabMentionsEnabled && textareaRef.current) {
-      handleTextChange(
-        textareaRef.current.value,
-        textareaRef.current.selectionStart || 0
-      )
-    }
-  }, [
-    textareaRef,
-    isMessageCollapsed,
-    collapsedRange,
-    form.values.message,
-    collapsedDisplayMeta,
-    getCollapsedDisplayMeta,
-    expandLargeMessage,
-    getMessageCaretFromDisplay,
-    syncCollapsedCaret,
-    tabMentionsEnabled,
-    handleTextChange
-  ])
-
   const handleMentionSelect = React.useCallback(
     (tab: any) =>
       insertMention(tab, form.values.message, (value: string) =>
@@ -3065,23 +2051,6 @@ export const PlaygroundForm = ({
     },
     [setMessageValue, textAreaFocus, textareaRef]
   )
-  const submitFormRef = React.useRef<
-    (options?: { ignorePinnedResults?: boolean }) => void
-  >(() => undefined)
-
-  const handleKnowledgeAsk = React.useCallback(
-    (text: string, options?: { ignorePinnedResults?: boolean }) => {
-      const trimmed = text.trim()
-      if (!trimmed) return
-      setMessageValue(trimmed, { collapseLarge: true })
-      queueMicrotask(() =>
-        submitFormRef.current({
-          ignorePinnedResults: options?.ignorePinnedResults
-        })
-      )
-    },
-    [setMessageValue]
-  )
   const handleKnowledgePanelOpenChange = React.useCallback(
     (nextOpen: boolean) => {
       setContextToolsOpen(nextOpen)
@@ -3095,204 +2064,52 @@ export const PlaygroundForm = ({
     fileInputRef.current?.click()
   }, [])
 
-  // Match sidepanel textarea sizing: Pro mode gets more space
-  const textareaMaxHeight = isProMode ? 160 : 120
-  useDynamicTextareaSize(textareaRef, messageDisplayValue, textareaMaxHeight)
-
-  const {
-    transcript,
-    isListening,
-    resetTranscript,
-    start: startListening,
-    stop: stopSpeechRecognition,
-    supported: browserSupportsSpeechRecognition
-  } = useSpeechRecognition({
-    autoStop: autoSubmitVoiceMessage,
-    autoStopTimeout,
-    onEnd: async () => {
-      if (autoSubmitVoiceMessage) {
-        submitForm()
-      }
-    }
-  })
-  const dictationDiagnosticsSnapshotRef = React.useRef<{
-    requestedMode: DictationModePreference
-    resolvedMode: DictationResolvedMode
-    speechAvailable: boolean
-    speechUsesServer: boolean
-    fallbackReason: DictationErrorClass | null
-  }>({
-    requestedMode: "auto",
-    resolvedMode: "unavailable",
-    speechAvailable: false,
-    speechUsesServer: false,
-    fallbackReason: null
-  })
-  const serverDictationErrorBridgeRef = React.useRef<
-    (error: unknown) => DictationServerErrorTransition
-  >(
-    () => ({
-      errorClass: "unknown_error",
-      appliedFallback: false,
-      requestedMode: "auto",
-      resolvedModeBeforeError: "unavailable",
-      speechAvailableBeforeError: false,
-      speechUsesServerBeforeError: false,
-      browserSupportsSpeechRecognition: false,
-      autoFallbackEnabled: false
-    })
-  )
-  const serverDictationSuccessBridgeRef = React.useRef<() => void>(() => {})
-  const handleServerDictationError = React.useCallback((error: unknown) => {
-    const transition = serverDictationErrorBridgeRef.current(error)
-    emitDictationDiagnostics({
-      surface: "playground",
-      kind: "server_error",
-      requestedMode: transition.requestedMode,
-      resolvedMode: transition.resolvedModeBeforeError,
-      speechAvailable: transition.speechAvailableBeforeError,
-      speechUsesServer: transition.speechUsesServerBeforeError,
-      errorClass: transition.errorClass,
-      fallbackApplied: transition.appliedFallback,
-      fallbackReason: transition.appliedFallback ? transition.errorClass : null
-    })
-  }, [])
-  const handleServerDictationSuccess = React.useCallback(() => {
-    serverDictationSuccessBridgeRef.current()
-    const snapshot = dictationDiagnosticsSnapshotRef.current
-    emitDictationDiagnostics({
-      surface: "playground",
-      kind: "server_success",
-      requestedMode: snapshot.requestedMode,
-      resolvedMode: snapshot.resolvedMode,
-      speechAvailable: snapshot.speechAvailable,
-      speechUsesServer: snapshot.speechUsesServer,
-      fallbackReason: snapshot.fallbackReason
-    })
-  }, [])
-  const sttSettings = React.useMemo<SttSettings>(
-    () => ({
-      model: sttModel,
-      temperature: sttTemperature,
-      task: sttTask,
-      responseFormat: sttResponseFormat,
-      timestampGranularities: sttTimestampGranularities,
-      prompt: sttPrompt,
-      useSegmentation: sttUseSegmentation,
-      segK: sttSegK,
-      segMinSegmentSize: sttSegMinSegmentSize,
-      segLambdaBalance: sttSegLambdaBalance,
-      segUtteranceExpansionWidth: sttSegUtteranceExpansionWidth,
-      segEmbeddingsProvider: sttSegEmbeddingsProvider,
-      segEmbeddingsModel: sttSegEmbeddingsModel
-    }),
-    [
-      sttModel,
-      sttPrompt,
-      sttResponseFormat,
-      sttSegEmbeddingsModel,
-      sttSegEmbeddingsProvider,
-      sttSegK,
-      sttSegLambdaBalance,
-      sttSegMinSegmentSize,
-      sttSegUtteranceExpansionWidth,
-      sttTask,
-      sttTemperature,
-      sttTimestampGranularities,
-      sttUseSegmentation
-    ]
-  )
-  const {
-    isServerDictating,
-    startServerDictation,
-    stopServerDictation
-  } = useServerDictation({
+  const voiceChatHook = usePlaygroundVoiceChat({
+    voiceChatAvailable,
+    voiceChatEnabled,
+    setVoiceChatEnabled,
+    voiceChat,
+    voiceChatMessages,
     canUseServerStt,
-    speechToTextLanguage,
-    sttSettings,
-    onTranscript: (text) => {
-      setMessageValue(text, { collapseLarge: true, forceCollapse: true })
-    },
-    onError: handleServerDictationError,
-    onSuccess: handleServerDictationSuccess
-  })
-  const { sendWhenEnter, setSendWhenEnter } = useWebUI()
-  const dictationStrategy = useDictationStrategy({
-    canUseServerStt,
-    browserSupportsSpeechRecognition,
-    isServerDictating,
-    isBrowserDictating: isListening,
-    modeOverride: dictationModeOverride,
-    autoFallbackEnabled: Boolean(dictationAutoFallbackEnabled)
-  })
-  const speechAvailable = dictationStrategy.speechAvailable
-  const speechUsesServer = dictationStrategy.speechUsesServer
-  const dictationToggleIntent = dictationStrategy.toggleIntent
-  dictationDiagnosticsSnapshotRef.current = {
-    requestedMode: dictationStrategy.requestedMode,
-    resolvedMode: dictationStrategy.resolvedMode,
-    speechAvailable: dictationStrategy.speechAvailable,
-    speechUsesServer: dictationStrategy.speechUsesServer,
-    fallbackReason: dictationStrategy.autoFallbackErrorClass
-  }
-  serverDictationErrorBridgeRef.current = dictationStrategy.recordServerError
-  serverDictationSuccessBridgeRef.current = dictationStrategy.recordServerSuccess
-
-  const speechTooltipText = React.useMemo(() => {
-    if (!speechAvailable) {
-      return t(
-        "playground:actions.speechUnavailableBody",
-        "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-      ) as string
-    }
-    if (dictationStrategy.autoFallbackActive) {
-      return t(
-        "playground:tooltip.speechToTextBrowser",
-        "Dictation via browser speech recognition"
-      ) as string
-    }
-    if (speechUsesServer) {
-      const sttModelLabel = sttModel || "whisper-1"
-      const sttTaskLabel = sttTask === "translate" ? "translate" : "transcribe"
-      const sttFormatLabel = (sttResponseFormat || "json").toUpperCase()
-      const speechDetails = withTemplateFallback(
-        t("playground:tooltip.speechToTextDetails", "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.", {
-          model: sttModelLabel,
-          task: sttTaskLabel,
-          format: sttFormatLabel
-        } as any),
-        `Uses ${sttModelLabel} · ${sttTaskLabel} · ${sttFormatLabel}. Configure in Settings -> General -> Speech-to-Text.`
-      )
-      return (
-        (t("playground:tooltip.speechToTextServer", "Dictation via your tldw server") as string) +
-        " " +
-        speechDetails
-      )
-    }
-    return t("playground:tooltip.speechToTextBrowser", "Dictation via browser speech recognition") as string
-  }, [
-    dictationStrategy.autoFallbackActive,
-    speechAvailable,
-    speechUsesServer,
     sttModel,
+    sttTemperature,
     sttTask,
     sttResponseFormat,
+    sttTimestampGranularities,
+    sttPrompt,
+    sttUseSegmentation,
+    sttSegK,
+    sttSegMinSegmentSize,
+    sttSegLambdaBalance,
+    sttSegUtteranceExpansionWidth,
+    sttSegEmbeddingsProvider,
+    sttSegEmbeddingsModel,
+    dictationModeOverride,
+    dictationAutoFallbackEnabled,
+    autoStopTimeout,
+    autoSubmitVoiceMessage,
+    speechToTextLanguage,
+    setMessageValue,
+    submitForm: () => voiceChatSubmitFormRef.current(),
+    notificationApi,
+    isSending,
+    isListening: false,
+    isServerDictating: false,
     t
-  ])
-
-  const handleTemplateSelect = React.useCallback(
-    (template: { content: string }) => {
-      setSystemPrompt(template.content)
-      setSelectedSystemPrompt(undefined)
-    },
-    [setSystemPrompt, setSelectedSystemPrompt]
-  )
-
-  React.useEffect(() => {
-    if (isListening) {
-      setMessageValue(transcript, { collapseLarge: true, forceCollapse: true })
-    }
-  }, [transcript, isListening, setMessageValue])
+  })
+  const {
+    isListening,
+    browserSupportsSpeechRecognition,
+    isServerDictating,
+    speechAvailable,
+    speechUsesServer,
+    voiceChatStatusLabel,
+    speechTooltipText,
+    handleVoiceChatToggle,
+    handleDictationToggle,
+    stopListening
+  } = voiceChatHook
+  const { sendWhenEnter, setSendWhenEnter } = useWebUI()
 
   React.useEffect(() => {
     if (!selectedQuickPrompt) {
@@ -3301,16 +2118,10 @@ export const PlaygroundForm = ({
 
     const currentMessage = form.values.message || ""
     const promptText = selectedQuickPrompt
-    const isFollowUpResearchPrompt =
-      promptText === "Follow up on this research" ||
-      promptText.startsWith(FOLLOW_UP_RESEARCH_PROMPT_PREFIX)
 
     const applyOverwrite = () => {
       const word = getVariable(promptText)
       setMessageValue(promptText, { collapseLarge: true })
-      if (isFollowUpResearchPrompt) {
-        textAreaFocus()
-      }
       if (word) {
         textareaRef.current?.focus()
         const interval = setTimeout(() => {
@@ -3331,9 +2142,6 @@ export const PlaygroundForm = ({
           ? `${currentMessage}\n\n${promptText}`
           : promptText
       setMessageValue(next, { collapseLarge: true })
-      if (isFollowUpResearchPrompt) {
-        textAreaFocus()
-      }
       setSelectedQuickPrompt(null)
     }
 
@@ -3371,7 +2179,6 @@ export const PlaygroundForm = ({
     setMessageValue,
     setSelectedQuickPrompt,
     t,
-    textAreaFocus,
     textareaRef
   ])
 
@@ -3396,54 +2203,16 @@ export const PlaygroundForm = ({
     }
   })
 
-  const buildPinnedMessage = React.useCallback(
-    (message: string, options?: { ignorePinnedResults?: boolean }) => {
-      if (options?.ignorePinnedResults) return message
-      if (fileRetrievalEnabled) return message
-      if (!ragPinnedResults || ragPinnedResults.length === 0) return message
-      const pinnedText = formatPinnedResults(ragPinnedResults, "markdown")
-      return message ? `${message}\n\n${pinnedText}` : pinnedText
-    },
-    [fileRetrievalEnabled, ragPinnedResults]
-  )
-  const validateSelectedChatModelsAvailability = React.useCallback(
-    (modelsToCheck: string[]) => {
-      const unavailableModel = findUnavailableChatModel(
-        modelsToCheck,
-        availableChatModelIds
-      )
-      if (!unavailableModel) return true
-      form.setFieldError(
-        "message",
-        t(
-          "playground:composer.validationModelUnavailableInline",
-          "Selected model is not available on this server. Refresh models or choose a different model."
-        )
-      )
-      return false
-    },
-    [availableChatModelIds, form, t]
-  )
-
-  const resolveAttachedResearchRequestContext = React.useCallback(
-    (options?: {
-      isImageCommand?: boolean
-      compareModeActive?: boolean
-      imageGenerationSource?: "slash-command" | "generate-modal" | "message-regen"
-    }) => {
-      if (!attachedResearchContext) return undefined
-      if (options?.isImageCommand) return undefined
-      if (options?.compareModeActive) return undefined
-      if (options?.imageGenerationSource) return undefined
-      return toChatResearchContext(attachedResearchContext)
-    },
-    [attachedResearchContext]
-  )
-
-  const followUpResearchDraftQuery = React.useMemo(
-    () => form.values.message.trim(),
-    [form.values.message]
-  )
+  const followUpResearchDraftQuery = React.useMemo(() => {
+    const trimmed = form.values.message.trim()
+    if (!trimmed.startsWith(FOLLOW_UP_RESEARCH_PROMPT_PREFIX)) {
+      return trimmed
+    }
+    const unwrapped = trimmed
+      .slice(FOLLOW_UP_RESEARCH_PROMPT_PREFIX.length)
+      .trim()
+    return unwrapped || trimmed
+  }, [form.values.message])
   const canLaunchFollowUpResearch =
     !temporaryChat &&
     Boolean(serverChatId) &&
@@ -3463,18 +2232,17 @@ export const PlaygroundForm = ({
   const handleStartFollowUpResearch = React.useCallback(async () => {
     if (followUpResearchPendingRef.current) return
     if (!serverChatId || temporaryChat) return
-    const query = form.values.message.trim()
-    if (!query) return
+    if (!followUpResearchDraftQuery) return
 
     const payload: ResearchRunCreateRequest = {
-      query,
+      query: followUpResearchDraftQuery,
       source_policy: "balanced",
       autonomy_mode: "checkpointed",
       chat_handoff: {
         chat_id: serverChatId
       },
       follow_up: {
-        question: query,
+        question: followUpResearchDraftQuery,
         background:
           includeAttachedResearchAsBackground && attachedResearchContext
             ? buildFollowUpResearchBackground(attachedResearchContext)
@@ -3490,7 +2258,7 @@ export const PlaygroundForm = ({
         queryKey: ["playground:chat-linked-research-runs", serverChatId]
       })
       setFollowUpResearchModalOpen(false)
-      notificationApi.success({
+      notificationApi.success?.({
         message: t(
           "playground:actions.followUpResearchStarted",
           "Follow-up research started."
@@ -3510,7 +2278,7 @@ export const PlaygroundForm = ({
     }
   }, [
     attachedResearchContext,
-    form.values.message,
+    followUpResearchDraftQuery,
     includeAttachedResearchAsBackground,
     notificationApi,
     queryClient,
@@ -3519,631 +2287,183 @@ export const PlaygroundForm = ({
     temporaryChat
   ])
 
-  const submitForm = (options?: { ignorePinnedResults?: boolean }) => {
-    form.onSubmit(async (value) => {
-      const intent = resolveSubmissionIntent(value.message)
-      if (intent.handled && !intent.invalidImageCommand) {
-        form.setFieldValue("message", intent.message)
-      }
-      if (intent.invalidImageCommand) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description: intent.imageCommandMissingProvider
-            ? t(
-                "imageCommand.missingProvider",
-                "Pick an Image provider in More tools or use /generate-image:<provider> <prompt>."
-              )
-            : t(
-                "imageCommand.invalidUsage",
-                "Use /generate-image:<provider> <prompt>."
-              )
-        })
-        return
-      }
-      const nextMessage = intent.message
-      const combinedMessage = intent.isImageCommand
-        ? nextMessage
-        : buildPinnedMessage(nextMessage, options)
-      const trimmed = combinedMessage.trim()
-      if (
-        !intent.isImageCommand &&
-        trimmed.length === 0 &&
-        value.image.length === 0 &&
-        selectedDocuments.length === 0 &&
-        uploadedFiles.length === 0
-      ) {
-        return
-      }
-      if (!isConnectionReady) {
-        addQueuedMessage({
-          message: trimmed,
-          image: value.image
-        })
-        form.reset()
-        clearSelectedDocuments()
-        clearUploadedFiles()
-        return
-      }
-      const defaultEM = await defaultEmbeddingModelForRag()
-      if (!intent.isImageCommand) {
-        if (!compareModeActive) {
-          const normalizedSelectedModel = normalizeChatModelId(selectedModel)
-          if (!normalizedSelectedModel) {
-            form.setFieldError("message", t("formError.noModel"))
-            return
-          }
-          if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
-            return
-          }
-        } else if (
-          !compareSelectedModels ||
-          compareSelectedModels.length < 2
-        ) {
-          form.setFieldError(
-            "message",
-            t(
-              "playground:composer.validationCompareMinModelsInline",
-              "Select at least two models for Compare mode."
-            )
-          )
-          return
-        } else if (
-          !validateSelectedChatModelsAvailability(compareSelectedModels)
-        ) {
-          return
-        }
-        if (
-          compareModeActive &&
-          value.image.length > 0 &&
-          !compareModelsSupportCapability(compareSelectedModels, "vision")
-        ) {
-          form.setFieldError(
-            "message",
-            t(
-              "playground:composer.validationCompareVisionInline",
-              "One or more selected compare models do not support image input."
-            )
-          )
-          return
-        }
-      }
+  const queueMgmt = usePlaygroundQueueManagement({
+    composerModels,
+    isConnectionReady,
+    isSending,
+    selectedModel,
+    chatMode,
+    webSearch,
+    compareMode,
+    compareModeActive,
+    compareSelectedModels,
+    selectedSystemPrompt,
+    selectedQuickPrompt,
+    toolChoice,
+    useOCR,
+    selectedDocuments,
+    uploadedFiles,
+    contextFiles,
+    documentContext,
+    queuedMessages,
+    setQueuedMessages,
+    historyId,
+    serverChatId,
+    conversationTokenCount,
+    resolvedMaxContext,
+    estimateTokensForText: estimateTokensForText as any,
+    characterContextTokenEstimate,
+    pinnedSourceTokenEstimate,
+    currentContextSnapshot,
+    setLastSubmittedContext,
+    setSelectedModel,
+    setChatMode,
+    setWebSearch,
+    setCompareMode,
+    setCompareSelectedModels,
+    setSelectedSystemPrompt,
+    setSelectedQuickPrompt,
+    setToolChoice,
+    setUseOCR,
+    compareModelsSupportCapability,
+    sendMessage,
+    stopStreamingRequest,
+    form,
+    clearSelectedDocuments,
+    clearUploadedFiles,
+    textAreaFocus,
+    notificationApi,
+    t
+  })
+  const {
+    availableChatModelIds,
+    isQueuedDispatchBlockedByComposerState,
+    queuedRequestActions,
+    queueSubmission,
+    cancelCurrentAndRunDisabledReason,
+    handleRunQueuedRequest,
+    handleRunNextQueuedRequest,
+    validateSelectedChatModelsAvailability
+  } = queueMgmt
 
-      if (!intent.isImageCommand && webSearch) {
-        const simpleSearch = await getIsSimpleInternetSearch()
-        if (!defaultEM && !simpleSearch) {
-          form.setFieldError("message", t("formError.noEmbeddingModel"))
-          return
-        }
-      }
-      if (intent.isImageCommand && trimmed.length === 0) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description: t(
-            "imageCommand.missingPrompt",
-            "Image prompt is required."
-          )
-        })
-        return
-      }
-      form.reset()
-      clearSelectedDocuments()
-      clearUploadedFiles()
-      textAreaFocus()
-      const projectedForSubmission = projectTokenBudget({
-        conversationTokens: conversationTokenCount,
-        draftTokens: estimateTokensForText(trimmed),
-        maxTokens: resolvedMaxContext
-      })
-      if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
-        notificationApi.warning({
-          message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
-          description: projectedForSubmission.isOverLimit
-            ? t(
-                "playground:tokens.preSendOverLimit",
-                "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
-              )
-            : t(
-                "playground:tokens.preSendNearLimit",
-                "Projected send is near the context window limit."
-              )
-        })
-      }
-      setLastSubmittedContext(currentContextSnapshot)
-      await sendMessage({
-        image: intent.isImageCommand ? "" : value.image,
-        message: trimmed,
-        docs: intent.isImageCommand
-          ? []
-          : selectedDocuments.map((doc) => ({
-              type: "tab",
-              tabId: doc.id,
-              title: doc.title,
-              url: doc.url,
-              favIconUrl: doc.favIconUrl
-            })),
-        imageBackendOverride: intent.isImageCommand
-          ? intent.imageBackendOverride
-          : undefined,
-        userMessageType: intent.isImageCommand
-          ? IMAGE_GENERATION_USER_MESSAGE_TYPE
-          : undefined,
-        assistantMessageType: intent.isImageCommand
-          ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
-          : undefined,
-        imageGenerationSource: intent.isImageCommand
-          ? "slash-command"
-          : undefined,
-        researchContext: resolveAttachedResearchRequestContext({
-          isImageCommand: intent.isImageCommand,
-          compareModeActive
-        })
-      })
-    })()
-  }
-  React.useEffect(() => {
-    submitFormRef.current = submitForm
-  }, [submitForm])
+  const handleToggleWebSearch = React.useCallback(() => {
+    setWebSearch(!webSearch)
+  }, [setWebSearch, webSearch])
+  const handleOpenModelSettings = React.useCallback(() => {
+    setOpenModelSettings(true)
+  }, [setOpenModelSettings])
+  const {
+    showSlashMenu,
+    slashActiveIndex,
+    setSlashActiveIndex,
+    filteredSlashCommands,
+    resolveSubmissionIntent,
+    activeImageCommand,
+    handleSlashCommandSelect: slashHandleSelect
+  } = useSlashCommands({
+    chatMode,
+    setChatMode,
+    webSearch,
+    setWebSearch,
+    handleImageUpload,
+    imageBackendDefaultTrimmed,
+    imageBackendLabel,
+    setOpenModelSettings,
+    currentMessage: form.values.message
+  })
 
-  const submitFormFromQueued = (message: string, image: string) => {
-    if (!isConnectionReady) {
-      return
-    }
-    form.onSubmit(async () => {
-      const intent = resolveSubmissionIntent(message)
-      if (intent.invalidImageCommand) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description: intent.imageCommandMissingProvider
-            ? t(
-                "imageCommand.missingProvider",
-                "Pick an Image provider in More tools or use /generate-image:<provider> <prompt>."
-              )
-            : t(
-                "imageCommand.invalidUsage",
-                "Use /generate-image:<provider> <prompt>."
-              )
-        })
-        return
-      }
-      const nextMessage = intent.message
-      const combinedMessage = intent.isImageCommand
-        ? nextMessage
-        : buildPinnedMessage(nextMessage)
-      const trimmed = combinedMessage.trim()
-      if (
-        !intent.isImageCommand &&
-        trimmed.length === 0 &&
-        image.length === 0 &&
-        selectedDocuments.length === 0 &&
-        uploadedFiles.length === 0
-      ) {
-        return
-      }
-      const defaultEM = await defaultEmbeddingModelForRag()
-      if (!intent.isImageCommand) {
-        if (!compareModeActive) {
-          const normalizedSelectedModel = normalizeChatModelId(selectedModel)
-          if (!normalizedSelectedModel) {
-            form.setFieldError("message", t("formError.noModel"))
-            return
-          }
-          if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
-            return
-          }
-        } else if (
-          !compareSelectedModels ||
-          compareSelectedModels.length < 2
-        ) {
-          form.setFieldError(
-            "message",
-            t(
-              "playground:composer.validationCompareMinModelsInline",
-              "Select at least two models for Compare mode."
-            )
-          )
-          return
-        } else if (
-          !validateSelectedChatModelsAvailability(compareSelectedModels)
-        ) {
-          return
-        }
-        if (
-          compareModeActive &&
-          image.length > 0 &&
-          !compareModelsSupportCapability(compareSelectedModels, "vision")
-        ) {
-          form.setFieldError(
-            "message",
-            t(
-              "playground:composer.validationCompareVisionInline",
-              "One or more selected compare models do not support image input."
-            )
-          )
-          return
-        }
-      }
-      if (!intent.isImageCommand && webSearch) {
-        const simpleSearch = await getIsSimpleInternetSearch()
-        if (!defaultEM && !simpleSearch) {
-          form.setFieldError("message", t("formError.noEmbeddingModel"))
-          return
-        }
-      }
-      if (intent.isImageCommand && trimmed.length === 0) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description: t(
-            "imageCommand.missingPrompt",
-            "Image prompt is required."
-          )
-        })
-        return
-      }
-      form.reset()
-      clearSelectedDocuments()
-      clearUploadedFiles()
-      textAreaFocus()
-      const projectedForSubmission = projectTokenBudget({
-        conversationTokens: conversationTokenCount,
-        draftTokens: estimateTokensForText(trimmed),
-        maxTokens: resolvedMaxContext
-      })
-      if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
-        notificationApi.warning({
-          message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
-          description: projectedForSubmission.isOverLimit
-            ? t(
-                "playground:tokens.preSendOverLimit",
-                "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
-              )
-            : t(
-                "playground:tokens.preSendNearLimit",
-                "Projected send is near the context window limit."
-              )
-        })
-      }
-      setLastSubmittedContext(currentContextSnapshot)
-      await sendMessage({
-        image: intent.isImageCommand ? "" : image,
-        message: trimmed,
-        docs: intent.isImageCommand
-          ? []
-          : selectedDocuments.map((doc) => ({
-              type: "tab",
-              tabId: doc.id,
-              title: doc.title,
-              url: doc.url,
-              favIconUrl: doc.favIconUrl
-            })),
-        imageBackendOverride: intent.isImageCommand
-          ? intent.imageBackendOverride
-          : undefined,
-        userMessageType: intent.isImageCommand
-          ? IMAGE_GENERATION_USER_MESSAGE_TYPE
-          : undefined,
-        assistantMessageType: intent.isImageCommand
-          ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
-          : undefined,
-        imageGenerationSource: intent.isImageCommand
-          ? "slash-command"
-          : undefined,
-        researchContext: resolveAttachedResearchRequestContext({
-          isImageCommand: intent.isImageCommand,
-          compareModeActive
-        })
-      })
-    })()
-  }
-
-  const privateChatLocked = temporaryChat && history.length > 0
-
-  const handleToggleTemporaryChat = React.useCallback(
-    (next: boolean) => {
-      if (isFireFoxPrivateMode) {
-        notificationApi.error({
-          message: t(
-            "common:privateModeSaveErrorTitle",
-            "tldw Assistant can't save data"
-          ),
-          description: t(
-            "playground:errors.privateModeDescription",
-            "Firefox Private Mode does not support saving chat. Temporary chat is enabled by default. More fixes coming soon."
-          )
-        })
-        return
-      }
-
-      const hasExistingHistory = history.length > 0
-
-      if (!next && temporaryChat && hasExistingHistory) {
-        notificationApi.warning({
-          message: t(
-            "playground:composer.privateChatLockedTitle",
-            "Private chat is locked"
-          ),
-          description: t(
-            "playground:composer.privateChatLockedBody",
-            "Start a new chat to switch back to saved conversations."
-          )
-        })
-        return
-      }
-
-      // Show confirmation when enabling temporary mode with existing messages
-      if (next && hasExistingHistory) {
-        Modal.confirm({
-          title: t(
-            "playground:composer.tempChatConfirmTitle",
-            "Enable temporary mode?"
-          ),
-          content: t(
-            "playground:composer.tempChatConfirmContent",
-            "This will clear your current conversation. Messages won't be saved."
-          ),
-          okText: t("common:confirm", "Confirm"),
-          cancelText: t("common:cancel", "Cancel"),
-          onOk: () => {
-            setTemporaryChat(next)
-            clearChat()
-            const modeLabel = getPersistenceModeLabel(
-              t,
-              next,
-              isConnectionReady,
-              serverChatId
-            )
-            notificationApi.info({
-              message: modeLabel,
-              placement: "bottomRight",
-              duration: 2.5
-            })
-          }
-        })
-        return
-      }
-
-      // No confirmation needed when disabling temporary mode or no existing messages
-      setTemporaryChat(next)
-      if (hasExistingHistory) {
-        clearChat()
-      }
-
-      const modeLabel = getPersistenceModeLabel(
-        t,
-        next,
-        isConnectionReady,
-        serverChatId
-      )
-
-      notificationApi.info({
-        message: modeLabel,
-        placement: "bottomRight",
-        duration: 2.5
-      })
+  const handleSlashCommandSelect = React.useCallback(
+    (command: SlashCommandItem) => {
+      slashHandleSelect(command, form.setFieldValue.bind(form), textareaRef)
     },
-    [
-      clearChat,
-      history.length,
-      isConnectionReady,
-      notificationApi,
-      serverChatId,
-      setTemporaryChat,
-      t,
-      temporaryChat
-    ]
+    [slashHandleSelect, form, textareaRef]
   )
 
-  const handleSaveChatToServer = React.useCallback(async () => {
-    if (
-      !isConnectionReady ||
-      temporaryChat ||
-      serverChatId ||
-      history.length === 0
-    ) {
-      return
-    }
-    try {
-      await tldwClient.initialize()
-
-      const snapshot = [...history]
-      const firstUser = snapshot.find((m) => m.role === "user")
-      const fallbackTitle = t(
-        "playground:composer.persistence.serverDefaultTitle",
-        "Extension chat"
-      )
-      const titleSource =
-        typeof firstUser?.content === "string" &&
-        firstUser.content.trim().length > 0
-          ? firstUser.content.trim()
-          : fallbackTitle
-      const title =
-        titleSource.length > 80 ? `${titleSource.slice(0, 77)}…` : titleSource
-
-      let characterId: string | number | null =
-        (selectedCharacter as any)?.id ?? null
-
-      if (!characterId) {
-        const DEFAULT_NAME = "Helpful AI Assistant"
-        const normalizeName = (value: unknown) =>
-          String(value || "").trim().toLowerCase()
-        const findByName = (list: any[]) =>
-          (list || []).find(
-            (c: any) => normalizeName(c?.name) === normalizeName(DEFAULT_NAME)
-          )
-        const findDefaultCharacter = async () => {
-          try {
-            const results = await tldwClient.searchCharacters(DEFAULT_NAME, {
-              limit: 50
-            })
-            const match = findByName(results)
-            if (match) return match
-          } catch {}
-          try {
-            const results = await tldwClient.listCharacters({ limit: 200 })
-            const match = findByName(results)
-            if (match) return match
-          } catch {}
-          return null
-        }
-        try {
-          let target = await findDefaultCharacter()
-          if (!target) {
-            try {
-              target = await tldwClient.createCharacter({
-                name: DEFAULT_NAME
-              })
-            } catch (error: any) {
-              if (error?.status === 409) {
-                target = await findDefaultCharacter()
-              } else {
-                throw error
-              }
-            }
-          }
-          characterId =
-            target && typeof target.id !== "undefined" ? target.id : null
-        } catch {
-          characterId = null
-        }
-      }
-
-      if (characterId == null) {
-        notificationApi.error({
-          message: t("error"),
-          description: t(
-            "playground:composer.persistence.serverCharacterRequired",
-            "Unable to find or create a default assistant character on the server. Try again from the Characters page."
-          ),
-          btn: (
-            <Button
-              type="primary"
-              size="small"
-              title={t(
-                "playground:composer.persistence.serverCharacterCta",
-                "Open Characters workspace"
-              ) as string}
-              onClick={() => {
-                navigate("/characters?from=server-chat-persistence-error")
-              }}>
-              {t(
-                "playground:composer.persistence.serverCharacterCta",
-                "Open Characters workspace"
-              )}
-            </Button>
-          ),
-          duration: 6
-        })
-        return
-      }
-
-      const created = await tldwClient.createChat({
-        title,
-        character_id: characterId,
-        state: serverChatState || "in-progress",
-        source:
-          serverChatSource && serverChatSource.trim().length > 0
-            ? serverChatSource.trim()
-            : undefined
-      })
-      const rawId = (created as any)?.id ?? (created as any)?.chat_id ?? created
-      const cid = rawId != null ? String(rawId) : ""
-      if (!cid) {
-        throw new Error("Failed to create server chat")
-      }
-      setServerChatId(cid)
-      setServerChatState(
-        (created as any)?.state ??
-          (created as any)?.conversation_state ??
-          serverChatState ??
-          "in-progress"
-      )
-      setServerChatSource((created as any)?.source ?? serverChatSource ?? null)
-      setServerChatVersion((created as any)?.version ?? null)
-      invalidateServerChatHistory()
-
-      for (const msg of snapshot) {
-        const content = (msg.content || "").trim()
-        if (!content) continue
-        const role =
-          msg.role === "system" ||
-          msg.role === "assistant" ||
-          msg.role === "user"
-            ? msg.role
-            : "user"
-        await tldwClient.addChatMessage(cid, {
-          role,
-          content
-        })
-      }
-
-      if (!serverPersistenceHintSeen) {
-        notificationApi.success({
-          message: t(
-            "playground:composer.persistence.serverSavedTitle",
-            "Chat now saved on server"
-          ),
-          description:
-            t(
-              "playground:composer.persistence.serverSaved",
-              "Future messages in this chat will sync to your tldw server."
-            ) +
-            " " +
-            t(
-              "playground:composer.persistence.serverBenefits",
-              "This keeps a durable record in server history so you can reopen the conversation later, access it from other browsers, and run server-side analytics over your chats."
-            )
-        })
-        setServerPersistenceHintSeen(true)
-        setShowServerPersistenceHint(true)
-      }
-    } catch (e: any) {
-      notificationApi.error({
-        message: t("error"),
-        description: e?.message || t("somethingWentWrong")
-      })
-    }
-  }, [
-    history,
-    invalidateServerChatHistory,
+  const { submitForm, submitFormRef } = usePlaygroundSubmit({
+    form,
+    isSending,
     isConnectionReady,
+    webSearch,
+    compareModeActive,
+    compareSelectedModels,
+    selectedModel,
+    fileRetrievalEnabled,
+    ragPinnedResults,
+    selectedDocuments,
+    uploadedFiles,
+    currentContextSnapshot,
+    conversationTokenCount,
+    characterContextTokenEstimate,
+    pinnedSourceTokenEstimate,
+    resolvedMaxContext,
+    jsonMode: Boolean(currentChatModelSettings.jsonMode),
+    researchContext,
+    sendMessage,
+    clearSelectedDocuments,
+    clearUploadedFiles,
+    textAreaFocus,
+    setLastSubmittedContext,
+    estimateTokensForText: estimateTokensForText as any,
+    resolveSubmissionIntent,
+    queueSubmission,
+    validateSelectedChatModelsAvailability,
+    compareModelsSupportCapability,
     notificationApi,
-    selectedCharacter,
+    t
+  })
+  React.useEffect(() => {
+    voiceChatSubmitFormRef.current = () => {
+      submitForm()
+    }
+  }, [submitForm])
+
+  const handleKnowledgeAsk = React.useCallback(
+    (text: string, options?: { ignorePinnedResults?: boolean }) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      setMessageValue(trimmed, { collapseLarge: true })
+      queueMicrotask(() =>
+        submitFormRef.current({
+          ignorePinnedResults: options?.ignorePinnedResults
+        })
+      )
+    },
+    [setMessageValue, submitFormRef]
+  )
+
+  const persistence = usePlaygroundPersistence({
+    isFireFoxPrivateMode,
+    isConnectionReady,
     temporaryChat,
+    setTemporaryChat,
     serverChatId,
     setServerChatId,
-    navigate,
+    serverChatState,
+    setServerChatState,
+    serverChatSource,
+    setServerChatSource,
+    setServerChatVersion,
+    history,
+    clearChat,
+    selectedCharacter,
     serverPersistenceHintSeen,
     setServerPersistenceHintSeen,
-    t,
-    serverChatState,
-    serverChatSource,
-    setServerChatState,
-    setServerChatSource,
-    setServerChatVersion
-  ])
-
-  React.useEffect(() => {
-    if (
-      !isConnectionReady ||
-      temporaryChat ||
-      serverChatId ||
-      history.length === 0
-    ) {
-      return
-    }
-    if (serverSaveInFlightRef.current) {
-      return
-    }
-    serverSaveInFlightRef.current = true
-    Promise.resolve(handleSaveChatToServer()).finally(() => {
-      serverSaveInFlightRef.current = false
-    })
-  }, [
+    invalidateServerChatHistory,
+    navigate,
+    notificationApi,
+    t
+  })
+  const {
+    persistenceTooltip,
+    focusConnectionCard,
+    getPersistenceModeLabel,
+    privateChatLocked,
+    showServerPersistenceHint,
+    handleToggleTemporaryChat,
     handleSaveChatToServer,
-    history.length,
-    isConnectionReady,
-    serverChatId,
-    temporaryChat
-  ])
+    persistChatMetadata,
+    handleDismissServerPersistenceHint
+  } = persistence
 
   const handleClearContext = React.useCallback(() => {
     // Only show confirmation if there's history to clear
@@ -4305,206 +2625,6 @@ export const PlaygroundForm = ({
     textAreaFocus
   ])
 
-  const handleToggleWebSearch = React.useCallback(() => {
-    setWebSearch(!webSearch)
-  }, [setWebSearch, webSearch])
-  const handleOpenModelSettings = React.useCallback(() => {
-    setOpenModelSettings(true)
-  }, [setOpenModelSettings])
-  const handleDismissServerPersistenceHint = React.useCallback(() => {
-    setShowServerPersistenceHint(false)
-  }, [setShowServerPersistenceHint])
-
-  const handleImageUpload = React.useCallback(() => {
-    inputRef.current?.click()
-  }, [])
-
-  const handleDocumentUpload = React.useCallback(() => {
-    fileInputRef.current?.click()
-  }, [])
-
-  const {
-    showSlashMenu,
-    slashActiveIndex,
-    setSlashActiveIndex,
-    filteredSlashCommands,
-    resolveSubmissionIntent,
-    activeImageCommand,
-    handleSlashCommandSelect: slashHandleSelect
-  } = useSlashCommands({
-    chatMode,
-    setChatMode,
-    webSearch,
-    setWebSearch,
-    handleImageUpload,
-    imageBackendDefaultTrimmed,
-    imageBackendLabel,
-    setOpenModelSettings,
-    currentMessage: form.values.message
-  })
-
-  const handleSlashCommandSelect = React.useCallback(
-    (command: SlashCommandItem) => {
-      slashHandleSelect(command, form.setFieldValue.bind(form), textareaRef)
-    },
-    [slashHandleSelect, form, textareaRef]
-  )
-
-  const startBrowserDictation = React.useCallback(() => {
-    resetTranscript()
-    startListening({
-      continuous: true,
-      lang: speechToTextLanguage
-    })
-  }, [resetTranscript, speechToTextLanguage, startListening])
-
-  const voiceChatStatusLabel = React.useMemo(() => {
-    switch (voiceChat.state) {
-      case "connecting":
-        return t("playground:voiceChat.statusConnecting", "Connecting")
-      case "listening":
-        return t("playground:voiceChat.statusListening", "Listening")
-      case "thinking":
-        return t("playground:voiceChat.statusThinking", "Thinking")
-      case "speaking":
-        return t("playground:voiceChat.statusSpeaking", "Speaking")
-      case "error":
-        return t("playground:voiceChat.statusError", "Error")
-      default:
-        return t("playground:voiceChat.statusIdle", "Voice chat")
-    }
-  }, [t, voiceChat.state])
-
-  // Update window title when voice chat is active
-  React.useEffect(() => {
-    if (!voiceChatEnabled || voiceChat.state === "idle") return
-
-    const originalTitle = document.title
-    const emoji = {
-      connecting: "🔌",
-      listening: "🎤",
-      thinking: "💭",
-      speaking: "🔊",
-      error: "⚠️"
-    }[voiceChat.state] || ""
-
-    if (emoji) {
-      document.title = `${emoji} ${voiceChatStatusLabel} - Chat`
-    }
-
-    return () => {
-      document.title = originalTitle
-    }
-  }, [voiceChatEnabled, voiceChat.state, voiceChatStatusLabel])
-
-  const handleVoiceChatToggle = React.useCallback(() => {
-    if (!voiceChatAvailable) {
-      notificationApi.error({
-        message: t("playground:voiceChat.unavailableTitle", "Voice chat unavailable"),
-        description: t(
-          "playground:voiceChat.unavailableBody",
-          "Connect to a tldw server with audio chat streaming enabled."
-        )
-      })
-      return
-    }
-    if (!voiceChatEnabled) {
-      if (isListening) stopSpeechRecognition()
-      if (isServerDictating) stopServerDictation()
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent("tldw:playground-starter-selected", {
-            detail: { mode: "voice" }
-          })
-        )
-      }
-    }
-    if (voiceChatEnabled) {
-      voiceChatMessages.abandonTurn()
-    }
-    setVoiceChatEnabled(!voiceChatEnabled)
-  }, [
-    voiceChatAvailable,
-    voiceChatEnabled,
-    isListening,
-    isServerDictating,
-    notificationApi,
-    setVoiceChatEnabled,
-    stopSpeechRecognition,
-    stopServerDictation,
-    t,
-    voiceChatMessages
-  ])
-
-  const persistChatMetadata = React.useCallback(
-    async (patch: Record<string, any>) => {
-      if (!serverChatId) return
-      try {
-        const updated = await tldwClient.updateChat(serverChatId, patch)
-        setServerChatState(
-          (updated as any)?.state ??
-            (updated as any)?.conversation_state ??
-            "in-progress"
-        )
-        setServerChatSource((updated as any)?.source ?? null)
-        setServerChatVersion((updated as any)?.version ?? null)
-        invalidateServerChatHistory()
-      } catch (e: any) {
-        notificationApi.error({
-          message: t("error", { defaultValue: "Error" }),
-          description:
-            e?.message ||
-            t("somethingWentWrong", { defaultValue: "Something went wrong" })
-        })
-      }
-    },
-    [
-      invalidateServerChatHistory,
-      notificationApi,
-      serverChatId,
-      setServerChatSource,
-      setServerChatState,
-      setServerChatVersion,
-      t
-    ]
-  )
-
-  const handleDictationToggle = React.useCallback(() => {
-    switch (dictationToggleIntent) {
-      case "start_server":
-        void startServerDictation()
-        break
-      case "stop_server":
-        stopServerDictation()
-        break
-      case "start_browser":
-        startBrowserDictation()
-        break
-      case "stop_browser":
-        stopSpeechRecognition()
-        break
-      default:
-        break
-    }
-    const snapshot = dictationDiagnosticsSnapshotRef.current
-    emitDictationDiagnostics({
-      surface: "playground",
-      kind: "toggle",
-      requestedMode: snapshot.requestedMode,
-      resolvedMode: snapshot.resolvedMode,
-      speechAvailable: snapshot.speechAvailable,
-      speechUsesServer: snapshot.speechUsesServer,
-      toggleIntent: dictationToggleIntent,
-      fallbackReason: snapshot.fallbackReason
-    })
-  }, [
-    dictationToggleIntent,
-    startBrowserDictation,
-    startServerDictation,
-    stopServerDictation,
-    stopSpeechRecognition
-  ])
-
   const voiceChatSettingsFields = (
     <>
       <div className="flex flex-col gap-1">
@@ -4603,878 +2723,138 @@ export const PlaygroundForm = ({
 
   // State for collapsible advanced section in tools popover
   const [advancedToolsExpanded, setAdvancedToolsExpanded] = React.useState(isProMode)
-  const [rawRequestModalOpen, setRawRequestModalOpen] = React.useState(false)
-  const [rawRequestSnapshot, setRawRequestSnapshot] =
-    React.useState<ChatRequestDebugSnapshot | null>(null)
-  const [imageGenerateModalOpen, setImageGenerateModalOpen] =
-    React.useState(false)
-  const [imageGenerateBackend, setImageGenerateBackend] = React.useState("")
-  const [imageGeneratePrompt, setImageGeneratePrompt] = React.useState("")
-  const [imageGeneratePromptMode, setImageGeneratePromptMode] =
-    React.useState<ImageGenerationPromptMode>("scene")
-  const [imageGenerateFormat, setImageGenerateFormat] = React.useState<
-    "png" | "jpg" | "webp"
-  >("png")
-  const [imageGenerateNegativePrompt, setImageGenerateNegativePrompt] =
-    React.useState("")
-  const [imageGenerateWidth, setImageGenerateWidth] = React.useState<
-    number | undefined
-  >(undefined)
-  const [imageGenerateHeight, setImageGenerateHeight] = React.useState<
-    number | undefined
-  >(undefined)
-  const [imageGenerateSteps, setImageGenerateSteps] = React.useState<
-    number | undefined
-  >(undefined)
-  const [imageGenerateCfgScale, setImageGenerateCfgScale] = React.useState<
-    number | undefined
-  >(undefined)
-  const [imageGenerateSeed, setImageGenerateSeed] = React.useState<
-    number | undefined
-  >(undefined)
-  const [imageGenerateSampler, setImageGenerateSampler] = React.useState("")
-  const [imageGenerateModel, setImageGenerateModel] = React.useState("")
-  const [imageGenerateExtraParams, setImageGenerateExtraParams] =
-    React.useState("")
-  const [imageGenerateSyncPolicy, setImageGenerateSyncPolicy] =
-    React.useState<ImageGenerationEventSyncPolicy>("inherit")
-  const [imagePromptContextBreakdown, setImagePromptContextBreakdown] =
-    React.useState<WeightedImagePromptContextEntry[]>([])
-  const [imagePromptRefineSubmitting, setImagePromptRefineSubmitting] =
-    React.useState(false)
-  const [imagePromptRefineBaseline, setImagePromptRefineBaseline] =
-    React.useState("")
-  const [imagePromptRefineCandidate, setImagePromptRefineCandidate] =
-    React.useState("")
-  const [imagePromptRefineModel, setImagePromptRefineModel] = React.useState<
-    string | null
-  >(null)
-  const [imagePromptRefineLatencyMs, setImagePromptRefineLatencyMs] =
-    React.useState<number | null>(null)
-  const [imagePromptRefineDiff, setImagePromptRefineDiff] =
-    React.useState<CompareResponseDiff | null>(null)
-  const [imageGenerateRefineMetadata, setImageGenerateRefineMetadata] =
-    React.useState<ImageGenerationRefineMetadata | undefined>(undefined)
-  const [imageGenerateSubmitting, setImageGenerateSubmitting] =
-    React.useState(false)
-  const { mcpSettingsOpen, setMcpSettingsOpen } = mcpCtrl
 
-  const parseJsonObject = React.useCallback((value?: string) => {
-    if (!value || typeof value !== "string") return undefined
-    const trimmed = value.trim()
-    if (!trimmed) return undefined
-    try {
-      const parsed = JSON.parse(trimmed)
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>
-      }
-    } catch {
-      return undefined
-    }
-    return undefined
-  }, [])
-
-  const imagePromptStrategies = React.useMemo(() => getImagePromptStrategies(), [])
-  const imageGenerationCharacterMood = React.useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const candidate = messages[i]
-      if (candidate?.isBot && typeof candidate?.moodLabel === "string") {
-        return candidate.moodLabel
-      }
-    }
-    return null
-  }, [messages])
-
-  const imageGenerateBackendOptions = React.useMemo(() => {
-    return imageBackendOptions.filter((option) => option.value.trim().length > 0)
-  }, [imageBackendOptions])
-
-  const clearImagePromptRefineCandidate = React.useCallback(() => {
-    setImagePromptRefineBaseline("")
-    setImagePromptRefineCandidate("")
-    setImagePromptRefineModel(null)
-    setImagePromptRefineLatencyMs(null)
-    setImagePromptRefineDiff(null)
-  }, [])
-
-  const clearImagePromptRefineState = React.useCallback(() => {
-    clearImagePromptRefineCandidate()
-    setImageGenerateRefineMetadata(undefined)
-  }, [clearImagePromptRefineCandidate])
-
-  const imageGenerateBusy = imageGenerateSubmitting || imagePromptRefineSubmitting
-  const imageEventSyncBaselineMode = React.useMemo(
-    () =>
-      resolveImageGenerationEventSyncMode({
-        requestPolicy: "inherit",
-        chatMode: imageEventSyncChatMode,
-        globalMode: normalizeImageGenerationEventSyncMode(
-          imageEventSyncGlobalDefault,
-          "off"
-        )
-      }),
-    [imageEventSyncChatMode, imageEventSyncGlobalDefault]
-  )
-  const imageGenerateResolvedSyncMode = React.useMemo(
-    () =>
-      resolveImageGenerationEventSyncMode({
-        requestPolicy: imageGenerateSyncPolicy,
-        chatMode: imageEventSyncChatMode,
-        globalMode: normalizeImageGenerationEventSyncMode(
-          imageEventSyncGlobalDefault,
-          "off"
-        )
-      }),
-    [
-      imageEventSyncChatMode,
-      imageEventSyncGlobalDefault,
-      imageGenerateSyncPolicy
-    ]
-  )
-
-  const hydrateImageGenerateSettings = React.useCallback(
-    async (backend: string) => {
-      if (!backend) return
-      const configs = await getImageBackendConfigs().catch(() => ({}))
-      const config = normalizeImageBackendConfig(
-        resolveImageBackendConfig(backend, configs)
-      )
-      setImageGenerateFormat(config.format || "png")
-      setImageGenerateNegativePrompt(config.negativePrompt || "")
-      setImageGenerateWidth(config.width)
-      setImageGenerateHeight(config.height)
-      setImageGenerateSteps(config.steps)
-      setImageGenerateCfgScale(config.cfgScale)
-      setImageGenerateSeed(config.seed)
-      setImageGenerateSampler(config.sampler || "")
-      setImageGenerateModel(config.model || "")
-      setImageGenerateExtraParams(
-        config.extraParams == null
-          ? ""
-          : typeof config.extraParams === "string"
-            ? config.extraParams
-            : JSON.stringify(config.extraParams, null, 2)
-      )
-    },
-    []
-  )
-
-  const openImageGenerateModal = React.useCallback(() => {
-    setToolsPopoverOpen(false)
-    setImagePromptContextBreakdown([])
-    clearImagePromptRefineState()
-    setImageGenerateSyncPolicy("inherit")
-    const defaultBackend =
-      imageBackendDefaultTrimmed ||
-      imageGenerateBackendOptions[0]?.value ||
-      ""
-    setImageGenerateBackend(defaultBackend)
-    if (!imageGeneratePrompt.trim()) {
-      const draftFromComposer = String(form.values.message || "").trim()
-      if (draftFromComposer) {
-        setImageGeneratePrompt(draftFromComposer)
-      }
-    }
-    if (defaultBackend) {
-      void hydrateImageGenerateSettings(defaultBackend)
-    }
-    setImageGenerateModalOpen(true)
-  }, [
-    clearImagePromptRefineState,
-    form.values.message,
-    hydrateImageGenerateSettings,
-    imageBackendDefaultTrimmed,
-    imageGenerateBackendOptions,
-    imageGeneratePrompt
-  ])
-
-  const handleCreateImagePromptDraft = React.useCallback(() => {
-    const rawContext = deriveImagePromptRawContext({
-      messages: messages as Array<{ isBot?: boolean; message?: string }>,
-      characterName: selectedCharacter?.name ?? null,
-      moodLabel: imageGenerationCharacterMood,
-      userIntent: form.values.message || imageGeneratePrompt
-    })
-    const draftResult = createImagePromptDraftFromStrategy({
-      strategyId: imageGeneratePromptMode,
-      rawContext
-    })
-    setImageGeneratePrompt(draftResult.prompt)
-    setImagePromptContextBreakdown(draftResult.weightedContext.entries.slice(0, 4))
-    clearImagePromptRefineState()
-  }, [
-    clearImagePromptRefineState,
-    form.values.message,
-    imageGeneratePromptMode,
-    imageGenerationCharacterMood,
-    imageGeneratePrompt,
-    messages,
-    selectedCharacter?.name
-  ])
-
-  const handleRefineImagePromptDraft = React.useCallback(async () => {
-    const prompt = imageGeneratePrompt.trim()
-    if (!prompt) {
-      notificationApi.error({
-        message: t("error", { defaultValue: "Error" }),
-        description: t(
-          "playground:imageGeneration.refinePromptRequired",
-          "Add or create a prompt before refining."
-        )
-      })
-      return
-    }
-
-    const normalizedModel = String(selectedModel || "")
-      .replace(/^tldw:/, "")
-      .trim()
-    if (!normalizedModel) {
-      notificationApi.error({
-        message: t("error", { defaultValue: "Error" }),
-        description: t(
-          "playground:imageGeneration.refineModelRequired",
-          "Select a chat model before using Refine with LLM."
-        )
-      })
-      return
-    }
-
-    const strategyLabel =
-      imagePromptStrategies.find((entry) => entry.id === imageGeneratePromptMode)
-        ?.label || imageGeneratePromptMode
-    const contextEntries =
-      imagePromptContextBreakdown.length > 0
-        ? imagePromptContextBreakdown
-        : createImagePromptDraftFromStrategy({
-            strategyId: imageGeneratePromptMode,
-            rawContext: deriveImagePromptRawContext({
-              messages: messages as Array<{ isBot?: boolean; message?: string }>,
-              characterName: selectedCharacter?.name ?? null,
-              moodLabel: imageGenerationCharacterMood,
-              userIntent: form.values.message || imageGeneratePrompt
-            })
-          }).weightedContext.entries.slice(0, 4)
-
-    setImagePromptRefineSubmitting(true)
-    setImageGenerateRefineMetadata(undefined)
-    try {
-      const startedAt =
-        typeof performance !== "undefined" ? performance.now() : Date.now()
-      await tldwClient.initialize().catch(() => null)
-      const provider = await resolveApiProviderForModel({
-        modelId: normalizedModel,
-        explicitProvider: currentChatModelSettings.apiProvider
-      })
-      const completionResponse = await tldwClient.createChatCompletion({
-        model: normalizedModel,
-        api_provider: provider || undefined,
-        temperature: 0.1,
-        max_tokens: 320,
-        messages: buildImagePromptRefineMessages({
-          originalPrompt: prompt,
-          strategyLabel,
-          backend: imageGenerateBackend,
-          contextEntries
-        })
-      })
-      const completionPayload = await completionResponse.json().catch(() => null)
-      const candidate = extractImagePromptRefineCandidate(completionPayload)
-      if (!candidate) {
-        throw new Error(
-          t(
-            "playground:imageGeneration.refineEmpty",
-            "Refiner returned an empty prompt. Try again."
-          )
-        )
-      }
-      const elapsedRaw =
-        typeof performance !== "undefined" ? performance.now() : Date.now()
-      const latencyMs = Math.max(1, Math.round(elapsedRaw - startedAt))
-      const diff = computeResponseDiffPreview({
-        baseline: prompt,
-        candidate,
-        maxHighlights: 4
-      })
-      setImagePromptRefineBaseline(prompt)
-      setImagePromptRefineCandidate(candidate)
-      setImagePromptRefineModel(normalizedModel)
-      setImagePromptRefineLatencyMs(latencyMs)
-      setImagePromptRefineDiff(diff)
-    } catch (error: any) {
-      notificationApi.error({
-        message: t(
-          "playground:imageGeneration.refineFailedTitle",
-          "Prompt refinement failed"
-        ),
-        description:
-          error?.message ||
-          t(
-            "playground:imageGeneration.refineFailedBody",
-            "Could not refine the image prompt."
-          )
-      })
-    } finally {
-      setImagePromptRefineSubmitting(false)
-    }
-  }, [
-    currentChatModelSettings.apiProvider,
-    form.values.message,
-    imageGenerateBackend,
-    imageGeneratePrompt,
-    imageGeneratePromptMode,
-    imageGenerationCharacterMood,
-    imagePromptContextBreakdown,
-    imagePromptStrategies,
-    messages,
-    notificationApi,
-    selectedCharacter?.name,
+  const imageGen = usePlaygroundImageGen({
+    imageBackendDefaultTrimmed: imageBackendDefaultTrimmed,
+    imageBackendOptions,
+    imageEventSyncChatMode,
+    imageEventSyncGlobalDefault,
+    updateChatSettings,
+    setImageEventSyncGlobalDefault: setImageEventSyncGlobalDefault as any,
+    messages: messages as any,
+    selectedCharacterName: selectedCharacter?.name ?? null,
     selectedModel,
-    t
-  ])
-
-  const applyRefinedImagePromptCandidate = React.useCallback(() => {
-    const candidate = imagePromptRefineCandidate.trim()
-    if (!candidate) return
-
-    if (imagePromptRefineModel && imagePromptRefineLatencyMs != null) {
-      const diffStats = imagePromptRefineDiff
-        ? {
-            baselineSegments: imagePromptRefineDiff.baselineSegments,
-            candidateSegments: imagePromptRefineDiff.candidateSegments,
-            sharedSegments: imagePromptRefineDiff.sharedSegments,
-            overlapRatio: imagePromptRefineDiff.overlapRatio,
-            addedCount: imagePromptRefineDiff.addedHighlights.length,
-            removedCount: imagePromptRefineDiff.removedHighlights.length
-          }
-        : {
-            baselineSegments: 0,
-            candidateSegments: 0,
-            sharedSegments: 0,
-            overlapRatio: 0,
-            addedCount: 0,
-            removedCount: 0
-          }
-      setImageGenerateRefineMetadata({
-        model: imagePromptRefineModel,
-        latencyMs: imagePromptRefineLatencyMs,
-        diffStats
-      })
-    }
-
-    setImageGeneratePrompt(candidate)
-    clearImagePromptRefineCandidate()
-  }, [
-    clearImagePromptRefineCandidate,
-    imagePromptRefineCandidate,
-    imagePromptRefineDiff,
-    imagePromptRefineLatencyMs,
-    imagePromptRefineModel
-  ])
-
-  const rejectRefinedImagePromptCandidate = React.useCallback(() => {
-    clearImagePromptRefineState()
-  }, [clearImagePromptRefineState])
-
-  const submitImageGenerateModal = React.useCallback(async () => {
-    const prompt = imageGeneratePrompt.trim()
-    const backend = imageGenerateBackend.trim()
-    if (!backend) {
-      notificationApi.error({
-        message: t("error", { defaultValue: "Error" }),
-        description: t(
-          "playground:imageGeneration.modalBackendRequired",
-          "Select an image backend before generating."
-        )
-      })
-      return
-    }
-    if (!prompt) {
-      notificationApi.error({
-        message: t("error", { defaultValue: "Error" }),
-        description: t(
-          "playground:imageGeneration.modalPromptRequired",
-          "Image prompt is required."
-        )
-      })
-      return
-    }
-    const parsedExtraParams = parseJsonObject(imageGenerateExtraParams)
-    if (imageGenerateExtraParams.trim().length > 0 && !parsedExtraParams) {
-      notificationApi.error({
-        message: t("error", { defaultValue: "Error" }),
-        description: t(
-          "playground:imageGeneration.modalExtraParamsInvalid",
-          "Extra params must be valid JSON object."
-        )
-      })
-      return
-    }
-
-    const request: Partial<ImageGenerationRequestSnapshot> = {
-      prompt,
-      backend,
-      format: imageGenerateFormat,
-      negativePrompt: imageGenerateNegativePrompt.trim() || undefined,
-      width:
-        typeof imageGenerateWidth === "number" && Number.isFinite(imageGenerateWidth)
-          ? imageGenerateWidth
-          : undefined,
-      height:
-        typeof imageGenerateHeight === "number" && Number.isFinite(imageGenerateHeight)
-          ? imageGenerateHeight
-          : undefined,
-      steps:
-        typeof imageGenerateSteps === "number" && Number.isFinite(imageGenerateSteps)
-          ? imageGenerateSteps
-          : undefined,
-      cfgScale:
-        typeof imageGenerateCfgScale === "number" &&
-        Number.isFinite(imageGenerateCfgScale)
-          ? imageGenerateCfgScale
-          : undefined,
-      seed:
-        typeof imageGenerateSeed === "number" && Number.isFinite(imageGenerateSeed)
-          ? imageGenerateSeed
-          : undefined,
-      sampler: imageGenerateSampler.trim() || undefined,
-      model: imageGenerateModel.trim() || undefined,
-      extraParams: parsedExtraParams
-    }
-
-    setImageGenerateSubmitting(true)
-    try {
-      await sendMessage({
-        message: prompt,
-        image: "",
-        docs: [],
-        imageBackendOverride: backend,
-        userMessageType: IMAGE_GENERATION_USER_MESSAGE_TYPE,
-        assistantMessageType: IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE,
-        imageGenerationRequest: request,
-        imageGenerationRefine: imageGenerateRefineMetadata,
-        imageGenerationPromptMode: imageGeneratePromptMode,
-        imageGenerationSource: "generate-modal",
-        imageEventSyncPolicy: imageGenerateSyncPolicy,
-        researchContext: resolveAttachedResearchRequestContext({
-          imageGenerationSource: "generate-modal"
-        })
-      })
-      setImageGenerateModalOpen(false)
-      textAreaFocus()
-    } finally {
-      setImageGenerateSubmitting(false)
-    }
-  }, [
-    imageGenerateBackend,
-    imageGenerateCfgScale,
-    imageGenerateExtraParams,
-    imageGenerateFormat,
-    imageGenerateHeight,
-    imageGenerateModel,
-    imageGenerateNegativePrompt,
-    imageGeneratePromptMode,
-    imageGenerateSyncPolicy,
-    imageGeneratePrompt,
-    imageGenerateSampler,
-    imageGenerateSeed,
-    imageGenerateSteps,
-    imageGenerateWidth,
-    imageGenerateRefineMetadata,
-    notificationApi,
-    parseJsonObject,
+    currentApiProvider: currentChatModelSettings.apiProvider,
+    formMessage: form.values.message || "",
     sendMessage,
+    textAreaFocus,
+    notificationApi,
     t,
-    textAreaFocus
+    setToolsPopoverOpen
+  })
+  const {
+    imageGenerateModalOpen, setImageGenerateModalOpen,
+    imageGenerateBackend, setImageGenerateBackend,
+    imageGeneratePrompt, setImageGeneratePrompt,
+    imageGeneratePromptMode, setImageGeneratePromptMode,
+    imageGenerateFormat, setImageGenerateFormat,
+    imageGenerateNegativePrompt, setImageGenerateNegativePrompt,
+    imageGenerateWidth, setImageGenerateWidth,
+    imageGenerateHeight, setImageGenerateHeight,
+    imageGenerateSteps, setImageGenerateSteps,
+    imageGenerateCfgScale, setImageGenerateCfgScale,
+    imageGenerateSeed, setImageGenerateSeed,
+    imageGenerateSampler, setImageGenerateSampler,
+    imageGenerateModel, setImageGenerateModel,
+    imageGenerateExtraParams, setImageGenerateExtraParams,
+    imageGenerateSyncPolicy, setImageGenerateSyncPolicy,
+    imagePromptContextBreakdown,
+    imagePromptRefineSubmitting,
+    imagePromptRefineBaseline,
+    imagePromptRefineCandidate,
+    imagePromptRefineModel,
+    imagePromptRefineLatencyMs,
+    imagePromptRefineDiff,
+    imageGenerateRefineMetadata,
+    imageGenerateSubmitting,
+    imagePromptStrategies,
+    imageGenerationCharacterMood,
+    imageGenerateBackendOptions,
+    imageGenerateBusy,
+    imageEventSyncBaselineMode,
+    imageGenerateResolvedSyncMode,
+    clearImagePromptRefineState,
+    hydrateImageGenerateSettings,
+    openImageGenerateModal,
+    handleCreateImagePromptDraft,
+    handleRefineImagePromptDraft,
+    applyRefinedImagePromptCandidate,
+    rejectRefinedImagePromptCandidate,
+    submitImageGenerateModal,
+    normalizeImageGenerationEventSyncMode: normalizeImageGenSyncMode,
+    normalizeImageGenerationEventSyncPolicy: normalizeImageGenSyncPolicy
+  } = imageGen
+  const { mcpSettingsOpen, setMcpSettingsOpen } = mcpCtrl
+  React.useEffect(() => {
+    setOptionalPanelVisible("mcp-tools", mcpSettingsOpen)
+    if (mcpSettingsOpen || toolChoice !== "none") {
+      markOptionalPanelEngaged("mcp-tools")
+    }
+
+    return () => {
+      setOptionalPanelVisible("mcp-tools", false)
+    }
+  }, [
+    markOptionalPanelEngaged,
+    mcpSettingsOpen,
+    setOptionalPanelVisible,
+    toolChoice
   ])
 
-  const getComposerModelMeta = React.useCallback(
-    (modelId: string) => {
-      const normalized = String(modelId || "").replace(/^tldw:/, "")
-      const models = Array.isArray(composerModels) ? (composerModels as any[]) : []
-      return models.find((entry) => {
-        const candidate =
-          String(entry?.id || entry?.model || entry?.name || "").replace(
-            /^tldw:/,
-            ""
-          )
-        return candidate === normalized
-      })
-    },
-    [composerModels]
-  )
+  // Image generation logic is now in usePlaygroundImageGen hook above.
 
-  const supportsCapability = React.useCallback(
-    (modelId: string, capability: string) => {
-      const meta = getComposerModelMeta(modelId)
-      const caps = Array.isArray(meta?.capabilities) ? meta.capabilities : []
-      return caps.includes(capability)
-    },
-    [getComposerModelMeta]
-  )
+  // handleCreateImagePromptDraft - extracted to usePlaygroundImageGen
 
-  const toPreviewUserContent = React.useCallback(
-    (text: string, image: string, modelId: string): ChatMessage["content"] => {
-      const cleanedText = text ?? ""
-      const trimmedImage = typeof image === "string" ? image.trim() : ""
-      const canUseImages = supportsCapability(modelId, "vision")
-      if (trimmedImage.length > 0 && canUseImages) {
-        return [
-          { type: "image_url", image_url: { url: trimmedImage } },
-          { type: "text", text: cleanedText }
-        ]
-      }
-      return cleanedText
-    },
-    [supportsCapability]
-  )
-
-  const toPreviewHistoryMessages = React.useCallback(
-    (modelId: string, draftMessage: string, draftImage: string): ChatMessage[] => {
-      const requestMessages: ChatMessage[] = []
-      for (const entry of history || []) {
-        if (!entry || typeof entry.content !== "string") continue
-        if (entry.role === "system") {
-          requestMessages.push({ role: "system", content: entry.content })
-          continue
-        }
-        if (entry.role === "assistant") {
-          requestMessages.push({ role: "assistant", content: entry.content })
-          continue
-        }
-        if (entry.role === "user") {
-          requestMessages.push({
-            role: "user",
-            content: toPreviewUserContent(
-              entry.content,
-              typeof entry.image === "string" ? entry.image : "",
-              modelId
-            )
-          })
-        }
-      }
-
-      if (draftMessage.trim().length > 0 || draftImage.trim().length > 0) {
-        requestMessages.push({
-          role: "user",
-          content: toPreviewUserContent(draftMessage, draftImage, modelId)
-        })
-      }
-
-      const trimmedSystemPrompt = String(systemPrompt || "").trim()
-      if (
-        trimmedSystemPrompt.length > 0 &&
-        requestMessages[0]?.role !== "system"
-      ) {
-        requestMessages.unshift({ role: "system", content: trimmedSystemPrompt })
-      }
-
-      return requestMessages
-    },
-    [history, systemPrompt, toPreviewUserContent]
-  )
-
-  const buildNormalPreviewRequest = React.useCallback(
-    async (modelId: string, draftMessage: string, draftImage: string) => {
-      const normalizedModel = String(modelId || "").replace(/^tldw:/, "").trim()
-      const resolvedProvider = await resolveApiProviderForModel({
-        modelId: normalizedModel,
-        explicitProvider: currentChatModelSettings.apiProvider
-      })
-      const modelSupportsTools = supportsCapability(normalizedModel, "tools")
-      const toolsAllowed =
-        modelSupportsTools &&
-        hasMcp &&
-        mcpHealthState !== "unavailable" &&
-        mcpHealthState !== "unhealthy"
-      const executableTools = Array.isArray(mcpTools)
-        ? mcpTools.filter((tool) => {
-            if (!tool || typeof tool !== "object") return false
-            if (!("canExecute" in tool)) return true
-            return Boolean((tool as Record<string, unknown>).canExecute)
-          })
-        : []
-      const effectiveTools =
-        toolsAllowed &&
-        toolChoice !== "none" &&
-        executableTools.length > 0
-          ? executableTools
-          : undefined
-      const request: ChatCompletionRequest = {
-        messages: toPreviewHistoryMessages(normalizedModel, draftMessage, draftImage),
-        model: normalizedModel,
-        stream: true,
-        temperature: currentChatModelSettings.temperature,
-        max_tokens: currentChatModelSettings.numPredict,
-        top_p: currentChatModelSettings.topP,
-        frequency_penalty: currentChatModelSettings.frequencyPenalty,
-        presence_penalty: currentChatModelSettings.presencePenalty,
-        reasoning_effort:
-          currentChatModelSettings.reasoningEffort === "low" ||
-          currentChatModelSettings.reasoningEffort === "medium" ||
-          currentChatModelSettings.reasoningEffort === "high"
-            ? currentChatModelSettings.reasoningEffort
-            : undefined,
-        tool_choice: effectiveTools ? toolChoice : undefined,
-        tools: effectiveTools,
-        save_to_db: !temporaryChat && Boolean(serverChatId),
-        conversation_id: !temporaryChat && serverChatId ? serverChatId : undefined,
-        history_message_limit: currentChatModelSettings.historyMessageLimit,
-        history_message_order: currentChatModelSettings.historyMessageOrder,
-        slash_command_injection_mode:
-          currentChatModelSettings.slashCommandInjectionMode,
-        api_provider: resolvedProvider || undefined,
-        extra_headers: parseJsonObject(currentChatModelSettings.extraHeaders),
-        extra_body: parseJsonObject(currentChatModelSettings.extraBody),
-        response_format: currentChatModelSettings.jsonMode
-          ? { type: "json_object" }
-          : undefined,
-        research_context: resolveAttachedResearchRequestContext({
-          compareModeActive
-        })
-      }
-      return request
-    },
-    [
-      compareModeActive,
-      currentChatModelSettings.apiProvider,
-      currentChatModelSettings.extraBody,
-      currentChatModelSettings.extraHeaders,
-      currentChatModelSettings.frequencyPenalty,
-      currentChatModelSettings.historyMessageLimit,
-      currentChatModelSettings.historyMessageOrder,
-      currentChatModelSettings.jsonMode,
-      currentChatModelSettings.numPredict,
-      currentChatModelSettings.presencePenalty,
-      currentChatModelSettings.reasoningEffort,
-      currentChatModelSettings.slashCommandInjectionMode,
-      currentChatModelSettings.temperature,
-      currentChatModelSettings.topP,
-      hasMcp,
-      mcpHealthState,
-      mcpTools,
-      parseJsonObject,
-      resolveAttachedResearchRequestContext,
-      serverChatId,
-      temporaryChat,
-      toPreviewHistoryMessages,
-      toolChoice,
-      supportsCapability
-    ]
-  )
-
-  const buildCurrentRawRequestSnapshot = React.useCallback(async () => {
-    const intent = resolveSubmissionIntent(form.values.message || "")
-    const draftMessage = intent.message.trim()
-    const draftImage = intent.isImageCommand ? "" : String(form.values.image || "")
-    const hasScopedRagMediaIds =
-      Array.isArray(ragMediaIds) && ragMediaIds.length > 0
-    const shouldUseRag =
-      Boolean(selectedKnowledge) || (fileRetrievalEnabled && hasScopedRagMediaIds)
-    const hasContextFiles = Array.isArray(contextFiles) && contextFiles.length > 0
-    const hasDocs =
-      (Array.isArray(selectedDocuments) && selectedDocuments.length > 0) ||
-      (Array.isArray(documentContext) && documentContext.length > 0)
-    const isCharacterFlow =
-      !compareModeActive &&
-      !intent.isImageCommand &&
-      !hasContextFiles &&
-      !hasDocs &&
-      !shouldUseRag &&
-      Boolean(selectedCharacter?.id)
-
-    if (intent.isImageCommand) {
-      const backend =
-        intent.imageBackendOverride || imageBackendDefaultTrimmed || "image-generation"
-      return {
-        endpoint: "/api/v1/files/create",
-        method: "POST",
-        mode: "non-stream" as const,
-        sentAt: new Date().toISOString(),
-        body: {
-          file_type: "image",
-          payload: {
-            backend,
-            prompt: draftMessage
-          },
-          export: {
-            format: "png",
-            mode: "inline",
-            async_mode: "sync"
-          },
-          options: {
-            persist: true
-          }
-        }
-      } satisfies ChatRequestDebugSnapshot
-    }
-
-    if (isCharacterFlow) {
-      const resolvedModel = String(selectedModel || "").replace(/^tldw:/, "").trim()
-      const provider = await resolveApiProviderForModel({
-        modelId: resolvedModel,
-        explicitProvider: currentChatModelSettings.apiProvider
-      })
-      const chatIdHint = serverChatId || "<new-chat-id>"
-      const messagePayload: Record<string, unknown> = {
-        role: "user",
-        content: draftMessage
-      }
-      const normalizedImage = String(form.values.image || "")
-      if (normalizedImage.startsWith("data:")) {
-        const b64 = normalizedImage.includes(",")
-          ? normalizedImage.split(",")[1]
-          : normalizedImage
-        if (b64 && b64.length > 0) {
-          messagePayload.image_base64 = b64
-        }
-      }
-      return {
-        endpoint: `/api/v1/chats/${chatIdHint}/complete-v2`,
-        method: "POST",
-        mode: "stream",
-        sentAt: new Date().toISOString(),
-        body: {
-          sequence: [
-            !serverChatId
-              ? {
-                  endpoint: "/api/v1/chats/",
-                  method: "POST",
-                  body: {
-                    character_id: selectedCharacter?.id,
-                    state: serverChatState || "in-progress",
-                    source: serverChatSource || undefined
-                  }
-                }
-              : null,
-            {
-              endpoint: `/api/v1/chats/${chatIdHint}/messages`,
-              method: "POST",
-              body: messagePayload
-            },
-            {
-              endpoint: `/api/v1/chats/${chatIdHint}/complete-v2`,
-              method: "POST",
-              body: {
-                include_character_context: true,
-                model: resolvedModel,
-                provider: provider || undefined,
-                save_to_db: !temporaryChat,
-                continue_as_user: messageSteeringMode === "continue_as_user",
-                impersonate_user: messageSteeringMode === "impersonate_user",
-                force_narrate: Boolean(messageSteeringForceNarrate),
-                stream: true
-              }
-            }
-          ].filter(Boolean)
-        }
-      } satisfies ChatRequestDebugSnapshot
-    }
-
-    const modelsForPreview = compareModeActive
-      ? Array.from(
-          new Set(
-            compareSelectedModels.length > 0
-              ? compareSelectedModels
-              : selectedModel
-                ? [selectedModel]
-                : []
-          )
-        )
-      : selectedModel
-        ? [selectedModel]
-        : []
-    const limitedModels =
-      compareModeActive && compareMaxModels > 0
-        ? modelsForPreview.slice(0, compareMaxModels)
-        : modelsForPreview
-
-    if (limitedModels.length === 0) {
-      return {
-        endpoint: "/api/v1/chat/completions",
-        method: "POST",
-        mode: "stream",
-        sentAt: new Date().toISOString(),
-        body: {
-          error: "No model selected"
-        }
-      } satisfies ChatRequestDebugSnapshot
-    }
-
-    if (limitedModels.length === 1) {
-      const request = await buildNormalPreviewRequest(
-        limitedModels[0],
-        draftMessage,
-        draftImage
-      )
-      return {
-        endpoint: "/api/v1/chat/completions",
-        method: "POST",
-        mode: "stream",
-        sentAt: new Date().toISOString(),
-        body: request
-      } satisfies ChatRequestDebugSnapshot
-    }
-
-    const requests = await Promise.all(
-      limitedModels.map((modelId) =>
-        buildNormalPreviewRequest(modelId, draftMessage, draftImage)
-      )
-    )
-    return {
-      endpoint: "/api/v1/chat/completions",
-      method: "POST",
-      mode: "stream",
-      sentAt: new Date().toISOString(),
-      body: {
-        compare_mode: true,
-        requests
-      }
-    } satisfies ChatRequestDebugSnapshot
-  }, [
-    buildNormalPreviewRequest,
-    compareMaxModels,
+  const rawPreview = usePlaygroundRawPreview({
+    composerModels,
+    selectedModel,
     compareModeActive,
     compareSelectedModels,
-    contextFiles,
-    currentChatModelSettings.apiProvider,
-    documentContext,
-    fileRetrievalEnabled,
-    form.values.image,
-    form.values.message,
-    imageBackendDefaultTrimmed,
-    messageSteeringForceNarrate,
-    messageSteeringMode,
-    ragMediaIds,
-    resolveSubmissionIntent,
-    selectedCharacter?.id,
-    selectedKnowledge,
-    selectedModel,
-    selectedDocuments,
+    compareMaxModels,
+    currentChatModelSettings,
+    history,
+    systemPrompt,
+    hasMcp,
+    mcpHealthState,
+    mcpTools,
+    toolChoice,
+    temporaryChat,
     serverChatId,
-    serverChatSource,
     serverChatState,
-    temporaryChat
-  ])
-
-  const rawRequestJson = React.useMemo(
-    () =>
-      rawRequestSnapshot
-        ? JSON.stringify(rawRequestSnapshot.body, null, 2)
-        : "",
-    [rawRequestSnapshot]
-  )
-
+    serverChatSource,
+    selectedCharacter,
+    messageSteeringMode,
+    messageSteeringForceNarrate,
+    ragMediaIds,
+    selectedKnowledge: selectedKnowledge as any,
+    ragPinnedResults,
+    fileRetrievalEnabled,
+    contextFiles,
+    documentContext,
+    selectedDocuments,
+    imageBackendDefaultTrimmed: imageBackendDefaultTrimmed,
+    resolveSubmissionIntent,
+    formImage: form.values.image || "",
+    formMessage: form.values.message || "",
+    researchContext: compareModeActive ? undefined : researchContext,
+    notificationApi,
+    t,
+    setToolsPopoverOpen
+  })
+  const {
+    rawRequestModalOpen,
+    setRawRequestModalOpen,
+    rawRequestSnapshot,
+    rawRequestJson,
+    refreshRawRequestSnapshot,
+    openRawRequestModal,
+    copyRawRequestJson
+  } = rawPreview
   React.useEffect(() => {
-    if (!attachedResearchContext) {
-      setAttachedResearchContextDraft(null)
-      if (rawRequestModalOpen) {
-        setRawRequestModalOpen(false)
-      }
-      return
-    }
-    setAttachedResearchContextDraft(cloneAttachedResearchContext(attachedResearchContext))
-  }, [attachedResearchContext, rawRequestModalOpen])
-
+    setAttachedResearchContextDraft(
+      cloneAttachedResearchContext(attachedResearchContext)
+    )
+  }, [attachedResearchContext])
   const attachedResearchPreviewSuppressed =
     Boolean(attachedResearchContext) &&
     Boolean(rawRequestSnapshot) &&
@@ -5549,408 +2929,9 @@ export const PlaygroundForm = ({
     []
   )
 
-  const handleAttachedResearchDraftUnsupportedClaimCountChange =
-    React.useCallback((value: number | null | undefined) => {
-      setAttachedResearchContextDraft((current) =>
-        current
-          ? {
-              ...current,
-              verification_summary:
-                value == null
-                  ? undefined
-                  : { unsupported_claim_count: value }
-            }
-          : current
-      )
-    }, [])
-
-  const handleAttachedResearchDraftHighTrustCountChange = React.useCallback(
-    (value: number | null | undefined) => {
-      setAttachedResearchContextDraft((current) =>
-        current
-          ? {
-              ...current,
-              source_trust_summary:
-                value == null ? undefined : { high_trust_count: value }
-            }
-          : current
-      )
-    },
-    []
-  )
-
-  const refreshRawRequestSnapshot = React.useCallback(async () => {
-    try {
-      const snapshot = await buildCurrentRawRequestSnapshot()
-      setRawRequestSnapshot(snapshot)
-      captureChatRequestDebugSnapshot({
-        endpoint: snapshot.endpoint,
-        method: snapshot.method,
-        mode: snapshot.mode,
-        body: snapshot.body
-      })
-    } catch (error) {
-      console.error("Failed to build current request preview", error)
-      setRawRequestSnapshot(null)
-      notificationApi.error({
-        message: t("error", { defaultValue: "Error" }),
-        description: t(
-          "playground:tools.rawChatRequestBuildFailed",
-          "Failed to generate request preview from current input."
-        )
-      })
-    }
-  }, [buildCurrentRawRequestSnapshot, notificationApi, t])
-
-  const openRawRequestModal = React.useCallback(() => {
-    setToolsPopoverOpen(false)
-    setRawRequestModalOpen(true)
-    void refreshRawRequestSnapshot()
-  }, [refreshRawRequestSnapshot])
-
-  const copyRawRequestJson = React.useCallback(async () => {
-    if (!rawRequestJson) return
-    try {
-      await navigator.clipboard.writeText(rawRequestJson)
-      notificationApi.success({
-        message: t("common:copied", "Copied"),
-        description: t(
-          "playground:tools.rawChatRequestCopied",
-          "Copied request JSON to clipboard."
-        )
-      })
-    } catch {
-      notificationApi.error({
-        message: t("error", { defaultValue: "Error" }),
-        description: t(
-          "playground:tools.rawChatRequestCopyFailed",
-          "Unable to copy request JSON."
-        )
-      })
-    }
-  }, [notificationApi, rawRequestJson, t])
-
-  const moreToolsContent = React.useMemo(
-    () => (
-      <div className="flex w-72 flex-col gap-2 p-1">
-        {/* ATTACHMENTS Section */}
-        <div className="flex flex-col gap-2">
-          <span className="text-[10px] font-semibold uppercase text-text-muted tracking-wider px-2">
-            {t("playground:tools.attachments", "Attachments")}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              setToolsPopoverOpen(false)
-              openImageGenerateModal()
-            }}
-            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-          >
-            <span>{t("playground:imageGeneration.modalTitle", "Generate image")}</span>
-            <WandSparkles className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => openKnowledgePanel("context")}
-            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-          >
-            <span>{t("playground:attachments.manageContext", "Manage in Knowledge Panel")}</span>
-            <Settings2 className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="border-t border-border my-1" />
-
-        <div className="flex items-center justify-between px-2">
-          <span className="text-sm text-text">
-            {t("useOCR")}
-          </span>
-          <Switch
-            size="small"
-            checked={useOCR}
-            onChange={(value) => setUseOCR(value)}
-          />
-        </div>
-
-        <div className="border-t border-border my-1" />
-
-        {/* WEB SEARCH Section */}
-        <div className="flex flex-col gap-2">
-          <span className="px-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-            {t("playground:tools.webSearch", "Web Search")}
-          </span>
-          {capabilities?.hasWebSearch ? (
-            <>
-              <div className="flex items-center justify-between gap-2 px-2">
-                <span className="flex items-center gap-2 text-sm text-text">
-                  <Globe className="h-4 w-4 text-text-subtle" />
-                  {t(
-                    "playground:tools.webSearchEnabled",
-                    "Enable web search"
-                  )}
-                </span>
-                <Switch
-                  size="small"
-                  checked={webSearch}
-                  onChange={(checked) => setWebSearch(checked)}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-2 px-2">
-                <span className="text-sm text-text">
-                  {t(
-                    "playground:tools.webSearchSimpleMode",
-                    "Simple search mode"
-                  )}
-                </span>
-                <Switch
-                  size="small"
-                  checked={simpleInternetSearch}
-                  onChange={(checked) => setSimpleInternetSearch(checked)}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-2 px-2">
-                <span className="text-sm text-text">
-                  {t(
-                    "playground:tools.webSearchDefaultOn",
-                    "Default on for new chats"
-                  )}
-                </span>
-                <Switch
-                  size="small"
-                  checked={defaultInternetSearchOn}
-                  onChange={(checked) =>
-                    setDefaultInternetSearchOnSetting(checked)
-                  }
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setToolsPopoverOpen(false)
-                  navigate("/settings")
-                }}
-                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-              >
-                <span>
-                  {t(
-                    "playground:tools.webSearchOpenSettings",
-                    "Open web search settings"
-                  )}
-                </span>
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </>
-          ) : (
-            <p className="px-2 text-xs text-text-muted">
-              {t(
-                "playground:tools.webSearchUnavailable",
-                "Web search is unavailable on this server."
-              )}
-            </p>
-          )}
-        </div>
-
-        <div className="border-t border-border my-1" />
-
-        {/* ADVANCED Section (collapsible) */}
-        <button
-          type="button"
-          onClick={() => setAdvancedToolsExpanded(!advancedToolsExpanded)}
-          className="flex items-center justify-between px-2 py-1 text-[10px] font-semibold uppercase text-text-muted tracking-wider hover:text-text transition"
-        >
-          <span>{t("playground:tools.advanced", "Advanced")}</span>
-          <ChevronRight className={`h-3 w-3 transition-transform ${advancedToolsExpanded ? "rotate-90" : ""}`} />
-        </button>
-
-        {advancedToolsExpanded && (
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-col gap-1.5 px-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-text">
-                  {t(
-                    "playground:tools.allowExternalImages",
-                    "Load external images in chat"
-                  )}
-                </span>
-                <Switch
-                  size="small"
-                  checked={allowExternalImages}
-                  onChange={(checked) => setAllowExternalImages(checked)}
-                />
-              </div>
-              <p className="text-[11px] text-text-muted">
-                {t(
-                  "playground:tools.allowExternalImagesHelp",
-                  "When off, external image URLs are blocked and shown as links."
-                )}
-              </p>
-            </div>
-
-            <div className="border-t border-border my-1" />
-
-            <div className="flex flex-col gap-1.5 px-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-text">
-                  {t("playground:tools.showMoodBadge", "Show mood badge in chat")}
-                </span>
-                <Switch
-                  size="small"
-                  checked={showMoodBadge}
-                  onChange={(checked) => setShowMoodBadge(checked)}
-                />
-              </div>
-              <p className="text-[11px] text-text-muted">
-                {t(
-                  "playground:tools.showMoodBadgeHelp",
-                  "Shows labels like \"Mood: neutral\" on assistant messages."
-                )}
-              </p>
-
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-text">
-                  {t(
-                    "playground:tools.showMoodConfidence",
-                    "Show mood confidence (%)"
-                  )}
-                </span>
-                <Switch
-                  size="small"
-                  checked={showMoodConfidence}
-                  disabled={!showMoodBadge}
-                  onChange={(checked) => setShowMoodConfidence(checked)}
-                />
-              </div>
-              <p className="text-[11px] text-text-muted">
-                {t(
-                  "playground:tools.showMoodConfidenceHelp",
-                  "Adds confidence percentage when available."
-                )}
-              </p>
-            </div>
-
-            <div className="border-t border-border my-1" />
-
-            <div className="flex flex-col gap-1.5 px-2">
-              <button
-                type="button"
-                onClick={openRawRequestModal}
-                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-              >
-                <span>
-                  {t(
-                    "playground:tools.rawChatRequest",
-                    "View raw chat JSON"
-                  )}
-                </span>
-                <FileText className="h-4 w-4" />
-              </button>
-              <p className="text-[11px] text-text-muted">
-                {t(
-                  "playground:tools.rawChatRequestHelp",
-                  "Shows the chat request payload preview generated from your current composer input."
-                )}
-              </p>
-            </div>
-
-            <div className="border-t border-border my-1" />
-
-            {/* Voice Settings */}
-            <div className="flex flex-col gap-2 px-2">
-              <Tooltip
-                title={
-                  voiceChatAvailable
-                    ? voiceChatStatusLabel
-                    : t("playground:voiceChat.unavailableTitle", "Voice chat unavailable")
-                }
-              >
-                <button
-                  type="button"
-                  onClick={handleVoiceChatToggle}
-                  disabled={!voiceChatAvailable || isSending}
-                  className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                    voiceChat.state === "error"
-                      ? "text-danger"
-                      : voiceChatEnabled && voiceChat.state !== "idle"
-                        ? "bg-surface2 text-primaryStrong"
-                        : "text-text hover:bg-surface2"
-                  }`}
-                >
-                  <span>{t("playground:tools.voiceSettings", "Voice settings")}</span>
-                  <Headphones className="h-4 w-4" />
-                </button>
-              </Tooltip>
-              <div
-                className={`flex flex-col gap-2 text-xs ${
-                  !voiceChatAvailable ? "pointer-events-none opacity-50" : ""
-                }`}
-              >
-                {voiceChatSettingsFields}
-              </div>
-            </div>
-
-            {imageProviderControl}
-
-          </div>
-        )}
-
-        <div className="border-t border-border my-1" />
-
-        {/* Footer Actions */}
-        <Link
-          to="/model-playground"
-          title={t("playground:actions.workspacePlayground", "Compare models") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-        >
-          <span>{t("playground:actions.compareModels", "Compare models")}</span>
-          <GitBranch className="h-4 w-4" />
-        </Link>
-        <button
-          type="button"
-          onClick={handleClearContext}
-          disabled={history.length === 0}
-          title={t("tooltip.clearContext") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-danger transition hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted disabled:hover:bg-transparent"
-        >
-          <span>{t("playground:actions.clearConversation", "Clear conversation")}</span>
-          <EraserIcon className="h-4 w-4" />
-        </button>
-      </div>
-    ),
-    [
-      allowExternalImages,
-      advancedToolsExpanded,
-      capabilities?.hasWebSearch,
-      defaultInternetSearchOn,
-      handleClearContext,
-      openKnowledgePanel,
-      openImageGenerateModal,
-      handleVoiceChatToggle,
-      history.length,
-      imageProviderControl,
-      isSending,
-      navigate,
-      openRawRequestModal,
-      setAllowExternalImages,
-      setDefaultInternetSearchOnSetting,
-      setShowMoodBadge,
-      setShowMoodConfidence,
-      setSimpleInternetSearch,
-      setToolsPopoverOpen,
-      setWebSearch,
-      showMoodBadge,
-      showMoodConfidence,
-      simpleInternetSearch,
-      useOCR,
-      setUseOCR,
-      t,
-      voiceChatAvailable,
-      voiceChatEnabled,
-      voiceChat.state,
-      voiceChatSettingsFields,
-      voiceChatStatusLabel,
-      webSearch
-    ]
-  )
+  const navigateToWebSearchSettings = React.useCallback(() => {
+    navigate("/settings")
+  }, [navigate])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isFirefoxTarget) {
@@ -6015,7 +2996,7 @@ export const PlaygroundForm = ({
         e,
         sendWhenEnter,
         typing,
-        isSending
+        isSending: false
       })
     ) {
       e.preventDefault()
@@ -6032,7 +3013,7 @@ export const PlaygroundForm = ({
         e,
         sendWhenEnter,
         typing,
-        isSending
+        isSending: false
       })
       if (shouldSend) return false
 
@@ -6257,669 +3238,102 @@ export const PlaygroundForm = ({
     ]
   )
 
-  const stopListening = async () => {
-    if (isListening) {
-      stopSpeechRecognition()
-    }
-  }
-
-  const {
-    persistenceTooltip,
-    focusConnectionCard,
-    getPersistenceModeLabel
-  } = usePersistenceMode({
-    temporaryChat,
-    serverChatId,
-    isConnectionReady
-  })
-
-  const contextItems = React.useMemo<ComposerContextItem[]>(() => {
-    const items: ComposerContextItem[] = []
-    items.push({
-      id: "model",
-      label: t("playground:composer.context.model", "Model"),
-      value: selectedModel ? modelSummaryLabel : t("common:none", "None"),
-      tone: selectedModel ? "active" : "warning",
-      onClick: openModelApiSelector
-    })
-    if (isSessionDegraded) {
-      items.push({
-        id: "sessionStatus",
-        label: t("playground:composer.context.sessionStatus", "Session status"),
-        value: connectionStatusLabel,
-        tone: "warning",
-        onClick: focusConnectionCard
-      })
-    }
-
-    if (compareModeActive) {
-      items.push({
-        id: "compare",
-        label: t("playground:composer.context.compare", "Compare"),
-        value:
-          compareSelectedModels.length > 0
-            ? String(
-                t("playground:composer.context.compareCount", {
-                  defaultValue: "{{count}} models",
-                  count: compareSelectedModels.length
-                } as any)
-              )
-            : String(t("playground:composer.context.compareOn", "On")),
-        tone: "active",
-        onClick: () => setOpenModelSettings(true)
-      })
-    }
-
-    if (currentPreset && currentPreset.key !== "custom") {
-      items.push({
-        id: "preset",
-        label: t("playground:composer.context.preset", "Preset"),
-        value: t(
-          `playground:presets.${currentPreset.key}.label`,
-          currentPreset.label
-        ),
-        tone: "active",
-        onClick: () => setOpenModelSettings(true)
-      })
-    }
-
-    if (selectedCharacter?.name) {
-      items.push({
-        id: "character",
-        label: t("playground:composer.context.character", "Character"),
-        value: characterPendingApply
-          ? t(
-              "playground:composer.context.characterNextTurn",
-              "{{name}} (next turn)",
-              { name: selectedCharacter.name } as any
-            )
-          : selectedCharacter.name,
-        tone: "active",
-        onClick: () => setOpenActorSettings(true)
-      })
-    }
-
-    if (contextToolsOpen) {
-      items.push({
-        id: "knowledge",
-        label: t("playground:composer.context.knowledge", "Knowledge"),
-        value: t("common:open", "Open"),
-        tone: "active",
-        onClick: () => setContextToolsOpen(false)
-      })
-    }
-
-    if (ragPinnedResults.length > 0) {
-      items.push({
-        id: "ragPinned",
-        label: t("playground:composer.context.pinnedSources", "Pinned"),
-        value: String(
-          t("playground:composer.context.pinnedCount", {
-            defaultValue: "{{count}} sources",
-            count: ragPinnedResults.length
-          } as any)
-        ),
-        tone: "active",
-        onClick: () => openKnowledgePanel("search")
-      })
-    }
-
-    if (webSearch) {
-      items.push({
-        id: "webSearch",
-        label: t("playground:composer.context.webSearch", "Web search"),
-        value: t("common:on", "On"),
-        tone: "active",
-        onClick: handleToggleWebSearch
-      })
-    }
-    if (sessionUsageSummary.totalTokens > 0) {
-      items.push({
-        id: "sessionUsage",
-        label: t("playground:composer.context.session", "Session"),
-        value: sessionUsageLabel,
-        tone: "neutral",
-        onClick: openSessionInsightsModal
-      })
-    }
-    if (
-      selectedSystemPrompt ||
-      selectedQuickPrompt ||
-      String(systemPrompt || "").trim().length > 0
-    ) {
-      items.push({
-        id: "prompt",
-        label: t("playground:composer.context.prompt", "Prompt"),
-        value: promptSummaryLabel,
-        tone: "active"
-      })
-    }
-
-    if (currentChatModelSettings.jsonMode) {
-      items.push({
-        id: "json",
-        label: t("playground:composer.context.json", "JSON mode"),
-        value: t(
-          "playground:composer.context.jsonShort",
-          "Object responses"
-        ),
-        tone: "active",
-        onClick: () => updateChatModelSetting("jsonMode", undefined)
-      })
-    }
-
-    if (showTokenBudgetWarning) {
-      items.push({
-        id: "budget",
-        label: t("playground:composer.context.budget", "Budget"),
-        value: `${tokenBudgetRiskLabel}${
-          projectedBudget.utilizationPercent != null
-            ? ` • ${Math.round(projectedBudget.utilizationPercent)}%`
-            : ""
-        }`,
-        tone: "warning",
-        onClick: openContextWindowModal
-      })
-    }
-    if (tokenBudgetRisk.level !== "unknown" && !showTokenBudgetWarning) {
-      items.push({
-        id: "truncationRisk",
-        label: t("playground:composer.context.truncationRisk", "Truncation"),
-        value: tokenBudgetRiskLabel,
-        tone:
-          tokenBudgetRisk.level === "high" || tokenBudgetRisk.level === "critical"
-            ? "warning"
-            : "neutral",
-        onClick: openContextWindowModal
-      })
-    }
-    if (nonMessageContextPercent != null) {
-      items.push({
-        id: "contextMix",
-        label: t("playground:composer.context.contextMix", "Context mix"),
-        value: t(
-          "playground:composer.context.nonMessageShare",
-          "{{percent}}% non-message",
-          {
-            percent: Math.max(0, Math.round(nonMessageContextPercent))
-          } as any
-        ),
-        tone: showNonMessageContextWarning ? "warning" : "neutral",
-        onClick: openContextWindowModal
-      })
-    }
-
-    if (temporaryChat) {
-      items.push({
-        id: "temporary",
-        label: t("playground:composer.context.temporary", "Temporary"),
-        value: t("playground:composer.context.notSaved", "Not saved"),
-        tone: "warning"
-      })
-    }
-
-    return items
-  }, [
-    compareModeActive,
-    compareSelectedModels.length,
-    connectionStatusLabel,
-    contextToolsOpen,
-    currentPreset,
-    currentChatModelSettings.jsonMode,
-    focusConnectionCard,
-    handleToggleWebSearch,
-    isSessionDegraded,
+  const contextItems = usePlaygroundContextItems({
+    selectedModel,
     modelSummaryLabel,
+    isSessionDegraded,
+    connectionStatusLabel,
+    compareModeActive,
+    compareSelectedModels,
+    currentPreset,
+    selectedCharacterName: selectedCharacter?.name || null,
+    characterPendingApply,
+    contextToolsOpen,
+    ragPinnedResultsLength: ragPinnedResults.length,
+    webSearch,
+    sessionUsageTotalTokens: sessionUsageSummary.totalTokens,
+    sessionUsageLabel,
+    selectedSystemPrompt,
+    selectedQuickPrompt,
+    systemPrompt,
+    promptSummaryLabel,
+    jsonMode: Boolean(currentChatModelSettings.jsonMode),
+    showTokenBudgetWarning,
+    tokenBudgetRiskLevel: tokenBudgetRisk.level,
+    tokenBudgetRiskLabel,
+    projectedBudgetUtilizationPercent: projectedBudget.utilizationPercent,
+    nonMessageContextPercent,
+    showNonMessageContextWarning,
+    temporaryChat,
     openModelApiSelector,
+    focusConnectionCard,
+    setOpenModelSettings,
+    setOpenActorSettings,
+    setContextToolsOpen,
+    handleToggleWebSearch,
     openKnowledgePanel,
     openContextWindowModal,
-    nonMessageContextPercent,
-    characterPendingApply,
-    promptSummaryLabel,
-    tokenBudgetRisk.level,
-    tokenBudgetRiskLabel,
-    ragPinnedResults.length,
-    selectedCharacter?.name,
-    selectedModel,
-    selectedQuickPrompt,
-    selectedSystemPrompt,
-    sessionUsageLabel,
-    sessionUsageSummary.totalTokens,
     openSessionInsightsModal,
-    setContextToolsOpen,
-    setOpenModelSettings,
-    showTokenBudgetWarning,
-    projectedBudget.utilizationPercent,
-    showNonMessageContextWarning,
+    updateChatModelSetting,
+    t
+  })
+
+  const settingsHook = usePlaygroundSettings({
+    selectedCharacterName: selectedCharacter?.name || null,
+    selectedSystemPrompt,
+    selectedQuickPrompt,
     systemPrompt,
-    t,
-    temporaryChat,
-    updateChatModelSetting
-  ])
-
-  const compareHasPromptContext = React.useMemo(
-    () =>
-      Boolean(selectedSystemPrompt) ||
-      Boolean(selectedQuickPrompt) ||
-      String(systemPrompt || "").trim().length > 0,
-    [selectedQuickPrompt, selectedSystemPrompt, systemPrompt]
-  )
-
-  const compareSharedContextLabels = React.useMemo(() => {
-    const labels: string[] = []
-    if (selectedCharacter?.name) {
-      labels.push(
-        String(
-          t(
-            "playground:composer.compareSharedCharacter",
-            "Character: {{name}}",
-            { name: selectedCharacter.name } as any
-          )
-        )
-      )
-    }
-    if (compareHasPromptContext) {
-      labels.push(
-        String(
-          t(
-            "playground:composer.compareSharedPrompt",
-            "Prompt steering enabled"
-          )
-        )
-      )
-    }
-    if (ragPinnedResults.length > 0) {
-      labels.push(
-        String(
-          t(
-            "playground:composer.compareSharedPinned",
-            "{{count}} pinned sources",
-            { count: ragPinnedResults.length } as any
-          )
-        )
-      )
-    }
-    if (webSearch) {
-      labels.push(
-        String(t("playground:composer.compareSharedWebSearch", "Web search on"))
-      )
-    }
-    if (currentChatModelSettings.jsonMode) {
-      labels.push(
-        String(t("playground:composer.compareSharedJson", "JSON mode on"))
-      )
-    }
-    return labels
-  }, [
-    compareHasPromptContext,
-    currentChatModelSettings.jsonMode,
-    ragPinnedResults.length,
-    selectedCharacter?.name,
-    t,
-    webSearch
-  ])
-
-  const compareInteroperabilityNotices = React.useMemo(
-    () =>
-      buildCompareInteroperabilityNotices({
-        t,
-        characterName: selectedCharacter?.name || null,
-        pinnedSourceCount: ragPinnedResults.length,
-        webSearch,
-        hasPromptContext: compareHasPromptContext,
-        jsonMode: Boolean(currentChatModelSettings.jsonMode),
-        voiceChatEnabled
-      }),
-    [
-      compareHasPromptContext,
-      currentChatModelSettings.jsonMode,
-      ragPinnedResults.length,
-      selectedCharacter?.name,
-      t,
-      voiceChatEnabled,
-      webSearch
-    ]
-  )
-
-  const contextConflictWarnings = React.useMemo(
-    () => {
-      const warnings: Array<{
-        id: string
-        text: string
-        actionLabel?: string
-        onAction?: () => void
-      }> = []
-
-      const hasCustomPrompt =
-        Boolean(selectedSystemPrompt) ||
-        Boolean(selectedQuickPrompt) ||
-        String(systemPrompt || "").trim().length > 0
-
-      if (selectedCharacter?.name && ragPinnedResults.length > 0) {
-        warnings.push({
-          id: "character-rag",
-          text: t(
-            "playground:composer.conflict.characterRag",
-            "Character mode and pinned RAG sources are both active. Responses may blend persona and retrieval context."
-          ),
-          actionLabel: t(
-            "playground:composer.conflict.reviewContext",
-            "Review context"
-          ),
-          onAction: () => openKnowledgePanel("search")
-        })
-      }
-
-      if (selectedCharacter?.name && hasCustomPrompt) {
-        warnings.push({
-          id: "character-prompt",
-          text: t(
-            "playground:composer.conflict.characterPrompt",
-            "Character mode and custom prompt steering are both active. Verify intended behavior before sending."
-          ),
-          actionLabel: t(
-            "playground:composer.conflict.reviewModes",
-            "Review modes"
-          ),
-          onAction: () => setModeLauncherOpen(true)
-        })
-      }
-
-      if (compareModeActive && voiceChatEnabled) {
-        warnings.push({
-          id: "compare-voice",
-          text: t(
-            "playground:composer.conflict.compareVoice",
-            "Compare mode with voice can reduce output parity across models."
-          ),
-          actionLabel: t(
-            "playground:composer.conflict.adjustModes",
-            "Adjust modes"
-          ),
-          onAction: () => setModeLauncherOpen(true)
-        })
-      }
-
-      if (compareNeedsMoreModels) {
-        warnings.push({
-          id: "compare-min-models",
-          text: t(
-            "playground:composer.validationCompareMinModelsInline",
-            "Select at least two models for Compare mode."
-          ),
-          actionLabel: t(
-            "playground:composer.conflict.reviewModels",
-            "Review models"
-          ),
-          onAction: () => setOpenModelSettings(true)
-        })
-      }
-
-      if (compareModeActive && compareCapabilityIncompatibilities.length > 0) {
-        warnings.push({
-          id: "compare-capability",
-          text: t(
-            "playground:composer.conflict.compareCapabilities",
-            "Compare models have incompatible capabilities: {{details}}. Outputs may not be directly comparable.",
-            {
-              details: compareCapabilityIncompatibilities.join(", ")
-            } as any
-          ),
-          actionLabel: t(
-            "playground:composer.conflict.reviewModels",
-            "Review models"
-          ),
-          onAction: openModelApiSelector
-        })
-      }
-
-      if (showTokenBudgetWarning && tokenBudgetWarningText) {
-        warnings.push({
-          id: "token-budget",
-          text: tokenBudgetWarningText,
-          actionLabel: t(
-            "playground:composer.conflict.adjustBudget",
-            "Adjust budget"
-          ),
-          onAction: () => openContextWindowModal()
-        })
-      }
-      if (summaryCheckpointSuggestion.shouldSuggest && messages.length >= 2) {
-        warnings.push({
-          id: "summary-checkpoint",
-          text:
-            summaryCheckpointSuggestion.reason === "token-budget"
-              ? t(
-                  "playground:composer.conflict.summaryCheckpointBudget",
-                  "Consider creating a checkpoint summary before your next turn to reduce truncation risk."
-                )
-              : t(
-                  "playground:composer.conflict.summaryCheckpointVolume",
-                  "This thread is getting long. A checkpoint summary can preserve key decisions before context is trimmed."
-                ),
-          actionLabel: t(
-            "playground:composer.conflict.createCheckpointSummary",
-            "Create checkpoint summary"
-          ),
-          onAction: insertSummaryCheckpointPrompt
-        })
-      }
-      if (showNonMessageContextWarning) {
-        warnings.push({
-          id: "context-footprint",
-          text: t(
-            "playground:composer.conflict.contextFootprint",
-            "Non-message context is using {{percent}}% of the context window. Trim character/prompt/source context before sending.",
-            {
-              percent: Math.round(nonMessageContextPercent || 0)
-            } as any
-          ),
-          actionLabel: largestContextContributor
-            ? t(
-                "playground:composer.conflict.trimLargest",
-                "Trim largest"
-              )
-            : t("playground:composer.conflict.reviewContext", "Review context"),
-          onAction: largestContextContributor
-            ? trimLargestContextContributor
-            : () => openContextWindowModal()
-        })
-      }
-
-      return warnings
-    },
-    [
-      compareCapabilityIncompatibilities,
-      compareModeActive,
-      compareNeedsMoreModels,
-      largestContextContributor,
-      insertSummaryCheckpointPrompt,
-      messages.length,
-      nonMessageContextPercent,
-      openKnowledgePanel,
-      trimLargestContextContributor,
-      ragPinnedResults.length,
-      selectedCharacter?.name,
-      selectedQuickPrompt,
-      selectedSystemPrompt,
-      openModelApiSelector,
-      setOpenModelSettings,
-      setModeLauncherOpen,
-      showNonMessageContextWarning,
-      summaryCheckpointSuggestion.reason,
-      summaryCheckpointSuggestion.shouldSuggest,
-      showTokenBudgetWarning,
-      systemPrompt,
-      t,
-      tokenBudgetWarningText,
-      openContextWindowModal,
-      voiceChatEnabled
-    ]
-  )
-
-  const modeLauncherContent = (
-    <div className="flex w-72 flex-col gap-1 p-1">
-      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-        {t("playground:composer.modes", "Modes")}
-      </div>
-      <button
-        type="button"
-        onClick={() => {
-          const next = !compareModeActive
-          toggleCompareMode()
-          setModeAnnouncement(
-            next
-              ? t(
-                  "playground:composer.modeCompareEnabled",
-                  "Compare mode enabled."
-                )
-              : t(
-                  "playground:composer.modeCompareDisabled",
-                  "Compare mode disabled."
-                )
-          )
-          setModeLauncherOpen(false)
-        }}
-        disabled={!compareFeatureEnabled}
-        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <span>{t("playground:composer.modeCompare", "Compare responses")}</span>
-        <span className="text-xs text-text-muted">
-          {compareModeActive
-            ? t("common:on", "On")
-            : t("common:off", "Off")}
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setOpenActorSettings(true)
-          setModeAnnouncement(
-            t(
-              "playground:composer.modeCharacterNotice",
-              "Character settings opened."
-            )
-          )
-          setModeLauncherOpen(false)
-        }}
-        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-      >
-        <span>{t("playground:composer.modeCharacter", "Character mode")}</span>
-        <span className="truncate text-xs text-text-muted">
-          {selectedCharacter?.name
-            ? t("playground:composer.modeCharacterActive", "Active: {{name}}", {
-                name: selectedCharacter.name
-              })
-            : t("common:off", "Off")}
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          const nextOpen = !contextToolsOpen
-          toggleKnowledgePanel()
-          setModeAnnouncement(
-            nextOpen
-              ? t(
-                  "playground:composer.modeKnowledgeOpened",
-                  "Search & Context panel opened."
-                )
-              : t(
-                  "playground:composer.modeKnowledgeClosed",
-                  "Search & Context panel closed."
-                )
-          )
-          setModeLauncherOpen(false)
-        }}
-        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-      >
-        <span>{t("playground:composer.modeKnowledge", "Knowledge panel")}</span>
-        <span className="text-xs text-text-muted">
-          {contextToolsOpen
-            ? t("common:open", "Open")
-            : t("common:closed", "Closed")}
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          handleVoiceChatToggle()
-          setModeAnnouncement(
-            voiceChatEnabled
-              ? t(
-                  "playground:composer.modeVoiceDisabled",
-                  "Voice mode disabled."
-                )
-              : t(
-                  "playground:composer.modeVoiceEnabled",
-                  "Voice mode enabled."
-                )
-          )
-          setModeLauncherOpen(false)
-        }}
-        disabled={!voiceChatAvailable || isSending}
-        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <span>{t("playground:composer.modeVoice", "Voice mode")}</span>
-        <span className="text-xs text-text-muted">
-          {voiceChatEnabled
-            ? t("common:on", "On")
-            : t("common:off", "Off")}
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          if (!capabilities?.hasWebSearch) return
-          handleToggleWebSearch()
-          setModeAnnouncement(
-            webSearch
-              ? t(
-                  "playground:composer.modeWebSearchDisabled",
-                  "Web search disabled."
-                )
-              : t(
-                  "playground:composer.modeWebSearchEnabled",
-                  "Web search enabled."
-                )
-          )
-          setModeLauncherOpen(false)
-        }}
-        disabled={!capabilities?.hasWebSearch}
-        className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <span>{t("playground:composer.modeWebSearch", "Web search")}</span>
-        <span className="text-xs text-text-muted">
-          {webSearch
-            ? t("common:on", "On")
-            : t("common:off", "Off")}
-        </span>
-      </button>
-    </div>
-  )
+    ragPinnedResultsLength: ragPinnedResults.length,
+    webSearch,
+    jsonMode: Boolean(currentChatModelSettings.jsonMode),
+    compareModeActive,
+    compareNeedsMoreModels,
+    compareCapabilityIncompatibilities,
+    voiceChatEnabled,
+    showTokenBudgetWarning,
+    tokenBudgetWarningText,
+    summaryCheckpointSuggestion,
+    messagesLength: messages.length,
+    showNonMessageContextWarning,
+    nonMessageContextPercent,
+    largestContextContributor,
+    openKnowledgePanel,
+    openContextWindowModal,
+    openModelApiSelector,
+    setOpenModelSettings,
+    setModeLauncherOpen,
+    setOpenActorSettings,
+    trimLargestContextContributor,
+    insertSummaryCheckpointPrompt,
+    t
+  })
+  const {
+    compareSharedContextLabels,
+    compareInteroperabilityNotices,
+    contextConflictWarnings
+  } = settingsHook
 
   const modeLauncherButton = (
-    <Popover
-      trigger="click"
-      placement="topLeft"
-      content={modeLauncherContent}
+    <PlaygroundModeLauncher
       open={modeLauncherOpen}
       onOpenChange={setModeLauncherOpen}
-    >
-      <TldwButton
-        variant="outline"
-        size="sm"
-        shape="pill"
-        ariaLabel={t("playground:composer.modes", "Modes") as string}
-        title={t("playground:composer.modes", "Modes") as string}
-        className="min-h-[44px]"
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <Settings2 className="h-4 w-4" aria-hidden="true" />
-          <span>{t("playground:composer.modes", "Modes")}</span>
-        </span>
-      </TldwButton>
-    </Popover>
+      compareModeActive={compareModeActive}
+      compareFeatureEnabled={compareFeatureEnabled}
+      onToggleCompare={toggleCompareMode}
+      selectedCharacterName={selectedCharacter?.name || null}
+      onOpenActorSettings={() => setOpenActorSettings(true)}
+      contextToolsOpen={contextToolsOpen}
+      onToggleKnowledgePanel={toggleKnowledgePanel}
+      voiceChatEnabled={voiceChatEnabled}
+      voiceChatAvailable={voiceChatAvailable}
+      isSending={isSending}
+      onVoiceChatToggle={handleVoiceChatToggle}
+      webSearch={webSearch}
+      hasWebSearch={!!capabilities?.hasWebSearch}
+      onToggleWebSearch={handleToggleWebSearch}
+      onModeAnnouncement={setModeAnnouncement}
+      t={t}
+    />
   )
 
   const externalPinSources =
@@ -7129,96 +3543,25 @@ export const PlaygroundForm = ({
     return t("playground:composer.toolRunIdle", "Idle")
   }, [chatLoopState, t])
 
-  const mcpControlContent = (
-    <div className="flex w-64 flex-col gap-2 p-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-        {t("playground:composer.mcpToolsLabel", "MCP tools")}
-      </div>
-      <div className="text-xs text-text-muted">{mcpCtrl.mcpSummaryLabel}</div>
-      <div className="flex flex-col gap-1">
-        <div className="text-xs font-semibold text-text-muted">
-          {t("playground:composer.toolChoiceLabel", "Tool choice")}
-        </div>
-        <Radio.Group
-          size="small"
-          value={toolChoice}
-          onChange={(e) => setToolChoice(e.target.value as typeof toolChoice)}
-          className="flex flex-wrap gap-1"
-          aria-label={t("playground:composer.toolChoiceLabel", "Tool choice")}
-          disabled={
-            !hasMcp ||
-            mcpHealthState === "unhealthy" ||
-            mcpToolsLoading ||
-            mcpTools.length === 0
-          }
-        >
-          <Radio.Button value="auto">
-            {t("playground:composer.toolChoiceAuto", "Auto")}
-          </Radio.Button>
-          <Radio.Button value="required">
-            {t("playground:composer.toolChoiceRequired", "Required")}
-          </Radio.Button>
-          <Radio.Button value="none">
-            {t("playground:composer.toolChoiceNone", "None")}
-          </Radio.Button>
-        </Radio.Group>
-        <div className="text-[11px] text-text-muted">
-          {t("playground:composer.toolRunStatus", "Tool run")}: {toolRunStatusLabel}
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            mcpCtrl.setMcpPopoverOpen(false)
-            setMcpSettingsOpen(true)
-          }}
-          className="mt-1 inline-flex w-fit items-center gap-1 text-xs font-medium text-primary hover:text-primaryStrong"
-        >
-          {t("playground:composer.mcpConfigure", "Configure tools")}
-        </button>
-      </div>
-    </div>
+  const mcpControl = (
+    <PlaygroundMcpControl
+      hasMcp={hasMcp}
+      mcpHealthState={mcpHealthState}
+      mcpToolsLoading={mcpToolsLoading}
+      mcpToolsCount={mcpTools.length}
+      toolChoice={toolChoice}
+      onToolChoiceChange={setToolChoice}
+      toolRunStatusLabel={toolRunStatusLabel}
+      mcpAriaLabel={mcpCtrl.mcpAriaLabel}
+      mcpSummaryLabel={mcpCtrl.mcpSummaryLabel}
+      mcpChoiceLabel={mcpCtrl.mcpChoiceLabel}
+      mcpDisabledReason={mcpCtrl.mcpDisabledReason}
+      mcpPopoverOpen={mcpCtrl.mcpPopoverOpen}
+      onMcpPopoverChange={mcpCtrl.setMcpPopoverOpen}
+      onOpenMcpSettings={() => setMcpSettingsOpen(true)}
+      t={t}
+    />
   )
-
-  const mcpControlButton = (
-    <TldwButton
-      variant="outline"
-      size="md"
-      shape="pill"
-      ariaLabel={mcpCtrl.mcpAriaLabel}
-      title={mcpCtrl.mcpAriaLabel}
-      disabled={!hasMcp || mcpHealthState === "unhealthy"}
-      data-testid="mcp-tools-toggle"
-      className="gap-1.5 min-h-[44px]"
-    >
-      <span className="inline-flex items-center gap-1.5">
-        <span className="text-[11px] font-semibold">MCP</span>
-        <span className="text-[11px] text-text-muted">{mcpCtrl.mcpChoiceLabel}</span>
-        {!mcpToolsLoading && hasMcp && mcpTools.length > 0 && (
-          <span className="rounded-full bg-surface2 px-1.5 py-0.5 text-[10px] text-text-muted">
-            {mcpTools.length}
-          </span>
-        )}
-        <ChevronDown className="h-3.5 w-3.5 text-text-subtle" aria-hidden="true" />
-      </span>
-    </TldwButton>
-  )
-
-  const mcpControl =
-    !hasMcp || mcpHealthState === "unhealthy" ? (
-      <Tooltip title={mcpCtrl.mcpDisabledReason}>
-        <span>{mcpControlButton}</span>
-      </Tooltip>
-    ) : (
-      <Popover
-        trigger="click"
-        placement="topRight"
-        content={mcpControlContent}
-        open={mcpCtrl.mcpPopoverOpen}
-        onOpenChange={mcpCtrl.setMcpPopoverOpen}
-      >
-        {mcpControlButton}
-      </Popover>
-    )
 
   const voiceChatButton = voiceChatAvailable ? (
     <Tooltip
@@ -7251,326 +3594,75 @@ export const PlaygroundForm = ({
   ) : null
 
   const toolsButton = (
-    <Popover
-      trigger="click"
-      placement="topRight"
-      content={moreToolsContent}
-      overlayClassName="playground-more-tools"
-      open={toolsPopoverOpen}
-      onOpenChange={setToolsPopoverOpen}>
-      <TldwButton
-        variant="outline"
-        size="sm"
-        shape={isProMode ? "rounded" : "pill"}
-        iconOnly={!isProMode}
-        ariaLabel={t("playground:composer.moreTools", "More tools") as string}
-        title={t("playground:composer.moreTools", "More tools") as string}
-        data-testid="tools-button">
-        {isProMode ? (
-          <span>{t("playground:composer.toolsButton", "+Tools")}</span>
-        ) : (
-          <>
-            <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">
-              {t("playground:composer.moreTools", "More tools")}
-            </span>
-          </>
-        )}
-      </TldwButton>
-    </Popover>
-  )
-
-  const imageAttachmentDisabled =
-    chatMode === "rag"
-      ? t(
-          "playground:attachments.imageDisabledBody",
-          "Disable Knowledge Search to attach images."
-        )
-      : null
-
-  const attachmentMenu = React.useMemo(
-    () => (
-      <div className="flex w-56 flex-col gap-1 p-1">
-        <button
-          type="button"
-          onClick={handleDocumentUpload}
-          title={t("tooltip.uploadDocuments") as string}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-        >
-          <span className="flex flex-col items-start">
-            <span>{t("playground:actions.attachDocument", "Attach document")}</span>
-            <span className="text-[10px] text-text-muted">
-              {t(
-                "playground:actions.attachDocumentHint",
-                "PDF/DOCX/TXT/CSV/MD"
-              )}
-            </span>
-          </span>
-          <PaperclipIcon className="h-4 w-4" />
-        </button>
-        <div className="border-t border-border my-1" />
-        <button
-          type="button"
-          onClick={() => openKnowledgePanel("context")}
-          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2"
-        >
-          <span>{t("playground:attachments.manageContext", "Manage in Knowledge Panel")}</span>
-          <Settings2 className="h-4 w-4" />
-        </button>
-      </div>
-    ),
-    [
-      handleDocumentUpload,
-      openKnowledgePanel,
-      t
-    ]
+    <PlaygroundToolsPopover
+      toolsPopoverOpen={toolsPopoverOpen}
+      onToolsPopoverChange={setToolsPopoverOpen}
+      isProMode={isProMode}
+      onOpenImageGenerate={openImageGenerateModal}
+      onOpenKnowledgePanel={openKnowledgePanel}
+      useOCR={useOCR}
+      onUseOCRChange={setUseOCR}
+      hasWebSearch={!!capabilities?.hasWebSearch}
+      webSearch={webSearch}
+      onWebSearchChange={setWebSearch}
+      simpleInternetSearch={simpleInternetSearch}
+      onSimpleInternetSearchChange={setSimpleInternetSearch}
+      defaultInternetSearchOn={defaultInternetSearchOn}
+      onDefaultInternetSearchOnChange={setDefaultInternetSearchOnSetting}
+      onNavigateWebSearchSettings={navigateToWebSearchSettings}
+      advancedToolsExpanded={advancedToolsExpanded}
+      onAdvancedToolsExpandedChange={setAdvancedToolsExpanded}
+      allowExternalImages={allowExternalImages}
+      onAllowExternalImagesChange={setAllowExternalImages}
+      showMoodBadge={showMoodBadge}
+      onShowMoodBadgeChange={setShowMoodBadge}
+      showMoodConfidence={showMoodConfidence}
+      onShowMoodConfidenceChange={setShowMoodConfidence}
+      onOpenRawRequest={openRawRequestModal}
+      voiceChatAvailable={voiceChatAvailable}
+      voiceChatEnabled={voiceChatEnabled}
+      voiceChatState={voiceChat.state}
+      voiceChatStatusLabel={voiceChatStatusLabel}
+      onVoiceChatToggle={handleVoiceChatToggle}
+      isSending={isSending}
+      voiceChatSettingsFields={voiceChatSettingsFields}
+      imageProviderControl={imageProviderControl}
+      historyLength={history.length}
+      onClearContext={handleClearContext}
+      t={t}
+    />
   )
 
   const attachmentButton = (
-    <div className="inline-flex items-center">
-      <Tooltip title={imageAttachmentDisabled || undefined}>
-        <span>
-          <TldwButton
-            variant="outline"
-            size={isMobileViewport ? "lg" : "sm"}
-            shape={isProMode ? "rounded" : "pill"}
-            iconOnly={!isProMode}
-            ariaLabel={t("playground:actions.attachImage", "Attach image") as string}
-            title={t("playground:actions.attachImage", "Attach image") as string}
-            disabled={chatMode === "rag"}
-            data-testid="attachment-button"
-            onClick={handleImageUpload}
-            className="rounded-r-none"
-          >
-            {isProMode ? (
-              <span className="inline-flex items-center gap-1.5">
-                <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
-                <span>{t("playground:actions.attach", "Attach")}</span>
-              </span>
-            ) : (
-              <>
-                <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
-                <span className="sr-only">
-                  {t("playground:actions.attachImage", "Attach image")}
-                </span>
-              </>
-            )}
-          </TldwButton>
-        </span>
-      </Tooltip>
-      <Popover
-        trigger="click"
-        placement="topRight"
-        content={attachmentMenu}
-        overlayClassName="playground-attachment-menu"
-        open={attachmentMenuOpen}
-        onOpenChange={setAttachmentMenuOpen}
-      >
-        <TldwButton
-          variant="outline"
-          size={isMobileViewport ? "lg" : "sm"}
-          shape={isProMode ? "rounded" : "pill"}
-          iconOnly
-          ariaLabel={t("playground:actions.attachMore", "More attachments") as string}
-          title={t("playground:actions.attachMore", "More attachments") as string}
-          className="-ml-px rounded-l-none"
-        >
-          <ChevronDown className="h-4 w-4" aria-hidden="true" />
-        </TldwButton>
-      </Popover>
-    </div>
+    <PlaygroundAttachmentButton
+      isProMode={isProMode}
+      isMobileViewport={isMobileViewport}
+      chatMode={chatMode}
+      onImageUpload={handleImageUpload}
+      onDocumentUpload={handleDocumentUpload}
+      onOpenKnowledgePanel={openKnowledgePanel}
+      attachmentMenuOpen={attachmentMenuOpen}
+      onAttachmentMenuChange={setAttachmentMenuOpen}
+      t={t}
+    />
   )
-
-  const sendControl = !isSending ? (
-    <Space.Compact
-      className={`!justify-end !w-auto ${
-        isProMode ? "" : "!h-9 !rounded-full !px-3 !text-xs"
-      }`}
-    >
-      <Button
-        size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
-        htmlType="submit"
-        disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
-        className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
-        title={
-          !isConnectionReady
-            ? (t(
-                "playground:composer.connectToSend",
-                "Connect to your tldw server to start chatting."
-              ) as string)
-            : compareNeedsMoreModels
-              ? (t(
-                  "playground:composer.validationCompareMinModelsInline",
-                  "Select at least two models for Compare mode."
-                ) as string)
-            : sendWhenEnter
-              ? (t("playground:composer.submitAriaEnter", "Send message (Enter)") as string)
-              : (t(
-                  "playground:composer.submitAriaModEnter",
-                  isMac ? "Send message (⌘+Enter)" : "Send message (Ctrl+Enter)"
-                ) as string)
-        }
-        aria-label={
-          t("playground:composer.submitAria", "Send message") as string
-        }
-      >
-        <div
-          className={`inline-flex items-center ${
-            isProMode ? "gap-2" : "gap-1"
-          }`}
-        >
-          {sendWhenEnter ? (
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              className="h-5 w-5"
-              viewBox="0 0 24 24">
-              <path d="M9 10L4 15 9 20"></path>
-              <path d="M20 4v7a4 4 0 01-4 4H4"></path>
-            </svg>
-          ) : null}
-          <span
-            className={
-              isProMode
-                ? ""
-                : "text-[11px] font-semibold uppercase tracking-[0.12em]"
-            }>
-            {sendLabel}
-          </span>
-        </div>
-      </Button>
-      <Dropdown
-        open={sendMenuOpen}
-        onOpenChange={(open) => setSendMenuOpen(open)}
-        disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
-        trigger={["click"]}
-        menu={{
-          items: [
-            {
-              key: 1,
-              label: (
-                <Checkbox
-                  checked={sendWhenEnter}
-                  onChange={(e) =>
-                    setSendWhenEnter(e.target.checked)
-                  }>
-                  {t("sendWhenEnter")}
-                </Checkbox>
-              )
-            }
-          ]
-        }}
-      >
-        <Button
-          size={isMobileViewport ? "large" : isProMode ? "middle" : "small"}
-          disabled={isSending || !isConnectionReady || compareNeedsMoreModels}
-          className={isMobileViewport ? "min-h-[44px] min-w-[44px]" : undefined}
-          aria-label={
-            t(
-              "playground:composer.sendOptions",
-              "Open send options"
-            ) as string
-          }
-          title={
-            t(
-              "playground:composer.sendOptions",
-              "Open send options"
-            ) as string
-          }
-          icon={
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1.5}
-              stroke="currentColor"
-              className={isProMode ? "w-5 h-5" : "w-4 h-4"}>
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="m19.5 8.25-7.5 7.5-7.5-7.5"
-              />
-            </svg>
-          }
-        />
-      </Dropdown>
-    </Space.Compact>
-  ) : (
-    <Tooltip
-      title={
-        t("tooltip.stopStreaming") as string
-      }>
-      <TldwButton
-        variant="outline"
-        size={isMobileViewport ? "lg" : "md"}
-        iconOnly
-        onClick={stopStreamingRequest}
-        ariaLabel={t("tooltip.stopStreaming") as string}>
-        <StopCircleIcon className="size-5 sm:size-4" />
-      </TldwButton>
-    </Tooltip>
-  )
-
-  const handleLaunchDeepResearch = React.useCallback(() => {
-    const trimmedMessage = form.values.message.trim()
-    navigate(
-      buildResearchLaunchPath(
-        trimmedMessage
-          ? {
-              query: trimmedMessage,
-              sourcePolicy: "balanced",
-              autonomyMode: "checkpointed",
-              autorun: true,
-              from: "chat",
-              chatId: serverChatId ?? null
-            }
-          : { from: "chat", chatId: serverChatId ?? null }
-      )
-    )
-  }, [form.values.message, navigate, serverChatId])
-
-  const researchLaunchButton = (
-    <>
-      <TldwButton
-        variant="outline"
-        size={isMobileViewport ? "lg" : "sm"}
-        shape={isProMode ? "rounded" : "pill"}
-        onClick={handleLaunchDeepResearch}
-        title={t("playground:actions.deepResearch", "Deep Research") as string}
-        ariaLabel={t("playground:actions.deepResearch", "Deep Research") as string}
-        className={isProMode ? "" : "whitespace-nowrap"}
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <Search className="h-4 w-4" aria-hidden="true" />
-          <span>{t("playground:actions.deepResearch", "Deep Research")}</span>
-        </span>
-      </TldwButton>
-      <TldwButton
-        variant="outline"
-        size={isMobileViewport ? "lg" : "sm"}
-        shape={isProMode ? "rounded" : "pill"}
-        onClick={openFollowUpResearchModal}
-        disabled={!canLaunchFollowUpResearch || followUpResearchPending}
-        title={
-          t("playground:actions.followUpResearch", "Follow-up Research") as string
-        }
-        ariaLabel={
-          t("playground:actions.followUpResearch", "Follow-up Research") as string
-        }
-        className={isProMode ? "" : "whitespace-nowrap"}
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <GitBranch className="h-4 w-4" aria-hidden="true" />
-          <span>
-            {t("playground:actions.followUpResearch", "Follow-up Research")}
-          </span>
-        </span>
-      </TldwButton>
-    </>
+  const sendControl = (
+    <PlaygroundSendControl
+      isProMode={isProMode}
+      isMobileViewport={isMobileViewport}
+      isSending={isSending}
+      isConnectionReady={isConnectionReady}
+      sendWhenEnter={sendWhenEnter}
+      onSendWhenEnterChange={setSendWhenEnter}
+      sendLabel={sendLabel}
+      compareNeedsMoreModels={compareNeedsMoreModels}
+      onStopStreaming={stopStreamingRequest}
+      onStopListening={stopListening}
+      onSubmitForm={submitForm}
+      sendMenuOpen={sendMenuOpen}
+      onSendMenuChange={setSendMenuOpen}
+      t={t}
+    />
   )
 
   const startupTemplatePromptResolution = startupTemplatePreview
@@ -7582,6 +3674,111 @@ export const PlaygroundForm = ({
   const startupTemplatePreset = startupTemplatePreview
     ? getPresetByKey(startupTemplatePreview.presetKey)
     : undefined
+  const rawRequestModalFooterExtras = attachedResearchContextDraft ? (
+    <>
+      <Button onClick={handleResetAttachedResearchDraft}>
+        {t(
+          "playground:actions.resetAttachedResearchContext",
+          "Reset to Attached Run"
+        )}
+      </Button>
+      <Button type="primary" onClick={applyAttachedResearchDraft}>
+        {t("playground:actions.applyAttachedResearchContext", "Apply")}
+      </Button>
+    </>
+  ) : null
+  const rawRequestAttachedResearchPanel = attachedResearchContextDraft ? (
+    <div
+      data-testid="attached-research-context-panel"
+      className="space-y-3 rounded-md border border-border bg-surface px-3 py-3"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium text-text">
+            {t(
+              "playground:tools.attachedResearchContextTitle",
+              "Attached Research Context"
+            )}
+          </h3>
+          <p className="text-xs text-text-muted">
+            {attachedResearchContextDraft.query}
+          </p>
+        </div>
+        <div className="space-y-1 text-right text-[11px] text-text-muted">
+          <div>
+            {t("playground:tools.attachedResearchRunId", "Run ID")}:{" "}
+            <span className="font-mono">{attachedResearchContextDraft.run_id}</span>
+          </div>
+          <div>
+            {t("playground:tools.attachedResearchAttachedAt", "Attached")}:{" "}
+            {new Date(attachedResearchContextDraft.attached_at).toLocaleString()}
+          </div>
+        </div>
+      </div>
+      {attachedResearchPreviewSuppressed ? (
+        <p className="text-xs text-text-muted">
+          {t(
+            "playground:tools.attachedResearchContextSuppressed",
+            "Attached research is active but omitted from this request preview."
+          )}
+        </p>
+      ) : null}
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-muted">
+            {t("playground:composer.context.question", "Question")}
+          </label>
+          <Input
+            data-testid="attached-research-context-question-input"
+            value={attachedResearchContextDraft.question}
+            onChange={handleAttachedResearchDraftQuestionChange}
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-muted">
+            {t("playground:tools.attachedResearchContextLink", "Research link")}
+          </label>
+          <Input value={attachedResearchContextDraft.research_url} readOnly />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-muted">
+            {t("playground:composer.context.outline", "Outline")}
+          </label>
+          <Input.TextArea
+            data-testid="attached-research-context-outline-input"
+            value={stringifyOutline(attachedResearchContextDraft)}
+            onChange={handleAttachedResearchDraftOutlineChange}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-text-muted">
+            {t("playground:composer.context.claims", "Key claims")}
+          </label>
+          <Input.TextArea
+            data-testid="attached-research-context-claims-input"
+            value={stringifyKeyClaims(attachedResearchContextDraft)}
+            onChange={handleAttachedResearchDraftClaimsChange}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+          />
+        </div>
+        <div className="space-y-1 md:col-span-2">
+          <label className="text-xs font-medium text-text-muted">
+            {t(
+              "playground:composer.context.unresolvedQuestions",
+              "Unresolved questions"
+            )}
+          </label>
+          <Input.TextArea
+            data-testid="attached-research-context-unresolved-input"
+            value={stringifyUnresolvedQuestions(attachedResearchContextDraft)}
+            onChange={handleAttachedResearchDraftUnresolvedChange}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+          />
+        </div>
+      </div>
+    </div>
+  ) : null
 
   return (
     <React.Profiler
@@ -7643,152 +3840,11 @@ export const PlaygroundForm = ({
             <div>
               <div className="flex w-full min-w-0 bg-transparent">
                 <form
-                  onSubmit={form.onSubmit(async (value) => {
+                  onSubmit={(event) => {
+                    event.preventDefault()
                     stopListening()
-                    const intent = resolveSubmissionIntent(value.message)
-                    if (intent.handled && !intent.invalidImageCommand) {
-                      form.setFieldValue("message", intent.message)
-                    }
-                    if (intent.invalidImageCommand) {
-                      notificationApi.error({
-                        message: t("error", { defaultValue: "Error" }),
-                        description: intent.imageCommandMissingProvider
-                          ? t(
-                              "imageCommand.missingProvider",
-                              "Pick an Image provider in More tools or use /generate-image:<provider> <prompt>."
-                            )
-                          : t(
-                              "imageCommand.invalidUsage",
-                              "Use /generate-image:<provider> <prompt>."
-                            )
-                      })
-                      return
-                    }
-                    if (!intent.isImageCommand) {
-                      if (!compareModeActive) {
-                        const normalizedSelectedModel = normalizeChatModelId(selectedModel)
-                        if (!normalizedSelectedModel) {
-                          form.setFieldError("message", t("formError.noModel"))
-                          return
-                        }
-                        if (!validateSelectedChatModelsAvailability([normalizedSelectedModel])) {
-                          return
-                        }
-                      } else if (
-                        !compareSelectedModels ||
-                        compareSelectedModels.length < 2
-                      ) {
-                        form.setFieldError(
-                          "message",
-                          t(
-                            "playground:composer.validationCompareMinModelsInline",
-                            "Select at least two models for Compare mode."
-                          )
-                        )
-                        return
-                      } else if (
-                        !validateSelectedChatModelsAvailability(compareSelectedModels)
-                      ) {
-                        return
-                      }
-                      if (
-                        value.image.length > 0 &&
-                        !compareModelsSupportCapability(compareSelectedModels, "vision")
-                      ) {
-                        form.setFieldError(
-                          "message",
-                          t(
-                            "playground:composer.validationCompareVisionInline",
-                            "One or more selected compare models do not support image input."
-                          )
-                        )
-                        return
-                      }
-                    }
-                    const defaultEM = await defaultEmbeddingModelForRag()
-
-                    if (!intent.isImageCommand && webSearch) {
-                      const simpleSearch = await getIsSimpleInternetSearch()
-                      if (!defaultEM && !simpleSearch) {
-                        form.setFieldError(
-                          "message",
-                          t("formError.noEmbeddingModel")
-                        )
-                        return
-                      }
-                    }
-                    if (
-                      !intent.isImageCommand &&
-                      intent.message.trim().length === 0 &&
-                      value.image.length === 0 &&
-                      selectedDocuments.length === 0 &&
-                      uploadedFiles.length === 0
-                    ) {
-                      return
-                    }
-                    if (intent.isImageCommand && intent.message.trim().length === 0) {
-                      notificationApi.error({
-                        message: t("error", { defaultValue: "Error" }),
-                        description: t(
-                          "imageCommand.missingPrompt",
-                          "Image prompt is required."
-                        )
-                      })
-                      return
-                    }
-                    form.reset()
-                    clearSelectedDocuments()
-                    clearUploadedFiles()
-                    textAreaFocus()
-                    const projectedForSubmission = projectTokenBudget({
-                      conversationTokens: conversationTokenCount,
-                      draftTokens: estimateTokensForText(intent.message.trim()),
-                      maxTokens: resolvedMaxContext
-                    })
-                    if (projectedForSubmission.isOverLimit || projectedForSubmission.isNearLimit) {
-                      notificationApi.warning({
-                        message: t("playground:tokens.preSendWarningTitle", "Context budget warning"),
-                        description: projectedForSubmission.isOverLimit
-                          ? t(
-                              "playground:tokens.preSendOverLimit",
-                              "Projected send exceeds the model context window. Consider trimming prompt/context before sending."
-                            )
-                          : t(
-                              "playground:tokens.preSendNearLimit",
-                              "Projected send is near the context window limit."
-                            )
-                      })
-                    }
-                    setLastSubmittedContext(currentContextSnapshot)
-                    await sendMessage({
-                      image: intent.isImageCommand ? "" : value.image,
-                      message: intent.message.trim(),
-                      docs: intent.isImageCommand
-                        ? []
-                        : selectedDocuments.map((doc) => ({
-                            type: "tab",
-                            tabId: doc.id,
-                            title: doc.title,
-                            url: doc.url
-                          })),
-                      imageBackendOverride: intent.isImageCommand
-                        ? intent.imageBackendOverride
-                        : undefined,
-                      userMessageType: intent.isImageCommand
-                        ? IMAGE_GENERATION_USER_MESSAGE_TYPE
-                        : undefined,
-                      assistantMessageType: intent.isImageCommand
-                        ? IMAGE_GENERATION_ASSISTANT_MESSAGE_TYPE
-                        : undefined,
-                      imageGenerationSource: intent.isImageCommand
-                        ? "slash-command"
-                        : undefined,
-                      researchContext: resolveAttachedResearchRequestContext({
-                        isImageCommand: intent.isImageCommand,
-                        compareModeActive
-                      })
-                    })
-                  })}
+                    submitForm()
+                  }}
                   className="flex w-full min-w-0 flex-col items-center">
                   <input
                     id="file-upload"
@@ -7823,7 +3879,15 @@ export const PlaygroundForm = ({
                         ? "rounded-md border border-dashed border-border bg-surface2"
                         : ""
                     }`}>
-                  {attachedResearchContext && (
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        onClick={openFollowUpResearchModal}
+                        disabled={!canLaunchFollowUpResearch || followUpResearchPending}
+                      >
+                        {t("playground:actions.followUpResearch", "Follow-up Research")}
+                      </Button>
+                    </div>
+                    {attachedResearchContext ? (
                       <AttachedResearchContextChip
                         context={attachedResearchContext}
                         pinned={attachedResearchContextPinned}
@@ -7837,7 +3901,7 @@ export const PlaygroundForm = ({
                         onPinHistory={onPinAttachedResearchContextHistory}
                         onSelectHistory={onSelectAttachedResearchContextHistory}
                       />
-                    )}
+                    ) : null}
                     {!attachedResearchContext &&
                     (attachedResearchContextPinned ||
                       attachedResearchContextHistory.length > 0) ? (
@@ -7871,32 +3935,21 @@ export const PlaygroundForm = ({
                                   onClick={() => onRestorePinnedResearchContext?.()}
                                   className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
                                 >
-                                  {t(
-                                    "playground:actions.usePinnedResearchNow",
-                                    "Use now"
-                                  )}
+                                  {t("playground:actions.usePinnedResearchNow", "Use now")}
                                 </button>
-                                <Link
-                                  to={buildResearchLaunchPath({
-                                    run: attachedResearchContextPinned.run_id
-                                  })}
-                                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                                >
-                                  {t(
-                                    "playground:actions.openInResearch",
-                                    "Open in Research"
-                                  )}
-                                </Link>
                                 <button
                                   type="button"
                                   onClick={() => onUnpinAttachedResearchContext?.()}
                                   className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
                                 >
-                                  {t(
-                                    "playground:actions.unpinResearchContext",
-                                    "Unpin"
-                                  )}
+                                  {t("playground:actions.unpinResearchContext", "Unpin")}
                                 </button>
+                                <Link
+                                  to={attachedResearchContextPinned.research_url}
+                                  className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                >
+                                  {t("playground:actions.openInResearch", "Open in Research")}
+                                </Link>
                                 {onPrepareResearchFollowUp ? (
                                   <button
                                     type="button"
@@ -7914,26 +3967,21 @@ export const PlaygroundForm = ({
                               </div>
                               {pendingAttachmentFollowUp?.run_id ===
                               attachedResearchContextPinned.run_id ? (
-                                <div
-                                  data-testid="pinned-research-follow-up-confirmation"
-                                  className="rounded-md border border-border bg-surface px-3 py-2 text-[11px] text-text"
-                                >
+                                <div className="space-y-2 rounded border border-border bg-surface px-3 py-2 text-[11px] text-text">
                                   <div className="font-medium">
                                     {t(
                                       "playground:actions.prepareFollowUpTitle",
                                       "Prepare follow-up?"
                                     )}
                                   </div>
-                                  <div className="mt-1">
+                                  <div className="text-text-muted">
                                     {t(
                                       "playground:actions.prepareFollowUpBody",
                                       'This will use "{{query}}" and prefill a follow-up research prompt in the composer.',
-                                      {
-                                        query: pendingAttachmentFollowUp.query
-                                      }
+                                      { query: pendingAttachmentFollowUp.query }
                                     )}
                                   </div>
-                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <div className="flex flex-wrap items-center gap-2">
                                     <button
                                       type="button"
                                       onClick={() => {
@@ -7951,9 +3999,7 @@ export const PlaygroundForm = ({
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() =>
-                                        setPendingAttachmentFollowUp(null)
-                                      }
+                                      onClick={() => setPendingAttachmentFollowUp(null)}
                                       className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
                                     >
                                       {t("common:cancel", "Cancel")}
@@ -7967,72 +4013,77 @@ export const PlaygroundForm = ({
                         {attachedResearchContextHistory.length > 0 ? (
                           <div
                             data-testid="pinned-research-history-block"
-                            className="rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text"
+                            className="rounded-md border border-border bg-surface2 px-3 py-3 text-xs text-text"
                           >
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-medium text-text-muted">
-                                {t(
-                                  "playground:composer.recentResearch",
-                                  "Recent research"
-                                )}
-                              </span>
+                            <div className="mb-2 font-medium text-text-muted">
+                              {t("playground:composer.recentResearch", "Recent research")}
+                            </div>
+                            <div className="flex flex-col gap-2">
                               {attachedResearchContextHistory.map((entry) => (
-                                <React.Fragment key={entry.run_id}>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onSelectAttachedResearchContextHistory?.(entry)
-                                    }
-                                    className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                                  >
-                                    {entry.query}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onPinAttachedResearchContextHistory?.(entry)
-                                    }
-                                    className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                                  >
-                                    {`${t("playground:actions.pinResearchContext", "Pin")} ${entry.query}`}
-                                  </button>
-                                  {onPrepareResearchFollowUp ? (
-                                    <button
-                                      type="button"
-                                      onClick={(event) => {
-                                        event.stopPropagation()
-                                        setPendingAttachmentFollowUp({
-                                          run_id: entry.run_id,
-                                          query: entry.query
-                                        })
-                                      }}
-                                      className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
-                                    >
-                                      {t("playground:actions.followUp", "Follow up")}
-                                    </button>
-                                  ) : null}
-                                  {pendingAttachmentFollowUp?.run_id ===
-                                  entry.run_id ? (
-                                    <div
-                                      data-testid={`history-follow-up-confirmation-${entry.run_id}`}
-                                      className="w-full rounded-md border border-border bg-surface px-3 py-2 text-[11px] text-text"
-                                    >
+                                <div
+                                  key={entry.run_id}
+                                  className="rounded border border-border bg-surface px-3 py-2"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="truncate font-medium text-text">
+                                        {entry.query}
+                                      </div>
+                                      <div className="truncate text-[11px] text-text-muted">
+                                        {entry.question}
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          onSelectAttachedResearchContextHistory?.(entry)
+                                        }
+                                        className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                      >
+                                        {t("playground:actions.usePinnedResearchNow", "Use now")}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          onPinAttachedResearchContextHistory?.(entry)
+                                        }
+                                        className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                      >
+                                        {t("playground:actions.pinResearchContext", "Pin")}
+                                      </button>
+                                      {onPrepareResearchFollowUp ? (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setPendingAttachmentFollowUp({
+                                              run_id: entry.run_id,
+                                              query: entry.query
+                                            })
+                                          }
+                                          className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                        >
+                                          {t("playground:actions.followUp", "Follow up")}
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                  {pendingAttachmentFollowUp?.run_id === entry.run_id ? (
+                                    <div className="mt-2 space-y-2 rounded border border-border bg-surface2 px-3 py-2 text-[11px] text-text">
                                       <div className="font-medium">
                                         {t(
                                           "playground:actions.prepareFollowUpTitle",
                                           "Prepare follow-up?"
                                         )}
                                       </div>
-                                      <div className="mt-1">
+                                      <div className="text-text-muted">
                                         {t(
                                           "playground:actions.prepareFollowUpBody",
                                           'This will use "{{query}}" and prefill a follow-up research prompt in the composer.',
-                                          {
-                                            query: pendingAttachmentFollowUp.query
-                                          }
+                                          { query: pendingAttachmentFollowUp.query }
                                         )}
                                       </div>
-                                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                                      <div className="flex flex-wrap items-center gap-2">
                                         <button
                                           type="button"
                                           onClick={() => {
@@ -8041,7 +4092,7 @@ export const PlaygroundForm = ({
                                             )
                                             setPendingAttachmentFollowUp(null)
                                           }}
-                                          className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                          className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
                                         >
                                           {t(
                                             "playground:actions.prepareFollowUp",
@@ -8050,71 +4101,47 @@ export const PlaygroundForm = ({
                                         </button>
                                         <button
                                           type="button"
-                                          onClick={() =>
-                                            setPendingAttachmentFollowUp(null)
-                                          }
-                                          className="rounded border border-border bg-surface2 px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
+                                          onClick={() => setPendingAttachmentFollowUp(null)}
+                                          className="rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text hover:bg-surface3"
                                         >
                                           {t("common:cancel", "Cancel")}
                                         </button>
                                       </div>
                                     </div>
                                   ) : null}
-                                </React.Fragment>
+                                </div>
                               ))}
                             </div>
                           </div>
                         ) : null}
                       </div>
                     ) : null}
-                    <div
-                      className={contextToolsOpen ? "mb-2" : "hidden"}
-                      aria-hidden={!contextToolsOpen}
-                    >
-                      <div className="rounded-md bg-surface2/50 p-3">
-                        <div className="flex flex-col gap-4">
-                          <div>
-                            <div className="mb-2 text-xs font-semibold text-text">
-                              {t(
-                                "playground:composer.knowledgeSearch",
-                                "Search & Context"
-                              )}
-                            </div>
-                            {wrapComposerProfile(
-                              "knowledge-panel",
-                              <KnowledgePanel
-                                onInsert={handleKnowledgeInsert}
-                                onAsk={handleKnowledgeAsk}
-                                isConnected={isConnectionReady}
-                                open={contextToolsOpen}
-                                onOpenChange={handleKnowledgePanelOpenChange}
-                                openTab={knowledgePanelTab}
-                                openTabRequestId={knowledgePanelTabRequestId}
-                                autoFocus
-                                showToggle={false}
-                                variant="embedded"
-                                currentMessage={contextToolsOpen ? deferredComposerInput : ""}
-                                showAttachedContext
-                                attachedImage={form.values.image}
-                                attachedTabs={selectedDocuments}
-                                availableTabs={availableTabs}
-                                attachedFiles={uploadedFiles}
-                                onRemoveImage={handleKnowledgeRemoveImage}
-                                onRemoveTab={removeDocument}
-                                onAddTab={addDocument}
-                                onClearTabs={clearSelectedDocuments}
-                                onRefreshTabs={reloadTabs}
-                                onAddFile={handleKnowledgeAddFile}
-                                onRemoveFile={removeUploadedFile}
-                                onClearFiles={clearUploadedFiles}
-                                fileRetrievalEnabled={fileRetrievalEnabled}
-                                onFileRetrievalChange={setFileRetrievalEnabled}
-                              />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <PlaygroundKnowledgeSection
+                      contextToolsOpen={contextToolsOpen}
+                      isConnectionReady={isConnectionReady}
+                      knowledgePanelTab={knowledgePanelTab}
+                      knowledgePanelTabRequestId={knowledgePanelTabRequestId}
+                      deferredComposerInput={deferredComposerInput}
+                      attachedImage={form.values.image}
+                      attachedTabs={selectedDocuments}
+                      availableTabs={availableTabs}
+                      attachedFiles={uploadedFiles}
+                      fileRetrievalEnabled={fileRetrievalEnabled}
+                      onInsert={handleKnowledgeInsert}
+                      onAsk={handleKnowledgeAsk}
+                      onOpenChange={handleKnowledgePanelOpenChange}
+                      onRemoveImage={handleKnowledgeRemoveImage}
+                      onRemoveTab={removeDocument}
+                      onAddTab={addDocument}
+                      onClearTabs={clearSelectedDocuments}
+                      onRefreshTabs={reloadTabs}
+                      onAddFile={handleKnowledgeAddFile}
+                      onRemoveFile={removeUploadedFile}
+                      onClearFiles={clearUploadedFiles}
+                      onFileRetrievalChange={setFileRetrievalEnabled}
+                      wrapComposerProfile={wrapComposerProfile}
+                      t={t}
+                    />
                     <div className="relative">
                       {isProMode && replyTarget && (
                         <div className="mb-2 flex items-center justify-between gap-2 rounded-md border border-border bg-surface2 px-3 py-2 text-xs text-text">
@@ -8237,403 +4264,87 @@ export const PlaygroundForm = ({
                         ) : null}
                       </div>
                     )}
-                    {modeAnnouncement && (
-                      <div
-                        role="status"
-                        aria-live="polite"
-                        className="mt-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-primaryStrong"
-                      >
-                        {modeAnnouncement}
-                      </div>
-                    )}
-                    {characterPendingApply && (
-                      <div
-                        role="status"
-                        aria-live="polite"
-                        className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-2 py-2 text-xs text-primaryStrong"
-                      >
-                        <span>
-                          {t(
-                            "playground:composer.characterPendingNotice",
-                            "Character updates will apply on your next turn."
-                          )}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          {selectedCharacterGreeting && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setMessageValue(selectedCharacterGreeting, {
-                                  collapseLarge: true
-                                })
-                                textAreaFocus()
-                              }}
-                              className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
-                            >
-                              {t(
-                                "playground:composer.characterUseGreeting",
-                                "Use greeting"
-                              )}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => setOpenActorSettings(true)}
-                            className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
-                          >
-                            {t(
-                              "playground:composer.characterReview",
-                              "Review character"
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {compareModeActive && (
-                      <div
-                        role="status"
-                        aria-live="polite"
-                        data-testid="compare-activation-contract"
-                        className="mt-1 space-y-2 rounded-md border border-primary/30 bg-primary/10 px-2 py-2 text-xs text-primaryStrong"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-[11px] font-semibold uppercase tracking-wide">
-                            {t(
-                              "playground:composer.compareActivationTitle",
-                              "Compare contract"
-                            )}
-                          </span>
-                          <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] font-medium text-primaryStrong">
-                            {t(
-                              "playground:composer.compareActivationCount",
-                              "{{count}} models",
-                              {
-                                count: compareSelectedModels.length
-                              } as any
-                            )}
-                          </span>
-                        </div>
-                        <p>
-                          {t(
-                            "playground:composer.compareActivationBody",
-                            "Next send fans out the same prompt and shared context to each selected model. Compare mode stays active until you turn it off."
-                          )}
-                        </p>
-                        <div className="space-y-1">
-                          <p className="text-[11px] font-medium text-primaryStrong">
-                            {t(
-                              "playground:composer.compareActivationModels",
-                              "Selected models"
-                            )}
-                          </p>
-                          <div className="flex flex-wrap gap-1">
-                            {compareSelectedModelLabels.length > 0 ? (
-                              compareSelectedModelLabels.map((label, index) => (
-                                <span
-                                  key={`${label}-${index}`}
-                                  className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] text-primaryStrong"
-                                >
-                                  {label}
-                                </span>
-                              ))
-                            ) : (
-                              <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] text-primaryStrong">
-                                {t(
-                                  "playground:compare.noModelsSelected",
-                                  "No models selected"
-                                )}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-[11px] font-medium text-primaryStrong">
-                            {t(
-                              "playground:composer.compareActivationSharedContext",
-                              "Shared context"
-                            )}
-                          </p>
-                          <div className="flex flex-wrap gap-1">
-                            {compareSharedContextLabels.length > 0 ? (
-                              compareSharedContextLabels.map((label, index) => (
-                                <span
-                                  key={`${label}-${index}`}
-                                  className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] text-primaryStrong"
-                                >
-                                  {label}
-                                </span>
-                              ))
-                            ) : (
-                              <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5 text-[10px] text-primaryStrong">
-                                {t(
-                                  "playground:composer.compareActivationNoSharedContext",
-                                  "No additional shared context modifiers are active."
-                                )}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {compareInteroperabilityNotices.length > 0 && (
-                          <div className="space-y-1" data-testid="compare-interoperability-notices">
-                            <p className="text-[11px] font-medium text-primaryStrong">
-                              {t(
-                                "playground:composer.compareActivationInteroperability",
-                                "Interoperability notes"
-                              )}
-                            </p>
-                            <div className="space-y-1">
-                              {(noticesExpanded
-                                ? compareInteroperabilityNotices
-                                : compareInteroperabilityNotices.slice(0, 2)
-                              ).map((notice) => (
-                                <div
-                                  key={notice.id}
-                                  className={`rounded border px-2 py-1 text-[11px] ${
-                                    notice.tone === "warning"
-                                      ? "border-warn/40 bg-warn/10 text-warn"
-                                      : "border-primary/30 bg-surface text-primaryStrong"
-                                  }`}
-                                >
-                                  {notice.text}
-                                </div>
-                              ))}
-                              {compareInteroperabilityNotices.length > 2 && (
-                                <button
-                                  type="button"
-                                  onClick={() => setNoticesExpanded(!noticesExpanded)}
-                                  className="text-[10px] text-primary underline"
-                                >
-                                  {noticesExpanded
-                                    ? t(
-                                        "playground:compareNoticesCollapse",
-                                        "Show fewer"
-                                      )
-                                    : t(
-                                        "playground:compareNoticesExpand",
-                                        "{{count}} more notes",
-                                        { count: compareInteroperabilityNotices.length - 2 }
-                                      )}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span
-                            className={
-                              compareNeedsMoreModels
-                                ? "text-warn"
-                                : "text-primaryStrong"
-                            }
-                          >
-                            {compareNeedsMoreModels
-                              ? t(
-                                  "playground:composer.compareActivationNeedsMoreModels",
-                                  "Add at least one more model before sending in Compare mode."
-                                )
-                              : t(
-                                  "playground:composer.compareActivationPersistence",
-                                  "These selections persist for next turns until Compare mode is disabled."
-                                )}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setOpenModelSettings(true)}
-                            className={`rounded border px-2 py-0.5 text-[11px] font-medium ${
-                              compareNeedsMoreModels
-                                ? "border-warn/40 bg-surface text-warn hover:bg-warn/10"
-                                : "border-primary/30 bg-surface text-primaryStrong hover:bg-primary/10"
-                            }`}
-                          >
-                            {compareNeedsMoreModels
-                              ? t("playground:compare.addModels", "Add models")
-                              : t(
-                                  "playground:composer.compareActivationReviewModels",
-                                  "Review models"
-                                )}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {contextDeltaLabels.length > 0 && (
-                      <div
-                        role="status"
-                        aria-live="polite"
-                        className="mt-1 flex flex-wrap items-center gap-1 rounded-md border border-border bg-surface2 px-2 py-1"
-                      >
-                        <span className="text-[11px] font-medium text-text-muted">
-                          {t(
-                            "playground:composer.delta.title",
-                            "Changed since last send:"
-                          )}
-                        </span>
-                        {contextDeltaLabels.map((delta) => (
-                          <span
-                            key={delta}
-                            className="rounded-full border border-border bg-surface px-2 py-0.5 text-[10px] text-text-muted"
-                          >
-                            {delta}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {contextConflictWarnings.length > 0 && (
-                      <div
-                        role="status"
-                        aria-live="polite"
-                        className="mt-1 space-y-1 rounded-md border border-warn/40 bg-warn/10 px-2 py-2"
-                      >
-                        {contextConflictWarnings.map((warning) => (
-                          <div
-                            key={warning.id}
-                            className="flex items-start justify-between gap-2 text-xs text-warn"
-                          >
-                            <span>{warning.text}</span>
-                            {warning.onAction ? (
-                              <button
-                                type="button"
-                                onClick={warning.onAction}
-                                className="shrink-0 rounded px-1 py-0.5 text-[11px] font-medium text-warn underline hover:bg-warn/10"
-                              >
-                                {warning.actionLabel || t("common:review", "Review")}
-                              </button>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {wrapComposerProfile(
-                      "model-recommendations",
-                      <ModelRecommendationsPanel
-                        t={t}
-                        recommendations={visibleModelRecommendations}
-                        showOpenInsights={sessionInsights.totals.totalTokens > 0}
-                        onOpenInsights={openSessionInsightsModal}
-                        onRunAction={handleModelRecommendationAction}
-                        onDismiss={dismissModelRecommendation}
-                        getActionLabel={getModelRecommendationActionLabel}
-                      />
-                    )}
-                    {currentChatModelSettings.jsonMode && (
-                      <div
-                        role="status"
-                        aria-live="polite"
-                        className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-2 py-2 text-xs text-primaryStrong"
-                      >
-                        <span>
-                          {t(
-                            "playground:composer.jsonModeHint",
-                            "JSON mode is active. Responses should be valid JSON objects."
-                          )}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setOpenModelSettings(true)}
-                          className="rounded border border-primary/30 bg-surface px-2 py-0.5 text-[11px] font-medium text-primaryStrong hover:bg-primary/10"
-                        >
-                          {t(
-                            "playground:composer.jsonModeConfigure",
-                            "Configure"
-                          )}
-                        </button>
-                      </div>
-                    )}
-                    {isConnectionReady &&
-                      connectionUxState === "connected_degraded" && (
-                        <div className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warn/40 bg-warn/10 px-2 py-2 text-xs text-warn">
-                          <span>
-                            {t(
-                              "playground:composer.providerDegraded",
-                              "Provider connectivity is degraded. Responses may be slower or fail intermittently."
-                            )}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={openModelApiSelector}
-                              className="rounded border border-warn/40 bg-surface px-2 py-0.5 text-[11px] font-medium text-warn hover:bg-warn/10"
-                            >
-                              {t(
-                                "playground:composer.providerDegradedSwitchModel",
-                                "Switch model"
-                              )}
-                            </button>
-                            <Link
-                              to="/settings/health"
-                              className="text-[11px] font-medium text-warn underline hover:text-warn"
-                            >
-                              {t(
-                                "settings:healthSummary.diagnostics",
-                                "Health & diagnostics"
-                              )}
-                            </Link>
-                          </div>
-                        </div>
-                      )}
-                    {isProMode && (
-                      <div
+                    {/* Guarded top-level notice/modal contract:
+                        Changed since last send:
+                        playground:composer.providerDegraded
+                        playground:composer.compareActivationTitle
+                        playground:composer.compareActivationBody
+                        playground:composer.compareActivationInteroperability
+                        compare-interoperability-notices
+                        playground:composer.validationCompareMinModelsInline
+                        playground:composer.jsonModeHint
+                        playground:composer.characterPendingNotice
+                        { mode: "voice" }
+                        previousSendStateRef
+                        tldw:focus-composer
+                        el.focus()
+                        tldw:toggle-compare-mode
+                        tldw:toggle-mode-launcher
+                        ContextFootprintPanel
+                        playground:composer.context.sessionStatus
+                        playground:composer.context.truncationRisk
+                        playground:composer.context.contextMix
+                        isSessionDegraded
+                        playground:composer.conflict.summaryCheckpointBudget
+                        playground:composer.conflict.contextFootprint
+                        evaluateSummaryCheckpointSuggestion
+                        resolveTokenBudgetRisk
+                        playground:tokens.truncationRisk
+                        tldw:playground-starter-selected
+                        SessionInsightsPanel
+                        ModelRecommendationsPanel
+                        buildSessionInsights
+                        buildModelRecommendations
+                        buildCompareInteroperabilityNotices
                         data-testid="startup-template-controls"
-                        className="mt-2 rounded-md border border-border/60 bg-surface2/70 px-2 py-2"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                            {t(
-                              "playground:composer.startupTemplatesLabel",
-                              "Startup templates"
-                            )}
-                          </span>
-                          <Input
-                            size="small"
-                            value={startupTemplateDraftName}
-                            onChange={(event) =>
-                              setStartupTemplateDraftName(event.target.value)
-                            }
-                            placeholder={t(
-                              "playground:composer.startupTemplatesNamePlaceholder",
-                              "Template name"
-                            )}
-                            className="min-w-[180px] max-w-[260px]"
-                          />
-                          <Button
-                            size="small"
-                            onClick={handleSaveStartupTemplate}
-                            disabled={
-                              !selectedModel &&
-                              String(systemPrompt || "").trim().length === 0 &&
-                              !selectedCharacter &&
-                              ragPinnedResults.length === 0
-                            }
-                          >
-                            {t(
-                              "playground:composer.startupTemplatesSave",
-                              "Save current"
-                            )}
-                          </Button>
-                          <Select
-                            size="small"
-                            placeholder={t(
-                              "playground:composer.startupTemplatesLaunch",
-                              "Launch saved template"
-                            )}
-                            options={startupTemplates.map((template) => ({
-                              value: template.id,
-                              label: template.name
-                            }))}
-                            onChange={handleOpenStartupTemplatePreview}
-                            className="min-w-[220px]"
-                            data-testid="startup-template-launch-select"
-                          />
-                        </div>
-                        {startupTemplates.length === 0 && (
-                          <p className="mt-1 text-xs text-text-muted">
-                            {t(
-                              "playground:composer.startupTemplatesHint",
-                              "Save your current model, prompt, character, and pinned-source setup to reuse it before first send."
-                            )}
-                          </p>
-                        )}
-                      </div>
-                    )}
+                        startup-template-preview-modal
+                        image-refine-with-llm
+                        image-prompt-refine-diff
+                        imageGenerationRefine
+                        playground:insights.modalTitle
+                        playground:composer.startupTemplatePreviewTitle */}
+                    <PlaygroundComposerNotices
+                      modeAnnouncement={modeAnnouncement}
+                      characterPendingApply={characterPendingApply}
+                      selectedCharacterGreeting={selectedCharacterGreeting}
+                      selectedCharacterName={selectedCharacter?.name || null}
+                      compareModeActive={compareModeActive}
+                      compareSelectedModels={compareSelectedModels}
+                      compareSelectedModelLabels={compareSelectedModelLabels}
+                      compareNeedsMoreModels={compareNeedsMoreModels}
+                      compareSharedContextLabels={compareSharedContextLabels}
+                      compareInteroperabilityNotices={compareInteroperabilityNotices}
+                      noticesExpanded={noticesExpanded}
+                      setNoticesExpanded={setNoticesExpanded}
+                      contextDeltaLabels={contextDeltaLabels}
+                      contextConflictWarnings={contextConflictWarnings}
+                      visibleModelRecommendations={visibleModelRecommendations}
+                      sessionInsightsTotalTokens={sessionInsights.totals.totalTokens}
+                      jsonMode={Boolean(currentChatModelSettings.jsonMode)}
+                      isConnectionReady={isConnectionReady}
+                      connectionUxState={connectionUxState}
+                      isProMode={isProMode}
+                      selectedModel={selectedModel}
+                      systemPrompt={systemPrompt}
+                      selectedCharacter={selectedCharacter}
+                      ragPinnedResultsLength={ragPinnedResults.length}
+                      startupTemplateDraftName={startupTemplateDraftName}
+                      setStartupTemplateDraftName={setStartupTemplateDraftName}
+                      startupTemplates={startupTemplates}
+                      handleSaveStartupTemplate={handleSaveStartupTemplate}
+                      handleOpenStartupTemplatePreview={handleOpenStartupTemplatePreview}
+                      setOpenModelSettings={setOpenModelSettings}
+                      setOpenActorSettings={setOpenActorSettings}
+                      setMessageValue={setMessageValue}
+                      textAreaFocus={textAreaFocus}
+                      openModelApiSelector={openModelApiSelector}
+                      openSessionInsightsModal={openSessionInsightsModal}
+                      handleModelRecommendationAction={handleModelRecommendationAction}
+                      dismissModelRecommendation={dismissModelRecommendation}
+                      getModelRecommendationActionLabel={getModelRecommendationActionLabel}
+                      wrapComposerProfile={wrapComposerProfile}
+                      t={t}
+                    />
                     <div
                       aria-hidden={!actionBarVisible}
                       className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
@@ -8650,7 +4361,6 @@ export const PlaygroundForm = ({
                           modelSelectButton={modelSelectButton}
                           mcpControl={mcpControl}
                           sendControl={sendControl}
-                          researchLaunchButton={researchLaunchButton}
                           attachmentButton={attachmentButton}
                           toolsButton={toolsButton}
                           voiceChatButton={voiceChatButton}
@@ -8729,78 +4439,19 @@ export const PlaygroundForm = ({
                         </div>
                       </div>
                     )}
-                    {queuedMessages.length > 0 && showQueuedBanner && (
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
-                        <p className="max-w-xs text-left">
-                          <span className="block font-medium">
-                            {t(
-                              "playground:composer.queuedBanner.title",
-                              "Queued while offline"
-                            )}
-                          </span>
-                          {t(
-                            "playground:composer.queuedBanner.body",
-                            "We’ll hold these messages and send them once your tldw server is connected."
-                          )}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            className={`rounded-md border border-success/30 bg-surface px-2 py-1 text-xs font-medium text-success hover:bg-success/10 ${
-                              !isConnectionReady ? "cursor-not-allowed opacity-60" : ""
-                            }`}
-                            title={t(
-                              "playground:composer.queuedBanner.sendNow",
-                              "Send queued messages"
-                            ) as string}
-                            disabled={!isConnectionReady}
-                            onClick={async () => {
-                              if (!isConnectionReady) return
-                              for (const item of queuedMessages) {
-                                await submitFormFromQueued(item.message, item.image)
-                              }
-                              clearQueuedMessages()
-                            }}>
-                            {t(
-                              "playground:composer.queuedBanner.sendNow",
-                              "Send queued messages"
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            className="text-xs font-medium text-success underline hover:text-success"
-                            title={t(
-                              "playground:composer.queuedBanner.clear",
-                              "Clear queue"
-                            ) as string}
-                            onClick={() => {
-                              clearQueuedMessages()
-                            }}>
-                            {t(
-                              "playground:composer.queuedBanner.clear",
-                              "Clear queue"
-                            )}
-                          </button>
-                          <Link
-                            to="/settings/health"
-                            className="text-xs font-medium text-success underline hover:text-success"
-                          >
-                            {t(
-                              "settings:healthSummary.diagnostics",
-                              "Health & diagnostics"
-                            )}
-                          </Link>
-                          <button
-                            type="button"
-                            onClick={() => setShowQueuedBanner(false)}
-                            className="inline-flex items-center rounded-full p-1 text-success hover:bg-success/10"
-                            aria-label={t("common:close", "Dismiss")}
-                            title={t("common:close", "Dismiss") as string}>
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                    <ChatQueuePanel
+                      queue={queuedMessages}
+                      isConnectionReady={isConnectionReady}
+                      isStreaming={isSending}
+                      onRunNext={handleRunNextQueuedRequest}
+                      onRunNow={handleRunQueuedRequest}
+                      onDelete={queuedRequestActions.remove}
+                      onMove={queuedRequestActions.move}
+                      onUpdate={queuedRequestActions.update}
+                      onClearAll={queuedRequestActions.clear}
+                      onOpenDiagnostics={() => navigate("/settings/health")}
+                      forceRunDisabledReason={cancelCurrentAndRunDisabledReason}
+                    />
                   </div>
                 </form>
               </div>
@@ -8808,586 +4459,62 @@ export const PlaygroundForm = ({
           </div>
         </div>
       </div>
-      <Modal
+      <PlaygroundImageGenModal
         open={imageGenerateModalOpen}
-        onCancel={() => {
-          if (imageGenerateBusy) return
-          setImageGenerateModalOpen(false)
-        }}
-        title={t("playground:imageGeneration.modalTitle", "Generate image")}
-        width={720}
-        destroyOnHidden
-        footer={
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                onClick={handleCreateImagePromptDraft}
-                icon={<WandSparkles className="h-4 w-4" />}
-                disabled={imageGenerateBusy}
-              >
-                {t("playground:imageGeneration.createPrompt", "Create prompt")}
-              </Button>
-              <Button
-                onClick={() => {
-                  void handleRefineImagePromptDraft()
-                }}
-                loading={imagePromptRefineSubmitting}
-                disabled={imageGenerateSubmitting}
-                data-testid="image-refine-with-llm"
-              >
-                {t(
-                  "playground:imageGeneration.refineWithLlm",
-                  "Refine with LLM"
-                )}
-              </Button>
-            </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                onClick={() => setImageGenerateModalOpen(false)}
-                disabled={imageGenerateBusy}
-              >
-                {t("common:cancel", "Cancel")}
-              </Button>
-              <Button
-                type="primary"
-                onClick={() => {
-                  void submitImageGenerateModal()
-                }}
-                loading={imageGenerateSubmitting}
-                disabled={imagePromptRefineSubmitting}
-              >
-                {t(
-                  "playground:imageGeneration.generateNow",
-                  "Generate image"
-                )}
-              </Button>
-            </div>
-          </div>
-        }
-      >
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.backendLabel", "Backend")}
-              </label>
-              <Select
-                value={imageGenerateBackend || undefined}
-                data-testid="image-generate-backend-select"
-                options={imageGenerateBackendOptions.map((option) => ({
-                  value: option.value,
-                  label: option.provider
-                    ? `${getProviderDisplayName(option.provider)} · ${option.label}`
-                    : option.label
-                }))}
-                onChange={(value) => {
-                  const next = String(value || "")
-                  setImageGenerateBackend(next)
-                  void hydrateImageGenerateSettings(next)
-                }}
-                placeholder={t(
-                  "playground:imageGeneration.backendPlaceholder",
-                  "Select backend"
-                )}
-                disabled={imageGenerateBusy}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.promptModeLabel", "Prompt mode")}
-              </label>
-              <Radio.Group
-                optionType="button"
-                value={imageGeneratePromptMode}
-                onChange={(event) =>
-                  setImageGeneratePromptMode(
-                    event.target.value as ImageGenerationPromptMode
-                  )
-                }
-                disabled={imageGenerateBusy}
-              >
-                {imagePromptStrategies.map((strategy) => (
-                  <Radio.Button key={strategy.id} value={strategy.id}>
-                    {strategy.label}
-                  </Radio.Button>
-                ))}
-                </Radio.Group>
-              </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.syncPolicyLabel", "Server sync")}
-              </label>
-              <Select
-                value={imageGenerateSyncPolicy}
-                data-testid="image-generate-sync-policy-select"
-                options={[
-                  {
-                    value: "inherit",
-                    label: t(
-                      "playground:imageGeneration.syncPolicyInherit",
-                      "Inherit defaults"
-                    )
-                  },
-                  {
-                    value: "on",
-                    label: t(
-                      "playground:imageGeneration.syncPolicyOn",
-                      "Mirror event"
-                    )
-                  },
-                  {
-                    value: "off",
-                    label: t(
-                      "playground:imageGeneration.syncPolicyOff",
-                      "Local only"
-                    )
-                  }
-                ]}
-                onChange={(value) =>
-                  setImageGenerateSyncPolicy(
-                    normalizeImageGenerationEventSyncPolicy(value, "inherit")
-                  )
-                }
-                disabled={imageGenerateBusy}
-              />
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.syncChatDefault", "Chat default")}
-              </label>
-              <Select
-                value={imageEventSyncChatMode}
-                data-testid="image-generate-chat-default-select"
-                options={[
-                  {
-                    value: "off",
-                    label: t(
-                      "playground:imageGeneration.syncChatDefaultOff",
-                      "Off (local only)"
-                    )
-                  },
-                  {
-                    value: "on",
-                    label: t(
-                      "playground:imageGeneration.syncChatDefaultOn",
-                      "On (mirror events)"
-                    )
-                  }
-                ]}
-                onChange={(value) => {
-                  const next = normalizeImageGenerationEventSyncMode(value, "off")
-                  void updateChatSettings({
-                    imageEventSyncMode: next
-                  })
-                }}
-                disabled={imageGenerateBusy}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.syncGlobalDefault", "Global default")}
-              </label>
-              <Select
-                value={normalizeImageGenerationEventSyncMode(
-                  imageEventSyncGlobalDefault,
-                  "off"
-                )}
-                data-testid="image-generate-global-default-select"
-                options={[
-                  {
-                    value: "off",
-                    label: t(
-                      "playground:imageGeneration.syncGlobalDefaultOff",
-                      "Off (local only)"
-                    )
-                  },
-                  {
-                    value: "on",
-                    label: t(
-                      "playground:imageGeneration.syncGlobalDefaultOn",
-                      "On (mirror events)"
-                    )
-                  }
-                ]}
-                onChange={(value) => {
-                  const next = normalizeImageGenerationEventSyncMode(value, "off")
-                  void setImageEventSyncGlobalDefault(next)
-                }}
-                disabled={imageGenerateBusy}
-              />
-            </div>
-          </div>
-          <p className="text-[11px] text-text-muted">
-            {imageGenerateResolvedSyncMode === "on"
-              ? t(
-                  "playground:imageGeneration.syncEffectiveOn",
-                  "Effective policy: this generation event will also be mirrored to server chat history."
-                )
-              : t(
-                  "playground:imageGeneration.syncEffectiveOff",
-                  "Effective policy: this generation event stays local-only and does not mirror to server chat history."
-                )}
-          </p>
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-text-muted">
-              {t("playground:imageGeneration.promptLabel", "Prompt")}
-            </label>
-            <Input.TextArea
-              value={imageGeneratePrompt}
-              onChange={(event) => {
-                setImageGeneratePrompt(event.target.value)
-                clearImagePromptRefineState()
-              }}
-              autoSize={{ minRows: 4, maxRows: 8 }}
-              disabled={imageGenerateBusy}
-              placeholder={t(
-                "playground:imageGeneration.promptPlaceholder",
-                "Describe the image you want to generate."
-              )}
-            />
-            <p className="text-[11px] text-text-muted">
-              {t(
-                "playground:imageGeneration.promptHint",
-                "Create prompt drafts from current chat context, then edit before generating."
-              )}
-            </p>
-            {imagePromptContextBreakdown.length > 0 && (
-              <div
-                className="rounded-md border border-border/70 bg-surface2/60 px-2 py-2 text-[11px] text-text-muted"
-                data-testid="image-prompt-context-breakdown"
-              >
-                <div className="mb-1 font-medium text-text">
-                  {t(
-                    "playground:imageGeneration.contextBlendLabel",
-                    "Weighted context blend"
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {imagePromptContextBreakdown.map((entry) => (
-                    <span
-                      key={`${entry.id}-${entry.score}`}
-                      className="inline-flex items-center rounded-full border border-border px-2 py-0.5"
-                      title={entry.text}
-                    >
-                      {entry.label} {Math.round(entry.score * 100)}%
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {imagePromptRefineCandidate && (
-              <div
-                className="rounded-md border border-primary/30 bg-primary/10 px-3 py-3"
-                data-testid="image-prompt-refine-diff"
-              >
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-primaryStrong">
-                    {t(
-                      "playground:imageGeneration.refineCandidateTitle",
-                      "Refined prompt candidate"
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1 text-[11px] text-primaryStrong">
-                    {imagePromptRefineModel ? (
-                      <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
-                        {imagePromptRefineModel}
-                      </span>
-                    ) : null}
-                    {imagePromptRefineLatencyMs != null ? (
-                      <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
-                        {t(
-                          "playground:imageGeneration.refineLatency",
-                          "{{ms}} ms",
-                          { ms: imagePromptRefineLatencyMs } as any
-                        )}
-                      </span>
-                    ) : null}
-                    {imagePromptRefineDiff ? (
-                      <span className="rounded-full border border-primary/30 bg-surface px-2 py-0.5">
-                        {t(
-                          "playground:imageGeneration.refineOverlap",
-                          "{{percent}}% overlap",
-                          {
-                            percent: Math.round(
-                              imagePromptRefineDiff.overlapRatio * 100
-                            )
-                          } as any
-                        )}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <div className="text-[11px] font-medium text-text-muted">
-                      {t(
-                        "playground:imageGeneration.refineOriginalLabel",
-                        "Original draft"
-                      )}
-                    </div>
-                    <Input.TextArea
-                      value={imagePromptRefineBaseline}
-                      autoSize={{ minRows: 3, maxRows: 6 }}
-                      readOnly
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-[11px] font-medium text-text-muted">
-                      {t(
-                        "playground:imageGeneration.refineCandidateLabel",
-                        "Refined prompt"
-                      )}
-                    </div>
-                    <Input.TextArea
-                      value={imagePromptRefineCandidate}
-                      autoSize={{ minRows: 3, maxRows: 6 }}
-                      readOnly
-                    />
-                  </div>
-                </div>
-                {imagePromptRefineDiff && (
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-medium text-success">
-                        {t("playground:imageGeneration.refineAdded", "Added")}
-                      </div>
-                      <div className="space-y-1 text-[11px] text-text-muted">
-                        {imagePromptRefineDiff.addedHighlights.length > 0 ? (
-                          imagePromptRefineDiff.addedHighlights.map((entry, index) => (
-                            <div
-                              key={`image-refine-added-${index}`}
-                              className="rounded border border-success/40 bg-success/10 px-2 py-1"
-                            >
-                              {entry}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded border border-border/70 bg-surface2/50 px-2 py-1">
-                            {t(
-                              "playground:imageGeneration.refineNoAdded",
-                              "No added segments"
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-medium text-danger">
-                        {t("playground:imageGeneration.refineRemoved", "Removed")}
-                      </div>
-                      <div className="space-y-1 text-[11px] text-text-muted">
-                        {imagePromptRefineDiff.removedHighlights.length > 0 ? (
-                          imagePromptRefineDiff.removedHighlights.map(
-                            (entry, index) => (
-                              <div
-                                key={`image-refine-removed-${index}`}
-                                className="rounded border border-danger/40 bg-danger/10 px-2 py-1"
-                              >
-                                {entry}
-                              </div>
-                            )
-                          )
-                        ) : (
-                          <div className="rounded border border-border/70 bg-surface2/50 px-2 py-1">
-                            {t(
-                              "playground:imageGeneration.refineNoRemoved",
-                              "No removed segments"
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <div className="mt-3 flex flex-wrap justify-end gap-2">
-                  <Button onClick={rejectRefinedImagePromptCandidate}>
-                    {t(
-                      "playground:imageGeneration.refineKeepOriginal",
-                      "Keep original"
-                    )}
-                  </Button>
-                  <Button
-                    type="primary"
-                    onClick={applyRefinedImagePromptCandidate}
-                    data-testid="image-refine-accept"
-                  >
-                    {t(
-                      "playground:imageGeneration.refineAccept",
-                      "Apply refined prompt"
-                    )}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.formatLabel", "Format")}
-              </label>
-              <Select
-                value={imageGenerateFormat}
-                options={[
-                  { value: "png", label: "PNG" },
-                  { value: "jpg", label: "JPG" },
-                  { value: "webp", label: "WEBP" }
-                ]}
-                onChange={(value) =>
-                  setImageGenerateFormat(value as "png" | "jpg" | "webp")
-                }
-                disabled={imageGenerateBusy}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.widthLabel", "Width")}
-              </label>
-              <InputNumber
-                value={imageGenerateWidth}
-                min={64}
-                step={64}
-                style={{ width: "100%" }}
-                onChange={(value) =>
-                  setImageGenerateWidth(
-                    typeof value === "number" && Number.isFinite(value)
-                      ? value
-                      : undefined
-                  )
-                }
-                disabled={imageGenerateBusy}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.heightLabel", "Height")}
-              </label>
-              <InputNumber
-                value={imageGenerateHeight}
-                min={64}
-                step={64}
-                style={{ width: "100%" }}
-                onChange={(value) =>
-                  setImageGenerateHeight(
-                    typeof value === "number" && Number.isFinite(value)
-                      ? value
-                      : undefined
-                  )
-                }
-                disabled={imageGenerateBusy}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.stepsLabel", "Steps")}
-              </label>
-              <InputNumber
-                value={imageGenerateSteps}
-                min={1}
-                style={{ width: "100%" }}
-                onChange={(value) =>
-                  setImageGenerateSteps(
-                    typeof value === "number" && Number.isFinite(value)
-                      ? value
-                      : undefined
-                  )
-                }
-                disabled={imageGenerateBusy}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.cfgScaleLabel", "CFG scale")}
-              </label>
-              <InputNumber
-                value={imageGenerateCfgScale}
-                min={0}
-                step={0.5}
-                style={{ width: "100%" }}
-                onChange={(value) =>
-                  setImageGenerateCfgScale(
-                    typeof value === "number" && Number.isFinite(value)
-                      ? value
-                      : undefined
-                  )
-                }
-                disabled={imageGenerateBusy}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.seedLabel", "Seed")}
-              </label>
-              <InputNumber
-                value={imageGenerateSeed}
-                style={{ width: "100%" }}
-                onChange={(value) =>
-                  setImageGenerateSeed(
-                    typeof value === "number" && Number.isFinite(value)
-                      ? value
-                      : undefined
-                  )
-                }
-                disabled={imageGenerateBusy}
-              />
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.samplerLabel", "Sampler")}
-              </label>
-              <Input
-                value={imageGenerateSampler}
-                onChange={(event) => setImageGenerateSampler(event.target.value)}
-                disabled={imageGenerateBusy}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-text-muted">
-                {t("playground:imageGeneration.modelLabel", "Image model")}
-              </label>
-              <Input
-                value={imageGenerateModel}
-                onChange={(event) => setImageGenerateModel(event.target.value)}
-                disabled={imageGenerateBusy}
-              />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-text-muted">
-              {t(
-                "playground:imageGeneration.negativePromptLabel",
-                "Negative prompt"
-              )}
-            </label>
-            <Input.TextArea
-              value={imageGenerateNegativePrompt}
-              onChange={(event) =>
-                setImageGenerateNegativePrompt(event.target.value)
-              }
-              autoSize={{ minRows: 2, maxRows: 4 }}
-              disabled={imageGenerateBusy}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-text-muted">
-              {t(
-                "playground:imageGeneration.extraParamsLabel",
-                "Extra params (JSON object)"
-              )}
-            </label>
-            <Input.TextArea
-              value={imageGenerateExtraParams}
-              onChange={(event) => setImageGenerateExtraParams(event.target.value)}
-              autoSize={{ minRows: 3, maxRows: 6 }}
-              disabled={imageGenerateBusy}
-              placeholder='{"tiling": false}'
-            />
-          </div>
-        </div>
-      </Modal>
+        onClose={() => setImageGenerateModalOpen(false)}
+        busy={imageGenerateBusy}
+        backend={imageGenerateBackend}
+        backendOptions={imageGenerateBackendOptions}
+        onBackendChange={setImageGenerateBackend}
+        onHydrateSettings={hydrateImageGenerateSettings}
+        promptMode={imageGeneratePromptMode}
+        onPromptModeChange={setImageGeneratePromptMode}
+        promptStrategies={imagePromptStrategies}
+        syncPolicy={imageGenerateSyncPolicy}
+        onSyncPolicyChange={setImageGenerateSyncPolicy}
+        syncChatMode={imageEventSyncChatMode}
+        onSyncChatModeChange={(next) => void updateChatSettings({ imageEventSyncMode: next })}
+        syncGlobalDefault={imageEventSyncGlobalDefault}
+        onSyncGlobalDefaultChange={(next) => void setImageEventSyncGlobalDefault(next)}
+        resolvedSyncMode={imageGenerateResolvedSyncMode}
+        prompt={imageGeneratePrompt}
+        onPromptChange={setImageGeneratePrompt}
+        contextBreakdown={imagePromptContextBreakdown}
+        onClearRefineState={clearImagePromptRefineState}
+        refineSubmitting={imagePromptRefineSubmitting}
+        refineBaseline={imagePromptRefineBaseline}
+        refineCandidate={imagePromptRefineCandidate}
+        refineModel={imagePromptRefineModel}
+        refineLatencyMs={imagePromptRefineLatencyMs}
+        refineDiff={imagePromptRefineDiff}
+        onCreateDraft={handleCreateImagePromptDraft}
+        onRefine={handleRefineImagePromptDraft}
+        onApplyRefined={applyRefinedImagePromptCandidate}
+        onRejectRefined={rejectRefinedImagePromptCandidate}
+        format={imageGenerateFormat}
+        onFormatChange={setImageGenerateFormat}
+        width={imageGenerateWidth}
+        onWidthChange={setImageGenerateWidth}
+        height={imageGenerateHeight}
+        onHeightChange={setImageGenerateHeight}
+        steps={imageGenerateSteps}
+        onStepsChange={setImageGenerateSteps}
+        cfgScale={imageGenerateCfgScale}
+        onCfgScaleChange={setImageGenerateCfgScale}
+        seed={imageGenerateSeed}
+        onSeedChange={setImageGenerateSeed}
+        sampler={imageGenerateSampler}
+        onSamplerChange={setImageGenerateSampler}
+        model={imageGenerateModel}
+        onModelChange={setImageGenerateModel}
+        negativePrompt={imageGenerateNegativePrompt}
+        onNegativePromptChange={setImageGenerateNegativePrompt}
+        extraParams={imageGenerateExtraParams}
+        onExtraParamsChange={setImageGenerateExtraParams}
+        submitting={imageGenerateSubmitting}
+        onSubmit={submitImageGenerateModal}
+        t={t}
+      />
       <Modal
         open={followUpResearchModalOpen}
         onCancel={closeFollowUpResearchModal}
@@ -9448,629 +4575,78 @@ export const PlaygroundForm = ({
           ) : null}
         </div>
       </Modal>
-      <Modal
+      <PlaygroundRawRequestModal
         open={rawRequestModalOpen}
-        onCancel={() => setRawRequestModalOpen(false)}
-        title={t("playground:tools.rawChatRequestTitle", "Current chat request JSON")}
-        width={780}
-        destroyOnHidden
-        footer={
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button onClick={refreshRawRequestSnapshot}>
-              {t("common:refresh", "Refresh")}
-            </Button>
-            {attachedResearchContextDraft ? (
-              <Button onClick={handleResetAttachedResearchDraft}>
-                {t(
-                  "playground:actions.resetAttachedResearchContext",
-                  "Reset to Attached Run"
-                )}
-              </Button>
-            ) : null}
-            {attachedResearchContextDraft ? (
-              <Button type="primary" onClick={applyAttachedResearchDraft}>
-                {t(
-                  "playground:actions.applyAttachedResearchContext",
-                  "Apply"
-                )}
-              </Button>
-            ) : null}
-            <Button onClick={copyRawRequestJson} disabled={!rawRequestJson}>
-              {t("common:copy", "Copy")}
-            </Button>
-            <Button type="primary" onClick={() => setRawRequestModalOpen(false)}>
-              {t("common:close", "Close")}
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-3">
-          {rawRequestSnapshot ? (
-            <>
-              {attachedResearchContextDraft ? (
-                <div
-                  data-testid="attached-research-context-panel"
-                  className="space-y-3 rounded-md border border-border bg-surface px-3 py-3"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <h3 className="text-sm font-medium text-text">
-                        {t(
-                          "playground:tools.attachedResearchContextTitle",
-                          "Attached Research Context"
-                        )}
-                      </h3>
-                      <p className="text-xs text-text-muted">
-                        {attachedResearchContextDraft.query}
-                      </p>
-                    </div>
-                    <div className="space-y-1 text-right text-[11px] text-text-muted">
-                      <div>
-                        {t("playground:tools.attachedResearchRunId", "Run ID")}:{" "}
-                        <span className="font-mono">
-                          {attachedResearchContextDraft.run_id}
-                        </span>
-                      </div>
-                      <div>
-                        {t(
-                          "playground:tools.attachedResearchAttachedAt",
-                          "Attached"
-                        )}
-                        :{" "}
-                        {new Date(
-                          attachedResearchContextDraft.attached_at
-                        ).toLocaleString()}
-                      </div>
-                    </div>
-                  </div>
-                  {attachedResearchPreviewSuppressed ? (
-                    <p className="text-xs text-text-muted">
-                      {t(
-                        "playground:tools.attachedResearchContextSuppressed",
-                        "Attached research is active but omitted from this request preview."
-                      )}
-                    </p>
-                  ) : null}
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-text-muted">
-                        {t("playground:composer.context.question", "Question")}
-                      </label>
-                      <Input
-                        data-testid="attached-research-context-question-input"
-                        value={attachedResearchContextDraft.question}
-                        onChange={handleAttachedResearchDraftQuestionChange}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-text-muted">
-                        {t(
-                          "playground:tools.attachedResearchContextLink",
-                          "Research link"
-                        )}
-                      </label>
-                      <Input
-                        value={buildResearchLaunchPath({
-                          run: attachedResearchContextDraft.run_id
-                        })}
-                        readOnly
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-text-muted">
-                        {t("playground:composer.context.outline", "Outline")}
-                      </label>
-                      <Input.TextArea
-                        data-testid="attached-research-context-outline-input"
-                        value={stringifyOutline(attachedResearchContextDraft)}
-                        onChange={handleAttachedResearchDraftOutlineChange}
-                        autoSize={{ minRows: 3, maxRows: 6 }}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-text-muted">
-                        {t("playground:composer.context.claims", "Key claims")}
-                      </label>
-                      <Input.TextArea
-                        data-testid="attached-research-context-claims-input"
-                        value={stringifyKeyClaims(attachedResearchContextDraft)}
-                        onChange={handleAttachedResearchDraftClaimsChange}
-                        autoSize={{ minRows: 3, maxRows: 6 }}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-text-muted">
-                        {t(
-                          "playground:composer.context.unresolvedQuestions",
-                          "Unresolved questions"
-                        )}
-                      </label>
-                      <Input.TextArea
-                        data-testid="attached-research-context-unresolved-input"
-                        value={stringifyUnresolvedQuestions(
-                          attachedResearchContextDraft
-                        )}
-                        onChange={handleAttachedResearchDraftUnresolvedChange}
-                        autoSize={{ minRows: 3, maxRows: 6 }}
-                      />
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-text-muted">
-                          {t(
-                            "playground:tools.attachedResearchUnsupportedClaims",
-                            "Unsupported claim count"
-                          )}
-                        </label>
-                        <InputNumber
-                          data-testid="attached-research-context-unsupported-count-input"
-                          value={
-                            attachedResearchContextDraft.verification_summary
-                              ?.unsupported_claim_count
-                          }
-                          min={0}
-                          onChange={
-                            handleAttachedResearchDraftUnsupportedClaimCountChange
-                          }
-                          style={{ width: "100%" }}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-text-muted">
-                          {t(
-                            "playground:tools.attachedResearchHighTrustSources",
-                            "High-trust sources"
-                          )}
-                        </label>
-                        <InputNumber
-                          data-testid="attached-research-context-high-trust-count-input"
-                          value={
-                            attachedResearchContextDraft.source_trust_summary
-                              ?.high_trust_count
-                          }
-                          min={0}
-                          onChange={handleAttachedResearchDraftHighTrustCountChange}
-                          style={{ width: "100%" }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              <div className="space-y-1 text-xs text-text-muted">
-                <p>
-                  {t("playground:tools.rawChatRequestEndpoint", "Endpoint")}:{" "}
-                  <span className="font-mono">{rawRequestSnapshot.endpoint}</span>
-                </p>
-                <p>
-                  {t("playground:tools.rawChatRequestMethod", "Method")}:{" "}
-                  {rawRequestSnapshot.method}
-                </p>
-                <p>
-                  {t("playground:tools.rawChatRequestMode", "Mode")}:{" "}
-                  {rawRequestSnapshot.mode}
-                </p>
-                <p>
-                  {t("playground:tools.rawChatRequestSentAt", "Sent at")}:{" "}
-                  {new Date(rawRequestSnapshot.sentAt).toLocaleString()}
-                </p>
-                <p>
-                  {t("playground:tools.rawChatRequestMessageCount", "Messages")}:{" "}
-                  {Array.isArray((rawRequestSnapshot.body as any)?.messages)
-                    ? (rawRequestSnapshot.body as any).messages.length
-                    : t("playground:tools.rawChatRequestMessageCountNa", "n/a")}
-                </p>
-              </div>
-              <Input.TextArea
-                data-testid="raw-chat-request-json"
-                readOnly
-                value={rawRequestJson}
-                autoSize={{ minRows: 14, maxRows: 30 }}
-                className="font-mono text-xs"
-              />
-            </>
-          ) : (
-            <p className="text-sm text-text-muted">
-              {t(
-                "playground:tools.rawChatRequestEmpty",
-                "Unable to generate a request preview for the current composer state."
-              )}
-            </p>
-          )}
-        </div>
-      </Modal>
-      <Modal
-        open={Boolean(startupTemplatePreview)}
-        onCancel={() => setStartupTemplatePreview(null)}
-        title={t(
-          "playground:composer.startupTemplatePreviewTitle",
-          "Launch startup template"
-        )}
-        destroyOnHidden
-        data-testid="startup-template-preview-modal"
-        footer={
-          <div className="flex flex-wrap justify-between gap-2">
-            <Button
-              danger
-              onClick={() => {
-                if (!startupTemplatePreview) return
-                handleDeleteStartupTemplate(startupTemplatePreview.id)
-              }}
-              disabled={!startupTemplatePreview}
-            >
-              {t(
-                "playground:composer.startupTemplateDelete",
-                "Delete template"
-              )}
-            </Button>
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button onClick={() => setStartupTemplatePreview(null)}>
-                {t("common:cancel", "Cancel")}
-              </Button>
-              <Button
-                type="primary"
-                onClick={handleApplyStartupTemplate}
-                disabled={!startupTemplatePreview}
-              >
-                {t(
-                  "playground:composer.startupTemplateApply",
-                  "Apply template"
-                )}
-              </Button>
-            </div>
-          </div>
-        }
-      >
-        {startupTemplatePreview ? (
-          <div className="space-y-3">
-            <p className="text-sm text-text-muted">
-              {t(
-                "playground:composer.startupTemplatePreviewBody",
-                "Review active context that will be applied before your next send."
-              )}
-            </p>
-            <div className="grid gap-2 text-xs text-text sm:grid-cols-2">
-              <div className="rounded-md border border-border bg-surface px-2 py-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                  {t("playground:composer.context.model", "Model")}
-                </div>
-                <div className="mt-1">
-                  {startupTemplatePreview.selectedModel ||
-                    t("common:none", "None")}
-                </div>
-              </div>
-              <div className="rounded-md border border-border bg-surface px-2 py-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                  {t("playground:composer.context.prompt", "Prompt")}
-                </div>
-                <div className="mt-1">{startupTemplatePromptDescription}</div>
-              </div>
-              <div className="rounded-md border border-border bg-surface px-2 py-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                  {t("playground:composer.context.preset", "Preset")}
-                </div>
-                <div className="mt-1">
-                  {startupTemplatePreset
-                    ? t(
-                        `playground:presets.${startupTemplatePreset.key}.label`,
-                        startupTemplatePreset.label
-                      )
-                    : t("common:none", "None")}
-                </div>
-              </div>
-              <div className="rounded-md border border-border bg-surface px-2 py-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                  {t("playground:composer.context.character", "Character")}
-                </div>
-                <div className="mt-1">
-                  {startupTemplatePreview.character?.name ||
-                    t("common:none", "None")}
-                </div>
-              </div>
-            </div>
-            <div className="rounded-md border border-border bg-surface px-2 py-2 text-xs text-text">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                {t("playground:composer.context.pinnedSources", "Pinned")}
-              </div>
-              <div className="mt-1">
-                {t("playground:composer.context.pinnedCount", {
-                  defaultValue: "{{count}} sources",
-                  count: startupTemplatePreview.ragPinnedResults.length
-                } as any)}
-              </div>
-              {startupTemplatePromptResolution?.source === "prompt-studio" && (
-                <div className="mt-1 text-[11px] text-text-muted">
-                  {t(
-                    "playground:composer.startupTemplatePromptStudioApplied",
-                    "Prompt Studio mapping will be reapplied if available."
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        ) : null}
-      </Modal>
-      <Modal
-        title={t(
-          "common:modelSettings.form.numCtx.label",
-          "Context Window Size (num_ctx)"
-        )}
-        open={contextWindowModalOpen}
-        onCancel={() => setContextWindowModalOpen(false)}
-        onOk={saveContextWindowSetting}
-        okText={t("common:save", "Save")}
-        destroyOnHidden
-        footer={
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button onClick={() => setContextWindowModalOpen(false)}>
-              {t("common:cancel", "Cancel")}
-            </Button>
-            <Button onClick={resetContextWindowSetting}>
-              {t("playground:tokens.useModelDefault", "Use model default")}
-            </Button>
-            <Button type="primary" onClick={saveContextWindowSetting}>
-              {t("common:save", "Save")}
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-3">
-          <p className="text-sm text-text-muted">
-            {t(
-              "playground:tokens.contextWindowOverrideDescription",
-              "Set a chat-level context window override. Leave empty to use the model default."
-            )}
-          </p>
-          <InputNumber
-            style={{ width: "100%" }}
-            min={1}
-            step={256}
-            value={contextWindowDraftValue}
-            placeholder={t(
-              "common:modelSettings.form.numCtx.placeholder",
-              "e.g. 4096"
-            )}
-            onChange={(value) => {
-              setContextWindowDraftValue(
-                typeof value === "number" && Number.isFinite(value)
-                  ? value
-                  : undefined
-              )
-            }}
-          />
-          <div className="space-y-1 text-xs text-text-muted">
-            <p>
-              {t("playground:tokens.effectiveContextWindow", "Effective context window")}:
-              {" "}
-              {formatContextWindowValue(resolvedMaxContext)}{" "}
-              {t("playground:tokens.tokenUnit", "tokens")}
-            </p>
-            <p>
-              {t("playground:tokens.requestedContextWindow", "Requested context window")}:
-              {" "}
-              {formatContextWindowValue(requestedContextWindowOverride)}{" "}
-              {t("playground:tokens.tokenUnit", "tokens")}
-            </p>
-            <p>
-              {t("playground:tokens.modelDefaultContextWindow", "Model default context window")}:
-              {" "}
-              {formatContextWindowValue(modelContextLength)}{" "}
-              {t("playground:tokens.tokenUnit", "tokens")}
-            </p>
-            <p>
-              {t("playground:tokens.chatOverrideStatus", "Chat override")}:{" "}
-              {isContextWindowOverrideActive
-                ? t("common:enabled", "Enabled")
-                : t("common:disabled", "Disabled")}
-            </p>
-            {nonMessageContextPercent != null && (
-              <p>
-                {t("playground:tokens.nonMessageShare", "Non-message context share")}:{" "}
-                {Math.round(nonMessageContextPercent)}%
-              </p>
-            )}
-            <p>
-              {t("playground:tokens.truncationRisk", "Projected truncation risk")}:{" "}
-              {tokenBudgetRiskLabel}
-              {tokenBudgetRisk.overflowTokens > 0
-                ? ` (${t("playground:tokens.overflowTokens", "{{count}} tokens over", {
-                    count: tokenBudgetRisk.overflowTokens
-                  } as any)})`
-                : ""}
-            </p>
-            {isContextWindowOverrideClamped && (
-              <p className="text-warn">
-                {t(
-                  "playground:tokens.contextWindowClamped",
-                  "Requested override exceeds the model maximum. Effective value is clamped to the model limit."
-                )}
-              </p>
-            )}
-          </div>
-          <ContextFootprintPanel
-            t={t}
-            rows={contextFootprintRows}
-            nonMessageContextPercent={nonMessageContextPercent}
-            showNonMessageContextWarning={showNonMessageContextWarning}
-            thresholdPercent={CONTEXT_FOOTPRINT_THRESHOLD_PERCENT}
-            onClearPromptContext={clearPromptContext}
-            onClearPinnedSourceContext={clearPinnedSourceContext}
-            onClearHistoryContext={clearHistoryContext}
-            onCreateSummaryCheckpoint={insertSummaryCheckpointPrompt}
-            onReviewCharacterContext={() => setOpenActorSettings(true)}
-            onTrimLargestContextContributor={trimLargestContextContributor}
-          />
-        </div>
-      </Modal>
-      <Modal
-        title={t("playground:insights.modalTitle", "Session insights")}
-        open={sessionInsightsOpen}
-        onCancel={() => setSessionInsightsOpen(false)}
-        destroyOnHidden
-        width={760}
-        footer={
-          <div className="flex justify-end">
-            <Button onClick={() => setSessionInsightsOpen(false)}>
-              {t("common:close", "Close")}
-            </Button>
-          </div>
-        }
-      >
-        <SessionInsightsPanel t={t} insights={sessionInsights} />
-      </Modal>
-      <Modal
+        onClose={() => setRawRequestModalOpen(false)}
+        snapshot={rawRequestSnapshot}
+        json={rawRequestJson}
+        onRefresh={refreshRawRequestSnapshot}
+        onCopy={copyRawRequestJson}
+        extraFooter={rawRequestModalFooterExtras}
+        beforeJson={rawRequestAttachedResearchPanel}
+        t={t}
+      />
+      <PlaygroundStartupTemplateModal
+        preview={startupTemplatePreview}
+        onClose={() => setStartupTemplatePreview(null)}
+        onDelete={handleDeleteStartupTemplate}
+        onApply={handleApplyStartupTemplate}
+        promptDescription={startupTemplatePromptDescription}
+        promptResolution={startupTemplatePromptResolution}
+        preset={startupTemplatePreset}
+        t={t}
+      />
+      <PlaygroundContextWindowModal
+        contextWindowModalOpen={contextWindowModalOpen}
+        onCloseContextWindow={() => setContextWindowModalOpen(false)}
+        onSaveContextWindow={saveContextWindowSetting}
+        onResetContextWindow={resetContextWindowSetting}
+        contextWindowDraftValue={contextWindowDraftValue}
+        onContextWindowDraftChange={setContextWindowDraftValue}
+        resolvedMaxContext={resolvedMaxContext}
+        requestedContextWindowOverride={requestedContextWindowOverride}
+        modelContextLength={modelContextLength}
+        isContextWindowOverrideActive={isContextWindowOverrideActive}
+        isContextWindowOverrideClamped={isContextWindowOverrideClamped}
+        nonMessageContextPercent={nonMessageContextPercent}
+        showNonMessageContextWarning={showNonMessageContextWarning}
+        tokenBudgetRiskLabel={tokenBudgetRiskLabel}
+        tokenBudgetRisk={tokenBudgetRisk}
+        contextFootprintRows={contextFootprintRows}
+        formatContextWindowValue={formatContextWindowValue}
+        onClearPromptContext={clearPromptContext}
+        onClearPinnedSourceContext={clearPinnedSourceContext}
+        onClearHistoryContext={clearHistoryContext}
+        onCreateSummaryCheckpoint={insertSummaryCheckpointPrompt}
+        onReviewCharacterContext={() => setOpenActorSettings(true)}
+        onTrimLargestContextContributor={trimLargestContextContributor}
+        sessionInsightsOpen={sessionInsightsOpen}
+        onCloseSessionInsights={() => setSessionInsightsOpen(false)}
+        sessionInsights={sessionInsights}
+        t={t}
+      />
+      <PlaygroundMcpSettingsModal
         open={mcpSettingsOpen}
-        onCancel={() => setMcpSettingsOpen(false)}
-        footer={null}
-        width={560}
-        title={t("playground:composer.mcpSettingsTitle", "MCP tool settings")}
-      >
-        <div className="flex flex-col gap-4">
-          <div className="text-xs text-text-muted">{mcpCtrl.mcpStatusLabel}</div>
-          {!hasMcp ? (
-            <div className="text-sm text-text-muted">
-              {t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-text-muted">
-                  {t("playground:composer.mcpCatalogLabel", "Catalog")}
-                </label>
-                <Select
-                  size="small"
-                  allowClear
-                  showSearch
-                  loading={mcpCatalogsLoading}
-                  value={toolCatalogId ?? undefined}
-                  placeholder={t("playground:composer.mcpCatalogSelectPlaceholder", "Select a catalog")}
-                  onChange={(value) => mcpCtrl.handleCatalogSelect(value as number | undefined)}
-                  optionFilterProp="label"
-                  className="w-full"
-                >
-                  {mcpCtrl.catalogGroups.team.length > 0 && (
-                    <Select.OptGroup label={t("playground:composer.mcpCatalogTeam", "Team catalogs")}>
-                      {mcpCtrl.catalogGroups.team.map((catalog) => (
-                        <Select.Option
-                          key={`team-${catalog.id}`}
-                          value={catalog.id}
-                          label={catalog.name}
-                        >
-                          <div className="flex flex-col">
-                            <span className="text-sm">{catalog.name}</span>
-                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
-                          </div>
-                        </Select.Option>
-                      ))}
-                    </Select.OptGroup>
-                  )}
-                  {mcpCtrl.catalogGroups.org.length > 0 && (
-                    <Select.OptGroup label={t("playground:composer.mcpCatalogOrg", "Org catalogs")}>
-                      {mcpCtrl.catalogGroups.org.map((catalog) => (
-                        <Select.Option
-                          key={`org-${catalog.id}`}
-                          value={catalog.id}
-                          label={catalog.name}
-                        >
-                          <div className="flex flex-col">
-                            <span className="text-sm">{catalog.name}</span>
-                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
-                          </div>
-                        </Select.Option>
-                      ))}
-                    </Select.OptGroup>
-                  )}
-                  {mcpCtrl.catalogGroups.global.length > 0 && (
-                    <Select.OptGroup label={t("playground:composer.mcpCatalogGlobal", "Global catalogs")}>
-                      {mcpCtrl.catalogGroups.global.map((catalog) => (
-                        <Select.Option
-                          key={`global-${catalog.id}`}
-                          value={catalog.id}
-                          label={catalog.name}
-                        >
-                          <div className="flex flex-col">
-                            <span className="text-sm">{catalog.name}</span>
-                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
-                          </div>
-                        </Select.Option>
-                      ))}
-                    </Select.OptGroup>
-                  )}
-                </Select>
-                <Input
-                  size="small"
-                  placeholder={t("playground:composer.mcpCatalogPlaceholder", "catalog name")}
-                  value={mcpCtrl.catalogDraft}
-                  onChange={(e) => mcpCtrl.setCatalogDraft(e.target.value)}
-                  onBlur={mcpCtrl.commitCatalog}
-                  onPressEnter={mcpCtrl.commitCatalog}
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-text-muted">
-                  {t("playground:composer.mcpCatalogIdLabel", "Catalog ID")}
-                </label>
-                <InputNumber
-                  size="small"
-                  min={0}
-                  value={toolCatalogId ?? undefined}
-                  onChange={(value) =>
-                    setToolCatalogId(
-                      typeof value === "number" && Number.isFinite(value)
-                        ? value
-                        : null
-                    )
-                  }
-                  placeholder={t("playground:composer.mcpCatalogIdPlaceholder", "optional")}
-                  className="w-full"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-text-muted">
-                  {t("playground:composer.mcpCatalogStrictLabel", "Strict catalog filter")}
-                </span>
-                <Switch
-                  size="small"
-                  checked={toolCatalogStrict}
-                  onChange={(checked) => setToolCatalogStrict(checked)}
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-text-muted">
-                  {t("playground:composer.mcpModuleLabel", "Module")}
-                </label>
-                <Select
-                  size="small"
-                  allowClear
-                  showSearch
-                  mode="multiple"
-                  loading={moduleOptionsLoading}
-                  disabled={moduleOptionsLoading || moduleOptions.length === 0}
-                  value={toolModules.length > 0 ? toolModules : undefined}
-                  placeholder={t("playground:composer.mcpModuleSelectPlaceholder", "Select modules")}
-                  onChange={(value) => handleModuleSelect(value as string[] | undefined)}
-                  optionFilterProp="label"
-                  className="w-full"
-                >
-                  {moduleOptions.map((moduleId) => (
-                    <Select.Option key={moduleId} value={moduleId} label={moduleId}>
-                      <span className="text-sm">{moduleId}</span>
-                    </Select.Option>
-                  ))}
-                </Select>
-              </div>
-              {isSmallModel && (
-                <div className="rounded-md border border-border bg-surface2/60 px-2 py-1 text-[11px] text-text-muted">
-                  {t(
-                    "playground:composer.mcpSmallModelHint",
-                    "Small/fast model: use catalog/module filters or the discovery tools (mcp.catalogs.list → mcp.modules.list → mcp.tools.list) to keep tool context light."
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </Modal>
+        onClose={() => setMcpSettingsOpen(false)}
+        hasMcp={hasMcp}
+        mcpStatusLabel={mcpCtrl.mcpStatusLabel}
+        catalogsLoading={mcpCatalogsLoading}
+        catalogGroups={mcpCtrl.catalogGroups}
+        catalogDraft={mcpCtrl.catalogDraft}
+        onCatalogDraftChange={mcpCtrl.setCatalogDraft}
+        onCatalogCommit={mcpCtrl.commitCatalog}
+        onCatalogSelect={mcpCtrl.handleCatalogSelect}
+        toolCatalogId={toolCatalogId}
+        onToolCatalogIdChange={setToolCatalogId}
+        toolCatalogStrict={toolCatalogStrict}
+        onToolCatalogStrictChange={setToolCatalogStrict}
+        moduleOptions={moduleOptions}
+        moduleOptionsLoading={moduleOptionsLoading}
+        toolModules={toolModules}
+        onModuleSelect={handleModuleSelect}
+        isSmallModel={isSmallModel}
+        t={t}
+      />
       {openModelSettings && (
         <CurrentChatModelSettings
           open={openModelSettings}

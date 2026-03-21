@@ -1,6 +1,20 @@
+"""Validate the public OSS/private-hosted boundary policy and its enforcement hooks."""
+
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from types import ModuleType
 
 import pytest
+
+
+def _load_boundary_checker() -> ModuleType:
+    """Load the boundary checker script as a module for focused unit tests."""
+    checker_path = Path("Helper_Scripts/docs/check_public_private_boundary.py")
+    spec = spec_from_file_location("check_public_private_boundary", checker_path)
+    _require(spec is not None and spec.loader is not None, "expected import spec for boundary checker")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _require(condition: bool, message: str) -> None:
@@ -204,4 +218,87 @@ def test_mkdocs_workflow_runs_boundary_checker() -> None:
     _require(
         "python Helper_Scripts/docs/check_public_private_boundary.py" in workflow,
         "expected mkdocs workflow to run the public/private boundary checker",
+    )
+
+
+def test_boundary_checker_scans_example_and_special_text_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_boundary_checker()
+    scan_targets = (
+        "Docs/Published",
+        "Dockerfiles",
+        "Helper_Scripts/Samples/Caddy",
+        "tldw_Server_API/Config_Files",
+    )
+    expected_files = [
+        Path("Docs/Published/Feature_Status.md"),
+        Path("Dockerfiles/Dockerfile.worker"),
+        Path("Helper_Scripts/Samples/Caddy/Caddyfile.compose"),
+        Path("tldw_Server_API/Config_Files/.env.hosted-staging.example"),
+    ]
+
+    for path in expected_files:
+        full_path = tmp_path / path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text("placeholder", encoding="utf-8")
+
+    ignored_path = tmp_path / "Dockerfiles" / "artifact.bin"
+    ignored_path.write_bytes(b"\x00\x01")
+
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(module, "SCAN_TARGETS", scan_targets)
+
+    candidate_files = {
+        path.relative_to(tmp_path).as_posix() for path in module._iter_candidate_files()
+    }
+
+    _require(
+        {path.as_posix() for path in expected_files}.issubset(candidate_files),
+        "expected boundary checker to scan .example, Dockerfile*, and Caddyfile* assets",
+    )
+    _require(
+        ignored_path.relative_to(tmp_path).as_posix() not in candidate_files,
+        "expected non-text binary artifacts to stay out of the boundary checker scan set",
+    )
+
+
+def test_boundary_checker_matches_real_references_without_larger_token_false_positives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_boundary_checker()
+    checked_file = tmp_path / "Docs" / "Published" / "Feature_Status.md"
+    checked_file.parent.mkdir(parents=True, exist_ok=True)
+    checked_file.write_text(
+        "\n".join(
+            [
+                "Backup copy: Hosted_SaaS_Profile.md.backup",
+                "See Hosted_SaaS_Profile.md#setup for more details.",
+                'import "@web/components/hosted/account/AccountOverview"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "REPO_ROOT", tmp_path)
+
+    violations = module._find_violations(checked_file)
+
+    _require(
+        not any(":1:" in violation for violation in violations),
+        "expected larger-token suffixes to avoid triggering denylist matches",
+    )
+    _require(
+        any(
+            ":2:" in violation and "Hosted_SaaS_Profile.md" in violation
+            for violation in violations
+        ),
+        "expected anchored doc references to trigger denylist matches",
+    )
+    _require(
+        any(
+            ":3:" in violation and "@web/components/hosted" in violation
+            for violation in violations
+        ),
+        "expected hosted import path prefixes to trigger denylist matches",
     )

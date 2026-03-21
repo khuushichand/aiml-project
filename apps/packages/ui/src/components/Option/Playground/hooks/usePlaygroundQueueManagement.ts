@@ -60,7 +60,7 @@ export interface UsePlaygroundQueueManagementDeps {
   contextFiles: any[]
   documentContext: any[]
   queuedMessages: QueuedRequest[]
-  setQueuedMessages: (value: QueuedRequest[]) => void
+  setQueuedMessages: (value: QueuedRequest[] | ((prev: QueuedRequest[]) => QueuedRequest[])) => void
   historyId: string | null
   serverChatId: string | null
   conversationTokenCount: number
@@ -84,7 +84,7 @@ export interface UsePlaygroundQueueManagementDeps {
     capability: string
   ) => boolean
   sendMessage: (payload: Record<string, any>) => Promise<void>
-  stopStreamingRequest: () => void
+  stopStreamingRequest: (options?: { discardTurn?: boolean }) => void
   form: {
     setFieldError: (field: string, error: string) => void
     reset: () => void

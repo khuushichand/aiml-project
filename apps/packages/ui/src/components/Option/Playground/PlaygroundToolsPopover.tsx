@@ -3,11 +3,7 @@ import {
   Switch,
   Radio,
   Tooltip,
-  Popover,
-  Dropdown,
-  InputNumber,
-  Input,
-  Select
+  Popover
 } from "antd"
 import {
   ChevronDown,
@@ -167,7 +163,7 @@ export const PlaygroundToolsPopover: React.FC<PlaygroundToolsPopoverProps> =
         <div className="border-t border-border my-1" />
 
         <div className="flex items-center justify-between px-2">
-          <span className="text-sm text-text">{t("useOCR")}</span>
+          <span className="text-sm text-text">{t("playground:tools.useOCR", "Use OCR")}</span>
           <Switch
             size="small"
             checked={useOCR}

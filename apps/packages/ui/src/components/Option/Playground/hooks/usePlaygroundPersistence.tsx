@@ -175,15 +175,17 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
   )
 
   const handleSaveChatToServer = React.useCallback(async () => {
-    if (
-      !isConnectionReady ||
-      temporaryChat ||
-      serverChatId ||
-      history.length === 0
-    ) {
-      return
-    }
+    if (serverSaveInFlightRef.current) return
+    serverSaveInFlightRef.current = true
     try {
+      if (
+        !isConnectionReady ||
+        temporaryChat ||
+        serverChatId ||
+        history.length === 0
+      ) {
+        return
+      }
       await tldwClient.initialize()
 
       const snapshot = [...history]
@@ -342,6 +344,8 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
         message: t("error"),
         description: e?.message || t("somethingWentWrong")
       })
+    } finally {
+      serverSaveInFlightRef.current = false
     }
   }, [
     history,
@@ -373,13 +377,7 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
     ) {
       return
     }
-    if (serverSaveInFlightRef.current) {
-      return
-    }
-    serverSaveInFlightRef.current = true
-    Promise.resolve(handleSaveChatToServer()).finally(() => {
-      serverSaveInFlightRef.current = false
-    })
+    void handleSaveChatToServer()
   }, [
     handleSaveChatToServer,
     history.length,
