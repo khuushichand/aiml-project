@@ -75,7 +75,6 @@ export interface UseCharacterCrudDeps {
   effectiveDefaultCharacterId: string | undefined
   defaultCharacterSelection: any
   setDefaultCharacterSelection: (value: any) => Promise<void> | void
-  syncCharacterWorldBookSelection: (characterId: number, nextWorldBookIds: number[]) => Promise<void>
 }
 
 export function useCharacterCrud(deps: UseCharacterCrudDeps) {
@@ -109,8 +108,7 @@ export function useCharacterCrud(deps: UseCharacterCrudDeps) {
     clearEditDraft,
     data,
     effectiveDefaultCharacterId,
-    setDefaultCharacterSelection,
-    syncCharacterWorldBookSelection
+    setDefaultCharacterSelection
   } = deps
 
   const navigate = useNavigate()
@@ -151,11 +149,11 @@ export function useCharacterCrud(deps: UseCharacterCrudDeps) {
   // --- Create mutation ---
   const { mutate: createCharacter, isPending: creating } = useMutation({
     mutationFn: async (values: any) => {
-      const createdCharacter = await tldwClient.createCharacter(
-        buildCharacterPayload(values)
-      )
       const selectedWorldBookIds = normalizeWorldBookIds(
         values?.world_book_ids
+      )
+      const createdCharacter = await tldwClient.createCharacter(
+        buildCharacterPayload(values)
       )
       if (selectedWorldBookIds.length === 0) {
         return createdCharacter
@@ -171,7 +169,7 @@ export function useCharacterCrud(deps: UseCharacterCrudDeps) {
         )
       }
 
-      await syncCharacterWorldBookSelection(characterId, selectedWorldBookIds)
+      await syncWorldBookSelection(characterId, selectedWorldBookIds)
       return createdCharacter
     },
     onSuccess: () => {
@@ -221,7 +219,7 @@ export function useCharacterCrud(deps: UseCharacterCrudDeps) {
         )
         const editCharacterId = Number(editId)
         if (Number.isFinite(editCharacterId) && editCharacterId > 0) {
-          await syncCharacterWorldBookSelection(
+          await syncWorldBookSelection(
             Math.trunc(editCharacterId),
             selectedWorldBookIds
           )

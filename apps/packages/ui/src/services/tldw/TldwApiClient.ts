@@ -29,6 +29,7 @@ import type {
   CreateReadingDigestScheduleRequest,
   ImportSource,
   ReadingNoteLink,
+  ReadingListResponse,
   ReadingSavedSearch,
   ReadingSavedSearchListResponse,
   ReadingDigestSchedule,
@@ -6331,7 +6332,7 @@ export class TldwApiClient {
     domain?: string
     date_from?: string
     date_to?: string
-  }): Promise<any> {
+  }): Promise<ReadingListResponse> {
     const query = new URLSearchParams()
     if (params?.page) query.set("page", String(params.page))
     if (params?.size) query.set("size", String(params.size))

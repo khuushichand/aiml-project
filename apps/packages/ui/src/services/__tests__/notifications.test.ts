@@ -1,0 +1,185 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  bgRequest: vi.fn(),
+  bgStream: vi.fn()
+}))
+
+vi.mock("@/services/background-proxy", () => ({
+  bgRequest: (...args: unknown[]) => mocks.bgRequest(...args),
+  bgStream: (...args: unknown[]) => mocks.bgStream(...args)
+}))
+
+import {
+  buildNotificationsQuery,
+  createNotificationStreamSubscription,
+  dismissNotification,
+  getUnreadCount,
+  listNotifications,
+  markNotificationsRead,
+  parseNotificationStreamEvent,
+  snoozeNotification
+} from "../notifications"
+
+describe("notifications service", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("lists notifications through shared UI services", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      items: [{ id: 1, title: "Inbox item" }],
+      total: 1
+    })
+
+    const result = await listNotifications({ limit: 20, offset: 0 })
+
+    expect(result.items[0]?.id).toBe(1)
+  })
+
+  it("marks notifications read through shared UI services", async () => {
+    mocks.bgRequest.mockResolvedValue({ updated: 1 })
+
+    await expect(markNotificationsRead([1])).resolves.toEqual({ updated: 1 })
+  })
+
+  it("gets unread count through shared UI services", async () => {
+    mocks.bgRequest.mockResolvedValue({ unread_count: 7 })
+
+    await expect(getUnreadCount()).resolves.toEqual({ unread_count: 7 })
+  })
+
+  it("shares notification query serialization for parity-sensitive paths", () => {
+    expect(
+      buildNotificationsQuery({ limit: 20, offset: 0, include_archived: false })
+    ).toBe("?limit=20&offset=0&include_archived=false")
+  })
+
+  it("normalizes notification stream lines through shared helpers", () => {
+    expect(
+      parseNotificationStreamEvent(
+        '{"event_id":12,"kind":"deep_research_completed","title":"Done","message":"Ready"}'
+      )
+    ).toEqual({
+      event: "notification",
+      id: 12,
+      payload: {
+        event_id: 12,
+        kind: "deep_research_completed",
+        title: "Done",
+        message: "Ready"
+      }
+    })
+  })
+
+  it("retries the shared notification stream runner after an error and advances the cursor", async () => {
+    vi.useFakeTimers()
+    try {
+      const onEvent = vi.fn()
+      const onError = vi.fn()
+      const readStream = vi.fn(
+        async (_signal: AbortSignal, cursor: number, emit: (event: { event: string; id?: number; payload?: unknown }) => void) => {
+          if (readStream.mock.calls.length === 1) {
+            emit({
+              event: "notification",
+              id: 5,
+              payload: {
+                notification_id: 5,
+                kind: "job_failed",
+                title: "First",
+                message: "First notification"
+              }
+            })
+            const error = new Error("stream failed once") as Error & { cursor?: number }
+            error.cursor = 5
+            throw error
+          }
+
+          emit({
+            event: "notification",
+            id: 9,
+            payload: {
+              notification_id: 9,
+              kind: "job_completed",
+              title: "Second",
+              message: "Second notification"
+            }
+          })
+          await new Promise<void>(() => {})
+          return Math.max(cursor, 9)
+        }
+      )
+
+      const unsubscribe = createNotificationStreamSubscription({
+        after: 0,
+        reconnectDelayMs: 250,
+        onEvent,
+        onError,
+        readStream
+      })
+
+      await Promise.resolve()
+      expect(readStream).toHaveBeenCalledTimes(1)
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "notification", id: 5 })
+      )
+
+      await vi.advanceTimersByTimeAsync(250)
+      await Promise.resolve()
+
+      expect(readStream).toHaveBeenCalledTimes(2)
+      expect(readStream.mock.calls[0]?.[1]).toBe(0)
+      expect(readStream.mock.calls[1]?.[1]).toBe(5)
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "notification", id: 9 })
+      )
+      expect(onError).toHaveBeenCalledTimes(1)
+
+      unsubscribe()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("throttles reconnects after a graceful stream close", async () => {
+    vi.useFakeTimers()
+    try {
+      const readStream = vi.fn(async (_signal: AbortSignal, cursor: number) => cursor + 1)
+
+      const unsubscribe = createNotificationStreamSubscription({
+        after: 0,
+        reconnectDelayMs: 250,
+        onEvent: vi.fn(),
+        readStream
+      })
+
+      await Promise.resolve()
+      expect(readStream).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(249)
+      await Promise.resolve()
+      expect(readStream).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await Promise.resolve()
+      expect(readStream).toHaveBeenCalledTimes(2)
+
+      unsubscribe()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("dismisses and snoozes notifications through shared UI services", async () => {
+    mocks.bgRequest.mockResolvedValueOnce({ dismissed: true })
+    mocks.bgRequest.mockResolvedValueOnce({
+      task_id: "task-123",
+      run_at: "2026-03-20T00:15:00Z"
+    })
+
+    await dismissNotification(1)
+    await snoozeNotification(1, 15)
+
+    expect(mocks.bgRequest).toHaveBeenCalledTimes(2)
+  })
+})
