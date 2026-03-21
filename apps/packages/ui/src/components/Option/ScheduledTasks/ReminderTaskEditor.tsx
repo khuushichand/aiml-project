@@ -33,7 +33,7 @@ const taskToValues = (task: ScheduledTask | null): ReminderTaskEditorValues => {
     run_at: typeof sourceRef.run_at === "string" ? sourceRef.run_at : "",
     cron: typeof sourceRef.cron === "string" ? sourceRef.cron : "",
     timezone: typeof sourceRef.timezone === "string" ? sourceRef.timezone : "",
-    enabled: Boolean(task?.enabled)
+    enabled: task ? Boolean(task.enabled) : true
   }
 }
 
@@ -45,6 +45,7 @@ export const ReminderTaskEditor: React.FC<ReminderTaskEditorProps> = ({
   onSubmit
 }) => {
   const [form] = Form.useForm<ReminderTaskEditorValues>()
+  const scheduleKind = Form.useWatch("schedule_kind", form)
 
   useEffect(() => {
     if (open) {
@@ -57,7 +58,12 @@ export const ReminderTaskEditor: React.FC<ReminderTaskEditorProps> = ({
   }
 
   const handleFinish = async () => {
-    const values = await form.validateFields()
+    let values: ReminderTaskEditorValues
+    try {
+      values = await form.validateFields()
+    } catch {
+      return
+    }
     const payload =
       values.schedule_kind === "one_time"
         ? {
@@ -101,13 +107,37 @@ export const ReminderTaskEditor: React.FC<ReminderTaskEditorProps> = ({
             ]}
           />
         </Form.Item>
-        <Form.Item label="Run at" name="run_at">
+        <Form.Item
+          label="Run at"
+          name="run_at"
+          rules={
+            scheduleKind === "one_time"
+              ? [{ required: true, message: "Run at is required for one-time reminders" }]
+              : []
+          }
+        >
           <Input placeholder="2026-03-21T10:00:00+00:00" />
         </Form.Item>
-        <Form.Item label="Cron" name="cron">
+        <Form.Item
+          label="Cron"
+          name="cron"
+          rules={
+            scheduleKind === "recurring"
+              ? [{ required: true, message: "Cron is required for recurring reminders" }]
+              : []
+          }
+        >
           <Input placeholder="0 9 * * *" />
         </Form.Item>
-        <Form.Item label="Timezone" name="timezone">
+        <Form.Item
+          label="Timezone"
+          name="timezone"
+          rules={
+            scheduleKind === "recurring"
+              ? [{ required: true, message: "Timezone is required for recurring reminders" }]
+              : []
+          }
+        >
           <Input placeholder="UTC" />
         </Form.Item>
         <Form.Item label="Enabled" name="enabled" valuePropName="checked">

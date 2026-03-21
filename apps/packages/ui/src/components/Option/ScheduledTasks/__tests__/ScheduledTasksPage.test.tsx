@@ -121,8 +121,62 @@ describe("ScheduledTasksPage", () => {
     await user.click(await screen.findByRole("button", { name: "Save Reminder Task" }))
 
     await waitFor(() => {
-      expect(mocks.createScheduledTaskReminder).toHaveBeenCalled()
+      expect(mocks.createScheduledTaskReminder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Daily review",
+          schedule_kind: "one_time",
+          run_at: "2026-03-21T10:00:00+00:00",
+          enabled: true
+        })
+      )
     })
+  })
+
+  it("does not create a one-time reminder without run_at", async () => {
+    const user = userEvent.setup()
+
+    mocks.listScheduledTasks.mockResolvedValue({
+      items: [],
+      total: 0,
+      partial: false,
+      errors: []
+    })
+
+    renderWithQueryClient(<ScheduledTasksPage />)
+
+    await user.click(await screen.findByRole("button", { name: "Create Reminder Task" }))
+    await user.type(await screen.findByRole("textbox", { name: "Title" }), "Missing run at")
+    await user.click(await screen.findByRole("button", { name: "Save Reminder Task" }))
+
+    await waitFor(() => {
+      expect(mocks.createScheduledTaskReminder).not.toHaveBeenCalled()
+    })
+    expect(screen.getByText("Run at is required for one-time reminders")).toBeInTheDocument()
+  })
+
+  it("does not create a recurring reminder without cron and timezone", async () => {
+    const user = userEvent.setup()
+
+    mocks.listScheduledTasks.mockResolvedValue({
+      items: [],
+      total: 0,
+      partial: false,
+      errors: []
+    })
+
+    renderWithQueryClient(<ScheduledTasksPage />)
+
+    await user.click(await screen.findByRole("button", { name: "Create Reminder Task" }))
+    await user.type(await screen.findByRole("textbox", { name: "Title" }), "Recurring reminder")
+    await user.click(await screen.findByRole("combobox", { name: "Schedule kind" }))
+    await user.click(await screen.findByText("Recurring"))
+    await user.click(await screen.findByRole("button", { name: "Save Reminder Task" }))
+
+    await waitFor(() => {
+      expect(mocks.createScheduledTaskReminder).not.toHaveBeenCalled()
+    })
+    expect(screen.getByText("Cron is required for recurring reminders")).toBeInTheDocument()
+    expect(screen.getByText("Timezone is required for recurring reminders")).toBeInTheDocument()
   })
 
   it("edits and deletes a reminder task from the table", async () => {
