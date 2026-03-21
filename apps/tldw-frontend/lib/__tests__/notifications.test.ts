@@ -1,0 +1,121 @@
+/** @vitest-environment node */
+
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  apiGet: vi.fn(),
+  apiPost: vi.fn(),
+  buildAuthHeaders: vi.fn(),
+  getApiBaseUrl: vi.fn(),
+  streamStructuredSSE: vi.fn(),
+  bgRequest: vi.fn(),
+  bgStream: vi.fn()
+}))
+
+vi.mock("@web/lib/api", () => ({
+  apiClient: {
+    get: (...args: unknown[]) => mocks.apiGet(...args),
+    post: (...args: unknown[]) => mocks.apiPost(...args)
+  },
+  buildAuthHeaders: (...args: unknown[]) => mocks.buildAuthHeaders(...args),
+  getApiBaseUrl: (...args: unknown[]) => mocks.getApiBaseUrl(...args)
+}))
+
+vi.mock("@web/lib/sse", () => ({
+  streamStructuredSSE: (...args: unknown[]) => mocks.streamStructuredSSE(...args)
+}))
+
+vi.mock("@/services/background-proxy", () => ({
+  bgRequest: (...args: unknown[]) => mocks.bgRequest(...args),
+  bgStream: (...args: unknown[]) => mocks.bgStream(...args)
+}))
+
+import {
+  dismissNotification,
+  getUnreadCount,
+  listNotifications,
+  markNotificationsRead,
+  snoozeNotification,
+  subscribeNotificationsStream
+} from "../api/notifications"
+
+describe("web notifications adapter", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.buildAuthHeaders.mockReturnValue({
+      Authorization: "Bearer web-token",
+      "X-CSRF-Token": "csrf-token"
+    })
+    mocks.getApiBaseUrl.mockReturnValue("http://example.test/api/v1")
+    mocks.apiGet.mockResolvedValue({ items: [], total: 0 })
+    mocks.apiPost.mockResolvedValue({ updated: 1, dismissed: true, task_id: "task-1", run_at: "2026-03-20T00:15:00Z" })
+    mocks.streamStructuredSSE.mockImplementation(async (_url, _options, onEvent) => {
+      onEvent({
+        event: "notification",
+        id: 99,
+        payload: {
+          notification_id: 99,
+          kind: "info",
+          title: "Stream item",
+          message: "From web SSE",
+          created_at: "2026-03-20T00:00:00Z"
+        }
+      })
+      const error = new Error("stream failed once") as Error & { cursor?: number }
+      error.cursor = 99
+      throw error
+    })
+    mocks.bgRequest.mockResolvedValue({ items: [], total: 0 })
+    mocks.bgStream.mockImplementation(async function* () {
+      yield undefined
+      await new Promise(() => {})
+    })
+  })
+
+  it("uses the web apiClient transport for inbox CRUD", async () => {
+    await listNotifications({ limit: 20, offset: 0 })
+    await getUnreadCount()
+    await markNotificationsRead([1])
+    await dismissNotification(1)
+    await snoozeNotification(1, 15)
+
+    expect(mocks.apiGet).toHaveBeenCalledWith(
+      "/notifications?limit=20&offset=0&include_archived=false"
+    )
+    expect(mocks.apiGet).toHaveBeenCalledWith("/notifications/unread-count")
+    expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/mark-read", {
+      ids: [1]
+    })
+    expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/dismiss")
+    expect(mocks.apiPost).toHaveBeenCalledWith("/notifications/1/snooze", {
+      minutes: 15
+    })
+  })
+
+  it("uses web auth headers and SSE helpers for the notification stream", async () => {
+    const unsubscribe = subscribeNotificationsStream({
+      after: 42,
+      onEvent: vi.fn()
+    })
+
+    await Promise.resolve()
+
+    expect(mocks.buildAuthHeaders).toHaveBeenCalledWith("GET")
+    expect(mocks.getApiBaseUrl).toHaveBeenCalled()
+    expect(mocks.streamStructuredSSE).toHaveBeenCalledWith(
+      "http://example.test/api/v1/notifications/stream?after=42",
+      expect.objectContaining({
+        method: "GET",
+        credentials: "include",
+        signal: expect.any(AbortSignal),
+        headers: expect.objectContaining({
+          Authorization: "Bearer web-token",
+          "X-CSRF-Token": "csrf-token"
+        })
+      }),
+      expect.any(Function)
+    )
+
+    unsubscribe()
+  })
+})

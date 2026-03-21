@@ -483,6 +483,55 @@ export const CharacterDialogs: React.FC<CharacterDialogsProps> = (props) => {
   const characterIdentifierFn = (record: any): string =>
     String(record?.id ?? record?.slug ?? record?.name ?? "")
 
+  const conversationLoadErrorMessage = React.useMemo(
+    () =>
+      t("settings:manageCharacters.conversations.error", {
+        defaultValue: "Unable to load conversations for this character."
+      }),
+    [t]
+  )
+
+  const loadConversationChats = React.useCallback(async () => {
+    if (!conversationCharacter) return
+
+    setLoadingChats(true)
+    setChatsError(null)
+    setCharacterChats([])
+
+    try {
+      await tldwClient.initialize()
+      const characterId = characterIdentifierFn(conversationCharacter)
+      const chats = await tldwClient.listChats({
+        character_id: characterId || undefined,
+        limit: 100,
+        ordering: "-updated_at"
+      })
+      const filtered = Array.isArray(chats)
+        ? chats.filter(
+            (chat) =>
+              characterId &&
+              String(chat.character_id ?? "") === String(characterId)
+          )
+        : []
+      setCharacterChats(filtered)
+    } catch {
+      setChatsError(conversationLoadErrorMessage)
+    } finally {
+      setLoadingChats(false)
+    }
+  }, [
+    conversationLoadErrorMessage,
+    conversationCharacter,
+    setCharacterChats,
+    setChatsError,
+    setLoadingChats
+  ])
+
+  React.useEffect(() => {
+    if (!conversationsOpen || !conversationCharacter) return
+    void loadConversationChats()
+  }, [conversationCharacter, conversationsOpen, loadConversationChats])
+
   const formatUpdatedLabel = (value?: string | null) => {
     const fallback = t("settings:manageCharacters.conversations.unknownTime", {
       defaultValue: "Unknown"
@@ -917,37 +966,8 @@ export const CharacterDialogs: React.FC<CharacterDialogsProps> = (props) => {
               action={
                 <Button
                   size="small"
-                  onClick={async () => {
-                    if (!conversationCharacter) return
-                    setChatsError(null)
-                    setLoadingChats(true)
-                    setCharacterChats([])
-                    try {
-                      await tldwClient.initialize()
-                      const characterId = characterIdentifierFn(conversationCharacter)
-                      const chats = await tldwClient.listChats({
-                        character_id: characterId || undefined,
-                        limit: 100,
-                        ordering: "-updated_at"
-                      })
-                      const filtered = Array.isArray(chats)
-                        ? chats.filter(
-                            (c) =>
-                              characterId &&
-                              String(c.character_id ?? "") === String(characterId)
-                          )
-                        : []
-                      setCharacterChats(filtered)
-                    } catch {
-                      setChatsError(
-                        t("settings:manageCharacters.conversations.error", {
-                          defaultValue:
-                            "Unable to load conversations for this character."
-                        })
-                      )
-                    } finally {
-                      setLoadingChats(false)
-                    }
+                  onClick={() => {
+                    void loadConversationChats()
                   }}>
                   {t("common:retry", { defaultValue: "Retry" })}
                 </Button>

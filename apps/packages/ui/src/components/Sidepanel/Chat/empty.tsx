@@ -139,11 +139,11 @@ export const EmptySidePanel = ({ inputRef }: EmptySidePanelProps) => {
     return hasCompletedFirstRun
       ? t(
           "option:connectionCard.headlineMissing",
-          "Connect tldw Assistant to your server to start chatting"
+          "Connect tldw Assistant to your server to open Companion Home"
         )
       : t(
           "sidepanel:firstRun.headline",
-          "Finish setup to start chatting"
+          "Finish setup to open Companion Home"
         )
   })()
 
@@ -164,12 +164,12 @@ export const EmptySidePanel = ({ inputRef }: EmptySidePanelProps) => {
     if (!hasCompletedFirstRun) {
       return t(
         "sidepanel:firstRun.description",
-        "Before you can chat here, finish the short setup flow in Options to connect tldw Assistant to your tldw server or choose demo mode."
+        "Before you can use Companion Home here, finish the short setup flow in Options to connect tldw Assistant to your tldw server or choose demo mode."
       )
     }
     return t(
       "option:connectionCard.descriptionMissing",
-      "tldw_server is your private AI workspace that keeps chats, notes, and media on your own machine. Add your server URL to get started."
+      "tldw_server is your private AI workspace that keeps your home dashboard, chats, notes, and media on your own machine. Add your server URL to get started."
     )
   })()
 

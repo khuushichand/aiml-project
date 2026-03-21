@@ -1,0 +1,210 @@
+import React from "react"
+
+import {
+  fetchPersonalizationProfile,
+  type PersonalizationProfile,
+  updatePersonalizationOptIn
+} from "@/services/companion"
+import {
+  fetchCompanionHomeSnapshot,
+  type CompanionHomeSnapshot,
+  type CompanionHomeSurface
+} from "@/services/companion-home"
+import {
+  DEFAULT_COMPANION_HOME_LAYOUT,
+  loadCompanionHomeLayout,
+  saveCompanionHomeLayout,
+  type CompanionHomeLayoutCard
+} from "@/store/companion-home-layout"
+
+export const createEmptySnapshot = (
+  surface: CompanionHomeSurface
+): CompanionHomeSnapshot => ({
+  surface,
+  inbox: [],
+  needsAttention: [],
+  resumeWork: [],
+  goalsFocus: [],
+  recentActivity: [],
+  readingQueue: [],
+  degradedSources: ["workspace", "reading", "notes"],
+  summary: {
+    activityCount: 0,
+    inboxCount: 0,
+    needsAttentionCount: 0,
+    resumeWorkCount: 0
+  }
+})
+
+type UseCompanionHomeDataArgs = {
+  surface: CompanionHomeSurface
+  capsLoading: boolean
+  hasPersonalization: boolean
+  onPersonalizationEnabled?: () => void
+}
+
+type UseCompanionHomeDataResult = {
+  snapshot: CompanionHomeSnapshot | null
+  profile: PersonalizationProfile | null
+  profileLoaded: boolean
+  loading: boolean
+  error: string | null
+  enablingCompanion: boolean
+  refresh: () => void
+  enableCompanion: () => Promise<void>
+}
+
+export const useCompanionHomeData = ({
+  surface,
+  capsLoading,
+  hasPersonalization,
+  onPersonalizationEnabled
+}: UseCompanionHomeDataArgs): UseCompanionHomeDataResult => {
+  const [snapshot, setSnapshot] = React.useState<CompanionHomeSnapshot | null>(null)
+  const [profile, setProfile] = React.useState<PersonalizationProfile | null>(null)
+  const [profileLoaded, setProfileLoaded] = React.useState(false)
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
+  const [enablingCompanion, setEnablingCompanion] = React.useState(false)
+  const [refreshToken, setRefreshToken] = React.useState(0)
+
+  React.useEffect(() => {
+    if (capsLoading) return
+
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setProfileLoaded(false)
+
+    const load = async () => {
+      const [snapshotResult, profileResult] = await Promise.allSettled([
+        fetchCompanionHomeSnapshot(surface),
+        hasPersonalization ? fetchPersonalizationProfile() : Promise.resolve(null)
+      ])
+
+      if (cancelled) {
+        return
+      }
+
+      if (snapshotResult.status === "fulfilled") {
+        setSnapshot(snapshotResult.value)
+      } else {
+        setSnapshot(createEmptySnapshot(surface))
+        setError("Companion Home is partially unavailable right now.")
+      }
+
+      if (profileResult.status === "fulfilled") {
+        setProfile(profileResult.value)
+        setProfileLoaded(true)
+      } else {
+        setProfile(null)
+        setError((current) => current || "Companion setup status could not be loaded.")
+      }
+
+      setLoading(false)
+    }
+
+    void load()
+
+    return () => {
+      cancelled = true
+    }
+  }, [capsLoading, hasPersonalization, refreshToken, surface])
+
+  const refresh = React.useCallback(() => {
+    setRefreshToken((value) => value + 1)
+  }, [])
+
+  const enableCompanion = React.useCallback(async () => {
+    setEnablingCompanion(true)
+    setError(null)
+    try {
+      const nextProfile = await updatePersonalizationOptIn(true)
+      setProfile(nextProfile)
+      onPersonalizationEnabled?.()
+      refresh()
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Failed to enable companion personalization."
+      )
+    } finally {
+      setEnablingCompanion(false)
+    }
+  }, [onPersonalizationEnabled, refresh])
+
+  return {
+    snapshot,
+    profile,
+    profileLoaded,
+    loading,
+    error,
+    enablingCompanion,
+    refresh,
+    enableCompanion
+  }
+}
+
+type UseCompanionHomeLayoutResult = {
+  layout: CompanionHomeLayoutCard[] | null
+  updateLayout: (nextLayout: CompanionHomeLayoutCard[]) => void
+}
+
+export const useCompanionHomeLayout = (
+  surface: CompanionHomeSurface
+): UseCompanionHomeLayoutResult => {
+  const [layout, setLayout] = React.useState<CompanionHomeLayoutCard[] | null>(null)
+  const layoutLoadRequestRef = React.useRef(0)
+  const layoutMutationVersionRef = React.useRef(0)
+
+  React.useEffect(() => {
+    let cancelled = false
+    const requestId = layoutLoadRequestRef.current + 1
+    const mutationVersionAtRequest = layoutMutationVersionRef.current
+
+    layoutLoadRequestRef.current = requestId
+    setLayout(null)
+
+    const loadLayout = async () => {
+      try {
+        const nextLayout = await loadCompanionHomeLayout(surface)
+        if (
+          !cancelled &&
+          layoutLoadRequestRef.current === requestId &&
+          layoutMutationVersionRef.current === mutationVersionAtRequest
+        ) {
+          setLayout(nextLayout)
+        }
+      } catch {
+        if (
+          !cancelled &&
+          layoutLoadRequestRef.current === requestId &&
+          layoutMutationVersionRef.current === mutationVersionAtRequest
+        ) {
+          setLayout(DEFAULT_COMPANION_HOME_LAYOUT)
+        }
+      }
+    }
+
+    void loadLayout()
+
+    return () => {
+      cancelled = true
+    }
+  }, [surface])
+
+  const updateLayout = React.useCallback(
+    (nextLayout: CompanionHomeLayoutCard[]) => {
+      layoutMutationVersionRef.current += 1
+      setLayout(nextLayout)
+      void saveCompanionHomeLayout(surface, nextLayout)
+    },
+    [surface]
+  )
+
+  return {
+    layout,
+    updateLayout
+  }
+}

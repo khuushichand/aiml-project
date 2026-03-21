@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
-  bgRequest: vi.fn()
+  bgRequest: vi.fn(),
+  bgStream: vi.fn(),
+  listNotifications: vi.fn()
 }))
 
 vi.mock("@/services/background-proxy", () => ({
-  bgRequest: (...args: unknown[]) => mocks.bgRequest(...args)
+  bgRequest: (...args: unknown[]) => mocks.bgRequest(...args),
+  bgStream: (...args: unknown[]) => mocks.bgStream(...args)
+}))
+
+vi.mock("@/services/notifications", () => ({
+  listNotifications: (...args: unknown[]) => mocks.listNotifications(...args)
 }))
 
 import {
@@ -92,35 +99,35 @@ describe("companion service", () => {
         ],
         total: 1
       })
-      .mockResolvedValueOnce({
-        items: [
-          {
-            id: 11,
-            user_id: "1",
-            kind: "companion_reflection",
-            title: "Daily reflection",
-            message: "You revisited project alpha.",
-            severity: "info",
-            link_type: "companion_reflection",
-            link_id: "reflection-1",
-            created_at: "2026-03-10T13:00:00Z",
-            read_at: null,
-            dismissed_at: null
-          },
-          {
-            id: 12,
-            user_id: "1",
-            kind: "job_completed",
-            title: "Unrelated job",
-            message: "Done",
-            severity: "info",
-            created_at: "2026-03-10T13:05:00Z",
-            read_at: null,
-            dismissed_at: null
-          }
-        ],
-        total: 2
-      })
+    mocks.listNotifications.mockResolvedValueOnce({
+      items: [
+        {
+          id: 11,
+          user_id: "1",
+          kind: "companion_reflection",
+          title: "Daily reflection",
+          message: "You revisited project alpha.",
+          severity: "info",
+          link_type: "companion_reflection",
+          link_id: "reflection-1",
+          created_at: "2026-03-10T13:00:00Z",
+          read_at: null,
+          dismissed_at: null
+        },
+        {
+          id: 12,
+          user_id: "1",
+          kind: "job_completed",
+          title: "Unrelated job",
+          message: "Done",
+          severity: "info",
+          created_at: "2026-03-10T13:05:00Z",
+          read_at: null,
+          dismissed_at: null
+        }
+      ],
+      total: 2
+    })
 
     const snapshot = await fetchCompanionWorkspaceSnapshot()
 
@@ -145,13 +152,10 @@ describe("companion service", () => {
         method: "GET"
       })
     )
-    expect(mocks.bgRequest).toHaveBeenNthCalledWith(
-      4,
-      expect.objectContaining({
-        path: "/api/v1/notifications?limit=50&offset=0",
-        method: "GET"
-      })
-    )
+    expect(mocks.listNotifications).toHaveBeenCalledWith({
+      limit: 50,
+      offset: 0
+    })
 
     expect(snapshot.activity).toHaveLength(1)
     expect(snapshot.activity[0].id).toBe("activity-1")
@@ -169,6 +173,16 @@ describe("companion service", () => {
         link_id: "reflection-1"
       })
     ])
+    expect(snapshot.inbox).toEqual([
+      expect.objectContaining({
+        id: 11,
+        kind: "companion_reflection"
+      }),
+      expect.objectContaining({
+        id: 12,
+        kind: "job_completed"
+      })
+    ])
     expect(snapshot.activeGoalCount).toBe(1)
   })
 
@@ -182,10 +196,11 @@ describe("companion service", () => {
       })
       .mockResolvedValueOnce({ items: [], total: 0 })
       .mockResolvedValueOnce({ items: [], total: 0 })
-      .mockRejectedValueOnce(new Error("notifications unavailable"))
+    mocks.listNotifications.mockRejectedValueOnce(new Error("notifications unavailable"))
 
     const snapshot = await fetchCompanionWorkspaceSnapshot()
 
+    expect(snapshot.inbox).toEqual([])
     expect(snapshot.reflectionNotifications).toEqual([])
     expect(snapshot.reflections).toEqual([])
   })

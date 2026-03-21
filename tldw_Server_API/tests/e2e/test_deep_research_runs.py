@@ -15,6 +15,56 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 pytestmark = pytest.mark.critical
 
 
+def _set_user_db_base(monkeypatch: pytest.MonkeyPatch, base_dir) -> str | None:
+    from tldw_Server_API.app.core.config import settings
+
+    previous = settings.get("USER_DB_BASE_DIR")
+    settings.USER_DB_BASE_DIR = str(base_dir)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    return previous
+
+
+def _restore_user_db_base(previous: str | None) -> None:
+    from tldw_Server_API.app.core.config import settings
+
+    if previous is not None:
+        settings.USER_DB_BASE_DIR = previous
+        return
+    try:
+        del settings.USER_DB_BASE_DIR
+    except AttributeError:
+        pass
+
+
+def _seed_chat_thread(*, owner_user_id: str, chat_db_path, chat_id: str | None = None) -> str:
+    from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+    chat_db = CharactersRAGDB(str(chat_db_path), client_id=owner_user_id)
+    character_id = chat_db.add_character_card(
+        {
+            "name": DEFAULT_CHARACTER_NAME,
+            "description": "Research thread helper",
+            "personality": "Helpful",
+            "scenario": "Research follow-up testing",
+            "system_prompt": "You are a research assistant.",
+            "first_message": "Hello",
+            "creator_notes": "Created by deep research tests",
+        }
+    )
+    chat_id = chat_db.add_conversation(
+        {
+            "id": chat_id,
+            "character_id": character_id,
+            "title": "Deep Research Chat",
+            "client_id": owner_user_id,
+        }
+    )
+    if chat_id is None:
+        pytest.fail("Failed to seed deep research chat handoff conversation")
+    return chat_id
+
+
 def _parse_sse_block(block: str) -> dict[str, object] | None:
     event_name: str | None = None
     event_id: int | None = None
@@ -357,15 +407,17 @@ def test_deep_research_run_can_be_approved_and_exported(tmp_path):
     assert (outputs_dir / "research" / session_id / "bundle.json").exists()
 
 
-def test_deep_research_run_creation_persists_chat_handoff(tmp_path):
+def test_deep_research_run_creation_persists_chat_handoff(tmp_path, monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import research_runs
     from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     from tldw_Server_API.app.core.Research.service import ResearchService
 
     class DummyJobs:
         def create_job(self, **kwargs):
             return {"id": 21, "uuid": "job-21", "status": "queued", **kwargs}
 
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_dbs")
     research_db_path = tmp_path / "research.db"
     outputs_dir = tmp_path / "outputs"
     service = ResearchService(
@@ -379,17 +431,26 @@ def test_deep_research_run_creation_persists_chat_handoff(tmp_path):
     app.dependency_overrides[get_request_user] = lambda: SimpleNamespace(id=1)
     app.dependency_overrides[research_runs.get_research_service] = lambda: service
 
-    with TestClient(app) as client:
-        create_resp = client.post(
-            "/api/v1/research/runs",
-            json={
-                "query": "Trace the policy timeline",
-                "chat_handoff": {
-                    "chat_id": "chat_123",
-                    "launch_message_id": "msg_456",
-                },
-            },
+    try:
+        _seed_chat_thread(
+            owner_user_id="1",
+            chat_db_path=DatabasePaths.get_chacha_db_path("1"),
+            chat_id="chat_123",
         )
+
+        with TestClient(app) as client:
+            create_resp = client.post(
+                "/api/v1/research/runs",
+                json={
+                    "query": "Trace the policy timeline",
+                    "chat_handoff": {
+                        "chat_id": "chat_123",
+                        "launch_message_id": "msg_456",
+                    },
+                },
+            )
+    finally:
+        _restore_user_db_base(previous_user_db_base)
 
     assert create_resp.status_code == 200
     session_id = create_resp.json()["id"]

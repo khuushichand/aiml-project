@@ -2,7 +2,7 @@ import React from "react"
 import { useTranslation } from "react-i18next"
 
 import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
-import { CompanionPage } from "@/components/Option/Companion"
+import { CompanionHomeShell } from "@/components/Option/CompanionHome"
 import { SidepanelHeaderSimple } from "~/components/Sidepanel/Chat/SidepanelHeaderSimple"
 import {
   isCompanionConsentRequiredError,
@@ -20,7 +20,6 @@ const SidepanelCompanion = () => {
   const { t } = useTranslation(["option", "sidepanel"])
   const [banner, setBanner] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
-  const [reloadNonce, setReloadNonce] = React.useState(0)
   const lastHandledCaptureIdRef = React.useRef<string | null>(null)
 
   const handleCapture = React.useCallback(async (capture: PendingCompanionCapture) => {
@@ -35,7 +34,6 @@ const SidepanelCompanion = () => {
       await recordExplicitCompanionCapture(buildExplicitCompanionCapture(capture))
       clearPendingCompanionCapture(capture.id)
       setBanner("Saved selection to companion.")
-      setReloadNonce((value) => value + 1)
     } catch (caught) {
       const requestError = caught as Error & { status?: number }
       if (isCompanionConsentRequiredError(requestError)) {
@@ -46,7 +44,6 @@ const SidepanelCompanion = () => {
       if (requestError?.status === 409) {
         clearPendingCompanionCapture(capture.id)
         setBanner("Selection already saved to companion.")
-        setReloadNonce((value) => value + 1)
         return
       }
       setError("Failed to save selection to companion.")
@@ -54,17 +51,15 @@ const SidepanelCompanion = () => {
     }
   }, [])
 
-  const handleCompanionEnabled = React.useCallback(() => {
-    const pending = readPendingCompanionCapture()
-    if (!pending) return
-    void handleCapture(pending)
-  }, [handleCapture])
-
-  React.useEffect(() => {
+  const retryPendingCapture = React.useCallback(() => {
     const pending = readPendingCompanionCapture()
     if (pending) {
       void handleCapture(pending)
     }
+  }, [handleCapture])
+
+  React.useEffect(() => {
+    retryPendingCapture()
 
     const listener = (event: Event) => {
       const capture = (event as CustomEvent<PendingCompanionCapture>).detail
@@ -76,7 +71,7 @@ const SidepanelCompanion = () => {
     return () => {
       window.removeEventListener(COMPANION_PENDING_CAPTURE_EVENT, listener)
     }
-  }, [handleCapture])
+  }, [handleCapture, retryPendingCapture])
 
   return (
     <RouteErrorBoundary routeId="sidepanel-companion" routeLabel="Companion">
@@ -100,9 +95,8 @@ const SidepanelCompanion = () => {
               </div>
             </div>
           ) : null}
-          <CompanionPage
-            key={reloadNonce}
-            onCompanionEnabled={handleCompanionEnabled}
+          <CompanionHomeShell
+            onPersonalizationEnabled={retryPendingCapture}
             surface="sidepanel"
           />
         </div>
