@@ -2,7 +2,7 @@
 
 import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -115,7 +115,7 @@ describe("ScheduledTasksPage", () => {
 
     renderWithQueryClient(<ScheduledTasksPage />)
 
-    await user.click(await screen.findByRole("button", { name: "Create Reminder Task" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Create Reminder Task" }))
     await user.type(await screen.findByRole("textbox", { name: "Title" }), "Daily review")
     await user.type(screen.getByRole("textbox", { name: "Run at" }), "2026-03-21T10:00:00+00:00")
     await user.click(await screen.findByRole("button", { name: "Save Reminder Task" }))
@@ -170,18 +170,66 @@ describe("ScheduledTasksPage", () => {
     await user.type(await screen.findByRole("textbox", { name: "Title" }), "Recurring reminder")
     await user.click(await screen.findByRole("combobox", { name: "Schedule kind" }))
     await user.click(await screen.findByText("Recurring"))
+    fireEvent.click(await screen.findByRole("button", { name: "Save Reminder Task" }))
+
+    expect(await screen.findByText("Cron is required for recurring reminders")).toBeInTheDocument()
+    expect(screen.getByText("Timezone is required for recurring reminders")).toBeInTheDocument()
+    expect(mocks.createScheduledTaskReminder).not.toHaveBeenCalled()
+  })
+
+  it("does not create a one-time reminder with whitespace-only run_at", async () => {
+    const user = userEvent.setup()
+
+    mocks.listScheduledTasks.mockResolvedValue({
+      items: [],
+      total: 0,
+      partial: false,
+      errors: []
+    })
+
+    renderWithQueryClient(<ScheduledTasksPage />)
+
+    await user.click(await screen.findByRole("button", { name: "Create Reminder Task" }))
+    await user.type(await screen.findByRole("textbox", { name: "Title" }), "Whitespace run at")
+    fireEvent.change(screen.getByRole("textbox", { name: "Run at" }), { target: { value: "   " } })
     await user.click(await screen.findByRole("button", { name: "Save Reminder Task" }))
+
+    await waitFor(() => {
+      expect(mocks.createScheduledTaskReminder).not.toHaveBeenCalled()
+    })
+    expect(screen.getByText("Run at is required for one-time reminders")).toBeInTheDocument()
+  })
+
+  it("does not create a recurring reminder with whitespace-only cron and timezone", async () => {
+    const user = userEvent.setup()
+
+    mocks.listScheduledTasks.mockResolvedValue({
+      items: [],
+      total: 0,
+      partial: false,
+      errors: []
+    })
+
+    renderWithQueryClient(<ScheduledTasksPage />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create Reminder Task" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "Whitespace recurring reminder" }
+    })
+    await user.click(await screen.findByRole("combobox", { name: "Schedule kind" }))
+    await user.click(await screen.findByText("Recurring"))
+    fireEvent.change(screen.getByRole("textbox", { name: "Cron" }), { target: { value: "   " } })
+    fireEvent.change(screen.getByRole("textbox", { name: "Timezone" }), { target: { value: "   " } })
+    await user.click(screen.getByRole("button", { name: "Save Reminder Task" }))
 
     await waitFor(() => {
       expect(mocks.createScheduledTaskReminder).not.toHaveBeenCalled()
     })
     expect(screen.getByText("Cron is required for recurring reminders")).toBeInTheDocument()
     expect(screen.getByText("Timezone is required for recurring reminders")).toBeInTheDocument()
-  })
+  }, 10000)
 
   it("edits and deletes a reminder task from the table", async () => {
-    const user = userEvent.setup()
-
     mocks.listScheduledTasks.mockResolvedValue({
       items: [
         {
@@ -220,11 +268,12 @@ describe("ScheduledTasksPage", () => {
     renderWithQueryClient(<ScheduledTasksPage />)
 
     expect(await screen.findByText("Review notes")).toBeInTheDocument()
-    await user.click(await screen.findByRole("button", { name: "Edit" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }))
     expect(await screen.findByText("Edit reminder task")).toBeInTheDocument()
-    await user.clear(await screen.findByRole("textbox", { name: "Title" }))
-    await user.type(screen.getByRole("textbox", { name: "Title" }), "Updated review")
-    await user.click(await screen.findByRole("button", { name: "Save Reminder Task" }))
+    fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), {
+      target: { value: "Updated review" }
+    })
+    fireEvent.click(await screen.findByRole("button", { name: "Save Reminder Task" }))
 
     await waitFor(() => {
       expect(mocks.updateScheduledTaskReminder).toHaveBeenCalledWith(
@@ -233,7 +282,7 @@ describe("ScheduledTasksPage", () => {
       )
     })
 
-    await user.click(await screen.findByRole("button", { name: "Delete" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }))
 
     await waitFor(() => {
       expect(mocks.deleteScheduledTaskReminder).toHaveBeenCalledWith("reminder_task:1")

@@ -37,6 +37,15 @@ const taskToValues = (task: ScheduledTask | null): ReminderTaskEditorValues => {
   }
 }
 
+const requiredTrimmedRule = (message: string) => ({
+  validator: (_: unknown, value: unknown) => {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return Promise.resolve()
+    }
+    return Promise.reject(new Error(message))
+  }
+})
+
 export const ReminderTaskEditor: React.FC<ReminderTaskEditorProps> = ({
   open,
   task,
@@ -64,22 +73,49 @@ export const ReminderTaskEditor: React.FC<ReminderTaskEditorProps> = ({
     } catch {
       return
     }
+
+    const runAt = values.run_at?.trim() || ""
+    const cron = values.cron?.trim() || ""
+    const timezone = values.timezone?.trim() || ""
+    if (values.schedule_kind === "one_time" && !runAt) {
+      form.setFields([
+        {
+          name: "run_at",
+          errors: ["Run at is required for one-time reminders"]
+        }
+      ])
+      return
+    }
+    if (values.schedule_kind === "recurring" && (!cron || !timezone)) {
+      form.setFields([
+        {
+          name: "cron",
+          errors: !cron ? ["Cron is required for recurring reminders"] : []
+        },
+        {
+          name: "timezone",
+          errors: !timezone ? ["Timezone is required for recurring reminders"] : []
+        }
+      ])
+      return
+    }
+
     const payload =
       values.schedule_kind === "one_time"
         ? {
             title: values.title.trim(),
             body: values.body?.trim() || null,
             schedule_kind: "one_time" as const,
-            run_at: values.run_at?.trim() || null,
-            timezone: values.timezone?.trim() || null,
+            run_at: runAt || null,
+            timezone: timezone || null,
             enabled: Boolean(values.enabled)
           }
         : {
             title: values.title.trim(),
             body: values.body?.trim() || null,
             schedule_kind: "recurring" as const,
-            cron: values.cron?.trim() || null,
-            timezone: values.timezone?.trim() || null,
+            cron: cron || null,
+            timezone: timezone || null,
             enabled: Boolean(values.enabled)
           }
 
@@ -112,7 +148,7 @@ export const ReminderTaskEditor: React.FC<ReminderTaskEditorProps> = ({
           name="run_at"
           rules={
             scheduleKind === "one_time"
-              ? [{ required: true, message: "Run at is required for one-time reminders" }]
+              ? [requiredTrimmedRule("Run at is required for one-time reminders")]
               : []
           }
         >
@@ -123,7 +159,7 @@ export const ReminderTaskEditor: React.FC<ReminderTaskEditorProps> = ({
           name="cron"
           rules={
             scheduleKind === "recurring"
-              ? [{ required: true, message: "Cron is required for recurring reminders" }]
+              ? [requiredTrimmedRule("Cron is required for recurring reminders")]
               : []
           }
         >
@@ -134,7 +170,7 @@ export const ReminderTaskEditor: React.FC<ReminderTaskEditorProps> = ({
           name="timezone"
           rules={
             scheduleKind === "recurring"
-              ? [{ required: true, message: "Timezone is required for recurring reminders" }]
+              ? [requiredTrimmedRule("Timezone is required for recurring reminders")]
               : []
           }
         >
