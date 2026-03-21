@@ -529,7 +529,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
                       {tokens.map((line, i) => (
                         <div
                           key={i}
-                          {...getLineProps({ line, key: i })}
+                          {...getLineProps({ line })}
                           className="table w-full">
                           <span className="table-cell select-none pr-4 text-right text-xs text-text-subtle">
                             {i + 1}
@@ -538,7 +538,7 @@ export const CodeBlock: FC<Props> = ({ language, value, blockIndex }) => {
                             {line.map((token, key) => (
                               <span
                                 key={key}
-                                {...getTokenProps({ token, key })}
+                                {...getTokenProps({ token })}
                               />
                             ))}
                           </span>

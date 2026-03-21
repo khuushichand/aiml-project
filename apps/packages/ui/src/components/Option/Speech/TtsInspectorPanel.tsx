@@ -82,7 +82,7 @@ export const TtsInspectorPanel: React.FC<Props> = ({
         onClose={onClose}
         closable={false}
         styles={{ body: { padding: 0 }, wrapper: { maxWidth: 360 } }}
-        width={360}
+        size={360}
       >
         <PanelContent
           activeTab={activeTab}

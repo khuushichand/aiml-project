@@ -497,6 +497,7 @@ export const SMOKE_HARD_GATE_ALLOWLIST: SmokeHardGateAllowlistRule[] = [
       "/speech",
       "/tts",
       "/audio",
+      "/404",
       "/__wayfinding-missing-route__"
     ]
   },
