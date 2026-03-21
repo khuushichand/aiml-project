@@ -5802,6 +5802,14 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _integrations_cp_min_err:
         logger.debug(f"Skipping integrations control plane router in minimal test app: {_integrations_cp_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.scheduled_tasks_control_plane import (
+            router as scheduled_tasks_control_plane_router,
+        )
+
+        app.include_router(scheduled_tasks_control_plane_router, prefix=f"{API_V1_PREFIX}", tags=["scheduled-tasks"])
+    except _IMPORT_EXCEPTIONS as _scheduled_tasks_cp_min_err:
+        logger.debug(f"Skipping scheduled tasks control plane router in minimal test app: {_scheduled_tasks_cp_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.notifications import router as notifications_router
 
         app.include_router(notifications_router, prefix=f"{API_V1_PREFIX}", tags=["notifications"])
@@ -6460,6 +6468,20 @@ else:
         )
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Integrations control plane endpoint not available: {_e}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.scheduled_tasks_control_plane import (
+            router as _scheduled_tasks_control_plane_router,
+        )
+
+        _include_if_enabled(
+            "scheduled-tasks",
+            _scheduled_tasks_control_plane_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["scheduled-tasks"],
+            default_stable=False,
+        )
+    except _IMPORT_EXCEPTIONS as _e:
+        logger.warning(f"Scheduled tasks control plane endpoint not available: {_e}")
     try:
         from tldw_Server_API.app.api.v1.endpoints.notifications import router as _notifications_router
 
