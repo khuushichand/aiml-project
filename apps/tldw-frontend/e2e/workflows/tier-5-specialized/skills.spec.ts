@@ -14,7 +14,6 @@ import {
   skipIfServerUnavailable,
   assertNoCriticalErrors,
 } from "../../utils/fixtures"
-import { expectApiCall } from "../../utils/api-assertions"
 
 test.describe("Skills", () => {
   test.beforeEach(async ({ authedPage, serverInfo }) => {
@@ -46,24 +45,42 @@ test.describe("Skills", () => {
     authedPage,
     diagnostics,
   }) => {
-    const apiCall = expectApiCall(authedPage, {
-      url: "/api/v1/skills",
-    })
+    let skillsRequestMade = false
+    const handler = (req: import("@playwright/test").Request) => {
+      if (req.url().includes("/api/v1/skills") && req.method() === "GET") {
+        skillsRequestMade = true
+      }
+    }
+    authedPage.on("request", handler)
+
     await authedPage.goto("/skills", { waitUntil: "domcontentloaded" })
 
     const unsupportedHeading = authedPage.getByRole("heading", {
       name: /skills not available/i,
     })
+    const skillsTable = authedPage.locator("table")
+    const createButtons = authedPage.getByRole("button", {
+      name: /new skill|add skill|create/i,
+    })
+
+    await expect(
+      unsupportedHeading.or(skillsTable).or(createButtons).first()
+    ).toBeVisible({ timeout: 15_000 })
+
     const unsupportedVisible = await unsupportedHeading
-      .isVisible({ timeout: 5_000 })
+      .isVisible()
       .catch(() => false)
 
     if (unsupportedVisible) {
       await expect(unsupportedHeading).toBeVisible()
+      expect(skillsRequestMade).toBe(false)
     } else {
-      const result = await apiCall
-      expect(result.response.status()).toBeLessThan(500)
+      await expect
+        .poll(() => skillsRequestMade, { timeout: 15_000 })
+        .toBe(true)
     }
+
+    authedPage.removeListener("request", handler)
 
     await assertNoCriticalErrors(diagnostics)
   })

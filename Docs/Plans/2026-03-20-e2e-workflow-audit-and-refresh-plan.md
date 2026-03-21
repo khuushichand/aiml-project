@@ -24,8 +24,11 @@
 
 ## Audit Notes
 - Added focused coverage for the `/documentation` route and the placeholder settings-CTA contract.
-- Live route audit confirmed the docs fix and the placeholder CTA de-duplication in rendered snapshots, but the full Playwright harness still times out after rendering the fixed DOM.
+- The static/redirect route harness issue was traced to brittle `waitForLoadState("networkidle")` calls plus one stale `/privileges` redirect assumption. Focused packs for hosted placeholders, settings placeholders, `/documentation`, `/privileges`, and `/profile`/`/companion` now pass against a stable dev server on `8091`.
+- `settings-full.spec.ts` was not catching app bugs; it was counting interactive elements before the settings shell finished hydrating. It now waits on `SettingsPage.waitForReady()` and asserts visible DOM controls instead of immediate role counts.
+- `model-playground.spec.ts` and `skills.spec.ts` were also stale. The live pages rendered correctly in failure artifacts, but the specs were blocked by `networkidle`, global `aria-pressed` selectors, and an unconditional Skills API expectation on a server that intentionally resolves to the unsupported-state branch. Focused tier-5 reruns now pass.
+- Existing e2e coverage quality improved materially in this pass, but there are still additional route/workspace specs with the same `networkidle` pattern in tier-1 and tier-5 that should be refreshed in follow-up work.
 - New route findings from the continued walkthrough:
   - `/integrations`, `/billing`, `/account`, `/signup`, `/auth/reset-password`, and `/privileges` were traced to a stale port-3000 Next dev process rather than missing source routes. A clean server on `8091` served all of them as `200`, and restarting the live `3000` server restored the same behavior.
   - `/notifications` showed the same stale-process symptom on the original `3000` server. After the restart it served the normal page HTML instead of the Next recovery shell.
-  - The remaining e2e reliability gap is the Playwright harness itself: several route specs time out even after the expected DOM is already rendered in the failure artifacts.
+  - The remaining e2e reliability gap is now narrower: several unfixed tier-1 and tier-5 specs still rely on `networkidle` and loose page-load assertions, even though the pages themselves appear healthy.

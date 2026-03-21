@@ -28,20 +28,16 @@ test.describe("Moderation Playground", () => {
     await authedPage.goto("/moderation-playground", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    // Hero heading or permission error should be visible
-    const hasHeading = await authedPage
-      .getByText("Moderation Playground")
-      .first()
-      .isVisible()
-      .catch(() => false)
-    const hasPermissionError = await authedPage
-      .getByText("Admin moderation access required")
-      .isVisible()
-      .catch(() => false)
-
-    expect(hasHeading || hasPermissionError).toBe(true)
+    const heading = authedPage.getByRole("heading", {
+      name: /moderation playground/i,
+    })
+    const permissionError = authedPage.getByText(
+      /admin moderation access required/i
+    )
+    await expect(heading.or(permissionError).first()).toBeVisible({
+      timeout: 15_000,
+    })
 
     await assertNoCriticalErrors(diagnostics)
   })
@@ -53,7 +49,12 @@ test.describe("Moderation Playground", () => {
     await authedPage.goto("/moderation-playground", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
+    await expect(
+      authedPage
+        .getByRole("heading", { name: /moderation playground/i })
+        .or(authedPage.getByText(/admin moderation access required/i))
+        .first()
+    ).toBeVisible({ timeout: 15_000 })
 
     // Skip if permission gated
     const hasPermissionError = await authedPage
@@ -88,23 +89,15 @@ test.describe("Moderation Playground", () => {
     await authedPage.goto("/moderation-playground", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    const hasOnline = await authedPage
-      .getByText("Server online")
-      .isVisible()
-      .catch(() => false)
-    const hasOffline = await authedPage
-      .getByText("Server offline")
-      .isVisible()
-      .catch(() => false)
-    const hasPermission = await authedPage
-      .getByText("Admin moderation access required")
-      .isVisible()
-      .catch(() => false)
+    const statusBadge = authedPage.getByText(/server (online|offline)/i).first()
+    const permissionError = authedPage.getByText(
+      /admin moderation access required/i
+    )
 
-    // Either status badge or permission gate should render
-    expect(hasOnline || hasOffline || hasPermission).toBe(true)
+    await expect(statusBadge.or(permissionError).first()).toBeVisible({
+      timeout: 15_000,
+    })
 
     await assertNoCriticalErrors(diagnostics)
   })

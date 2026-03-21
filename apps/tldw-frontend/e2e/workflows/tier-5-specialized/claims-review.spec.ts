@@ -25,11 +25,24 @@ test.describe("Claims Review", () => {
     await authedPage.goto("/claims-review", {
       waitUntil: "domcontentloaded",
     })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    // Should have navigated to /content-review
-    const url = authedPage.url()
-    expect(url).toContain("/content-review")
+    const redirectPanel = authedPage.getByTestId("route-redirect-panel")
+    const contentReviewHeading = authedPage.getByRole("heading", {
+      name: /content review/i,
+    })
+
+    await expect(
+      redirectPanel.or(contentReviewHeading).first()
+    ).toBeVisible({ timeout: 15_000 })
+
+    const panelVisible = await redirectPanel.isVisible().catch(() => false)
+    if (panelVisible) {
+      await expect(
+        authedPage.getByTestId("route-redirect-open-updated-page")
+      ).toHaveAttribute("href", "/content-review")
+    } else {
+      await expect(contentReviewHeading).toBeVisible()
+    }
 
     await assertNoCriticalErrors(diagnostics)
   })

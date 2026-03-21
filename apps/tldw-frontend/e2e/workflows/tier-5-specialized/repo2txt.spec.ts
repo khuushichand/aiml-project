@@ -25,25 +25,13 @@ test.describe("Repo2Txt", () => {
     diagnostics,
   }) => {
     await authedPage.goto("/repo2txt", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    // Route root data-testid
-    const routeRoot = authedPage.locator('[data-testid="repo2txt-route-root"]')
-    const hasRoot = await routeRoot.isVisible().catch(() => false)
-
-    // Provider panel
-    const providerPanel = authedPage.locator(
-      '[data-testid="repo2txt-provider-panel"]'
-    )
-    const hasProvider = await providerPanel.isVisible().catch(() => false)
-
-    // Output panel
-    const outputPanel = authedPage.locator(
-      '[data-testid="repo2txt-output-panel"]'
-    )
-    const hasOutput = await outputPanel.isVisible().catch(() => false)
-
-    expect(hasRoot || hasProvider || hasOutput).toBe(true)
+    await expect(
+      authedPage.getByRole("heading", { name: /source provider/i })
+    ).toBeVisible({ timeout: 15_000 })
+    await expect(
+      authedPage.getByRole("heading", { name: /output/i })
+    ).toBeVisible({ timeout: 15_000 })
 
     await assertNoCriticalErrors(diagnostics)
   })
@@ -53,13 +41,12 @@ test.describe("Repo2Txt", () => {
     diagnostics,
   }) => {
     await authedPage.goto("/repo2txt", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
 
-    const buttons = await authedPage.getByRole("button").count()
-    const inputs = await authedPage
-      .locator("input, select, textarea")
-      .count()
-    expect(buttons + inputs).toBeGreaterThan(0)
+    const interactiveElements = authedPage.locator(
+      "button, input, select, textarea"
+    )
+    await expect(interactiveElements.first()).toBeVisible({ timeout: 15_000 })
+    expect(await interactiveElements.count()).toBeGreaterThan(0)
 
     await assertNoCriticalErrors(diagnostics)
   })

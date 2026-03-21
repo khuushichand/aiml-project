@@ -53,7 +53,11 @@ test.describe("Model Playground", () => {
       authedPage.getByRole("heading", { name: /model playground/i })
     ).toBeVisible({ timeout: 10_000 })
 
-    const debugBtn = authedPage.locator('button[aria-pressed]').first()
+    const debugBtn = authedPage
+      .locator("main")
+      .last()
+      .locator('button[aria-pressed]')
+      .first()
     await expect(debugBtn).toBeVisible({ timeout: 10_000 })
     await debugBtn.click()
     await expect(

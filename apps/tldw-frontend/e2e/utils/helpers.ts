@@ -22,15 +22,201 @@ export async function seedAuth(
 ): Promise<void> {
   const finalConfig = { ...TEST_CONFIG, ...config };
   await page.addInitScript((cfg) => {
+    const readStorageValue = (key: string) => {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw == null) return undefined;
+        return JSON.parse(raw);
+      } catch {
+        return localStorage.getItem(key) ?? undefined;
+      }
+    };
+
+    const writeStorageValue = (key: string, value: unknown) => {
+      try {
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch {}
+    };
+
+    const installChromeStorageShim = () => {
+      const globalWindow = window as unknown as {
+        chrome?: Record<string, unknown>;
+        browser?: Record<string, unknown>;
+      };
+
+      const listeners = new Set<
+        (changes: Record<string, { oldValue: unknown; newValue: unknown }>, area: string) => void
+      >();
+
+      const emitChanges = (
+        changes: Record<string, { oldValue: unknown; newValue: unknown }>,
+        area: string
+      ) => {
+        for (const listener of listeners) {
+          try {
+            listener(changes, area);
+          } catch {}
+        }
+      };
+
+      const areaApi = {
+        get: async (
+          keys?: string | string[] | Record<string, unknown> | null,
+          callback?: (result: Record<string, unknown>) => void
+        ) => {
+          let result: Record<string, unknown>;
+          if (keys == null) {
+            const out: Record<string, unknown> = {};
+            for (let idx = 0; idx < localStorage.length; idx += 1) {
+              const key = localStorage.key(idx);
+              if (!key) continue;
+              out[key] = readStorageValue(key);
+            }
+            result = out;
+          } else if (typeof keys === "string") {
+            result = { [keys]: readStorageValue(keys) };
+          } else if (Array.isArray(keys)) {
+            result = keys.reduce<Record<string, unknown>>((acc, key) => {
+              acc[key] = readStorageValue(key);
+              return acc;
+            }, {});
+          } else {
+            result = Object.entries(keys).reduce<Record<string, unknown>>(
+              (acc, [key, fallback]) => {
+                const current = readStorageValue(key);
+                acc[key] = typeof current === "undefined" ? fallback : current;
+                return acc;
+              },
+              {}
+            );
+          }
+          if (typeof callback === "function") {
+            try {
+              callback(result);
+            } catch {}
+          }
+          return result;
+        },
+        set: async (items: Record<string, unknown>, callback?: () => void) => {
+          const changes: Record<string, { oldValue: unknown; newValue: unknown }> = {};
+          for (const [key, value] of Object.entries(items || {})) {
+            const oldValue = readStorageValue(key);
+            writeStorageValue(key, value);
+            changes[key] = { oldValue, newValue: value };
+          }
+          if (Object.keys(changes).length > 0) {
+            emitChanges(changes, "sync");
+          }
+          if (typeof callback === "function") {
+            try {
+              callback();
+            } catch {}
+          }
+        },
+        remove: async (keys: string | string[], callback?: () => void) => {
+          const values = Array.isArray(keys) ? keys : [keys];
+          const changes: Record<string, { oldValue: unknown; newValue: unknown }> = {};
+          for (const key of values) {
+            const oldValue = readStorageValue(key);
+            try {
+              localStorage.removeItem(key);
+            } catch {}
+            changes[key] = { oldValue, newValue: undefined };
+          }
+          if (Object.keys(changes).length > 0) {
+            emitChanges(changes, "sync");
+          }
+          if (typeof callback === "function") {
+            try {
+              callback();
+            } catch {}
+          }
+        },
+        clear: async (callback?: () => void) => {
+          const changes: Record<string, { oldValue: unknown; newValue: unknown }> = {};
+          for (let idx = 0; idx < localStorage.length; idx += 1) {
+            const key = localStorage.key(idx);
+            if (!key) continue;
+            changes[key] = { oldValue: readStorageValue(key), newValue: undefined };
+          }
+          try {
+            localStorage.clear();
+          } catch {}
+          if (Object.keys(changes).length > 0) {
+            emitChanges(changes, "sync");
+          }
+          if (typeof callback === "function") {
+            try {
+              callback();
+            } catch {}
+          }
+        },
+        getBytesInUse: async (_keys?: unknown, callback?: (bytes: number) => void) => {
+          if (typeof callback === "function") {
+            try {
+              callback(0);
+            } catch {}
+          }
+          return 0;
+        }
+      };
+
+      if (!globalWindow.chrome) {
+        globalWindow.chrome = {};
+      }
+      const chromeLike = globalWindow.chrome as Record<string, unknown>;
+      if (!chromeLike.runtime) {
+        chromeLike.runtime = { id: "mock-runtime-id" };
+      } else if (typeof (chromeLike.runtime as { id?: unknown }).id === "undefined") {
+        (chromeLike.runtime as { id?: string }).id = "mock-runtime-id";
+      }
+
+      const storageShim = {
+        sync: areaApi,
+        local: areaApi,
+        managed: areaApi,
+        onChanged: {
+          addListener: (
+            fn: (changes: Record<string, { oldValue: unknown; newValue: unknown }>, area: string) => void
+          ) => listeners.add(fn),
+          removeListener: (
+            fn: (changes: Record<string, { oldValue: unknown; newValue: unknown }>, area: string) => void
+          ) => listeners.delete(fn)
+        }
+      };
+
+      chromeLike.storage = storageShim;
+
+      if (!globalWindow.browser) {
+        globalWindow.browser = {};
+      }
+      const browserLike = globalWindow.browser as Record<string, unknown>;
+      browserLike.storage = storageShim as Record<string, unknown>;
+    };
+
+    installChromeStorageShim();
+
+    const authConfig = {
+      serverUrl: cfg.serverUrl,
+      authMode: 'single-user',
+      apiKey: cfg.apiKey,
+    };
+
     try {
       localStorage.setItem(
         'tldwConfig',
-        JSON.stringify({
-          serverUrl: cfg.serverUrl,
-          authMode: 'single-user',
-          apiKey: cfg.apiKey,
-        })
+        JSON.stringify(authConfig)
       );
+    } catch {}
+    try {
+      const chromeLike = (window as unknown as { chrome?: any }).chrome;
+      chromeLike?.storage?.sync?.set?.({ tldwConfig: authConfig });
+      chromeLike?.storage?.local?.set?.({ tldwConfig: authConfig });
+      chromeLike?.storage?.sync?.set?.({ isMigrated: true });
+      chromeLike?.storage?.local?.set?.({ isMigrated: true });
+    } catch {}
+    try {
+      localStorage.setItem("isMigrated", "true");
     } catch {}
     try {
       localStorage.setItem('__tldw_first_run_complete', 'true');
@@ -39,6 +225,12 @@ export async function seedAuth(
       if (cfg.allowOffline) {
         localStorage.setItem('__tldw_allow_offline', 'true');
       }
+    } catch {}
+    try {
+      localStorage.setItem("serverUrl", cfg.serverUrl);
+      localStorage.setItem("tldwServerUrl", cfg.serverUrl);
+      localStorage.setItem("authMode", "single-user");
+      localStorage.setItem("apiKey", cfg.apiKey);
     } catch {}
     // Suppress connection error modals by setting test bypass
     try {
