@@ -152,7 +152,7 @@ describe("WorldBooksManager stage-1 list metadata", () => {
     vi.clearAllMocks()
   })
 
-  it("renders last-modified and budget metadata with unattached and disabled cues", () => {
+  it("renders last-modified and budget metadata with attachment-on-demand and disabled cues", () => {
     render(<WorldBooksManager />)
 
     expect(screen.getByText("Last Modified")).toBeInTheDocument()
@@ -161,7 +161,7 @@ describe("WorldBooksManager stage-1 list metadata", () => {
     expect(screen.getByText("Unknown")).toBeInTheDocument()
     expect(screen.getByText("750 tok")).toBeInTheDocument()
     expect(screen.getByText("320 tok")).toBeInTheDocument()
-    expect(screen.getByText("Unattached")).toBeInTheDocument()
+    expect(screen.getAllByText("Open to load")).toHaveLength(2)
 
     const disabledRow = screen.getByText("Archive Lore").closest("tr")
     expect(disabledRow).toHaveClass("opacity-75")

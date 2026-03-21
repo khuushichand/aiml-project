@@ -1752,30 +1752,42 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           enable_web_fallback: effectiveSettings.enable_web_fallback,
         })
 
-        const streamSearch = (tldwClient as {
-          ragSearchStream?: (
-            query: string,
-            options?: Record<string, unknown>
-          ) => AsyncGenerator<any, void, unknown>
-        }).ragSearchStream
         const canAttemptStreaming =
           streamingFeatureEnabled &&
           effectiveSettings.enable_generation &&
-          typeof streamSearch === "function"
+          typeof (tldwClient as {
+            ragSearchStream?: (
+              query: string,
+              options?: Record<string, unknown>
+            ) => AsyncGenerator<any, void, unknown>
+          }).ragSearchStream === "function"
 
         let results: RagResult[] = []
         let answer: string | null = null
         let usedStreaming = false
         let resolvedSearchDetails: SearchRuntimeDetails | null = null
 
-        if (canAttemptStreaming && streamSearch) {
+        if (
+          canAttemptStreaming &&
+          typeof (tldwClient as {
+            ragSearchStream?: (
+              query: string,
+              options?: Record<string, unknown>
+            ) => AsyncGenerator<any, void, unknown>
+          }).ragSearchStream === "function"
+        ) {
           let streamResults: RagResult[] = []
           let streamAnswer = ""
           let receivedStreamEvent = false
           let streamWhyPayload: unknown = null
 
           try {
-            for await (const event of streamSearch(trimmedQuery, {
+            for await (const event of (tldwClient as {
+              ragSearchStream: (
+                query: string,
+                options?: Record<string, unknown>
+              ) => AsyncGenerator<any, void, unknown>
+            }).ragSearchStream(trimmedQuery, {
               ...options,
               signal: abortController.signal,
             })) {

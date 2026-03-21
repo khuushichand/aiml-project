@@ -530,6 +530,16 @@ def create_generator(config: Union[GenerationConfig, dict[str, Any]]) -> Generat
         return LLMGenerator(config)
 
 
+def _sanitize_generation_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Drop non-GenerationConfig keys before instantiating a generator."""
+    allowed_fields = set(GenerationConfig.__dataclass_fields__.keys())
+    return {
+        key: value
+        for key, value in config.items()
+        if key in allowed_fields
+    }
+
+
 # Pipeline integration functions
 
 async def generate_response(context: Any, **kwargs) -> Any:
@@ -544,7 +554,7 @@ async def generate_response(context: Any, **kwargs) -> Any:
         await PromptTemplates.warm_template_async(prompt_name)
 
     # Create generator
-    generator = create_generator(config_dict)
+    generator = create_generator(_sanitize_generation_config(config_dict))
 
     # Generate response
     result = await generator.generate(context, context.query)
@@ -628,7 +638,7 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
         await PromptTemplates.warm_template_async(prompt_name)
 
     # Create generator
-    generator = create_generator(config_dict)
+    generator = create_generator(_sanitize_generation_config(config_dict))
 
     # Store generator in context for streaming
     base_stream = generator.generate_stream(context, context.query)

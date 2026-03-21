@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react"
 import { useTranslation } from "react-i18next"
-import { useStorage } from "@plasmohq/storage/hook"
 import { Alert, Button, Card, Spin, Tag, Tooltip, Empty, Badge } from "antd"
 import {
   Bot,
@@ -12,6 +11,7 @@ import {
   Settings,
   Heart,
 } from "lucide-react"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { ACPRestClient } from "@/services/acp/client"
 
 type AgentEntry = {
@@ -30,13 +30,86 @@ type HealthStatus = {
   details?: string
 }
 
+const formatHealthDetails = (
+  message: unknown,
+  runner: Record<string, unknown> | null,
+  availableAgents: number,
+  totalAgents: number
+): string | undefined => {
+  const parts: string[] = []
+  if (typeof message === "string" && message.trim().length > 0) {
+    parts.push(message.trim())
+  }
+  if (runner) {
+    const source = typeof runner.source === "string" ? runner.source : null
+    const path = typeof runner.path === "string" ? runner.path : null
+    const runnerParts = [
+      "Runner",
+      source ? `source ${source}` : null,
+      path ? `path ${path}` : null
+    ].filter((part): part is string => Boolean(part))
+    if (runnerParts.length > 1) {
+      parts.push(runnerParts.join(" "))
+    }
+  }
+  if (totalAgents > 0) {
+    parts.push(`${availableAgents}/${totalAgents} agents available`)
+  }
+  return parts.length > 0 ? parts.join(" • ") : undefined
+}
+
+const normalizeHealthStatus = (payload: unknown): HealthStatus | null => {
+  if (!payload || typeof payload !== "object") {
+    return null
+  }
+
+  const record = payload as Record<string, unknown>
+  if (
+    typeof record.runner === "string" &&
+    typeof record.agent === "string" &&
+    typeof record.api_keys === "string"
+  ) {
+    return {
+      runner: record.runner,
+      agent: record.agent,
+      api_keys: record.api_keys,
+      details: typeof record.details === "string" ? record.details : undefined
+    }
+  }
+
+  const runner =
+    record.runner && typeof record.runner === "object" && !Array.isArray(record.runner)
+      ? (record.runner as Record<string, unknown>)
+      : null
+  const agents = Array.isArray(record.agents)
+    ? record.agents.filter(
+        (agent): agent is Record<string, unknown> =>
+          Boolean(agent) && typeof agent === "object" && !Array.isArray(agent)
+      )
+    : []
+  const availableAgents = agents.filter((agent) => agent.status === "available").length
+  const missingApiKeys = agents.some((agent) => agent.api_key_set === false)
+
+  return {
+    runner: typeof runner?.status === "string" ? runner.status : "unknown",
+    agent:
+      agents.length === 0
+        ? typeof record.overall === "string"
+          ? record.overall
+          : "unknown"
+        : availableAgents === 0
+          ? "unavailable"
+          : availableAgents === agents.length
+            ? "available"
+            : "degraded",
+    api_keys: missingApiKeys ? "missing" : "ok",
+    details: formatHealthDetails(record.message, runner, availableAgents, agents.length)
+  }
+}
+
 export const AgentRegistryPage: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
-
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
+  const { config: connectionConfig } = useCanonicalConnectionConfig()
 
   const [agents, setAgents] = useState<AgentEntry[]>([])
   const [health, setHealth] = useState<HealthStatus | null>(null)
@@ -46,26 +119,41 @@ export const AgentRegistryPage: React.FC = () => {
 
   const restClient = useMemo(
     () =>
-      new ACPRestClient({
-        serverUrl,
-        getAuthHeaders: async () => {
-          const headers: Record<string, string> = {}
-          if (authMode === "single-user" && apiKey) {
-            headers["X-API-KEY"] = apiKey
-          } else if (authMode === "multi-user" && accessToken) {
-            headers.Authorization = `Bearer ${accessToken}`
-          }
-          return headers
-        },
-        getAuthParams: async () => ({
-          token: authMode === "multi-user" && accessToken ? accessToken : undefined,
-          api_key: authMode === "single-user" && apiKey ? apiKey : undefined,
-        }),
-      }),
-    [serverUrl, authMode, apiKey, accessToken]
+      connectionConfig
+        ? new ACPRestClient({
+            serverUrl: connectionConfig.serverUrl,
+            getAuthHeaders: async () => {
+              const headers: Record<string, string> = {}
+              if (connectionConfig.authMode === "single-user" && connectionConfig.apiKey) {
+                headers["X-API-KEY"] = connectionConfig.apiKey
+              } else if (
+                connectionConfig.authMode === "multi-user" &&
+                connectionConfig.accessToken
+              ) {
+                headers.Authorization = `Bearer ${connectionConfig.accessToken}`
+              }
+              if (typeof connectionConfig.orgId === "number") {
+                headers["X-TLDW-Org-Id"] = String(connectionConfig.orgId)
+              }
+              return headers
+            },
+            getAuthParams: async () => ({
+              token:
+                connectionConfig.authMode === "multi-user" && connectionConfig.accessToken
+                  ? connectionConfig.accessToken
+                  : undefined,
+              api_key:
+                connectionConfig.authMode === "single-user" && connectionConfig.apiKey
+                  ? connectionConfig.apiKey
+                  : undefined,
+            }),
+          })
+        : null,
+    [connectionConfig]
   )
 
   const fetchAgents = useCallback(async () => {
+    if (!restClient) return
     setLoading(true)
     setError(null)
     try {
@@ -86,30 +174,35 @@ export const AgentRegistryPage: React.FC = () => {
   }, [restClient])
 
   const fetchHealth = useCallback(async () => {
+    if (!connectionConfig) return
     setHealthLoading(true)
     try {
-      const url = `${serverUrl}/api/v1/acp/health`
+      const url = `${connectionConfig.serverUrl}/api/v1/acp/health`
       const headers: Record<string, string> = { "Content-Type": "application/json" }
-      if (authMode === "single-user" && apiKey) {
-        headers["X-API-KEY"] = apiKey
-      } else if (authMode === "multi-user" && accessToken) {
-        headers.Authorization = `Bearer ${accessToken}`
+      if (connectionConfig.authMode === "single-user" && connectionConfig.apiKey) {
+        headers["X-API-KEY"] = connectionConfig.apiKey
+      } else if (connectionConfig.authMode === "multi-user" && connectionConfig.accessToken) {
+        headers.Authorization = `Bearer ${connectionConfig.accessToken}`
+      }
+      if (typeof connectionConfig.orgId === "number") {
+        headers["X-TLDW-Org-Id"] = String(connectionConfig.orgId)
       }
       const res = await fetch(url, { headers })
       if (res.ok) {
-        setHealth(await res.json())
+        setHealth(normalizeHealthStatus(await res.json()))
       }
     } catch {
       // Health check failure is not critical
     } finally {
       setHealthLoading(false)
     }
-  }, [serverUrl, authMode, apiKey, accessToken])
+  }, [connectionConfig])
 
   useEffect(() => {
+    if (!connectionConfig) return
     void fetchAgents()
     void fetchHealth()
-  }, [fetchAgents, fetchHealth])
+  }, [connectionConfig, fetchAgents, fetchHealth])
 
   const statusIcon = (status: string) => {
     switch (status) {

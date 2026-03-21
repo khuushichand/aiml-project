@@ -136,7 +136,8 @@ async def get_system_stats(db) -> SystemStatsResponse:
             if isinstance(row, dict):
                 return row
             if hasattr(row, "keys"):
-                return {key: row[key] for key in row}
+                row_keys = list(row.keys())
+                return {key: row[key] for key in row_keys}
             return {key: row[idx] if idx < len(row) else None for idx, key in enumerate(keys)}
 
         is_pg = _is_postgres_connection(db)

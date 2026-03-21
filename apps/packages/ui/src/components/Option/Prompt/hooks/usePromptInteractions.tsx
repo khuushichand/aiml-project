@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, type QueryClient } from "@tanstack/react-query"
 import { notification, Form } from "antd"
 import { useNavigate } from "react-router-dom"
@@ -32,6 +32,7 @@ type LocalQuickTestPrompt = {
 export interface UsePromptInteractionsDeps {
   queryClient: QueryClient
   isOnline: boolean
+  initialSegment?: string
   t: (key: string, opts?: Record<string, any>) => string
   getPromptTexts: (prompt: any) => { systemText: string | undefined; userText: string | undefined }
   getPromptKeywords: (prompt: any) => string[]
@@ -46,6 +47,7 @@ export function usePromptInteractions(deps: UsePromptInteractionsDeps) {
   const {
     queryClient,
     isOnline,
+    initialSegment = "custom",
     t,
     getPromptTexts,
     getPromptKeywords,
@@ -96,7 +98,8 @@ export function usePromptInteractions(deps: UsePromptInteractionsDeps) {
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
 
   // Segment state
-  const [selectedSegment, setSelectedSegment] = useState<string>("custom")
+  const [selectedSegment, setSelectedSegment] = useState<string>(initialSegment)
+  const previousInitialSegmentRef = useRef(initialSegment)
 
   // Copilot queries
   const { data: copilotData, status: copilotStatus } = useQuery({
@@ -215,6 +218,12 @@ export function usePromptInteractions(deps: UsePromptInteractionsDeps) {
     setInspectorOpen(false)
     setInspectorPromptId(null)
   }, [inspectorOpen, inspectorPrompt])
+
+  useEffect(() => {
+    if (previousInitialSegmentRef.current === initialSegment) return
+    previousInitialSegmentRef.current = initialSegment
+    setSelectedSegment(initialSegment)
+  }, [initialSegment])
 
   const closeInspector = React.useCallback(() => {
     setInspectorOpen(false)

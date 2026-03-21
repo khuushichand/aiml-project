@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 import { HeaderShortcuts } from "../HeaderShortcuts"
+import { HEADER_SHORTCUT_ITEMS } from "../header-shortcut-items"
 
 const mockState = vi.hoisted(() => ({
   expanded: false,
@@ -92,6 +93,12 @@ describe("HeaderShortcuts launcher modal", () => {
       <HeaderShortcuts expanded={false} onExpandedChange={vi.fn()} />
     )
     expect(container.innerHTML).toBe("")
+  })
+
+  it("routes the chat shortcut directly to /chat", () => {
+    const chatShortcut = HEADER_SHORTCUT_ITEMS.find((item) => item.id === "chat")
+
+    expect(chatShortcut?.to).toBe("/chat")
   })
 
   it("renders a dialog when open (expanded=true)", () => {

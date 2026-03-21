@@ -79,6 +79,7 @@ class TestAdminKeyEndpointsExist:
         "/api/v1/admin/permissions",
         "/api/v1/admin/cleanup-settings",
         "/api/v1/admin/registration-settings",
+        "/api/v1/admin/rate-limits",
         "/api/v1/admin/roles/{role_id}/rate-limits",
         "/api/v1/admin/users",
     ]

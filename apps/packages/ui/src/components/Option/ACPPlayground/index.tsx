@@ -3,9 +3,11 @@ import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import { Drawer, Tabs } from "antd"
 import { Bot, MessageSquare, Wrench, Terminal } from "lucide-react"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { useACPSession } from "@/hooks/useACPSession"
 import { ACPRestClient } from "@/services/acp/client"
+import { buildACPClientConfig } from "@/services/acp/connection"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 import type { ACPPermissionTier } from "@/services/acp/types"
 import { ACPPlaygroundHeader } from "./ACPPlaygroundHeader"
@@ -35,10 +37,7 @@ export const ACPPlayground: React.FC = () => {
   // Pane state with persistence
   const [leftPaneOpen, setLeftPaneOpen] = useStorage(ACP_LEFT_PANE_KEY, true)
   const [rightPaneOpen, setRightPaneOpen] = useStorage(ACP_RIGHT_PANE_KEY, true)
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
+  const { config: connectionConfig } = useCanonicalConnectionConfig()
 
   // Mobile drawer state
   const [leftDrawerOpen, setLeftDrawerOpen] = React.useState(false)
@@ -79,26 +78,14 @@ export const ACPPlayground: React.FC = () => {
 
   const restClient = React.useMemo(
     () =>
-      new ACPRestClient({
-        serverUrl,
-        getAuthHeaders: async () => {
-          const headers: Record<string, string> = {}
-          if (authMode === "single-user" && apiKey) {
-            headers["X-API-KEY"] = apiKey
-          } else if (authMode === "multi-user" && accessToken) {
-            headers.Authorization = `Bearer ${accessToken}`
-          }
-          return headers
-        },
-        getAuthParams: async () => ({
-          token: authMode === "multi-user" && accessToken ? accessToken : undefined,
-          api_key: authMode === "single-user" && apiKey ? apiKey : undefined,
-        }),
-      }),
-    [serverUrl, authMode, apiKey, accessToken]
+      connectionConfig ? new ACPRestClient(buildACPClientConfig(connectionConfig)) : null,
+    [connectionConfig]
   )
 
   const refreshSessionsFromServer = React.useCallback(async () => {
+    if (!restClient) {
+      return
+    }
     setIsHydratingSessions(true)
     try {
       const response = await restClient.listSessions({ limit: 200, offset: 0 })
@@ -122,7 +109,7 @@ export const ACPPlayground: React.FC = () => {
     denyPermission,
   } = useACPSession({
     sessionId: activeSessionId ?? undefined,
-    autoConnect: !!activeSessionId,
+    autoConnect: Boolean(activeSessionId && connectionConfig),
     onConnected: (message) => {
       updateSessionState(message.session_id, "connected")
       setGlobalError(null)
@@ -171,8 +158,11 @@ export const ACPPlayground: React.FC = () => {
 
   // Hydrate persisted ACP sessions from backend when the page loads.
   useEffect(() => {
+    if (!restClient) {
+      return
+    }
     void refreshSessionsFromServer()
-  }, [refreshSessionsFromServer])
+  }, [refreshSessionsFromServer, restClient])
 
   // Keep the active session state in sync with the shared ACP hook.
   useEffect(() => {
@@ -201,7 +191,7 @@ export const ACPPlayground: React.FC = () => {
 
   // When switching sessions, refresh detail + usage if the session exists server-side.
   useEffect(() => {
-    if (!activeSessionId) return
+    if (!activeSessionId || !restClient) return
 
     let cancelled = false
     const loadSessionMetadata = async () => {

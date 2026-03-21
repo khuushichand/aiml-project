@@ -37,6 +37,7 @@ EXPECTED_SPLIT_ADMIN_OPERATIONS: set[tuple[str, str]] = {
     ("DELETE", "/api/v1/admin/users/{user_id}/overrides/{permission_id}"),
     ("GET", "/api/v1/admin/users/{user_id}/effective-permissions"),
     ("GET", "/api/v1/admin/roles/{role_id}/permissions/effective"),
+    ("GET", "/api/v1/admin/rate-limits"),
     ("POST", "/api/v1/admin/roles/{role_id}/rate-limits"),
     ("DELETE", "/api/v1/admin/roles/{role_id}/rate-limits"),
     ("POST", "/api/v1/admin/users/{user_id}/rate-limits"),
@@ -129,6 +130,11 @@ def test_admin_split_openapi_schema_contracts(monkeypatch, tmp_path) -> None:
     maintenance_put = paths["/api/v1/admin/maintenance"]["put"]
     maintenance_schema = maintenance_put["responses"]["200"]["content"]["application/json"]["schema"]
     assert maintenance_schema["$ref"].endswith("/MaintenanceState")
+
+    rate_limits_get = paths["/api/v1/admin/rate-limits"]["get"]
+    rate_limits_get_schema = rate_limits_get["responses"]["200"]["content"]["application/json"]["schema"]
+    assert rate_limits_get_schema["type"] == "array"
+    assert rate_limits_get_schema["items"]["$ref"].endswith("/RateLimitResponse")
 
     rate_limit_post = paths["/api/v1/admin/roles/{role_id}/rate-limits"]["post"]
     rate_limit_schema = rate_limit_post["responses"]["200"]["content"]["application/json"]["schema"]

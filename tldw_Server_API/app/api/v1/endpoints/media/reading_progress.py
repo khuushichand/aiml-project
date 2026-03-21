@@ -126,7 +126,7 @@ async def get_reading_progress(
     FROM {PROGRESS_TABLE}
     WHERE media_id = ? AND user_id = ?
     """
-    query = query_template.format_map(locals())  # nosec B608
+    query = query_template.format(PROGRESS_TABLE=PROGRESS_TABLE)  # nosec B608
     try:
         with db.transaction() as conn:
             cursor = conn.execute(query, (media_id, user_id))
@@ -141,27 +141,36 @@ async def get_reading_progress(
     if not row:
         return ReadingProgressNotFound(media_id=media_id, has_progress=False)
 
-    row_dict = dict(row)
-    current_page = row_dict["current_page"]
-    total_pages = row_dict["total_pages"]
-    # Use stored percentage if available (for EPUB), otherwise calculate from page
-    stored_percentage = row_dict.get("percentage")
-    percent_complete = (
-        stored_percentage
-        if stored_percentage is not None
-        else (current_page / total_pages * 100) if total_pages > 0 else 0
-    )
+    try:
+        row_dict = dict(row)
+        current_page = row_dict["current_page"]
+        total_pages = row_dict["total_pages"]
+        # Use stored percentage if available (for EPUB), otherwise calculate from page
+        stored_percentage = row_dict.get("percentage")
+        percent_complete = (
+            stored_percentage
+            if stored_percentage is not None
+            else (current_page / total_pages * 100) if total_pages > 0 else 0
+        )
 
-    return ReadingProgressResponse(
-        media_id=media_id,
-        current_page=current_page,
-        total_pages=total_pages,
-        zoom_level=row_dict["zoom_level"],
-        view_mode=ViewMode(row_dict["view_mode"]),
-        percent_complete=round(percent_complete, 1),
-        cfi=row_dict.get("cfi"),
-        last_read_at=datetime.fromisoformat(row_dict["last_read_at"]),
-    )
+        return ReadingProgressResponse(
+            media_id=media_id,
+            current_page=current_page,
+            total_pages=total_pages,
+            zoom_level=row_dict["zoom_level"],
+            view_mode=ViewMode(row_dict["view_mode"]),
+            percent_complete=round(percent_complete, 1),
+            cfi=row_dict.get("cfi"),
+            last_read_at=datetime.fromisoformat(row_dict["last_read_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            "Ignoring corrupt reading progress row for media_id={} user_id={}: {}",
+            media_id,
+            user_id,
+            exc,
+        )
+        return ReadingProgressNotFound(media_id=media_id, has_progress=False)
 
 
 @router.put(

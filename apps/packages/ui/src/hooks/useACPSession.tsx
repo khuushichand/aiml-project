@@ -6,7 +6,8 @@
  */
 
 import React from "react"
-import { useStorage } from "@plasmohq/storage/hook"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
+import { buildACPAuthParams, resolveACPServerUrl } from "@/services/acp/connection"
 import type {
   ACPSessionState,
   ACPWSServerMessage,
@@ -86,11 +87,7 @@ export function useACPSession(options: UseACPSessionOptions = {}): UseACPSession
     onDisconnected,
   } = options
 
-  // Storage for server config
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
+  const { config: connectionConfig } = useCanonicalConnectionConfig()
 
   // State
   const [state, setState] = React.useState<ACPSessionState>("disconnected")
@@ -142,19 +139,22 @@ export function useACPSession(options: UseACPSessionOptions = {}): UseACPSession
 
   // Build WebSocket URL with auth
   const buildWsUrl = React.useCallback(() => {
-    if (!sessionId || !serverUrl) return null
+    if (!sessionId || !connectionConfig) return null
 
-    const wsUrl = serverUrl.replace(/^http/i, "ws")
+    const wsUrl = resolveACPServerUrl(connectionConfig).replace(/^http/i, "ws")
     const params = new URLSearchParams()
+    const authParams = buildACPAuthParams(connectionConfig)
 
-    if (authMode === "single-user" && apiKey) {
-      params.set("api_key", apiKey)
-    } else if (authMode === "multi-user" && accessToken) {
-      params.set("token", accessToken)
+    if (authParams.api_key) {
+      params.set("api_key", authParams.api_key)
+    }
+    if (authParams.token) {
+      params.set("token", authParams.token)
     }
 
-    return `${wsUrl}/api/v1/acp/sessions/${sessionId}/stream?${params.toString()}`
-  }, [sessionId, serverUrl, authMode, apiKey, accessToken])
+    const query = params.toString()
+    return `${wsUrl}/api/v1/acp/sessions/${sessionId}/stream${query ? `?${query}` : ""}`
+  }, [sessionId, connectionConfig])
 
   // Handle incoming messages
   const handleMessage = React.useCallback((event: MessageEvent) => {
@@ -238,7 +238,7 @@ export function useACPSession(options: UseACPSessionOptions = {}): UseACPSession
   const connect = React.useCallback(async () => {
     const url = buildWsUrl()
     if (!url) {
-      setError("Missing session ID or server URL")
+      setError("Missing ACP connection configuration")
       updateState("error")
       return
     }
@@ -395,13 +395,16 @@ export function useACPSession(options: UseACPSessionOptions = {}): UseACPSession
 
   // Auto-connect when sessionId changes
   React.useEffect(() => {
-    if (autoConnect && sessionId) {
-      connect()
+    if (autoConnect && sessionId && connectionConfig) {
+      void connect()
     }
     return () => {
       disconnect()
     }
-  }, [sessionId, autoConnect]) // eslint-disable-line react-hooks/exhaustive-deps
+    // `connect` depends on message handlers and session state; re-running on every
+    // callback identity change would thrash the ACP socket.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConnect, connectionConfig, disconnect, sessionId])
 
   // Cleanup on unmount
   React.useEffect(() => {

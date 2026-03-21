@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -60,6 +61,88 @@ def _get_is_postgres_backend_fn() -> Callable[[], Awaitable[bool]]:
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
     return admin_mod._is_postgres_backend
+
+
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+    if isinstance(row, dict):
+        return row
+    if hasattr(row, "keys"):
+        row_keys = list(row.keys())
+        return {str(key): row[key] for key in row_keys}
+    keys = ["scope", "id", "resource", "limit_per_min", "burst"]
+    return {key: row[idx] if idx < len(row) else None for idx, key in enumerate(keys)}
+
+
+_POSTGRES_RATE_LIMIT_LIST_QUERIES: tuple[str, str] = (
+    """
+    SELECT
+        'role' AS scope,
+        role_id AS id,
+        resource,
+        limit_per_min,
+        burst
+    FROM rbac_role_rate_limits
+    ORDER BY role_id, resource
+    """,
+    """
+    SELECT
+        'user' AS scope,
+        user_id AS id,
+        resource,
+        limit_per_min,
+        burst
+    FROM rbac_user_rate_limits
+    ORDER BY user_id, resource
+    """,
+)
+
+
+_SQLITE_RATE_LIMIT_LIST_QUERIES: tuple[str, str] = (
+    """
+    SELECT
+        'role' AS scope,
+        role_id AS id,
+        resource,
+        limit_per_min,
+        burst
+    FROM rbac_role_rate_limits
+    ORDER BY role_id, resource
+    """,
+    """
+    SELECT
+        'user' AS scope,
+        user_id AS id,
+        resource,
+        limit_per_min,
+        burst
+    FROM rbac_user_rate_limits
+    ORDER BY user_id, resource
+    """,
+)
+
+
+@router.get("/rate-limits", response_model=list[RateLimitResponse])
+async def list_admin_rate_limits(db=Depends(get_db_transaction)) -> list[RateLimitResponse]:
+    try:
+        is_pg = await _get_is_postgres_backend_fn()()
+        rows: list[dict[str, Any]] = []
+        if is_pg:
+            for query in _POSTGRES_RATE_LIMIT_LIST_QUERIES:
+                scope_rows = await db.fetch(query)
+                rows.extend(_row_to_dict(row) for row in scope_rows)
+        else:
+            for query in _SQLITE_RATE_LIMIT_LIST_QUERIES:
+                cursor = await db.execute(query)
+                scope_rows = await cursor.fetchall()
+                rows.extend(_row_to_dict(row) for row in scope_rows)
+
+        return [RateLimitResponse(**row) for row in rows]
+    except _RATE_LIMITS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Failed to list admin rate limits: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list admin rate limits") from e
+
 
 @router.post("/roles/{role_id}/rate-limits", response_model=RateLimitResponse)
 async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, db=Depends(get_db_transaction)) -> RateLimitResponse:

@@ -1,7 +1,6 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStorage } from '@plasmohq/storage/hook'
-import { bgRequest } from '@/services/background-proxy'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { setSetting } from '@/services/settings/registry'
 import {
@@ -32,6 +31,35 @@ const DEFAULT_MEDIA_LIBRARY_STORAGE_USAGE: MediaLibraryStorageUsage = {
   quotaMb: null,
   usagePercentage: null,
   warning: null
+}
+
+const READING_PROGRESS_SUPPORTED_MEDIA_TYPES = new Set([
+  'document',
+  'docx',
+  'epub',
+  'html',
+  'markdown',
+  'md',
+  'pdf',
+  'text'
+])
+
+const isReadingProgressEndpointUnavailableError = (error: unknown): boolean => {
+  const statusCode = getErrorStatusCode(error)
+  if (statusCode == null) return false
+  return statusCode >= 500 || statusCode === 404 || statusCode === 405 || statusCode === 410
+}
+
+const supportsReadingProgressForResult = (item: MediaResultItem): boolean => {
+  if (item.kind !== 'media') return false
+  const rawType =
+    item.meta?.type ??
+    item.raw?.type ??
+    item.raw?.media_type ??
+    item.raw?.metadata?.type ??
+    item.raw?.safe_metadata?.type
+  if (typeof rawType !== 'string') return false
+  return READING_PROGRESS_SUPPORTED_MEDIA_TYPES.has(rawType.trim().toLowerCase())
 }
 
 type MediaCollectionRecord = {
@@ -95,6 +123,7 @@ export function useMediaSelection(deps: UseMediaSelectionDeps) {
 
   // Reading progress
   const [readingProgressMap, setReadingProgressMap] = useState<Map<string, number>>(new Map())
+  const readingProgressUnavailableRef = useRef(false)
 
   const toggleFavorite = useCallback((id: string) => {
     const idStr = String(id)
@@ -158,8 +187,12 @@ export function useMediaSelection(deps: UseMediaSelectionDeps) {
 
   // Reading progress
   useEffect(() => {
+    if (readingProgressUnavailableRef.current) {
+      setReadingProgressMap(new Map())
+      return
+    }
     const mediaIds = displayResults
-      .filter((r) => r.kind === 'media')
+      .filter((r) => supportsReadingProgressForResult(r))
       .map((r) => String(r.id))
     if (mediaIds.length === 0) {
       setReadingProgressMap(new Map())
@@ -173,20 +206,22 @@ export function useMediaSelection(deps: UseMediaSelectionDeps) {
     let cancelled = false
     const fetchProgress = async () => {
       const entries: Array<[string, number]> = []
-      const batchSize = 10
-      for (let i = 0; i < mediaIds.length; i += batchSize) {
-        const batch = mediaIds.slice(i, i + batchSize)
-        const results = await Promise.allSettled(
-          batch.map((id) => getReadingProgress.call(tldwClient, id))
-        )
-        if (cancelled) return
-        for (let j = 0; j < results.length; j++) {
-          const result = results[j]
-          if (result.status === 'fulfilled' && result.value?.has_progress !== false) {
-            const pct = result.value?.percent_complete
+      for (const mediaId of mediaIds) {
+        try {
+          const result = await getReadingProgress.call(tldwClient, mediaId)
+          if (cancelled) return
+          if (result?.has_progress !== false) {
+            const pct = result?.percent_complete
             if (typeof pct === 'number' && pct > 0) {
-              entries.push([batch[j], pct])
+              entries.push([mediaId, pct])
             }
+          }
+        } catch (error) {
+          if (cancelled) return
+          if (isReadingProgressEndpointUnavailableError(error)) {
+            readingProgressUnavailableRef.current = true
+            setReadingProgressMap(new Map(entries))
+            return
           }
         }
       }
@@ -207,14 +242,40 @@ export function useMediaSelection(deps: UseMediaSelectionDeps) {
     }))
 
     try {
-      const response = await bgRequest<any>({
-        path: '/api/v1/storage/usage' as any,
-        method: 'GET' as any
-      })
+      let response: any = null
+      if (typeof (tldwClient as any).getCurrentUserStorageQuota === 'function') {
+        try {
+          response = await (tldwClient as any).getCurrentUserStorageQuota()
+        } catch {
+          response = null
+        }
+      }
+      if (
+        response == null &&
+        typeof (tldwClient as any).getCurrentUserProfile === 'function'
+      ) {
+        const profile = await (tldwClient as any).getCurrentUserProfile({
+          sections: 'quotas'
+        })
+        const quotas = profile?.quotas ?? {}
+        response = {
+          storage_used_mb: quotas?.storage_used_mb,
+          storage_quota_mb: quotas?.storage_quota_mb,
+          usage_percentage: quotas?.usage_percentage
+        }
+      }
       const totalMb = toNonNegativeFiniteNumber(
-        response?.usage?.total_mb ?? response?.usage?.totalMb
+        response?.storage_used_mb ??
+          response?.storageUsedMb ??
+          response?.usage?.total_mb ??
+          response?.usage?.totalMb
       )
-      const quotaMb = toNonNegativeFiniteNumber(response?.quota_mb ?? response?.quotaMb)
+      const quotaMb = toNonNegativeFiniteNumber(
+        response?.storage_quota_mb ??
+          response?.storageQuotaMb ??
+          response?.quota_mb ??
+          response?.quotaMb
+      )
       const usagePercentage = toNonNegativeFiniteNumber(
         response?.usage_percentage ?? response?.usagePercentage
       )

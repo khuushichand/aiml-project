@@ -190,6 +190,53 @@ def test_get_session_returns_validated_chat_id_for_linked_run(tmp_path, monkeypa
     assert loaded.chat_id == "chat_123"
 
 
+def test_create_session_rolls_back_persisted_run_when_enqueue_fails(tmp_path, monkeypatch):
+    import sqlite3
+
+    from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.Research.service import ResearchService
+
+    previous_user_db_base = _set_user_db_base(monkeypatch, tmp_path / "user_dbs")
+
+    class FailingJobs:
+        def create_job(self, **_kwargs):
+            raise RuntimeError("queue saturated")
+
+    service = ResearchService(
+        research_db_path=tmp_path / "research.db",
+        outputs_dir=tmp_path / "outputs",
+        job_manager=FailingJobs(),
+    )
+
+    try:
+        _seed_chat_thread(
+            owner_user_id="1",
+            chat_db_path=DatabasePaths.get_chacha_db_path("1"),
+            chat_id="chat_123",
+        )
+        with pytest.raises(RuntimeError, match="queue saturated"):
+            service.create_session(
+                owner_user_id="1",
+                query="Investigate regulatory timeline",
+                source_policy="balanced",
+                autonomy_mode="checkpointed",
+                chat_handoff={"chat_id": "chat_123"},
+            )
+    finally:
+        _restore_user_db_base(previous_user_db_base)
+
+    db = ResearchSessionsDB(tmp_path / "research.db")
+    assert db.list_sessions("1") == []
+
+    with sqlite3.connect(tmp_path / "research.db") as conn:
+        remaining_handoffs = conn.execute(
+            "SELECT COUNT(*) FROM research_chat_handoffs"
+        ).fetchone()[0]
+
+    assert remaining_handoffs == 0
+
+
 def test_get_session_returns_null_chat_id_for_unlinked_run(tmp_path):
     from tldw_Server_API.app.core.Research.service import ResearchService
 

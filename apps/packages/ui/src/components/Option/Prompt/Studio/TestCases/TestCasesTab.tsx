@@ -71,7 +71,7 @@ export const TestCasesTab: React.FC = () => {
     ],
     queryFn: () =>
       listTestCases(selectedProjectId!, {
-        per_page: 200,
+        per_page: 100,
         is_golden: goldenFilter
       }),
     enabled: selectedProjectId !== null

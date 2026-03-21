@@ -62,7 +62,7 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
     items: [
       {
         id: "chat",
-        to: "/",
+        to: "/chat",
         icon: MessageSquare,
         labelKey: "option:header.modePlayground",
         labelDefault: "Chat",

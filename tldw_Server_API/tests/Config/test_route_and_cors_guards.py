@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import os
 from pathlib import Path
@@ -5,6 +6,7 @@ import re
 
 from fastapi import FastAPI
 import pytest
+from starlette.requests import Request
 
 # Keep this module importable even when local/dev env sets ALLOWED_ORIGINS='*'.
 os.environ["ALLOWED_ORIGINS"] = "http://localhost:3000"
@@ -223,6 +225,31 @@ def test_compute_openapi_cors_allow_origin_echoes_allowed_explicit_origin() -> N
         allowed_openapi_origins={"http://localhost:3000"},
     )
     assert allow_origin == "http://localhost:3000"
+
+
+def test_global_unhandled_exception_handler_keeps_cors_for_allowed_origin() -> None:
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/boom",
+        "raw_path": b"/boom",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"origin", b"http://localhost:3000")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "app": app_main.app,
+    }
+    request = Request(scope)
+
+    response = asyncio.run(
+        app_main._global_unhandled_exception_handler(request, RuntimeError("boom"))
+    )
+
+    assert response.status_code == 500
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
 
 
 def test_compute_openapi_cors_allow_origin_rejects_disallowed_origin() -> None:

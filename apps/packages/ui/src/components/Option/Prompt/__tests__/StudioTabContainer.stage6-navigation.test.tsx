@@ -19,8 +19,14 @@ const useMutationMock = vi.hoisted(() => vi.fn())
 const invalidateQueriesMock = vi.hoisted(() => vi.fn())
 const getConfigMock = vi.hoisted(() => vi.fn())
 const setPromptStudioDefaultsMock = vi.hoisted(() => vi.fn())
+const promptStudioServiceMocks = vi.hoisted(() => ({
+  hasPromptStudio: vi.fn(),
+  getPromptStudioStatus: vi.fn(),
+  listProjects: vi.fn()
+}))
 
 let latestSocket: MockWebSocket | null = null
+let settingsProjectsQueryOptions: any = null
 
 class MockWebSocket {
   static CONNECTING = 0
@@ -175,6 +181,21 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
   }
 }))
 
+vi.mock("@/services/prompt-studio", () => ({
+  hasPromptStudio: (...args: unknown[]) =>
+    (promptStudioServiceMocks.hasPromptStudio as (...args: unknown[]) => unknown)(
+      ...args
+    ),
+  getPromptStudioStatus: (...args: unknown[]) =>
+    (promptStudioServiceMocks.getPromptStudioStatus as (
+      ...args: unknown[]
+    ) => unknown)(...args),
+  listProjects: (...args: unknown[]) =>
+    (promptStudioServiceMocks.listProjects as (...args: unknown[]) => unknown)(
+      ...args
+    )
+}))
+
 vi.mock("@/services/prompt-studio-settings", () => ({
   getPromptStudioDefaults: vi.fn(async () => ({
     defaultProjectId: null,
@@ -189,6 +210,7 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
 
   beforeEach(() => {
     statusQueryOptions = null
+    settingsProjectsQueryOptions = null
     state.isOnline = true
     state.isMobile = false
     state.processing = 0
@@ -210,6 +232,23 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
       authMode: "single-user",
       apiKey: "test-api-key",
       accessToken: ""
+    })
+    promptStudioServiceMocks.hasPromptStudio.mockReset()
+    promptStudioServiceMocks.getPromptStudioStatus.mockReset()
+    promptStudioServiceMocks.listProjects.mockReset()
+    promptStudioServiceMocks.hasPromptStudio.mockResolvedValue(true)
+    promptStudioServiceMocks.getPromptStudioStatus.mockResolvedValue({
+      data: {
+        data: {
+          queue_depth: 0,
+          processing: 0,
+          leases: {},
+          success_rate: 1
+        }
+      }
+    })
+    promptStudioServiceMocks.listProjects.mockResolvedValue({
+      data: [{ id: 11, name: "Project Eleven" }]
     })
     usePromptStudioStore.setState({
       activeSubTab: "projects",
@@ -260,6 +299,7 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
         }
       }
       if (key === "settings-projects") {
+        settingsProjectsQueryOptions = options
         return {
           data: {
             data: [
@@ -413,6 +453,21 @@ describe("StudioTabContainer stage 6 navigation and polling", () => {
       expect(setPromptStudioDefaultsMock).toHaveBeenCalledWith({
         autoSyncWorkspacePrompts: false
       })
+    })
+  })
+
+  it("caps the settings projects query at the backend pagination maximum", async () => {
+    render(
+      <MemoryRouter>
+        <StudioTabContainer />
+      </MemoryRouter>
+    )
+
+    await settingsProjectsQueryOptions?.queryFn?.()
+
+    expect(promptStudioServiceMocks.listProjects).toHaveBeenCalledWith({
+      page: 1,
+      per_page: 100
     })
   })
 })

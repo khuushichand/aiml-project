@@ -179,6 +179,9 @@ describe("SourcesWorkspacePage", () => {
     expect(
       screen.getByText("This server does not advertise ingestion source support.")
     ).toBeInTheDocument()
+    expect(hookMocks.useIngestionSourcesQuery).toHaveBeenCalledWith(undefined, {
+      enabled: false
+    })
   })
 
   it("wires enable disable actions through the update mutation", async () => {

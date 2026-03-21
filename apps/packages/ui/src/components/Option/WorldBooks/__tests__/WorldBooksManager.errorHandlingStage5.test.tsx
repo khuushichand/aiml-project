@@ -215,7 +215,7 @@ describe("WorldBooksManager error-handling stage-5 edge warnings", () => {
   it("filters stale attachment rows when attached characters no longer exist", () => {
     render(<WorldBooksManager />)
 
-    expect(screen.getByText("Unattached")).toBeInTheDocument()
+    expect(screen.getByText("Open to load")).toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: /View attached characters for Arcana/i })
     ).not.toBeInTheDocument()

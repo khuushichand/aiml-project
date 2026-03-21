@@ -70,6 +70,24 @@ import {
 
 const KeywordPickerModal = React.lazy(() => import('@/components/Notes/KeywordPickerModal'))
 
+const isMissingConversationLookupError = (error: unknown): boolean => {
+  if (!error) return false
+  const status =
+    typeof error === 'object' && 'status' in error ? Number((error as { status?: unknown }).status) : Number.NaN
+  if (status === 404) return true
+  const code =
+    typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code || '') : ''
+  if (code.toUpperCase() === 'NOT_FOUND') return true
+  const message = error instanceof Error ? error.message : String(error)
+  return /\b(not found|404)\b/i.test(message)
+}
+
+const UUID_LIKE_CONVERSATION_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+const shouldAutoResolveConversationLabel = (conversationId: string): boolean =>
+  !UUID_LIKE_CONVERSATION_ID.test(conversationId)
+
 const NotesManagerPage: React.FC = () => {
   const { t } = useTranslation(['option', 'common'])
   const isOnline = useServerOnline()
@@ -117,6 +135,7 @@ const NotesManagerPage: React.FC = () => {
   const conversationLabelByIdRef = React.useRef<Record<string, string>>({})
   conversationLabelByIdRef.current = conversationLabelById
   const pendingConversationLabelRequestsRef = React.useRef<Set<string>>(new Set())
+  const missingConversationLabelIdsRef = React.useRef<Set<string>>(new Set())
 
   // ---- Notebook keyword tokens (needed before list hook) ----
   // We compute this after list hook provides selectedNotebook
@@ -457,11 +476,18 @@ const NotesManagerPage: React.FC = () => {
 
   const conversationIdsToResolve = React.useMemo(() => {
     const ids = new Set<string>()
+    const selectedConversationId = normalizeConversationId(ed.backlinkConversationId)
     for (const note of visibleNotes) {
       const normalized = normalizeConversationId(note?.conversation_id)
-      if (normalized) ids.add(normalized)
+      if (!normalized) continue
+      if (shouldAutoResolveConversationLabel(normalized)) {
+        ids.add(normalized)
+        continue
+      }
+      if (selectedConversationId && normalized === selectedConversationId) {
+        ids.add(normalized)
+      }
     }
-    const selectedConversationId = normalizeConversationId(ed.backlinkConversationId)
     if (selectedConversationId) ids.add(selectedConversationId)
     return Array.from(ids)
   }, [ed.backlinkConversationId, visibleNotes])
@@ -472,6 +498,7 @@ const NotesManagerPage: React.FC = () => {
         if (!conversationId) return false
         if (conversationLabelByIdRef.current[conversationId]) return false
         if (pendingConversationLabelRequestsRef.current.has(conversationId)) return false
+        if (missingConversationLabelIdsRef.current.has(conversationId)) return false
         return true
       })
       if (pending.length === 0) return
@@ -493,11 +520,19 @@ const NotesManagerPage: React.FC = () => {
             if (result.status !== 'fulfilled') continue
             const { conversationId, label } = result.value
             if (!label) continue
+            missingConversationLabelIdsRef.current.delete(conversationId)
             if (current[conversationId]) continue
             if (next == null) next = { ...current }
             next[conversationId] = label
           }
           return next ?? current
+        })
+        settled.forEach((result, index) => {
+          if (result.status !== 'rejected') return
+          const conversationId = pending[index]
+          if (!conversationId) return
+          if (!isMissingConversationLookupError(result.reason)) return
+          missingConversationLabelIdsRef.current.add(conversationId)
         })
       } finally {
         pending.forEach((conversationId) =>

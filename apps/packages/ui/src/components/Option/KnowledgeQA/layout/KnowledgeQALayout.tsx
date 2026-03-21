@@ -311,10 +311,12 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
           <div
             data-testid="knowledge-search-shell"
             className={cn(
-              "transition-all duration-300 pt-6 pb-4",
-              effectiveSimple
-                ? "mx-auto w-full max-w-3xl px-4 md:px-6"
-                : "px-4 md:px-6"
+              "transition-all duration-300",
+              effectiveSimple && !hasVisibleResultsArea
+                ? "mx-auto flex flex-1 w-full max-w-3xl items-center justify-center px-4 py-10 md:px-6"
+                : effectiveSimple
+                  ? "mx-auto w-full max-w-3xl px-4 pt-6 pb-4 md:px-6"
+                  : "px-4 pt-6 pb-4 md:px-6"
             )}
           >
             <div className={cn(

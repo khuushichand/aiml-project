@@ -20,6 +20,27 @@ class _CursorStub:
         return list(self._rows)
 
 
+class _SqliteRowLike:
+    def __init__(self, keys: list[str], values: tuple[Any, ...]) -> None:
+        self._keys = list(keys)
+        self._values = tuple(values)
+
+    def keys(self) -> list[str]:
+        return list(self._keys)
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, int):
+            return self._values[key]
+        idx = self._keys.index(str(key))
+        return self._values[idx]
+
+
 class _SqliteDbWithPgTraps:
     def __init__(self) -> None:
         self._is_sqlite = True
@@ -157,6 +178,45 @@ async def test_get_system_stats_sqlite_backend_selection_uses_execute() -> None:
     assert not db.fetchrow_calls
     assert not db.fetchval_calls
     assert not db.fetch_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_get_system_stats_sqlite_row_objects_use_row_keys() -> None:
+    class _SqliteDbWithRowObjects(_SqliteDbWithPgTraps):
+        async def execute(self, query: str, params: Any = ()) -> _CursorStub:
+            self.execute_calls.append((str(query), params))
+            q = str(query).lower()
+            if "from users" in q and "count(*) as total_users" in q:
+                return _CursorStub(
+                    row=_SqliteRowLike(
+                        ["total_users", "active_users", "verified_users", "admin_users", "new_users_30d"],
+                        (10, 8, 7, 1, 2),
+                    )
+                )
+            if "sum(storage_used_mb) as total_used_mb" in q:
+                return _CursorStub(
+                    row=_SqliteRowLike(
+                        ["total_used_mb", "total_quota_mb", "avg_used_mb", "max_used_mb"],
+                        (100.0, 1000.0, 12.5, 50.0),
+                    )
+                )
+            if "from sessions" in q and "count(distinct user_id) as unique_users" in q:
+                return _CursorStub(
+                    row=_SqliteRowLike(
+                        ["active_sessions", "unique_users"],
+                        (4, 3),
+                    )
+                )
+            raise AssertionError(f"Unexpected query: {query!r}")
+
+    db = _SqliteDbWithRowObjects()
+
+    response = await svc.get_system_stats(db)
+
+    assert response.users.total == 10
+    assert response.storage.total_quota_mb == 1000.0
+    assert response.sessions.unique_users == 3
 
 
 @pytest.mark.asyncio

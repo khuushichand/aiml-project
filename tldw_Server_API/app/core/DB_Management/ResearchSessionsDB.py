@@ -626,6 +626,30 @@ class ResearchSessionsDB:
             ).fetchall()
         return [session for row in rows if (session := self._session_from_row(row)) is not None]
 
+    def delete_session_cascade(self, session_id: str) -> bool:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM research_chat_handoffs WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM research_run_events WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM research_artifacts WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM research_checkpoints WHERE session_id = ?",
+                (session_id,),
+            )
+            cursor = conn.execute(
+                "DELETE FROM research_sessions WHERE id = ?",
+                (session_id,),
+            )
+        return bool(cursor.rowcount)
+
     def update_phase(
         self,
         session_id: str,

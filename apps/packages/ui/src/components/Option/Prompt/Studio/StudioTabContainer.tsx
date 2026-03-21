@@ -125,7 +125,7 @@ export const StudioTabContainer: React.FC = () => {
 
   const { data: settingsProjectsResponse } = useQuery({
     queryKey: ["prompt-studio", "settings-projects"],
-    queryFn: () => listProjects({ page: 1, per_page: 200 }),
+    queryFn: () => listProjects({ page: 1, per_page: 100 }),
     enabled: isOnline && hasStudio === true
   })
 

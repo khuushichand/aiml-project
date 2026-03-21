@@ -191,6 +191,35 @@ def test_conversation_endpoints_expose_normalized_assistant_identity(tmp_path):
     assert metadata["character_id"] is None
 
 
+def test_get_chat_conversation_returns_metadata_for_knowledge_clients(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    conversation_id = db.add_conversation(
+        {
+            "assistant_kind": "persona",
+            "assistant_id": "knowledge-helper",
+            "persona_memory_mode": "read_only",
+            "title": "Knowledge QA thread",
+            "client_id": "user-1",
+        }
+    )
+    assert conversation_id is not None
+    keyword_id = db.add_keyword("__knowledge_QA__")
+    db.link_conversation_to_keyword(conversation_id, keyword_id)
+
+    response = app.get(f"/api/v1/chat/conversations/{conversation_id}")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["id"] == conversation_id
+    assert payload["assistant_kind"] == "persona"
+    assert payload["assistant_id"] == "knowledge-helper"
+    assert payload["persona_memory_mode"] == "read_only"
+    assert payload["keywords"] == ["__knowledge_QA__"]
+
+
 def test_conversation_alias_filters_character_scope(tmp_path):
     db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")

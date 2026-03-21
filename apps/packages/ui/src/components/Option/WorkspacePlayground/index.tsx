@@ -783,9 +783,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
           import("@/hooks/useSharing").then(async (mod) => {
             try {
               const { getTldwServerURL } = await import("@/services/tldw-server")
-              const fetcher = (await import("@/libs/fetcher")).default
+              const { fetchWithTldwAuth } = await import("@/services/tldw/auth-fetch")
               const base = await getTldwServerURL()
-              const res = await fetcher(`${base}/api/v1/sharing/shared-with-me/${sid}/workspace`)
+              const res = await fetchWithTldwAuth(`${base}/api/v1/sharing/shared-with-me/${sid}/workspace`)
               if (res.ok) {
                 const data = await res.json()
                 const share = data.share

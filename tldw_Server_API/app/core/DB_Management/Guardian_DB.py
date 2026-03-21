@@ -553,9 +553,6 @@ class GuardianDB:
                         ON guardian_household_member_drafts(role);
                     CREATE INDEX IF NOT EXISTS idx_ghmd_user
                         ON guardian_household_member_drafts(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_ghmd_account_mode
-                        ON guardian_household_member_drafts(account_mode);
-
                     CREATE TABLE IF NOT EXISTS guardian_household_member_invites (
                         id TEXT PRIMARY KEY,
                         household_draft_id TEXT NOT NULL,
@@ -628,8 +625,6 @@ class GuardianDB:
 
                     CREATE INDEX IF NOT EXISTS idx_ggpd_household
                         ON guardian_guardrail_plan_drafts(household_draft_id);
-                    CREATE INDEX IF NOT EXISTS idx_ggpd_member
-                        ON guardian_guardrail_plan_drafts(dependent_member_draft_id);
                     CREATE INDEX IF NOT EXISTS idx_ggpd_status
                         ON guardian_guardrail_plan_drafts(status);
                     CREATE INDEX IF NOT EXISTS idx_ggpd_relationship
@@ -737,6 +732,8 @@ class GuardianDB:
         optional_indexes = [
             ("idx_sp_governance", "supervised_policies", "governance_policy_id"),
             ("idx_smr_policy", "self_monitoring_rules", "governance_policy_id"),
+            ("idx_ghmd_account_mode", "guardian_household_member_drafts", "account_mode"),
+            ("idx_ggpd_member", "guardian_guardrail_plan_drafts", "dependent_member_draft_id"),
         ]
         for idx_name, table, column in optional_indexes:
             if self._table_has_column(conn, table, column):

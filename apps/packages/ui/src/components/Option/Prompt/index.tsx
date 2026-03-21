@@ -183,23 +183,6 @@ export const PromptBody = () => {
   // Get initial segment from URL param
   const initialSegment = getSegmentFromParam(searchParams.get("tab"))
 
-  // Sync URL params with selected segment
-  useEffect(() => {
-    const currentTab = searchParams.get("tab")
-    const expectedTab = selectedSegment === "custom" ? null : selectedSegment
-
-    if (currentTab !== expectedTab) {
-      if (expectedTab) {
-        setSearchParams({ tab: expectedTab }, { replace: true })
-      } else {
-        // Remove tab param when on default (custom) tab
-        const newParams = new URLSearchParams(searchParams)
-        newParams.delete("tab")
-        setSearchParams(newParams, { replace: true })
-      }
-    }
-  }, [selectedSegment, searchParams, setSearchParams])
-
   // Track if we've processed the initial prompt deep-link
   const deepLinkProcessedRef = useRef(false)
 
@@ -327,6 +310,7 @@ export const PromptBody = () => {
   const interactions = usePromptInteractions({
     queryClient,
     isOnline,
+    initialSegment,
     t,
     getPromptTexts,
     getPromptKeywords,
@@ -360,6 +344,22 @@ export const PromptBody = () => {
   } = interactions
 
   // --- Effects ---
+
+  // Sync URL params with selected segment after interactions initialize the tab state.
+  useEffect(() => {
+    const currentTab = searchParams.get("tab")
+    const expectedTab = selectedSegment === "custom" ? null : selectedSegment
+
+    if (currentTab !== expectedTab) {
+      if (expectedTab) {
+        setSearchParams({ tab: expectedTab }, { replace: true })
+      } else {
+        const newParams = new URLSearchParams(searchParams)
+        newParams.delete("tab")
+        setSearchParams(newParams, { replace: true })
+      }
+    }
+  }, [searchParams, selectedSegment, setSearchParams])
 
   useEffect(() => {
     setCurrentPage(1)
@@ -427,19 +427,6 @@ export const PromptBody = () => {
       window.removeEventListener("resize", handleResize)
     }
   }, [])
-
-  useEffect(() => {
-    if (!shouldUseServerSearch || serverSearchStatus !== "error") return
-    notification.warning({
-      message: t("managePrompts.searchServerFallback", {
-        defaultValue: "Server search unavailable"
-      }),
-      description: t("managePrompts.searchServerFallbackDesc", {
-        defaultValue:
-          "Falling back to local search results for this query."
-      })
-    })
-  }, [serverSearchStatus, shouldUseServerSearch, t])
 
   // Handle ?prompt= deep-link for opening a specific prompt
   useEffect(() => {
@@ -690,6 +677,19 @@ export const PromptBody = () => {
     hiddenServerResultsOnPage,
     useServerSearchResults
   } = filteredDataHook
+
+  useEffect(() => {
+    if (!shouldUseServerSearch || serverSearchStatus !== "error") return
+    notification.warning({
+      message: t("managePrompts.searchServerFallback", {
+        defaultValue: "Server search unavailable"
+      }),
+      description: t("managePrompts.searchServerFallbackDesc", {
+        defaultValue:
+          "Falling back to local search results for this query."
+      })
+    })
+  }, [serverSearchStatus, shouldUseServerSearch, t])
 
   const filteredTrashData = useMemo(() => {
     if (!Array.isArray(trashData)) return []

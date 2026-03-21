@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.exceptions import BadRequestError
 
 
 pytestmark = pytest.mark.unit
@@ -220,3 +221,30 @@ def test_get_media_ingest_job_rejects_boolean_admin_without_claims(monkeypatch, 
             assert resp.status_code == 403
     finally:
         app.dependency_overrides.clear()
+
+
+def test_submit_media_ingest_jobs_returns_429_for_concurrent_job_limit(
+    media_ingest_jobs_client,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.db"))
+
+    from tldw_Server_API.app.core.Jobs import manager as jobs_manager
+
+    def fake_create_job(self, **_kwargs):
+        raise BadRequestError("User 1 has reached the maximum concurrent job limit (5)")
+
+    monkeypatch.setattr(jobs_manager.JobManager, "create_job", fake_create_job, raising=True)
+
+    resp = media_ingest_jobs_client.post(
+        "/api/v1/media/ingest/jobs",
+        data={
+            "media_type": "document",
+            "urls": "https://example.com/too-many",
+        },
+        headers={"X-API-KEY": "test-api-key-12345"},
+    )
+
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["detail"] == "User 1 has reached the maximum concurrent job limit (5)"

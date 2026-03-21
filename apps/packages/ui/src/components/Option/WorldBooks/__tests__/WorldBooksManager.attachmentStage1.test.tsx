@@ -259,4 +259,58 @@ describe("WorldBooksManager attachment stage-1 scalable views", () => {
     },
     15000
   )
+
+  it("hydrates attachment relationships sequentially instead of bursting every character request at once", async () => {
+    currentCharacters = [
+      { id: 1, name: "Alice" },
+      { id: 2, name: "Bob" },
+      { id: 3, name: "Cara" }
+    ]
+    tldwClientMock.listCharacterWorldBooks.mockImplementation(
+      () => new Promise(() => undefined)
+    )
+
+    render(<WorldBooksManager />)
+
+    const attachmentQueryCall = useQueryMock.mock.calls.find((call) => {
+      const queryKey = Array.isArray(call?.[0]?.queryKey) ? call[0].queryKey : []
+      return queryKey[0] === "tldw:worldBookAttachments"
+    })
+    const attachmentQuery = attachmentQueryCall?.[0]
+
+    expect(attachmentQuery?.queryFn).toBeTypeOf("function")
+
+    void attachmentQuery.queryFn()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(tldwClientMock.listCharacterWorldBooks).toHaveBeenCalledTimes(1)
+    expect(tldwClientMock.listCharacterWorldBooks).toHaveBeenCalledWith(1)
+  })
+
+  it("keeps attachment hydration disabled until attachment tooling is opened", async () => {
+    const user = userEvent.setup()
+    currentCharacters = [
+      { id: 1, name: "Alice" },
+      { id: 2, name: "Bob" }
+    ]
+
+    render(<WorldBooksManager />)
+
+    const attachmentQueryCalls = useQueryMock.mock.calls.filter((call) => {
+      const queryKey = Array.isArray(call?.[0]?.queryKey) ? call[0].queryKey : []
+      return queryKey[0] === "tldw:worldBookAttachments"
+    })
+
+    expect(attachmentQueryCalls.at(-1)?.[0]?.enabled).toBe(false)
+
+    await user.click(screen.getByRole("button", { name: "Open relationship matrix" }))
+
+    const updatedAttachmentQueryCalls = useQueryMock.mock.calls.filter((call) => {
+      const queryKey = Array.isArray(call?.[0]?.queryKey) ? call[0].queryKey : []
+      return queryKey[0] === "tldw:worldBookAttachments"
+    })
+
+    expect(updatedAttachmentQueryCalls.at(-1)?.[0]?.enabled).toBe(true)
+  })
 })

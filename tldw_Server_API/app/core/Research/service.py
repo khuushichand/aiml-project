@@ -8,6 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from tldw_Server_API.app.api.v1.schemas.research_runs_schemas import (
     ResearchArtifactManifestEntry,
     ResearchCheckpointSummary,
@@ -284,12 +286,23 @@ class ResearchService:
                 ),
             )
 
-        job = enqueue_research_phase_job(
-            jm=self._job_manager_for_session(),
-            session_id=session.id,
-            phase=session.phase,
-            owner_user_id=session.owner_user_id,
-        )
+        try:
+            job = enqueue_research_phase_job(
+                jm=self._job_manager_for_session(),
+                session_id=session.id,
+                phase=session.phase,
+                owner_user_id=session.owner_user_id,
+            )
+        except Exception:
+            try:
+                db.delete_session_cascade(session.id)
+            except Exception as cleanup_exc:
+                logger.warning(
+                    "Failed to clean up research session {} after enqueue failure: {}",
+                    session.id,
+                    cleanup_exc,
+                )
+            raise
         return db.attach_active_job(
             session.id,
             self._job_identifier(job),

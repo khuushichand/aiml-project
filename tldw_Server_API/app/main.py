@@ -4875,6 +4875,53 @@ def _compute_openapi_cors_allow_origin(
     return None
 
 
+_cors_allow_all_origins = False
+_cors_allow_credentials = False
+_cors_allow_origin_regex: str | None = None
+_cors_allowed_openapi_origins: set[str] = set()
+
+
+def _compute_runtime_cors_allow_origin(origin: str | None) -> str | None:
+    if not origin:
+        return None
+    if _cors_allow_all_origins and not _cors_allow_credentials:
+        return "*"
+
+    normalized_origin = str(origin).rstrip("/")
+    if normalized_origin in _cors_allowed_openapi_origins:
+        return origin
+
+    if _cors_allow_origin_regex:
+        try:
+            import re as _re
+
+            if _re.match(_cors_allow_origin_regex, origin):
+                return origin
+        except _REQUEST_GUARD_EXCEPTIONS:
+            return None
+
+    if _cors_allow_all_origins:
+        return origin
+    return None
+
+
+def _apply_runtime_cors_headers(request: Request, response: Any) -> Any:
+    allow_origin = _compute_runtime_cors_allow_origin(request.headers.get("origin"))
+    if not allow_origin:
+        return response
+
+    response.headers.setdefault("Access-Control-Allow-Origin", allow_origin)
+    if allow_origin != "*":
+        response.headers.setdefault("Vary", "Origin")
+    if _cors_allow_credentials:
+        response.headers.setdefault("Access-Control-Allow-Credentials", "true")
+    response.headers.setdefault(
+        "Access-Control-Expose-Headers",
+        "X-Request-ID, traceparent, X-Trace-Id"
+    )
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Global exception handler – surfaces tracebacks that BaseHTTPMiddleware
 # layers would otherwise swallow, producing only a bare
@@ -4902,9 +4949,12 @@ async def _global_unhandled_exception_handler(request, exc):
         url=request.url,
         exc=exc,
     )
-    return _JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
+    return _apply_runtime_cors_headers(
+        request,
+        _JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        ),
     )
 
 
@@ -4915,9 +4965,12 @@ async def _client_disconnect_exception_handler(request: Request, exc: ClientDisc
         method=request.method,
         url=request.url,
     )
-    return _JSONResponse(
-        status_code=499,
-        content={"detail": "Client disconnected"},
+    return _apply_runtime_cors_headers(
+        request,
+        _JSONResponse(
+            status_code=499,
+            content={"detail": "Client disconnected"},
+        ),
     )
 
 

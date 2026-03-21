@@ -415,11 +415,11 @@ export const SystemSettings = () => {
                       {tokens.slice(0, 4).map((line, i) => (
                         <div
                           key={i}
-                          {...getLineProps({ line, key: i })}>
+                          {...getLineProps({ line })}>
                           {line.map((token, key) => (
                             <span
                               key={key}
-                              {...getTokenProps({ token, key })}
+                              {...getTokenProps({ token })}
                             />
                           ))}
                         </div>

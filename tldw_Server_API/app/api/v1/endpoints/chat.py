@@ -235,6 +235,7 @@ from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
@@ -4101,6 +4102,56 @@ def _scoped_conversation_fields(conversation: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _conversation_assistant_identity_fields(conversation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "character_id": conversation.get("character_id"),
+        "assistant_kind": conversation.get("assistant_kind"),
+        "assistant_id": conversation.get("assistant_id"),
+        "persona_memory_mode": conversation.get("persona_memory_mode"),
+    }
+
+
+def _conversation_search_deleted_scope(include_deleted: bool, deleted_only: bool) -> str:
+    if deleted_only:
+        return "deleted_only"
+    if include_deleted:
+        return "include_deleted"
+    return "active"
+
+
+def _conversation_search_query_strategy(
+    query: str | None,
+    *,
+    include_deleted: bool,
+    deleted_only: bool,
+) -> str:
+    if not (query or "").strip():
+        return "none"
+    if include_deleted or deleted_only:
+        return "deleted_text"
+    return "fts"
+
+
+def _conversation_search_metric_labels(
+    query: str | None,
+    *,
+    order_by: str,
+    include_deleted: bool,
+    deleted_only: bool,
+    outcome: str,
+) -> dict[str, str]:
+    return {
+        "query_strategy": _conversation_search_query_strategy(
+            query,
+            include_deleted=include_deleted,
+            deleted_only=deleted_only,
+        ),
+        "order_by": order_by,
+        "deleted_scope": _conversation_search_deleted_scope(include_deleted, deleted_only),
+        "outcome": outcome,
+    }
+
+
 def _verify_conversation_ownership(
     db: CharactersRAGDB,
     conversation_id: str,
@@ -4510,6 +4561,9 @@ async def list_chat_conversations(
     keywords: list[str] | None = Query(None, description="Keyword filters (repeatable)"),
     cluster_id: str | None = Query(None, description="Cluster ID filter"),
     character_id: int | None = Query(None, description="Character ID filter"),
+    character_scope: str | None = Query(None, description="Character scope filter: all, character, or non_character"),
+    include_deleted: bool = Query(False, description="Include deleted conversations in results"),
+    deleted_only: bool = Query(False, description="Only return deleted conversations"),
     start_date: str | None = Query(None, description="ISO-8601 start date"),
     end_date: str | None = Query(None, description="ISO-8601 end date"),
     date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
@@ -4521,7 +4575,31 @@ async def list_chat_conversations(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
+    started_at = time.perf_counter()
+    effective_include_deleted = include_deleted or deleted_only
+    normalized_character_scope = character_scope.strip().lower() if character_scope and character_scope.strip() else None
+
+    def _record_search_outcome(outcome: str) -> dict[str, str]:
+        labels = _conversation_search_metric_labels(
+            query,
+            order_by=order_by,
+            include_deleted=effective_include_deleted,
+            deleted_only=deleted_only,
+            outcome=outcome,
+        )
+        duration_seconds = max(time.perf_counter() - started_at, 0.0)
+        registry = get_metrics_registry()
+        registry.increment("chat_conversation_search_requests_total", labels=labels)
+        registry.observe("chat_conversation_search_duration_seconds", duration_seconds, labels=labels)
+        return labels
+
     try:
+        if normalized_character_scope == "non_character" and character_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="character_scope=non_character cannot be combined with character_id",
+            )
+
         topic_filter = topic_label.strip() if topic_label else None
         topic_prefix = False
         if topic_filter and topic_filter.endswith("*"):
@@ -4536,11 +4614,15 @@ async def list_chat_conversations(
         start_iso = _parse_iso_datetime(start_date, "start_date").isoformat() if start_date else None
         end_iso = _parse_iso_datetime(end_date, "end_date").isoformat() if end_date else None
         resolved_scope = _resolve_conversation_scope(scope_type, workspace_id)
+        search_as_of = datetime.now(timezone.utc)
 
-        rows = db.search_conversations(
+        page_rows, total, _max_bm25 = db.search_conversations_page(
             query,
             client_id=str(current_user.id),
+            include_deleted=effective_include_deleted,
+            deleted_only=deleted_only,
             character_id=character_id,
+            character_scope=normalized_character_scope,
             state=state,
             topic_label=topic_filter,
             topic_prefix=topic_prefix,
@@ -4559,62 +4641,13 @@ async def list_chat_conversations(
             scope_type=resolved_scope.scope_type,
             workspace_id=resolved_scope.workspace_id,
         )
-
-        max_bm25 = max((row.get("bm25_raw") or 0.0) for row in rows) if rows else 0.0
-        w_bm25, w_recency = _normalize_weights(CHAT_BM25_WEIGHT, CHAT_RECENCY_WEIGHT)
-
-        for row in rows:
-            bm25_raw = row.get("bm25_raw") or 0.0
-            bm25_norm = min((bm25_raw / max_bm25), 1.0) if max_bm25 else 0.0
-            dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
-            recency = _calculate_recency(dt, RECENCY_HALF_LIFE_DAYS)
-            row["_bm25_norm"] = bm25_norm
-            row["_recency"] = recency
-            row["_hybrid"] = (w_bm25 * bm25_norm) + (w_recency * recency)
-            row["_sort_dt"] = dt or datetime.fromtimestamp(0, tz=timezone.utc)
-            label = row.get("topic_label")
-            row["_topic_sort"] = str(label).strip().lower() if label else None
-
-        if order_by == "bm25":
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_bm25_norm") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-        elif order_by == "hybrid":
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_hybrid") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-        elif order_by == "topic":
-            rows.sort(
-                key=lambda r: (
-                    r.get("_topic_sort") is None,
-                    r.get("_topic_sort") or "",
-                    -(r.get("_bm25_norm") or 0.0),
-                    -(r.get("_recency") or 0.0),
-                    r.get("id") or "",
-                )
-            )
-        else:
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("_recency") or 0.0),
-                    -(r.get("_sort_dt").timestamp()),
-                    r.get("id") or "",
-                )
-            )
-
-        total = len(rows)
-        page_rows = rows[offset: offset + limit]
         conv_ids = [row.get("id") for row in page_rows if row.get("id")]
         keyword_map = db.get_keywords_for_conversations(conv_ids) if conv_ids else {}
-        message_counts = db.count_messages_for_conversations(conv_ids) if conv_ids else {}
+        message_counts = (
+            db.count_messages_for_conversations(conv_ids, include_deleted=effective_include_deleted)
+            if conv_ids
+            else {}
+        )
         items: list[ConversationListItem] = []
         for row in page_rows:
             conv_id = row.get("id") or ""
@@ -4622,12 +4655,12 @@ async def list_chat_conversations(
             keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
             message_count = message_counts.get(conv_id, 0)
 
-            bm25_norm = row.get("_bm25_norm") if order_by in {"bm25", "hybrid"} else None
+            bm25_norm = row.get("bm25_norm") if order_by in {"bm25", "hybrid"} else None
             items.append(
                 ConversationListItem(
                     id=conv_id,
                     **_scoped_conversation_fields(row),
-                    **assistant_fields,
+                    **_conversation_assistant_identity_fields(row),
                     title=row.get("title"),
                     state=row.get("state") or "in-progress",
                     topic_label=row.get("topic_label"),
@@ -4649,14 +4682,117 @@ async def list_chat_conversations(
             total=total,
             has_more=(offset + limit) < total,
         )
+        success_labels = _record_search_outcome("success")
+        logger.debug(
+            "Conversation search completed: {}",
+            {
+                "query_strategy": success_labels["query_strategy"],
+                "order_by": success_labels["order_by"],
+                "deleted_scope": success_labels["deleted_scope"],
+                "returned": len(items),
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
         return ConversationListResponse(items=items, pagination=pagination)
     except InputError as exc:
+        _record_search_outcome("validation")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HTTPException as exc:
+        if 400 <= exc.status_code < 500:
+            _record_search_outcome("validation")
+        else:
+            error_labels = _record_search_outcome("server_error")
+            logger.error(
+                "Conversation list failed: {}",
+                {
+                    "query_strategy": error_labels["query_strategy"],
+                    "order_by": error_labels["order_by"],
+                    "deleted_scope": error_labels["deleted_scope"],
+                    "outcome": error_labels["outcome"],
+                },
+                exc_info=True,
+            )
+        raise
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        error_labels = _record_search_outcome("server_error")
+        logger.error(
+            "Conversation list failed: {}",
+            {
+                "query_strategy": error_labels["query_strategy"],
+                "order_by": error_labels["order_by"],
+                "deleted_scope": error_labels["deleted_scope"],
+                "outcome": error_labels["outcome"],
+            },
+            exc_info=True,
+        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list conversations") from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Get conversation metadata",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+)
+@conversations_alias_router.get(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Get conversation metadata [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+    include_in_schema=False,
+)
+async def get_chat_conversation(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        scope = _resolve_conversation_scope(scope_type, workspace_id)
+        conversation = _verify_conversation_ownership(db, conversation_id, current_user, scope)
+        keyword_rows = db.get_keywords_for_conversation(conversation_id)
+        keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
+        try:
+            message_count = db.count_messages_for_conversation(conversation_id)
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            message_count = 0
+
+        return ConversationListItem(
+            id=conversation.get("id") or conversation_id,
+            **_scoped_conversation_fields(conversation),
+            **_conversation_assistant_identity_fields(conversation),
+            title=conversation.get("title"),
+            state=conversation.get("state") or "in-progress",
+            topic_label=conversation.get("topic_label"),
+            bm25_norm=None,
+            last_modified=_coerce_datetime(conversation.get("last_modified")) or datetime.now(timezone.utc),
+            created_at=_coerce_datetime(conversation.get("created_at")) or datetime.now(timezone.utc),
+            message_count=message_count,
+            keywords=keywords_list,
+            cluster_id=conversation.get("cluster_id"),
+            source=conversation.get("source"),
+            external_ref=conversation.get("external_ref"),
+            version=conversation.get("version") or 1,
+        )
     except HTTPException:
         raise
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-        logger.error(f"Conversation list failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list conversations") from exc
+        logger.error(f"Conversation get failed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load conversation",
+        ) from exc
 
 
 @router.patch(

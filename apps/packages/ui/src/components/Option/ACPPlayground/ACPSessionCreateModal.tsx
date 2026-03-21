@@ -22,9 +22,10 @@ import {
   Check,
   Loader2,
 } from "lucide-react"
-import { useStorage } from "@plasmohq/storage/hook"
 import { Button } from "@/components/Common/Button"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { ACPRestClient } from "@/services/acp/client"
+import { buildACPClientConfig } from "@/services/acp/connection"
 import type {
   ACPAgentType,
   ACPAgentInfo,
@@ -183,12 +184,9 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const [form] = Form.useForm<FormValues>()
+  const { config: connectionConfig, loading: isConnectionConfigLoading } = useCanonicalConnectionConfig()
 
   // Server config from storage
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
   const workspaceId = useWorkspaceStore((state) => state.workspaceId)
 
   // Local state
@@ -203,23 +201,10 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
 
   // Create REST client
   const restClient = React.useMemo(() => {
-    return new ACPRestClient({
-      serverUrl,
-      getAuthHeaders: async () => {
-        const headers: Record<string, string> = {}
-        if (authMode === "single-user" && apiKey) {
-          headers["X-API-KEY"] = apiKey
-        } else if (authMode === "multi-user" && accessToken) {
-          headers["Authorization"] = `Bearer ${accessToken}`
-        }
-        return headers
-      },
-      getAuthParams: async () => ({
-        token: authMode === "multi-user" ? accessToken : undefined,
-        api_key: authMode === "single-user" ? apiKey : undefined,
-      }),
-    })
-  }, [serverUrl, authMode, apiKey, accessToken])
+    return connectionConfig
+      ? new ACPRestClient(buildACPClientConfig(connectionConfig))
+      : null
+  }, [connectionConfig])
 
   // Fetch available agents
   const {
@@ -227,8 +212,8 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
     isLoading: isLoadingAgents,
   } = useQuery({
     queryKey: ["acp", "agents"],
-    queryFn: () => restClient.getAvailableAgents(),
-    enabled: open,
+    queryFn: () => restClient!.getAvailableAgents(),
+    enabled: open && !!restClient,
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   })
 
@@ -256,6 +241,9 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
   // Create session mutation
   const createMutation = useMutation({
     mutationFn: async (values: FormValues) => {
+      if (!restClient) {
+        throw new Error("Missing ACP connection configuration")
+      }
       setCreationStep("creating")
       setCreationError(undefined)
 
@@ -394,6 +382,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
 
   const isPending = createMutation.isPending
   const isInProgress = creationStep !== "idle" && creationStep !== "error"
+  const isAgentSelectionLoading = isConnectionConfigLoading || isLoadingAgents
 
   return (
     <Modal
@@ -472,7 +461,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
             </span>
           }
         >
-          {isLoadingAgents ? (
+          {isAgentSelectionLoading ? (
             <div className="flex items-center justify-center py-4">
               <Loader2 className="h-5 w-5 animate-spin text-text-muted" />
             </div>
@@ -551,7 +540,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
             type="primary"
             htmlType="submit"
             loading={isPending}
-            disabled={isLoadingAgents}
+            disabled={isAgentSelectionLoading || !restClient}
           >
             {isPending ? (
               <span className="flex items-center gap-2">

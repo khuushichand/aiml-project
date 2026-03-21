@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   detailById: {} as Record<string, any>,
   refetch: vi.fn(),
   bgRequest: vi.fn(),
+  tldwClientGetConfig: vi.fn(),
+  tldwClientGetCurrentUserStorageQuota: vi.fn(),
+  tldwClientGetCurrentUserProfile: vi.fn(),
+  tldwClientGetReadingProgress: vi.fn(),
   getSetting: vi.fn(),
   setSetting: vi.fn(),
   clearSetting: vi.fn(),
@@ -144,7 +148,13 @@ vi.mock('@/hooks/useMediaNavigation', () => ({
 
 vi.mock('@/services/tldw/TldwApiClient', () => ({
   tldwClient: {
-    getConfig: vi.fn().mockResolvedValue({})
+    getConfig: (...args: unknown[]) => mocks.tldwClientGetConfig(...args),
+    getCurrentUserStorageQuota: (...args: unknown[]) =>
+      mocks.tldwClientGetCurrentUserStorageQuota(...args),
+    getCurrentUserProfile: (...args: unknown[]) =>
+      mocks.tldwClientGetCurrentUserProfile(...args),
+    getReadingProgress: (...args: unknown[]) =>
+      mocks.tldwClientGetReadingProgress(...args)
   }
 }))
 
@@ -321,6 +331,28 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
     }
     mocks.refetch.mockReset()
     mocks.refetch.mockResolvedValue({ data: mocks.queryData })
+    mocks.tldwClientGetConfig.mockReset()
+    mocks.tldwClientGetConfig.mockResolvedValue({})
+    mocks.tldwClientGetCurrentUserStorageQuota.mockReset()
+    mocks.tldwClientGetCurrentUserStorageQuota.mockResolvedValue({
+      user_id: 1,
+      storage_used_mb: 128.5,
+      storage_quota_mb: 5120,
+      available_mb: 4991.5,
+      usage_percentage: 2.5
+    })
+    mocks.tldwClientGetCurrentUserProfile.mockReset()
+    mocks.tldwClientGetCurrentUserProfile.mockResolvedValue({
+      quotas: {
+        storage_used_mb: 128.5,
+        storage_quota_mb: 5120
+      }
+    })
+    mocks.tldwClientGetReadingProgress.mockReset()
+    mocks.tldwClientGetReadingProgress.mockResolvedValue({
+      media_id: 1,
+      has_progress: false
+    })
     mocks.getSetting.mockReset()
     mocks.getSetting.mockResolvedValue(undefined)
     mocks.setSetting.mockReset()
@@ -355,6 +387,19 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
       return {}
     })
     window.localStorage.removeItem(MEDIA_TYPES_CACHE_KEY)
+  })
+
+  it('loads account storage usage through the supported user storage API', async () => {
+    renderMediaPage('/media')
+
+    await waitFor(() => {
+      expect(mocks.tldwClientGetCurrentUserStorageQuota).toHaveBeenCalledTimes(1)
+    })
+
+    const requestedPaths = mocks.bgRequest.mock.calls.map(
+      (call) => String((call[0] as { path?: string })?.path || '')
+    )
+    expect(requestedPaths).not.toContain('/api/v1/storage/usage')
   })
 
   it('debounces rapid query changes before triggering refetch with active filters', async () => {
@@ -596,6 +641,50 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
     })
   })
 
+  it('hydrates initial keyword suggestions from loaded results before trying the keyword endpoint', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 1,
+        title: 'Item 1',
+        snippet: 'one',
+        keywords: ['alpha', 'beta'],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+    let keywordCallCount = 0
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (path.startsWith('/api/v1/media/keywords')) {
+        keywordCallCount += 1
+        return { keywords: ['remote-keyword'] }
+      }
+      if (path.startsWith('/api/v1/media/?page=')) {
+        return { items: [], pagination: { total_pages: 1, total_items: 0 } }
+      }
+      if (path.startsWith('/api/v1/media/')) {
+        const id = path.replace('/api/v1/media/', '').split('?')[0]
+        return {
+          id,
+          title: `Media ${id}`,
+          type: 'document',
+          content: { text: `Content for ${id}` }
+        }
+      }
+      if (path.startsWith('/api/v1/notes')) {
+        return { items: [], pagination: { total_items: 0 } }
+      }
+      return {}
+    })
+
+    renderMediaPage('/media')
+
+    await waitFor(() => {
+      expect(keywordCallCount).toBe(0)
+    })
+  })
+
   it('retries keyword endpoint after cooldown instead of latching fallback forever', async () => {
     const baseNow = new Date('2026-02-18T00:00:00Z').getTime()
     let now = baseNow
@@ -631,6 +720,7 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
 
     renderMediaPage('/media')
 
+    fireEvent.click(screen.getByTestId('filter-panel-keyword-search'))
     await waitFor(() => {
       expect(keywordCallCount).toBe(1)
     })
@@ -648,5 +738,147 @@ describe('ViewMediaPage stage 12 performance guardrails', () => {
     })
 
     nowSpy.mockRestore()
+  })
+
+  it('dedupes in-flight keyword lookups and suppresses unsupported endpoint retries', async () => {
+    let keywordCallCount = 0
+    let rejectKeywordRequest: ((reason?: unknown) => void) | null = null
+
+    mocks.bgRequest.mockImplementation((request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (path.startsWith('/api/v1/media/keywords')) {
+        keywordCallCount += 1
+        return new Promise((_, reject) => {
+          rejectKeywordRequest = reject
+        })
+      }
+      if (path.startsWith('/api/v1/media/?page=')) {
+        return Promise.resolve({ items: [], pagination: { total_pages: 1, total_items: 0 } })
+      }
+      if (path.startsWith('/api/v1/media/')) {
+        const id = path.replace('/api/v1/media/', '').split('?')[0]
+        return Promise.resolve({
+          id,
+          title: `Media ${id}`,
+          type: 'document',
+          content: { text: `Content for ${id}` }
+        })
+      }
+      if (path.startsWith('/api/v1/notes')) {
+        return Promise.resolve({ items: [], pagination: { total_items: 0 } })
+      }
+      return Promise.resolve({})
+    })
+
+    renderMediaPage('/media')
+
+    fireEvent.click(screen.getByTestId('filter-panel-keyword-search'))
+    await waitFor(() => {
+      expect(keywordCallCount).toBe(1)
+    })
+
+    fireEvent.click(screen.getByTestId('filter-panel-keyword-search'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(keywordCallCount).toBe(1)
+
+    rejectKeywordRequest?.(
+      Object.assign(new Error('Not found (/api/v1/media/keywords)'), {
+        status: 404
+      })
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    fireEvent.click(screen.getByTestId('filter-panel-keyword-search'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(keywordCallCount).toBe(1)
+  })
+
+  it('stops reading-progress hydration after the first fatal endpoint failure', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 1,
+        title: 'Item 1',
+        snippet: 'one',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      },
+      {
+        kind: 'media',
+        id: 2,
+        title: 'Item 2',
+        snippet: 'two',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      },
+      {
+        kind: 'media',
+        id: 3,
+        title: 'Item 3',
+        snippet: 'three',
+        keywords: [],
+        meta: { type: 'document' },
+        raw: {}
+      }
+    ]
+    mocks.tldwClientGetReadingProgress.mockRejectedValue(
+      Object.assign(new Error('Failed (/api/v1/media/1/progress)'), {
+        status: 500
+      })
+    )
+
+    renderMediaPage('/media')
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.tldwClientGetReadingProgress).toHaveBeenCalledTimes(1)
+    expect(mocks.tldwClientGetReadingProgress).toHaveBeenCalledWith('1')
+  })
+
+  it('skips reading-progress hydration for non-document media results', async () => {
+    mocks.queryData = [
+      {
+        kind: 'media',
+        id: 41,
+        title: 'Clip 41',
+        snippet: 'clip',
+        keywords: [],
+        meta: { type: 'video' },
+        raw: {}
+      },
+      {
+        kind: 'media',
+        id: 42,
+        title: 'Song 42',
+        snippet: 'song',
+        keywords: [],
+        meta: { type: 'audio' },
+        raw: {}
+      }
+    ]
+
+    renderMediaPage('/media')
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.tldwClientGetReadingProgress).not.toHaveBeenCalled()
   })
 })

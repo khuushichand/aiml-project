@@ -1,5 +1,3 @@
-import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
+import dynamic from "next/dynamic"
 
-export default function CompanionRedirectPage() {
-  return <RouteRedirect to="/companion" />;
-}
+export default dynamic(() => import("@/routes/option-companion"), { ssr: false })

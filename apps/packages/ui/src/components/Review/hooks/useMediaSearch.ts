@@ -276,6 +276,8 @@ export function useMediaSearch(deps: UseMediaSearchDeps) {
   const previousPageSizeRef = useRef<number>(pageSize)
   const keywordEndpointUnavailableRef = useRef(false)
   const keywordEndpointRetryAtRef = useRef(0)
+  const keywordEndpointUnsupportedRef = useRef(false)
+  const keywordEndpointInFlightRef = useRef<Promise<any[] | null> | null>(null)
   const mediaApiUnavailableNotifiedRef = useRef(false)
 
   const markMediaApiUnavailable = useCallback((error?: unknown) => {
@@ -935,55 +937,97 @@ export function useMediaSearch(deps: UseMediaSearchDeps) {
       return
     }
 
+    const trimmedSearch = searchText?.trim()
+
+    const applyKeywordResultsFallback = () => {
+      const keywordsFromResults = new Set<string>()
+      for (const result of results) {
+        if (!result.keywords) continue
+        for (const kw of result.keywords) {
+          if (!searchText || kw.toLowerCase().includes(searchText.toLowerCase())) {
+            keywordsFromResults.add(kw)
+          }
+        }
+      }
+      setKeywordOptions(Array.from(keywordsFromResults))
+      setKeywordSourceMode('results')
+    }
+
+    if (!trimmedSearch) {
+      applyKeywordResultsFallback()
+      return
+    }
+
+    if (keywordEndpointUnsupportedRef.current) {
+      applyKeywordResultsFallback()
+      return
+    }
+
+    if (keywordEndpointInFlightRef.current) {
+      try {
+        const pendingItems = await keywordEndpointInFlightRef.current
+        if (pendingItems) {
+          setKeywordOptions(normalizeKeywords(pendingItems))
+          setKeywordSourceMode('endpoint')
+          return
+        }
+      } catch {
+        applyKeywordResultsFallback()
+        return
+      }
+    }
+
     const now = Date.now()
     if (
       !keywordEndpointUnavailableRef.current ||
       now >= keywordEndpointRetryAtRef.current
     ) {
       try {
-        const trimmedSearch = searchText?.trim()
-        const endpointPath = trimmedSearch
-          ? `/api/v1/media/keywords?query=${encodeURIComponent(trimmedSearch)}`
-          : '/api/v1/media/keywords'
-        const keywordResp = await bgRequest<any>({
-          path: endpointPath as any,
-          method: 'GET' as any
-        })
-        const endpointItems = Array.isArray(keywordResp)
-          ? keywordResp
-          : Array.isArray(keywordResp?.keywords)
-            ? keywordResp.keywords
-            : Array.isArray(keywordResp?.items)
-              ? keywordResp.items
-              : null
+        const endpointRequest = (async () => {
+          const endpointPath = `/api/v1/media/keywords?query=${encodeURIComponent(trimmedSearch)}`
+          const keywordResp = await bgRequest<any>({
+            path: endpointPath as any,
+            method: 'GET' as any
+          })
+          const endpointItems = Array.isArray(keywordResp)
+            ? keywordResp
+            : Array.isArray(keywordResp?.keywords)
+              ? keywordResp.keywords
+              : Array.isArray(keywordResp?.items)
+                ? keywordResp.items
+                : null
 
-        if (!endpointItems) {
-          throw new Error('Unexpected keyword endpoint response')
-        }
+          if (!endpointItems) {
+            throw new Error('Unexpected keyword endpoint response')
+          }
+
+          return endpointItems
+        })()
+        keywordEndpointInFlightRef.current = endpointRequest
+        const endpointItems = await endpointRequest
 
         setKeywordOptions(normalizeKeywords(endpointItems))
         setKeywordSourceMode('endpoint')
+        keywordEndpointUnsupportedRef.current = false
         keywordEndpointUnavailableRef.current = false
         keywordEndpointRetryAtRef.current = 0
         return
-      } catch {
-        keywordEndpointUnavailableRef.current = true
-        keywordEndpointRetryAtRef.current =
-          Date.now() + MEDIA_KEYWORD_ENDPOINT_RETRY_COOLDOWN_MS
+      } catch (error) {
+        if (isMediaEndpointMissingError(error)) {
+          keywordEndpointUnsupportedRef.current = true
+          keywordEndpointUnavailableRef.current = true
+          keywordEndpointRetryAtRef.current = Number.POSITIVE_INFINITY
+        } else {
+          keywordEndpointUnavailableRef.current = true
+          keywordEndpointRetryAtRef.current =
+            Date.now() + MEDIA_KEYWORD_ENDPOINT_RETRY_COOLDOWN_MS
+        }
+      } finally {
+        keywordEndpointInFlightRef.current = null
       }
     }
 
-    const keywordsFromResults = new Set<string>()
-    for (const result of results) {
-      if (!result.keywords) continue
-      for (const kw of result.keywords) {
-        if (!searchText || kw.toLowerCase().includes(searchText.toLowerCase())) {
-          keywordsFromResults.add(kw)
-        }
-      }
-    }
-    setKeywordOptions(Array.from(keywordsFromResults))
-    setKeywordSourceMode('results')
+    applyKeywordResultsFallback()
   }, [mediaApiUnavailable, results])
 
   // Keep keyword suggestions in sync with results

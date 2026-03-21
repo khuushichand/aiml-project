@@ -3,7 +3,7 @@ import { Button, Form, Input, InputNumber, Modal, Skeleton, Switch, Table, Toolt
 import React from "react"
 import { useConfirmDanger } from "@/components/Common/confirm-danger"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { Pen, Trash2, BookOpen, Link2, Download, BarChart3, Copy, List, MoreHorizontal, Upload as UploadIcon } from "lucide-react"
+import { Pen, Trash2, BookOpen, Link2, Download, BarChart3, Copy, List, MoreHorizontal, Upload as UploadIcon, HelpCircle } from "lucide-react"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "../../Common/FeatureEmptyState"
 import { useTranslation } from "react-i18next"
@@ -75,6 +75,7 @@ export const WorldBooksManager: React.FC = () => {
   const [editExpectedVersion, setEditExpectedVersion] = React.useState<number | null>(null)
   const [editConflict, setEditConflict] = React.useState<EditWorldBookConflictState | null>(null)
   const [openMatrix, setOpenMatrix] = React.useState(false)
+  const [attachmentsHydrationRequested, setAttachmentsHydrationRequested] = React.useState(false)
   const [openGlobalStats, setOpenGlobalStats] = React.useState(false)
   const [statsFor, setStatsFor] = React.useState<any | null>(null)
   const [statsLoadingId, setStatsLoadingId] = React.useState<number | null>(null)
@@ -160,16 +161,15 @@ export const WorldBooksManager: React.FC = () => {
     queryFn: async () => {
       if (!characters || characters.length === 0) return {}
       await tldwClient.initialize()
-      const results = await Promise.all(
-        (characters || []).map(async (c: any) => {
-          try {
-            const books = await tldwClient.listCharacterWorldBooks(c.id)
-            return { character: c, books: books || [] }
-          } catch {
-            return { character: c, books: [] }
-          }
-        })
-      )
+      const results: Array<{ character: any; books: any[] }> = []
+      for (const character of characters || []) {
+        try {
+          const books = await tldwClient.listCharacterWorldBooks(character.id)
+          results.push({ character, books: books || [] })
+        } catch {
+          results.push({ character, books: [] })
+        }
+      }
       const map: Record<number, any[]> = {}
       results.forEach(({ character, books }) => {
         (books || []).forEach((b: any) => {
@@ -185,8 +185,12 @@ export const WorldBooksManager: React.FC = () => {
       })
       return map
     },
-    enabled: isOnline && !!characters && characters.length > 0
+    enabled: isOnline && attachmentsHydrationRequested && !!characters && characters.length > 0
   })
+
+  const requestAttachmentHydration = React.useCallback(() => {
+    setAttachmentsHydrationRequested(true)
+  }, [])
 
   const maxRecursiveDepth =
     typeof worldBookRuntimeConfig?.max_recursive_depth === "number" &&
@@ -398,6 +402,9 @@ export const WorldBooksManager: React.FC = () => {
   const [detachingFor, setDetachingFor] = React.useState<{ characterId: number; worldBookId: number } | null>(null)
 
   const renderAttachedCell = (record: any) => {
+    if (!attachmentsHydrationRequested) {
+      return <Tag color="default">Open to load</Tag>
+    }
     if (attachmentsLoading) return <span className="text-text-muted">Loading…</span>
     const attached = getAttachedCharacters(record.id)
     if (!attached || attached.length === 0) {
@@ -528,9 +535,10 @@ export const WorldBooksManager: React.FC = () => {
 
   const handleOpenMatrix = React.useCallback(() => {
     matrixFocusReturnRef.current = getActiveFocusableElement()
+    requestAttachmentHydration()
     initializeMatrixSession()
     setOpenMatrix(true)
-  }, [getActiveFocusableElement, initializeMatrixSession])
+  }, [getActiveFocusableElement, initializeMatrixSession, requestAttachmentHydration])
 
   const handleCloseMatrix = React.useCallback(() => {
     const focusTarget = matrixFocusReturnRef.current
@@ -1149,7 +1157,10 @@ export const WorldBooksManager: React.FC = () => {
           size="small"
           aria-label="Quick attach characters"
           icon={<Link2 className="w-4 h-4" />}
-          onClick={() => setOpenAttach(record.id)}
+          onClick={() => {
+            requestAttachmentHydration()
+            setOpenAttach(record.id)
+          }}
         />
       </Tooltip>
       <Tooltip title="Export JSON">
@@ -1215,7 +1226,10 @@ export const WorldBooksManager: React.FC = () => {
       {
         key: "attach",
         label: "Quick Attach Characters",
-        onClick: () => setOpenAttach(record.id)
+        onClick: () => {
+          requestAttachmentHydration()
+          setOpenAttach(record.id)
+        }
       },
       {
         key: "export",
@@ -1360,7 +1374,12 @@ export const WorldBooksManager: React.FC = () => {
           />
           <Select
             value={attachmentFilter}
-            onChange={(value) => setAttachmentFilter(value)}
+            onChange={(value) => {
+              if (value !== "all") {
+                requestAttachmentHydration()
+              }
+              setAttachmentFilter(value)
+            }}
             aria-label="Filter by attachment state"
             data-testid="world-books-attachment-filter"
             className="w-44"

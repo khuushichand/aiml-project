@@ -54,3 +54,38 @@ async def test_generate_streaming_response_warms_prompt_template(
     await generation_mod.generate_streaming_response(ctx)
 
     assert warmed == ["instruction_tuned"]
+
+
+@pytest.mark.asyncio
+async def test_generate_streaming_response_ignores_non_generator_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_configs: list[dict[str, Any]] = []
+
+    class _StubGenerator:
+        async def generate_stream(self, context: Any, query: str) -> AsyncIterator[str]:
+            if False:
+                yield ""  # pragma: no cover
+
+    def _fake_create_generator(config: dict[str, Any]) -> _StubGenerator:
+        captured_configs.append(dict(config))
+        return _StubGenerator()
+
+    monkeypatch.setattr(generation_mod, "create_generator", _fake_create_generator)
+
+    ctx = SimpleNamespace(
+        config={"generation": {"provider": "openai", "model": "gpt-4o-mini"}},
+        query="stream without config blowups",
+        metadata={},
+    )
+
+    await generation_mod.generate_streaming_response(
+        ctx,
+        enable_claims=True,
+        claims_top_k=5,
+        claims_concurrency=4,
+    )
+
+    assert captured_configs == [
+        {"provider": "openai", "model": "gpt-4o-mini", "streaming": True}
+    ]

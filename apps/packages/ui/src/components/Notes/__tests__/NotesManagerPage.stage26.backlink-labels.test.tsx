@@ -261,6 +261,44 @@ describe("NotesManagerPage stage 26 conversation backlink labels", () => {
     })
   })
 
+  it("does not re-request a missing conversation label after the backlink is selected", async () => {
+    configureCommonRequests("conv-unavailable")
+    mockGetChat.mockRejectedValue(new Error("Chat session conv-unavailable not found"))
+
+    renderPage()
+    expect(await screen.findByText("conv-unavailable")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: /backlink note/i }))
+    await waitFor(() => {
+      const labels = screen.getAllByText("conv-unavailable")
+      expect(labels.length).toBeGreaterThan(1)
+    })
+
+    expect(mockGetChat).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not auto-fetch UUID conversation labels until the linked note is opened", async () => {
+    const uuidConversationId = "acd86f3a-492e-4a8b-90fb-ff282b9721fb"
+    configureCommonRequests(uuidConversationId)
+    mockGetChat.mockRejectedValue(
+      new Error(`Chat session ${uuidConversationId} not found`)
+    )
+
+    renderPage()
+    expect(await screen.findByText(uuidConversationId)).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(mockGetChat).not.toHaveBeenCalled()
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: /backlink note/i }))
+
+    await waitFor(() => {
+      expect(mockGetChat).toHaveBeenCalledTimes(1)
+    })
+    expect(mockGetChat).toHaveBeenCalledWith(uuidConversationId)
+  })
+
   it("opens linked conversations in the same tab by default", async () => {
     configureCommonRequests("conv-same-tab")
     mockGetChat.mockResolvedValue({
