@@ -55,7 +55,7 @@ export const IntegrationProviderCard: React.FC<IntegrationProviderCardProps> = (
             <List.Item
               actions={
                 onInspect
-                  ? [<Button key="inspect" size="small" onClick={() => onInspect(item)}>Inspect</Button>]
+                  ? [<Button key="inspect" size="small" onClick={() => onInspect(item)}>Manage</Button>]
                   : undefined
               }
             >

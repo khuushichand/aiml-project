@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from "react"
-import { Alert, Button, Card, Col, Row, Skeleton, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Col, Row, Skeleton, Space, Tag, Typography, message } from "antd"
 import { useQuery } from "@tanstack/react-query"
 import {
+  connectPersonalIntegration,
+  deletePersonalIntegration,
   createWorkspaceTelegramPairingCode,
   getWorkspaceDiscordPolicy,
   getWorkspaceSlackPolicy,
@@ -10,11 +12,13 @@ import {
   listWorkspaceIntegrations,
   listWorkspaceTelegramLinkedActors,
   revokeWorkspaceTelegramLinkedActor,
+  updatePersonalIntegration,
   updateWorkspaceDiscordPolicy,
   updateWorkspaceSlackPolicy,
   updateWorkspaceTelegramBot,
   type IntegrationConnection,
   type IntegrationProvider,
+  type PersonalIntegrationProvider,
   type IntegrationScope
 } from "@/services/integrations-control-plane"
 import { IntegrationConnectionDrawer } from "./IntegrationConnectionDrawer"
@@ -37,8 +41,12 @@ const providerLabel: Record<IntegrationProvider, string> = {
 const sortConnections = (connections: IntegrationConnection[]): IntegrationConnection[] =>
   [...connections].sort((left, right) => left.display_name.localeCompare(right.display_name))
 
+const isPersonalProvider = (provider: IntegrationProvider): provider is PersonalIntegrationProvider =>
+  provider === "slack" || provider === "discord"
+
 export const IntegrationManagementPage: React.FC<IntegrationManagementPageProps> = ({ scope }) => {
   const [selectedConnection, setSelectedConnection] = useState<IntegrationConnection | null>(null)
+  const [activePersonalActionKey, setActivePersonalActionKey] = useState<string | null>(null)
 
   const overviewQuery = useQuery({
     queryKey: ["integrations", scope, "overview"],
@@ -93,6 +101,43 @@ export const IntegrationManagementPage: React.FC<IntegrationManagementPageProps>
   }
 
   const isWorkspace = scope === "workspace"
+
+  const handlePersonalAction = async (connection: IntegrationConnection, action: string) => {
+    if (scope !== "personal" || !isPersonalProvider(connection.provider)) {
+      return
+    }
+
+    const actionKey = `${connection.id}:${action}`
+    setActivePersonalActionKey(actionKey)
+
+    try {
+      if (action === "connect" || action === "reconnect") {
+        const response = await connectPersonalIntegration(connection.provider)
+        if (typeof window !== "undefined") {
+          window.open(response.auth_url, "_blank", "noopener,noreferrer")
+        }
+        message.success(`${providerLabel[connection.provider]} authorization opened`)
+      } else if (action === "enable" || action === "disable") {
+        const updated = await updatePersonalIntegration(connection.provider, connection.id, {
+          enabled: action === "enable"
+        })
+        setSelectedConnection(updated)
+        message.success(`${providerLabel[connection.provider]} ${action}d`)
+      } else if (action === "remove") {
+        await deletePersonalIntegration(connection.provider, connection.id)
+        setSelectedConnection(null)
+        message.success(`${providerLabel[connection.provider]} removed`)
+      } else {
+        return
+      }
+
+      await overviewQuery.refetch()
+    } catch (error: any) {
+      message.error(error?.message || `Unable to ${action} ${providerLabel[connection.provider]}`)
+    } finally {
+      setActivePersonalActionKey(null)
+    }
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-6">
@@ -193,7 +238,9 @@ export const IntegrationManagementPage: React.FC<IntegrationManagementPageProps>
       <IntegrationConnectionDrawer
         open={selectedConnection !== null}
         connection={selectedConnection}
+        activeActionKey={activePersonalActionKey}
         onClose={() => setSelectedConnection(null)}
+        onRunAction={scope === "personal" ? handlePersonalAction : undefined}
       />
     </div>
   )

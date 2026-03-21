@@ -1,11 +1,13 @@
 import React from "react"
-import { Drawer, Descriptions, Space, Tag, Typography } from "antd"
+import { Button, Descriptions, Drawer, Space, Tag, Typography } from "antd"
 import type { IntegrationConnection } from "@/services/integrations-control-plane"
 
 type IntegrationConnectionDrawerProps = {
   open: boolean
   connection: IntegrationConnection | null
+  activeActionKey?: string | null
   onClose: () => void
+  onRunAction?: (connection: IntegrationConnection, action: string) => Promise<void> | void
 }
 
 const formatJson = (value: Record<string, unknown>): string => {
@@ -19,8 +21,18 @@ const formatJson = (value: Record<string, unknown>): string => {
 export const IntegrationConnectionDrawer: React.FC<IntegrationConnectionDrawerProps> = ({
   open,
   connection,
-  onClose
+  activeActionKey,
+  onClose,
+  onRunAction
 }) => {
+  const actionableLabels: Record<string, string> = {
+    connect: "Connect",
+    reconnect: "Reconnect",
+    enable: "Enable",
+    disable: "Disable",
+    remove: "Remove"
+  }
+
   return (
     <Drawer
       title={connection?.display_name ?? "Connection details"}
@@ -52,13 +64,33 @@ export const IntegrationConnectionDrawer: React.FC<IntegrationConnectionDrawerPr
 
           <div>
             <Typography.Title level={5}>Actions</Typography.Title>
-            <Space wrap>
-              {connection.actions.length > 0 ? (
-                connection.actions.map((action) => <Tag key={action}>{action}</Tag>)
-              ) : (
-                <Typography.Text type="secondary">No actions available.</Typography.Text>
-              )}
-            </Space>
+            {connection.actions.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {onRunAction ? (
+                  <Space wrap>
+                    {connection.actions.map((action) => {
+                      const actionKey = `${connection.id}:${action}`
+                      return (
+                        <Button
+                          key={action}
+                          type={action === "remove" ? "default" : "primary"}
+                          danger={action === "remove"}
+                          loading={activeActionKey === actionKey}
+                          onClick={() => void onRunAction(connection, action)}
+                        >
+                          {actionableLabels[action] ?? action}
+                        </Button>
+                      )
+                    })}
+                  </Space>
+                ) : null}
+                <Space wrap>
+                  {connection.actions.map((action) => <Tag key={action}>{action}</Tag>)}
+                </Space>
+              </div>
+            ) : (
+              <Typography.Text type="secondary">No actions available.</Typography.Text>
+            )}
           </div>
 
           <div>
