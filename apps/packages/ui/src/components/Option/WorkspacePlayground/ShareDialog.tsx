@@ -52,7 +52,7 @@ export const ShareDialog: React.FC<ShareDialogProps> = ({
       onCancel={onClose}
       footer={null}
       width={640}
-      destroyOnClose
+      destroyOnHidden
     >
       <Tabs
         activeKey={activeTab}

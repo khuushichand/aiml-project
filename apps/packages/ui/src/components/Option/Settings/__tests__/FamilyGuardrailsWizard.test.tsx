@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { FamilyGuardrailsWizard } from "../FamilyGuardrailsWizard"
 
 const {
+  useCanonicalConnectionConfigMock,
   createHouseholdDraftMock,
   updateHouseholdDraftMock,
   addHouseholdMemberDraftMock,
@@ -20,6 +21,7 @@ const {
   clipboardWriteTextMock,
   resendPendingInvitesMock
 } = vi.hoisted(() => ({
+  useCanonicalConnectionConfigMock: vi.fn(),
   createHouseholdDraftMock: vi.fn(),
   updateHouseholdDraftMock: vi.fn(),
   addHouseholdMemberDraftMock: vi.fn(),
@@ -49,6 +51,14 @@ vi.mock("@/services/family-wizard", () => ({
   reissueHouseholdMemberInvite: reissueHouseholdMemberInviteMock,
   resendPendingInvites: resendPendingInvitesMock
 }))
+
+vi.mock("@/hooks/useCanonicalConnectionConfig", () => ({
+  useCanonicalConnectionConfig: (...args: unknown[]) =>
+    useCanonicalConnectionConfigMock(...args)
+}))
+
+const fetchMock = vi.fn()
+vi.stubGlobal("fetch", fetchMock)
 
 const startNewHousehold = async () => {
   await waitFor(() => {
@@ -116,6 +126,8 @@ describe("FamilyGuardrailsWizard", () => {
   })
 
   beforeEach(() => {
+    fetchMock.mockReset()
+    useCanonicalConnectionConfigMock.mockReset()
     createHouseholdDraftMock.mockReset()
     updateHouseholdDraftMock.mockReset()
     addHouseholdMemberDraftMock.mockReset()
@@ -129,6 +141,22 @@ describe("FamilyGuardrailsWizard", () => {
     reissueHouseholdMemberInviteMock.mockReset()
     resendPendingInvitesMock.mockReset()
     clipboardWriteTextMock.mockReset()
+    useCanonicalConnectionConfigMock.mockReturnValue({
+      config: {
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user",
+        apiKey: "test-key"
+      },
+      loading: false
+    })
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        paths: {
+          "/api/v1/guardian/wizard/drafts": {}
+        }
+      })
+    })
     listHouseholdDraftsMock.mockResolvedValue([])
     clipboardWriteTextMock.mockResolvedValue(undefined)
     resendPendingInvitesMock.mockResolvedValue({
@@ -202,6 +230,22 @@ describe("FamilyGuardrailsWizard", () => {
     expect(screen.getByRole("button", { name: "Resume latest draft" })).toBeEnabled()
     expect(screen.getByRole("button", { name: "Edit household" })).toBeInTheDocument()
     expect(screen.getByText("Saved Home")).toBeInTheDocument()
+  })
+
+  it("skips saved draft loading when the server does not expose wizard draft endpoints", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        paths: {}
+      })
+    })
+
+    render(<FamilyGuardrailsWizard />)
+
+    expect(
+      await screen.findByText("Saved household drafts unavailable")
+    ).toBeInTheDocument()
+    expect(listHouseholdDraftsMock).not.toHaveBeenCalled()
   })
 
   it("renders compact step labels with current and next step context", async () => {

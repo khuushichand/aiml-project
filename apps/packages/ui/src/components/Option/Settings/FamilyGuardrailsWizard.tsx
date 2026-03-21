@@ -18,6 +18,7 @@ import {
 } from "antd"
 import type { InputRef } from "antd"
 import { DeleteOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 
 import {
   addHouseholdMemberDraft,
@@ -208,6 +209,24 @@ const MIN_DEPENDENTS = 1
 const MAX_DEPENDENTS = 12
 const LARGE_HOUSEHOLD_TABLE_THRESHOLD = 4
 const BULK_ENTRY_PLACEHOLDER = "One per line: Display Name | user_id | email(optional)"
+const FAMILY_WIZARD_DRAFTS_PATH = "/api/v1/guardian/wizard/drafts"
+const UNSUPPORTED_FAMILY_WIZARD_STATUS_CODES = new Set([404, 405, 410, 501])
+
+const getFamilyWizardErrorStatus = (error: unknown): number | null => {
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status === "number" && Number.isFinite(status)) return status
+  const message = error instanceof Error ? error.message : String(error || "")
+  const matched = message.match(/\b([45]\d{2})\b/)
+  if (!matched) return null
+  const parsed = Number.parseInt(matched[1], 10)
+  return Number.isNaN(parsed) ? null : parsed
+}
+
+const isFamilyWizardDraftsUnsupported = (error: unknown): boolean => {
+  const status = getFamilyWizardErrorStatus(error)
+  if (status == null) return false
+  return UNSUPPORTED_FAMILY_WIZARD_STATUS_CODES.has(status)
+}
 
 const isEditableTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false
@@ -468,10 +487,15 @@ export function FamilyGuardrailsWizard({
   initialStep = 0,
   initialDraft = null
 }: FamilyGuardrailsWizardProps = {}) {
+  const { config: connectionConfig, loading: connectionConfigLoading } =
+    useCanonicalConnectionConfig()
   const [currentStep, setCurrentStep] = useState(initialStep)
   const [submitting, setSubmitting] = useState(false)
   const [resendingInvites, setResendingInvites] = useState(false)
   const [loadingDraftList, setLoadingDraftList] = useState(!initialDraft)
+  const [savedDraftsSupported, setSavedDraftsSupported] = useState<boolean | null>(
+    initialDraft ? true : null
+  )
   const [loadingSavedDraft, setLoadingSavedDraft] = useState(false)
   const [draft, setDraft] = useState<HouseholdDraft | null>(initialDraft)
   const [telemetryCohort, setTelemetryCohort] = useState<FamilyGuardrailsWizardTelemetryCohort>(
@@ -513,6 +537,7 @@ export function FamilyGuardrailsWizard({
   const [templateReviewTargetLabel, setTemplateReviewTargetLabel] = useState<string | null>(null)
   const [mappingFixTargetLabel, setMappingFixTargetLabel] = useState<string | null>(null)
   const memberFieldInputRefs = React.useRef<Record<string, HTMLInputElement | null>>({})
+  const initialDraftListLoadRef = React.useRef(false)
   const telemetryStartedRef = React.useRef(false)
   const telemetryCompletedRef = React.useRef(false)
   const lastViewedStepRef = React.useRef<FamilyGuardrailsWizardTelemetryStep | null>(null)
@@ -954,7 +979,63 @@ export function FamilyGuardrailsWizard({
   }, [])
 
   React.useEffect(() => {
+    if (initialDraft) {
+      setSavedDraftsSupported(true)
+      setLoadingDraftList(false)
+      return
+    }
+    if (connectionConfigLoading) return
+
+    const serverUrl = connectionConfig?.serverUrl?.trim()
+    if (!serverUrl) {
+      setSavedDraftsSupported(true)
+      return
+    }
+
+    let cancelled = false
+
+    const probeDraftEndpointSupport = async () => {
+      try {
+        const response = await fetch(`${serverUrl}/openapi.json`)
+        if (!response.ok) {
+          if (!cancelled) {
+            setSavedDraftsSupported(true)
+          }
+          return
+        }
+        const spec = await response.json()
+        const paths =
+          spec && typeof spec === "object" && spec.paths && typeof spec.paths === "object"
+            ? (spec.paths as Record<string, unknown>)
+            : null
+        if (!cancelled) {
+          setSavedDraftsSupported(Boolean(paths && FAMILY_WIZARD_DRAFTS_PATH in paths))
+        }
+      } catch {
+        if (!cancelled) {
+          setSavedDraftsSupported(true)
+        }
+      }
+    }
+
+    void probeDraftEndpointSupport()
+
+    return () => {
+      cancelled = true
+    }
+  }, [connectionConfig?.serverUrl, connectionConfigLoading, initialDraft])
+
+  React.useEffect(() => {
     if (initialDraft) return
+    if (connectionConfigLoading) return
+    if (savedDraftsSupported === null) return
+    if (savedDraftsSupported === false) {
+      setLoadingDraftList(false)
+      return
+    }
+    if (initialDraftListLoadRef.current) return
+    initialDraftListLoadRef.current = true
+
     let cancelled = false
 
     const loadDraftEntries = async () => {
@@ -964,6 +1045,12 @@ export function FamilyGuardrailsWizard({
         if (cancelled) return
         setSavedDrafts(drafts)
       } catch (error) {
+        if (cancelled) return
+        if (isFamilyWizardDraftsUnsupported(error)) {
+          setSavedDraftsSupported(false)
+          setSavedDrafts([])
+          return
+        }
         console.error("Failed to load family wizard drafts:", error)
       } finally {
         if (!cancelled) {
@@ -976,7 +1063,7 @@ export function FamilyGuardrailsWizard({
     return () => {
       cancelled = true
     }
-  }, [applySnapshot, initialDraft])
+  }, [connectionConfigLoading, initialDraft, savedDraftsSupported])
 
   React.useEffect(() => {
     if (telemetryStartedRef.current) return
@@ -1615,7 +1702,14 @@ export function FamilyGuardrailsWizard({
         const latestSavedDraft = savedDrafts[0] ?? null
         return (
           <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-            {loadingDraftList ? (
+            {savedDraftsSupported === false ? (
+              <Alert
+                showIcon
+                type="info"
+                title="Saved household drafts unavailable"
+                description="This server does not expose family wizard draft endpoints yet. Start a new household to continue."
+              />
+            ) : loadingDraftList ? (
               <Alert
                 showIcon
                 type="info"

@@ -7,10 +7,16 @@ import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
+  useCanonicalConnectionConfig: vi.fn(),
   listScheduledTasks: vi.fn(),
   createScheduledTaskReminder: vi.fn(),
   updateScheduledTaskReminder: vi.fn(),
   deleteScheduledTaskReminder: vi.fn()
+}))
+
+vi.mock("@/hooks/useCanonicalConnectionConfig", () => ({
+  useCanonicalConnectionConfig: (...args: unknown[]) =>
+    mocks.useCanonicalConnectionConfig(...args)
 }))
 
 vi.mock("@/services/scheduled-tasks-control-plane", () => ({
@@ -21,6 +27,9 @@ vi.mock("@/services/scheduled-tasks-control-plane", () => ({
 }))
 
 import { ScheduledTasksPage } from "../ScheduledTasksPage"
+
+const fetchMock = vi.fn()
+vi.stubGlobal("fetch", fetchMock)
 
 const renderWithQueryClient = (ui: React.ReactElement) => {
   const queryClient = new QueryClient({
@@ -37,6 +46,39 @@ describe("ScheduledTasksPage", () => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset()
     }
+    mocks.useCanonicalConnectionConfig.mockReturnValue({
+      config: {
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user",
+        apiKey: "test-key"
+      },
+      loading: false
+    })
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        paths: {
+          "/api/v1/scheduled-tasks": {}
+        }
+      })
+    })
+  })
+
+  it("shows an unsupported-state message without calling the list endpoint when scheduled tasks are unavailable", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        paths: {}
+      })
+    })
+
+    renderWithQueryClient(<ScheduledTasksPage />)
+
+    expect(
+      await screen.findByText("Scheduled tasks endpoints are not available on this server.")
+    ).toBeInTheDocument()
+    expect(mocks.listScheduledTasks).not.toHaveBeenCalled()
   })
 
   it("renders reminder rows as native CRUD and watchlist rows as external-managed", async () => {

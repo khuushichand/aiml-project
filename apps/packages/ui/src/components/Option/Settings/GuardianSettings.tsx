@@ -42,6 +42,7 @@ import { useNavigate } from "react-router-dom"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import {
   listRules,
   createRule,
@@ -114,6 +115,12 @@ const normalizeRelationshipStatus = (status: string): string => {
 }
 
 const UNSUPPORTED_GUARDIAN_STATUS_CODES = new Set([404, 405, 410, 501])
+const SELF_MONITORING_REQUIRED_PATHS = [
+  "/api/v1/self-monitoring/rules",
+  "/api/v1/self-monitoring/alerts",
+  "/api/v1/self-monitoring/alerts/unread-count",
+  "/api/v1/self-monitoring/governance-policies"
+] as const
 
 const getGuardianErrorStatus = (error: unknown): number | null => {
   const status = (error as { status?: unknown } | null)?.status
@@ -139,25 +146,85 @@ const isGuardianEndpointUnsupported = (error: unknown): boolean => {
 function SelfMonitoringTab({ online }: { online: boolean }) {
   const { t } = useTranslation("settings")
   const qc = useQueryClient()
+  const { config: connectionConfig, loading: connectionConfigLoading } =
+    useCanonicalConnectionConfig()
   const [ruleDrawerOpen, setRuleDrawerOpen] = useState(false)
   const [governanceModalOpen, setGovernanceModalOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<SelfMonitoringRule | null>(null)
   const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([])
   const [apiUnavailable, setApiUnavailable] = useState(false)
+  const [selfMonitoringSupported, setSelfMonitoringSupported] = useState<
+    boolean | null
+  >(online ? null : true)
   const [form] = Form.useForm()
   const [governanceForm] = Form.useForm()
+  const selfMonitoringQueriesEnabled =
+    online && selfMonitoringSupported === true && !apiUnavailable
+
+  React.useEffect(() => {
+    if (!online) {
+      setSelfMonitoringSupported(true)
+      return
+    }
+    if (connectionConfigLoading) return
+
+    const serverUrl = connectionConfig?.serverUrl?.trim()
+    if (!serverUrl) {
+      setSelfMonitoringSupported(true)
+      return
+    }
+
+    let cancelled = false
+
+    const probeSelfMonitoringSupport = async () => {
+      try {
+        const response = await fetch(`${serverUrl}/openapi.json`)
+        if (!response.ok) {
+          if (!cancelled) {
+            setSelfMonitoringSupported(true)
+          }
+          return
+        }
+        const spec = await response.json()
+        const paths =
+          spec && typeof spec === "object" && spec.paths && typeof spec.paths === "object"
+            ? (spec.paths as Record<string, unknown>)
+            : null
+        const supported = SELF_MONITORING_REQUIRED_PATHS.every(
+          (path) => Boolean(paths && path in paths)
+        )
+        if (!cancelled) {
+          setSelfMonitoringSupported(supported)
+        }
+      } catch {
+        if (!cancelled) {
+          setSelfMonitoringSupported(true)
+        }
+      }
+    }
+
+    void probeSelfMonitoringSupport()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connectionConfig?.serverUrl,
+    connectionConfigLoading,
+    online
+  ])
 
   const rulesQuery = useQuery({
     queryKey: ["guardian", "rules"],
     queryFn: () => listRules(),
-    enabled: online && !apiUnavailable,
+    enabled: selfMonitoringQueriesEnabled,
     retry: false
   })
 
   const alertsQuery = useQuery({
     queryKey: ["guardian", "alerts"],
     queryFn: () => listAlerts({ limit: 50 }),
-    enabled: online && !apiUnavailable,
+    enabled: selfMonitoringQueriesEnabled,
     retry: false
   })
 
@@ -165,14 +232,14 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
     queryKey: ["guardian", "unread"],
     queryFn: getUnreadCount,
     refetchInterval: 30_000,
-    enabled: online && !apiUnavailable,
+    enabled: selfMonitoringQueriesEnabled,
     retry: false
   })
 
   const governanceQuery = useQuery({
     queryKey: ["guardian", "governance"],
     queryFn: () => listGovernancePolicies(),
-    enabled: online && !apiUnavailable,
+    enabled: selfMonitoringQueriesEnabled,
     retry: false
   })
 
@@ -569,7 +636,11 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
     }
   ]
 
-  if (apiUnavailable) {
+  if (online && (connectionConfigLoading || selfMonitoringSupported === null)) {
+    return <Card loading size="small" />
+  }
+
+  if (selfMonitoringSupported === false || apiUnavailable) {
     return (
       <Alert
         type="info"
