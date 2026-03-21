@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-pytest_plugins = ("tldw_Server_API.tests.AuthNZ.conftest",)
-
 
 async def _make_workspace_provider_installations_repo(tmp_path, monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
