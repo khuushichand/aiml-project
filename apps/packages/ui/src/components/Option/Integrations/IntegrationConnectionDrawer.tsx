@@ -38,7 +38,7 @@ export const IntegrationConnectionDrawer: React.FC<IntegrationConnectionDrawerPr
       title={connection?.display_name ?? "Connection details"}
       open={open}
       onClose={onClose}
-      width={520}
+      size="large"
       destroyOnClose
     >
       {connection ? (

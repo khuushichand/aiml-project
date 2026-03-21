@@ -2,7 +2,7 @@
 
 import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -50,6 +50,114 @@ const renderWithQueryClient = (ui: React.ReactElement) => {
   return render(
     <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
   )
+}
+
+const mockWorkspaceQueries = (overrides?: {
+  overviewItems?: Array<Record<string, unknown>>
+  slackPolicy?: Record<string, unknown>
+  discordPolicy?: Record<string, unknown>
+}) => {
+  mocks.listWorkspaceIntegrations.mockResolvedValue({
+    scope: "workspace",
+    items: overrides?.overviewItems ?? [
+      {
+        id: "workspace:slack",
+        provider: "slack",
+        scope: "workspace",
+        display_name: "Slack workspace",
+        status: "connected",
+        enabled: true,
+        metadata: {},
+        actions: ["refresh"]
+      },
+      {
+        id: "workspace:discord",
+        provider: "discord",
+        scope: "workspace",
+        display_name: "Discord workspace",
+        status: "connected",
+        enabled: true,
+        metadata: {},
+        actions: ["refresh"]
+      },
+      {
+        id: "workspace:telegram",
+        provider: "telegram",
+        scope: "workspace",
+        display_name: "Telegram bot",
+        status: "needs_config",
+        enabled: false,
+        metadata: {},
+        actions: ["configure"]
+      }
+    ]
+  })
+  mocks.getWorkspaceSlackPolicy.mockResolvedValue({
+    provider: "slack",
+    scope: "workspace",
+    installation_ids: ["T-1"],
+    uniform: true,
+    policy: {
+      allowed_commands: ["help"],
+      channel_allowlist: [],
+      channel_denylist: [],
+      default_response_mode: "thread",
+      strict_user_mapping: false,
+      service_user_id: null,
+      user_mappings: {},
+      workspace_quota_per_minute: 10,
+      user_quota_per_minute: 5,
+      status_scope: "workspace",
+      ...overrides?.slackPolicy
+    }
+  })
+  mocks.getWorkspaceDiscordPolicy.mockResolvedValue({
+    provider: "discord",
+    scope: "workspace",
+    installation_ids: ["G-1"],
+    uniform: true,
+    policy: {
+      allowed_commands: ["help"],
+      channel_allowlist: [],
+      channel_denylist: [],
+      default_response_mode: "channel",
+      strict_user_mapping: false,
+      service_user_id: null,
+      user_mappings: {},
+      guild_quota_per_minute: 10,
+      user_quota_per_minute: 5,
+      status_scope: "guild",
+      ...overrides?.discordPolicy
+    }
+  })
+  mocks.getWorkspaceTelegramBot.mockResolvedValue({
+    ok: true,
+    provider: "telegram",
+    scope_type: "org",
+    scope_id: 1,
+    bot_username: "examplebot",
+    enabled: true
+  })
+  mocks.listWorkspaceTelegramLinkedActors.mockResolvedValue({
+    ok: true,
+    scope_type: "org",
+    scope_id: 1,
+    items: []
+  })
+  mocks.updateWorkspaceSlackPolicy.mockResolvedValue({
+    provider: "slack",
+    scope: "workspace",
+    installation_ids: ["T-1"],
+    uniform: true,
+    policy: {}
+  })
+  mocks.updateWorkspaceDiscordPolicy.mockResolvedValue({
+    provider: "discord",
+    scope: "workspace",
+    installation_ids: ["G-1"],
+    uniform: true,
+    policy: {}
+  })
 }
 
 describe("IntegrationManagementPage", () => {
@@ -194,92 +302,23 @@ describe("IntegrationManagementPage", () => {
     })
   })
 
+  it("shows an unsupported-state message when personal integrations are unavailable on the server", async () => {
+    mocks.listPersonalIntegrations.mockRejectedValue(
+      Object.assign(new Error("Not Found (GET /api/v1/integrations/personal)"), {
+        status: 404
+      })
+    )
+
+    renderWithQueryClient(<IntegrationManagementPage scope="personal" />)
+
+    expect(await screen.findByText("Personal integrations unavailable")).toBeInTheDocument()
+    expect(
+      screen.getByText("This server does not expose the personal integrations control-plane yet.")
+    ).toBeInTheDocument()
+  })
+
   it("renders workspace slack, discord, and telegram controls", async () => {
-    mocks.listWorkspaceIntegrations.mockResolvedValue({
-      scope: "workspace",
-      items: [
-        {
-          id: "workspace:slack",
-          provider: "slack",
-          scope: "workspace",
-          display_name: "Slack workspace",
-          status: "connected",
-          enabled: true,
-          metadata: {},
-          actions: ["refresh"]
-        },
-        {
-          id: "workspace:discord",
-          provider: "discord",
-          scope: "workspace",
-          display_name: "Discord workspace",
-          status: "connected",
-          enabled: true,
-          metadata: {},
-          actions: ["refresh"]
-        },
-        {
-          id: "workspace:telegram",
-          provider: "telegram",
-          scope: "workspace",
-          display_name: "Telegram bot",
-          status: "needs_config",
-          enabled: false,
-          metadata: {},
-          actions: ["configure"]
-        }
-      ]
-    })
-    mocks.getWorkspaceSlackPolicy.mockResolvedValue({
-      provider: "slack",
-      scope: "workspace",
-      installation_ids: ["T-1"],
-      uniform: true,
-      policy: {
-        allowed_commands: ["help"],
-        channel_allowlist: [],
-        channel_denylist: [],
-        default_response_mode: "thread",
-        strict_user_mapping: false,
-        service_user_id: null,
-        user_mappings: {},
-        workspace_quota_per_minute: 10,
-        user_quota_per_minute: 5,
-        status_scope: "workspace"
-      }
-    })
-    mocks.getWorkspaceDiscordPolicy.mockResolvedValue({
-      provider: "discord",
-      scope: "workspace",
-      installation_ids: ["G-1"],
-      uniform: true,
-      policy: {
-        allowed_commands: ["help"],
-        channel_allowlist: [],
-        channel_denylist: [],
-        default_response_mode: "channel",
-        strict_user_mapping: false,
-        service_user_id: null,
-        user_mappings: {},
-        guild_quota_per_minute: 10,
-        user_quota_per_minute: 5,
-        status_scope: "guild"
-      }
-    })
-    mocks.getWorkspaceTelegramBot.mockResolvedValue({
-      ok: true,
-      provider: "telegram",
-      scope_type: "org",
-      scope_id: 1,
-      bot_username: "examplebot",
-      enabled: true
-    })
-    mocks.listWorkspaceTelegramLinkedActors.mockResolvedValue({
-      ok: true,
-      scope_type: "org",
-      scope_id: 1,
-      items: []
-    })
+    mockWorkspaceQueries()
 
     renderWithQueryClient(<IntegrationManagementPage scope="workspace" />)
 
@@ -288,5 +327,67 @@ describe("IntegrationManagementPage", () => {
     expect(screen.getByText("Telegram")).toBeInTheDocument()
     expect(screen.getByText("Slack policy")).toBeInTheDocument()
     expect(screen.getByText("Telegram bot")).toBeInTheDocument()
+  })
+
+  it("preserves hidden Slack policy fields when saving visible settings", async () => {
+    const user = userEvent.setup()
+
+    mockWorkspaceQueries({
+      slackPolicy: {
+        allowed_commands: ["help", "status"],
+        channel_allowlist: ["C-1"],
+        channel_denylist: ["C-2"],
+        strict_user_mapping: true,
+        service_user_id: "U-service",
+        user_mappings: { U123: "alice" },
+        workspace_quota_per_minute: 12,
+        user_quota_per_minute: 6,
+        status_scope: "workspace_and_user"
+      }
+    })
+
+    renderWithQueryClient(<IntegrationManagementPage scope="workspace" />)
+
+    await user.click(await screen.findByRole("button", { name: "Save Slack policy" }))
+
+    await waitFor(() => {
+      expect(mocks.updateWorkspaceSlackPolicy).toHaveBeenCalledWith({
+        allowed_commands: ["help", "status"],
+        channel_allowlist: ["C-1"],
+        channel_denylist: ["C-2"],
+        default_response_mode: "thread",
+        strict_user_mapping: true,
+        service_user_id: "U-service",
+        user_mappings: { U123: "alice" },
+        workspace_quota_per_minute: 12,
+        user_quota_per_minute: 6,
+        status_scope: "workspace_and_user"
+      })
+    })
+  })
+
+  it("surfaces Slack policy load failures and blocks saving defaults", async () => {
+    mockWorkspaceQueries()
+    mocks.getWorkspaceSlackPolicy.mockRejectedValue(new Error("Slack policy unavailable"))
+
+    renderWithQueryClient(<IntegrationManagementPage scope="workspace" />)
+
+    expect(await screen.findByText("Unable to load Slack policy")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Save Slack policy" })).toBeDisabled()
+  })
+
+  it("rejects zero-value Slack quotas instead of sending a no-op payload", async () => {
+    mockWorkspaceQueries()
+
+    renderWithQueryClient(<IntegrationManagementPage scope="workspace" />)
+
+    const quotaInput = await screen.findByRole("spinbutton", { name: "Workspace quota / min" })
+    fireEvent.change(quotaInput, { target: { value: "0" } })
+    fireEvent.blur(quotaInput)
+    await userEvent.setup().click(screen.getByRole("button", { name: "Save Slack policy" }))
+
+    await waitFor(() => {
+      expect(mocks.updateWorkspaceSlackPolicy).not.toHaveBeenCalled()
+    })
   })
 })

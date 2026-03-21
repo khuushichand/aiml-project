@@ -27,6 +27,7 @@ import type {
 } from "@/services/integrations-control-plane"
 
 type SharedPolicyPanelProps = {
+  errorMessage?: string
   loading?: boolean
   onRefresh?: () => void
 }
@@ -83,13 +84,15 @@ const WorkspacePolicyEditor: React.FC<
     summary?: string
     installationIds?: string[]
     policy?: SlackWorkspacePolicyResponse["policy"] | DiscordWorkspacePolicyResponse["policy"]
+    errorMessage?: string
     loading?: boolean
     onSave: (payload: SlackWorkspacePolicyUpdate | DiscordWorkspacePolicyUpdate) => Promise<unknown>
     onRefresh?: () => void
   }
-> = ({ title, panelKind, summary, installationIds = [], policy, loading, onSave, onRefresh }) => {
+> = ({ title, panelKind, summary, installationIds = [], policy, errorMessage, loading, onSave, onRefresh }) => {
   const [form] = Form.useForm<WorkspacePolicyFormValues>()
   const [saving, setSaving] = useState(false)
+  const isUnavailable = Boolean(errorMessage) || (!loading && !policy)
 
   useEffect(() => {
     const quotaPerMinute =
@@ -108,23 +111,42 @@ const WorkspacePolicyEditor: React.FC<
   }, [form, policy])
 
   const handleSave = async () => {
+    if (isUnavailable || !policy) {
+      return
+    }
+
     const values = await form.validateFields()
     setSaving(true)
     try {
+      if (values.quota_per_minute != null && values.quota_per_minute <= 0) {
+        throw new Error(`${panelKind === "slack" ? "Workspace" : "Guild"} quota must be greater than 0`)
+      }
+      if (values.user_quota_per_minute != null && values.user_quota_per_minute <= 0) {
+        throw new Error("User quota must be greater than 0")
+      }
+
       const payload =
         panelKind === "slack"
           ? {
+              allowed_commands: policy.allowed_commands,
+              channel_allowlist: policy.channel_allowlist,
+              channel_denylist: policy.channel_denylist,
               default_response_mode: values.default_response_mode as "ephemeral" | "thread" | "channel" | undefined,
               service_user_id: values.service_user_id?.trim() || undefined,
               strict_user_mapping: values.strict_user_mapping,
+              user_mappings: policy.user_mappings,
               workspace_quota_per_minute: values.quota_per_minute,
               user_quota_per_minute: values.user_quota_per_minute,
               status_scope: values.status_scope as "workspace" | "workspace_and_user" | undefined
             }
           : {
+              allowed_commands: policy.allowed_commands,
+              channel_allowlist: policy.channel_allowlist,
+              channel_denylist: policy.channel_denylist,
               default_response_mode: values.default_response_mode as "ephemeral" | "channel" | undefined,
               service_user_id: values.service_user_id?.trim() || undefined,
               strict_user_mapping: values.strict_user_mapping,
+              user_mappings: policy.user_mappings,
               guild_quota_per_minute: values.quota_per_minute,
               user_quota_per_minute: values.user_quota_per_minute,
               status_scope: values.status_scope as "guild" | "guild_and_user" | undefined
@@ -152,6 +174,12 @@ const WorkspacePolicyEditor: React.FC<
   return (
     <Card title={title} loading={loading}>
       {summary ? <Typography.Paragraph type="secondary">{summary}</Typography.Paragraph> : null}
+      {errorMessage ? (
+        <Alert type="error" showIcon style={{ marginBottom: 16 }} title={errorMessage} />
+      ) : null}
+      {!errorMessage && isUnavailable ? (
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }} title={`${title} is unavailable`} />
+      ) : null}
       <Descriptions size="small" bordered column={1} style={{ marginBottom: 16 }}>
         {policyDescription.map((item) => (
           <Descriptions.Item key={item.label} label={item.label}>
@@ -162,6 +190,7 @@ const WorkspacePolicyEditor: React.FC<
       <Form form={form} layout="vertical">
         <Form.Item label="Default response mode" name="default_response_mode">
           <Select
+            disabled={isUnavailable}
             options={[
               { value: "ephemeral", label: "Ephemeral" },
               ...(panelKind === "slack"
@@ -174,24 +203,30 @@ const WorkspacePolicyEditor: React.FC<
           />
         </Form.Item>
         <Form.Item label="Service user ID" name="service_user_id">
-          <Input placeholder="Optional service user ID" />
+          <Input placeholder="Optional service user ID" disabled={isUnavailable} />
         </Form.Item>
         <Form.Item label="Strict user mapping" name="strict_user_mapping" valuePropName="checked">
-          <Switch />
+          <Switch disabled={isUnavailable} />
         </Form.Item>
         <Space wrap style={{ width: "100%" }} align="start">
           <Form.Item
             label={panelKind === "slack" ? "Workspace quota / min" : "Guild quota / min"}
             name="quota_per_minute"
           >
-            <InputNumber min={0} style={{ width: 180 }} />
+          <InputNumber
+              aria-label={panelKind === "slack" ? "Workspace quota / min" : "Guild quota / min"}
+              min={0}
+              style={{ width: 180 }}
+              disabled={isUnavailable}
+            />
           </Form.Item>
           <Form.Item label="User quota / min" name="user_quota_per_minute">
-            <InputNumber min={0} style={{ width: 180 }} />
+            <InputNumber aria-label="User quota / min" min={0} style={{ width: 180 }} disabled={isUnavailable} />
           </Form.Item>
           <Form.Item label="Status scope" name="status_scope">
             <Select
               style={{ width: 220 }}
+              disabled={isUnavailable}
               options={
                 panelKind === "slack"
                   ? [
@@ -206,8 +241,8 @@ const WorkspacePolicyEditor: React.FC<
             />
           </Form.Item>
         </Space>
-        <Button type="primary" onClick={() => void handleSave()} loading={saving}>
-          Save policy
+        <Button type="primary" onClick={() => void handleSave()} loading={saving} disabled={isUnavailable}>
+          {`Save ${title}`}
         </Button>
       </Form>
     </Card>
@@ -219,17 +254,19 @@ const TelegramPolicyEditor: React.FC<
     bot?: TelegramBotConfigResponse
     linkedActors?: TelegramLinkedActorItem[]
     pairingCode?: TelegramPairingCodeResponse | null
+    errorMessage?: string
     loading?: boolean
     onSave: (payload: TelegramBotConfigUpdate) => Promise<unknown>
     onGeneratePairingCode: () => Promise<TelegramPairingCodeResponse>
     onRevokeActor: (actorId: number) => Promise<unknown>
     onRefresh?: () => void
   }
-> = ({ bot, linkedActors = [], pairingCode, loading, onSave, onGeneratePairingCode, onRevokeActor, onRefresh }) => {
+> = ({ bot, linkedActors = [], pairingCode, errorMessage, loading, onSave, onGeneratePairingCode, onRevokeActor, onRefresh }) => {
   const [form] = Form.useForm<TelegramBotConfigUpdate>()
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [localPairingCode, setLocalPairingCode] = useState<TelegramPairingCodeResponse | null>(pairingCode ?? null)
+  const isUnavailable = Boolean(errorMessage) || (!loading && !bot)
 
   useEffect(() => {
     setLocalPairingCode(pairingCode ?? null)
@@ -245,6 +282,9 @@ const TelegramPolicyEditor: React.FC<
   }, [bot, form])
 
   const handleSave = async () => {
+    if (isUnavailable) {
+      return
+    }
     const values = await form.validateFields()
     setSaving(true)
     try {
@@ -264,6 +304,9 @@ const TelegramPolicyEditor: React.FC<
   }
 
   const handleGeneratePairingCode = async () => {
+    if (isUnavailable) {
+      return
+    }
     setGenerating(true)
     try {
       const result = await onGeneratePairingCode()
@@ -289,6 +332,9 @@ const TelegramPolicyEditor: React.FC<
 
   return (
     <Card title="Telegram bot" loading={loading}>
+      {errorMessage ? (
+        <Alert type="error" showIcon style={{ marginBottom: 16 }} title={errorMessage} />
+      ) : null}
       <Descriptions size="small" bordered column={1} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="Bot username">{bot?.bot_username ?? "—"}</Descriptions.Item>
         <Descriptions.Item label="Enabled">
@@ -299,22 +345,22 @@ const TelegramPolicyEditor: React.FC<
 
       <Form form={form} layout="vertical">
         <Form.Item label="Bot token" name="bot_token" rules={[{ required: true, message: "Bot token is required" }]}>
-          <Input.Password placeholder="Enter bot token" autoComplete="off" />
+          <Input.Password placeholder="Enter bot token" autoComplete="off" disabled={isUnavailable} />
         </Form.Item>
         <Form.Item label="Webhook secret" name="webhook_secret" rules={[{ required: true, message: "Webhook secret is required" }]}>
-          <Input.Password placeholder="Enter webhook secret" autoComplete="off" />
+          <Input.Password placeholder="Enter webhook secret" autoComplete="off" disabled={isUnavailable} />
         </Form.Item>
         <Form.Item label="Bot username" name="bot_username">
-          <Input placeholder="@ExampleBot" />
+          <Input placeholder="@ExampleBot" disabled={isUnavailable} />
         </Form.Item>
         <Form.Item label="Enabled" name="enabled" valuePropName="checked">
-          <Switch />
+          <Switch disabled={isUnavailable} />
         </Form.Item>
         <Space wrap>
-          <Button type="primary" onClick={() => void handleSave()} loading={saving}>
+          <Button type="primary" onClick={() => void handleSave()} loading={saving} disabled={isUnavailable}>
             Save bot config
           </Button>
-          <Button onClick={() => void handleGeneratePairingCode()} loading={generating}>
+          <Button onClick={() => void handleGeneratePairingCode()} loading={generating} disabled={isUnavailable}>
             Generate pairing code
           </Button>
         </Space>
@@ -325,7 +371,7 @@ const TelegramPolicyEditor: React.FC<
           type="success"
           showIcon
           style={{ marginTop: 16 }}
-          message="Pairing code generated"
+          title="Pairing code generated"
           description={
             <div style={{ display: "flex", flexDirection: "column" }}>
               <span>
@@ -376,6 +422,7 @@ export const IntegrationPolicyPanel: React.FC<IntegrationPolicyPanelProps> = (pr
         onSave={props.onSave}
         onGeneratePairingCode={props.onGeneratePairingCode}
         onRevokeActor={props.onRevokeActor}
+        errorMessage={props.errorMessage}
         onRefresh={props.onRefresh}
       />
     )
@@ -395,6 +442,7 @@ export const IntegrationPolicyPanel: React.FC<IntegrationPolicyPanelProps> = (pr
       summary={summary}
       installationIds={policy?.installation_ids}
       policy={policy?.policy}
+      errorMessage={props.errorMessage}
       loading={props.loading}
       onSave={props.onSave}
       onRefresh={props.onRefresh}
