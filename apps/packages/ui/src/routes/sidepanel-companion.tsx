@@ -51,11 +51,15 @@ const SidepanelCompanion = () => {
     }
   }, [])
 
-  React.useEffect(() => {
+  const retryPendingCapture = React.useCallback(() => {
     const pending = readPendingCompanionCapture()
     if (pending) {
       void handleCapture(pending)
     }
+  }, [handleCapture])
+
+  React.useEffect(() => {
+    retryPendingCapture()
 
     const listener = (event: Event) => {
       const capture = (event as CustomEvent<PendingCompanionCapture>).detail
@@ -67,7 +71,7 @@ const SidepanelCompanion = () => {
     return () => {
       window.removeEventListener(COMPANION_PENDING_CAPTURE_EVENT, listener)
     }
-  }, [handleCapture])
+  }, [handleCapture, retryPendingCapture])
 
   return (
     <RouteErrorBoundary routeId="sidepanel-companion" routeLabel="Companion">
@@ -91,7 +95,10 @@ const SidepanelCompanion = () => {
               </div>
             </div>
           ) : null}
-          <CompanionHomeShell surface="sidepanel" />
+          <CompanionHomeShell
+            onPersonalizationEnabled={retryPendingCapture}
+            surface="sidepanel"
+          />
         </div>
       </div>
     </RouteErrorBoundary>

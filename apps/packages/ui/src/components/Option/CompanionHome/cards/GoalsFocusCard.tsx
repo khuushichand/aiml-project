@@ -1,23 +1,9 @@
-import type { CompanionHomeItem } from "@/services/companion-home"
-
 import {
-  CompanionHomeCardShell,
-  type CompanionHomeCardState
-} from "./CardShell"
+  COMPANION_HOME_CARD_CONFIG,
+  createCompanionHomeCard
+} from "./factory"
 
-type GoalsFocusCardProps = {
-  items: CompanionHomeItem[]
-  state?: CompanionHomeCardState
-}
-
-export function GoalsFocusCard({ items, state }: GoalsFocusCardProps) {
-  return (
-    <CompanionHomeCardShell
-      title="Goals / Focus"
-      items={items}
-      state={state}
-      emptyLabel="No active goals are in focus"
-      emptyDescription="Active companion goals and their next progress checkpoints show up here."
-    />
-  )
-}
+export const GoalsFocusCard = createCompanionHomeCard(
+  "GoalsFocusCard",
+  COMPANION_HOME_CARD_CONFIG.goalsFocus
+)

@@ -58,7 +58,7 @@ describe("notifications service", () => {
   it("normalizes notification stream lines through shared helpers", () => {
     expect(
       parseNotificationStreamEvent(
-        'data: {"event_id":12,"kind":"deep_research_completed","title":"Done","message":"Ready"}'
+        '{"event_id":12,"kind":"deep_research_completed","title":"Done","message":"Ready"}'
       )
     ).toEqual({
       event: "notification",
@@ -134,6 +134,35 @@ describe("notifications service", () => {
         expect.objectContaining({ event: "notification", id: 9 })
       )
       expect(onError).toHaveBeenCalledTimes(1)
+
+      unsubscribe()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("throttles reconnects after a graceful stream close", async () => {
+    vi.useFakeTimers()
+    try {
+      const readStream = vi.fn(async (_signal: AbortSignal, cursor: number) => cursor + 1)
+
+      const unsubscribe = createNotificationStreamSubscription({
+        after: 0,
+        reconnectDelayMs: 250,
+        onEvent: vi.fn(),
+        readStream
+      })
+
+      await Promise.resolve()
+      expect(readStream).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(249)
+      await Promise.resolve()
+      expect(readStream).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await Promise.resolve()
+      expect(readStream).toHaveBeenCalledTimes(2)
 
       unsubscribe()
     } finally {

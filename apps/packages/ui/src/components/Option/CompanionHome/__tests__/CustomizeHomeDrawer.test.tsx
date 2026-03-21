@@ -82,4 +82,23 @@ describe("CustomizeHomeDrawer", () => {
       "recent-activity"
     ])
   })
+
+  it("focuses the dialog and closes on Escape", () => {
+    const handleClose = vi.fn()
+
+    render(
+      <CustomizeHomeDrawer
+        open
+        layout={DEFAULT_COMPANION_HOME_LAYOUT}
+        onClose={handleClose}
+        onLayoutChange={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole("dialog")).toHaveFocus()
+
+    fireEvent.keyDown(document, { key: "Escape" })
+
+    expect(handleClose).toHaveBeenCalledTimes(1)
+  })
 })

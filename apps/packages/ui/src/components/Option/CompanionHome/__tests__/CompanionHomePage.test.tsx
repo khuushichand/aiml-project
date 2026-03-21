@@ -193,10 +193,12 @@ const buildSnapshot = (overrides: Record<string, unknown> = {}) => ({
   ...overrides
 })
 
-const renderPage = () =>
+const renderPage = (
+  props: Partial<React.ComponentProps<typeof CompanionHomePage>> = {}
+) =>
   render(
     <MemoryRouter>
-      <CompanionHomePage surface="options" />
+      <CompanionHomePage surface="options" {...props} />
     </MemoryRouter>
   )
 
@@ -541,5 +543,24 @@ describe("CompanionHomePage", () => {
         "Resume suggestions are limited until companion, reading, and note sources are available."
       )
     ).toBeInTheDocument()
+  })
+
+  it("notifies the shell after enabling personalization successfully", async () => {
+    mocks.fetchPersonalizationProfile.mockResolvedValueOnce({
+      enabled: false,
+      updated_at: "2026-03-20T10:00:00Z"
+    })
+    const onPersonalizationEnabled = vi.fn()
+
+    renderPage({ onPersonalizationEnabled })
+
+    fireEvent.click(await screen.findByRole("button", { name: "Enable Companion" }))
+
+    await waitFor(() => {
+      expect(mocks.updatePersonalizationOptIn).toHaveBeenCalledWith(true)
+    })
+    await waitFor(() => {
+      expect(onPersonalizationEnabled).toHaveBeenCalledTimes(1)
+    })
   })
 })

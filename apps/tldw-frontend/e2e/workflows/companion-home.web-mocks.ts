@@ -60,8 +60,8 @@ export function resolveCompanionHomeWebMock(
     return {
       kind: "matched",
       response: jsonResponse({
-        items: [],
-        total: 0
+        items: COMPANION_HOME_PARITY_WORKSPACE_SNAPSHOT.knowledge,
+        total: COMPANION_HOME_PARITY_WORKSPACE_SNAPSHOT.knowledgeTotal
       })
     }
   }

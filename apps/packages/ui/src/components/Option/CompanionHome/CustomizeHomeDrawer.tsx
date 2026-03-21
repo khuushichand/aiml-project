@@ -1,3 +1,5 @@
+import React from "react"
+
 import {
   moveCompanionHomeCard,
   setCompanionHomeCardVisibility,
@@ -11,12 +13,95 @@ type CustomizeHomeDrawerProps = {
   onLayoutChange: (nextLayout: CompanionHomeLayoutCard[]) => void
 }
 
+const FOCUSABLE_SELECTOR = [
+  "button:not([disabled]):not([tabindex='-1'])",
+  "[href]:not([tabindex='-1'])",
+  "input:not([disabled]):not([tabindex='-1'])",
+  "select:not([disabled]):not([tabindex='-1'])",
+  "textarea:not([disabled]):not([tabindex='-1'])",
+  "[tabindex]:not([tabindex='-1'])"
+].join(",")
+
+const getFocusableElements = (container: HTMLElement): HTMLElement[] =>
+  Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (element) =>
+      !element.hasAttribute("disabled") &&
+      element.getAttribute("aria-hidden") !== "true"
+  )
+
 export function CustomizeHomeDrawer({
   open,
   layout,
   onClose,
   onLayoutChange
 }: CustomizeHomeDrawerProps) {
+  const drawerRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const container = drawerRef.current
+    if (!container) {
+      return
+    }
+
+    const previousActiveElement =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    container.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        onClose()
+        return
+      }
+
+      if (event.key !== "Tab") {
+        return
+      }
+
+      const focusableElements = getFocusableElements(container)
+      if (focusableElements.length === 0) {
+        event.preventDefault()
+        container.focus()
+        return
+      }
+
+      const first = focusableElements[0]
+      const last = focusableElements[focusableElements.length - 1]
+      const activeElement =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null
+      const isOutsideContainer = !activeElement || !container.contains(activeElement)
+
+      if (event.shiftKey) {
+        if (isOutsideContainer || activeElement === first || activeElement === container) {
+          event.preventDefault()
+          last.focus()
+        }
+        return
+      }
+
+      if (isOutsideContainer || activeElement === container) {
+        event.preventDefault()
+        first.focus()
+        return
+      }
+
+      if (activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown)
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown)
+      previousActiveElement?.focus()
+    }
+  }, [onClose, open])
+
   if (!open) {
     return null
   }
@@ -26,12 +111,15 @@ export function CustomizeHomeDrawer({
       aria-labelledby="customize-home-drawer-title"
       aria-modal="true"
       className="fixed inset-0 z-50"
+      ref={drawerRef}
       role="dialog"
+      tabIndex={-1}
     >
       <button
         aria-label="Close customize home"
         className="absolute inset-0 h-full w-full cursor-default bg-slate-950/35"
         onClick={onClose}
+        tabIndex={-1}
         type="button"
       />
       <aside className="absolute right-0 top-0 flex h-full w-full max-w-md flex-col border-l border-border/80 bg-surface shadow-2xl">

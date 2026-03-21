@@ -21,6 +21,12 @@ export default function SidepanelHomeResolver() {
       setTarget("chat")
       return
     }
+    if (forcedView === "companion") {
+      setTarget("companion")
+      return
+    }
+
+    setTarget(null)
 
     let cancelled = false
 
@@ -64,7 +70,7 @@ export default function SidepanelHomeResolver() {
       <React.Suspense
         fallback={
           <PageAssistLoader
-            label="Loading chat..."
+            label="Loading companion..."
             description="Preparing your assistant"
           />
         }

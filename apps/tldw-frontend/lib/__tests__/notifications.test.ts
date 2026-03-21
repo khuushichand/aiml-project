@@ -67,6 +67,7 @@ describe("web notifications adapter", () => {
     })
     mocks.bgRequest.mockResolvedValue({ items: [], total: 0 })
     mocks.bgStream.mockImplementation(async function* () {
+      yield undefined
       await new Promise(() => {})
     })
   })

@@ -117,13 +117,22 @@ const normalizeInboxEntityType = (
   return "notification"
 }
 
-const routeForEntityType = (entityType: CompanionHomeEntityType): string => {
+const routeForEntityType = (
+  surface: CompanionHomeSurface,
+  entityType: CompanionHomeEntityType
+): string | undefined => {
+  if (surface === "sidepanel" && (entityType === "reading_item" || entityType === "note")) {
+    return undefined
+  }
   if (entityType === "reading_item") return "/collections"
   if (entityType === "note") return "/notes"
   return "/companion"
 }
 
-const buildInboxItem = (notification: CompanionNotification): CompanionHomeItem => {
+const buildInboxItem = (
+  surface: CompanionHomeSurface,
+  notification: CompanionNotification
+): CompanionHomeItem => {
   const entityType = normalizeInboxEntityType(notification)
   const entityId = notification.link_id || String(notification.id)
   return {
@@ -134,11 +143,14 @@ const buildInboxItem = (notification: CompanionNotification): CompanionHomeItem 
     title: notification.title,
     summary: notification.message,
     updatedAt: notification.created_at || null,
-    href: routeForEntityType(entityType)
+    href: routeForEntityType(surface, entityType)
   }
 }
 
-const buildGoalItem = (goal: CompanionGoal): CompanionHomeItem => ({
+const buildGoalItem = (
+  surface: CompanionHomeSurface,
+  goal: CompanionGoal
+): CompanionHomeItem => ({
   id: `goal:${goal.id}`,
   entityId: goal.id,
   entityType: "goal",
@@ -146,10 +158,13 @@ const buildGoalItem = (goal: CompanionGoal): CompanionHomeItem => ({
   title: goal.title,
   summary: summarizeGoalProgress(goal),
   updatedAt: goal.updated_at || goal.created_at || null,
-  href: routeForEntityType("goal")
+  href: routeForEntityType(surface, "goal")
 })
 
-const buildReadingItem = (item: ReadingItemSummary): CompanionHomeItem => ({
+const buildReadingItem = (
+  surface: CompanionHomeSurface,
+  item: ReadingItemSummary
+): CompanionHomeItem => ({
   id: `reading:${item.id}`,
   entityId: item.id,
   entityType: "reading_item",
@@ -157,10 +172,13 @@ const buildReadingItem = (item: ReadingItemSummary): CompanionHomeItem => ({
   title: item.title,
   summary: item.summary || item.domain || item.url || "Saved for later reading.",
   updatedAt: item.updated_at || item.created_at || null,
-  href: routeForEntityType("reading_item")
+  href: routeForEntityType(surface, "reading_item")
 })
 
-const buildNoteItem = (note: NormalizedNoteEntry): CompanionHomeItem => ({
+const buildNoteItem = (
+  surface: CompanionHomeSurface,
+  note: NormalizedNoteEntry
+): CompanionHomeItem => ({
   id: `note:${note.id}`,
   entityId: note.id,
   entityType: "note",
@@ -168,7 +186,7 @@ const buildNoteItem = (note: NormalizedNoteEntry): CompanionHomeItem => ({
   title: note.title,
   summary: note.summary,
   updatedAt: note.updatedAt,
-  href: routeForEntityType("note")
+  href: routeForEntityType(surface, "note")
 })
 
 const normalizeActivityEntityType = (
@@ -203,7 +221,10 @@ const humanizeActivityEvent = (value: string): string => {
     .join(" ")
 }
 
-const buildActivityItem = (activity: CompanionActivityItem): CompanionHomeItem => {
+const buildActivityItem = (
+  surface: CompanionHomeSurface,
+  activity: CompanionActivityItem
+): CompanionHomeItem => {
   const entityType = normalizeActivityEntityType(activity)
   const metadata =
     activity.metadata && typeof activity.metadata === "object" ? activity.metadata : {}
@@ -223,15 +244,36 @@ const buildActivityItem = (activity: CompanionActivityItem): CompanionHomeItem =
       toNonEmptyString((metadata as Record<string, unknown>).page_url) ||
       "Recent companion activity.",
     updatedAt: activity.created_at || null,
-    href: routeForEntityType(entityType)
+    href: routeForEntityType(surface, entityType)
   }
+}
+
+const collectAmbiguousInboxEntityIds = (items: CompanionHomeItem[]): Set<string> => {
+  const entityTypesById = new Map<string, Set<CompanionHomeEntityType>>()
+
+  items.forEach((item) => {
+    const observedTypes =
+      entityTypesById.get(item.entityId) ?? new Set<CompanionHomeEntityType>()
+    observedTypes.add(item.entityType)
+    entityTypesById.set(item.entityId, observedTypes)
+  })
+
+  return new Set(
+    [...entityTypesById.entries()]
+      .filter(([, observedTypes]) => observedTypes.size > 1)
+      .map(([entityId]) => entityId)
+  )
 }
 
 const buildCanonicalInboxEntityKeys = (items: CompanionHomeItem[]): Set<string> => {
   const keys = new Set<string>()
+  const ambiguousEntityIds = collectAmbiguousInboxEntityIds(items)
+
   items.forEach((item) => {
     keys.add(`${item.entityType}:${item.entityId}`)
-    keys.add(`any:${item.entityId}`)
+    if (ambiguousEntityIds.has(item.entityId)) {
+      keys.add(`any:${item.entityId}`)
+    }
   })
   return keys
 }
@@ -333,7 +375,7 @@ export const fetchCompanionHomeSnapshot = async (
       : (degradedSources.push("notes"), [])
 
   const inbox = Array.isArray(workspace?.inbox)
-    ? workspace.inbox.map(buildInboxItem)
+    ? workspace.inbox.map((notification) => buildInboxItem(surface, notification))
     : []
   const inboxEntityKeys = buildCanonicalInboxEntityKeys(inbox)
 
@@ -341,38 +383,38 @@ export const fetchCompanionHomeSnapshot = async (
     ? workspace.goals.filter((goal) => goal.status === "active")
     : []
   const resumeGoals = activeGoals
-    .map(buildGoalItem)
+    .map((goal) => buildGoalItem(surface, goal))
     .filter((item) => !shouldSuppressDerivedItem(item, inboxEntityKeys))
   const attentionGoals = activeGoals
     .filter((goal) => !hasMeaningfulGoalProgress(goal) || isStale(goal.updated_at))
-    .map(buildGoalItem)
+    .map((goal) => buildGoalItem(surface, goal))
     .filter((item) => !shouldSuppressDerivedItem(item, inboxEntityKeys))
 
   const openReadingItems = readingItems.filter(isOpenReadingItem)
   const resumeReading = openReadingItems
-    .map(buildReadingItem)
+    .map((item) => buildReadingItem(surface, item))
     .filter((item) => !shouldSuppressDerivedItem(item, inboxEntityKeys))
   const attentionReading = openReadingItems
     .filter((item) => item.status === "saved" && isStale(item.updated_at || item.created_at))
-    .map(buildReadingItem)
+    .map((item) => buildReadingItem(surface, item))
     .filter((item) => !shouldSuppressDerivedItem(item, inboxEntityKeys))
 
   const resumeNotes = noteEntries
     .filter((note) => !note.completed)
-    .map(buildNoteItem)
+    .map((note) => buildNoteItem(surface, note))
     .filter((item) => !shouldSuppressDerivedItem(item, inboxEntityKeys))
   const attentionNotes = noteEntries
     .filter((note) => !note.completed && isStale(note.updatedAt))
-    .map(buildNoteItem)
+    .map((note) => buildNoteItem(surface, note))
     .filter((item) => !shouldSuppressDerivedItem(item, inboxEntityKeys))
 
   const needsAttention = [...attentionGoals, ...attentionReading, ...attentionNotes]
   const resumeWork = [...resumeGoals, ...resumeReading, ...resumeNotes]
-  const goalsFocus = activeGoals.map(buildGoalItem)
+  const goalsFocus = activeGoals.map((goal) => buildGoalItem(surface, goal))
   const recentActivity = Array.isArray(workspace?.activity)
-    ? workspace.activity.map(buildActivityItem)
+    ? workspace.activity.map((activity) => buildActivityItem(surface, activity))
     : []
-  const readingQueue = openReadingItems.map(buildReadingItem)
+  const readingQueue = openReadingItems.map((item) => buildReadingItem(surface, item))
 
   return {
     surface,

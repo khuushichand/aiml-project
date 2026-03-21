@@ -70,4 +70,15 @@ describe("SidepanelHomeResolver", () => {
     expect(await screen.findByTestId("sidepanel-chat-root")).toBeInTheDocument()
     expect(mocks.hasResumableSidepanelChat).not.toHaveBeenCalled()
   })
+
+  it("renders Companion Home immediately when the route forces companion view", async () => {
+    render(
+      <MemoryRouter initialEntries={["/?view=companion"]}>
+        <SidepanelHomeResolver />
+      </MemoryRouter>
+    )
+
+    expect(await screen.findByTestId("sidepanel-companion-root")).toBeInTheDocument()
+    expect(mocks.hasResumableSidepanelChat).not.toHaveBeenCalled()
+  })
 })

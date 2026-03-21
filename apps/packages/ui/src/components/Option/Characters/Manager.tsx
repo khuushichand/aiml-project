@@ -1807,8 +1807,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
     data,
     effectiveDefaultCharacterId,
     defaultCharacterSelection,
-    setDefaultCharacterSelection,
-    syncCharacterWorldBookSelection: async () => { /* provided by hook internally */ }
+    setDefaultCharacterSelection
   })
   const {
     createCharacter,

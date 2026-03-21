@@ -1,3 +1,5 @@
+import { browser } from "wxt/browser"
+
 import {
   getRecentChatFromCopilot
 } from "@/db/dexie/helpers"
@@ -27,21 +29,11 @@ export const getLegacyStorageKey = (id: number | null | undefined) =>
 
 export const readSidepanelRuntimeTabId = async (): Promise<number | null> => {
   try {
-    const runtime = (
-      globalThis as typeof globalThis & {
-        browser?: {
-          runtime?: {
-            sendMessage?: (message: { type: string }) => Promise<{ tabId?: unknown }>
-          }
-        }
-      }
-    ).browser?.runtime
-
-    if (!runtime?.sendMessage) {
+    if (!browser?.runtime?.sendMessage) {
       return null
     }
 
-    const resp = await runtime.sendMessage({
+    const resp = await browser.runtime.sendMessage({
       type: "tldw:get-tab-id"
     })
 

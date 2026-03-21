@@ -4,9 +4,13 @@ import { CompanionHomePage } from "./CompanionHomePage"
 
 type CompanionHomeShellProps = {
   surface: "options" | "sidepanel"
+  onPersonalizationEnabled?: () => void
 }
 
-export function CompanionHomeShell({ surface }: CompanionHomeShellProps) {
+export function CompanionHomeShell({
+  surface,
+  onPersonalizationEnabled
+}: CompanionHomeShellProps) {
   const actions =
     surface === "sidepanel"
       ? [
@@ -44,7 +48,10 @@ export function CompanionHomeShell({ surface }: CompanionHomeShellProps) {
       className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-8"
       data-testid="companion-home-shell"
     >
-      <CompanionHomePage surface={surface} />
+      <CompanionHomePage
+        onPersonalizationEnabled={onPersonalizationEnabled}
+        surface={surface}
+      />
 
       <div className="rounded-3xl border border-border/80 bg-surface/90 p-5 shadow-sm backdrop-blur-sm">
         <div className="flex items-start justify-between gap-3">

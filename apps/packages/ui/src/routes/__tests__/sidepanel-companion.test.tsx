@@ -1,5 +1,5 @@
 import React from "react"
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 
@@ -18,8 +18,23 @@ vi.mock("@/components/Common/RouteErrorBoundary", () => ({
 }))
 
 vi.mock("@/components/Option/CompanionHome", () => ({
-  CompanionHomeShell: ({ surface }: { surface: "options" | "sidepanel" }) => (
-    <div data-testid="companion-home-shell">{surface}</div>
+  CompanionHomeShell: ({
+    surface,
+    onPersonalizationEnabled
+  }: {
+    surface: "options" | "sidepanel"
+    onPersonalizationEnabled?: () => void
+  }) => (
+    <div data-testid="companion-home-shell">
+      {surface}
+      <button
+        data-testid="companion-home-personalization-enabled"
+        onClick={() => onPersonalizationEnabled?.()}
+        type="button"
+      >
+        personalization enabled
+      </button>
+    </div>
   )
 }))
 
@@ -156,5 +171,61 @@ describe("SidepanelCompanion", () => {
     expect(window.sessionStorage.getItem("tldw:companion:pendingCapture")).toContain(
       "\"capture-1\""
     )
+  })
+
+  it("retries the pending capture after personalization is enabled from companion home", async () => {
+    window.sessionStorage.setItem(
+      "tldw:companion:pendingCapture",
+      JSON.stringify({
+        id: "capture-1",
+        selectionText: "Remember this paragraph.",
+        pageUrl: "https://example.com/article",
+        pageTitle: "Example article",
+        action: "save_selection"
+      })
+    )
+    mocks.recordExplicitCompanionCapture
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Enable personalization before using companion."), {
+          status: 409
+        })
+      )
+      .mockResolvedValueOnce({
+        id: "activity-1",
+        event_type: "extension.selection_saved",
+        source_type: "browser_selection",
+        source_id: "capture-1",
+        surface: "extension.sidepanel",
+        tags: ["extension", "selection"],
+        provenance: {
+          capture_mode: "explicit",
+          route: "extension.context_menu",
+          action: "save_selection"
+        },
+        metadata: {
+          selection: "Remember this paragraph.",
+          page_url: "https://example.com/article",
+          page_title: "Example article"
+        },
+        created_at: "2026-03-10T12:00:00Z"
+      })
+
+    renderRoute()
+
+    expect(
+      await screen.findByText("Enable personalization before saving to companion.")
+    ).toBeInTheDocument()
+    expect(window.sessionStorage.getItem("tldw:companion:pendingCapture")).toContain(
+      "\"capture-1\""
+    )
+    expect(mocks.recordExplicitCompanionCapture).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId("companion-home-personalization-enabled"))
+
+    await waitFor(() => {
+      expect(mocks.recordExplicitCompanionCapture).toHaveBeenCalledTimes(2)
+    })
+    expect(await screen.findByText("Saved selection to companion.")).toBeInTheDocument()
+    expect(window.sessionStorage.getItem("tldw:companion:pendingCapture")).toBeNull()
   })
 })

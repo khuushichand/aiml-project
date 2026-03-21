@@ -83,15 +83,12 @@ export function CompanionHomeCardShell({
             )
           })}
         </ul>
-      ) : state ? (
-        <div className="mt-4 rounded-2xl border border-dashed border-border/70 bg-bg/60 p-4">
-          <div className="text-sm font-semibold text-text">{state.label}</div>
-          <p className="mt-2 text-sm leading-6 text-text-muted">{state.description}</p>
-        </div>
       ) : (
         <div className="mt-4 rounded-2xl border border-dashed border-border/70 bg-bg/60 p-4">
-          <div className="text-sm font-semibold text-text">{emptyLabel}</div>
-          <p className="mt-2 text-sm leading-6 text-text-muted">{emptyDescription}</p>
+          <div className="text-sm font-semibold text-text">{state?.label ?? emptyLabel}</div>
+          <p className="mt-2 text-sm leading-6 text-text-muted">
+            {state?.description ?? emptyDescription}
+          </p>
         </div>
       )}
     </section>

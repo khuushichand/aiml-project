@@ -21,32 +21,9 @@ const readBlobAsText = (blob: Blob): Promise<string> =>
   });
 
 if (typeof window !== 'undefined') {
-  await import('../packages/ui/vitest.setup');
-
-  // jsdom 27 lacks Blob/File.text(); characters import preview depends on it.
-  if (typeof Blob !== 'undefined' && typeof (Blob.prototype as any).text !== 'function') {
-    Object.defineProperty(Blob.prototype, 'text', {
-      configurable: true,
-      writable: true,
-      value: function text(this: Blob): Promise<string> {
-        return readBlobAsText(this);
-      },
-    });
-  }
-
-  if (typeof File !== 'undefined' && typeof (File.prototype as any).text !== 'function') {
-    Object.defineProperty(File.prototype, 'text', {
-      configurable: true,
-      writable: true,
-      value: function text(this: File): Promise<string> {
-        return readBlobAsText(this);
-      },
-    });
-  }
-
   // Mock next/dynamic to render the actual component instead of a loading wrapper
   // This is needed because dynamic({ ssr: false }) doesn't render in jsdom tests
-  vi.mock('next/dynamic', () => ({
+  vi.doMock('next/dynamic', () => ({
     default: (
       importFn: () => Promise<{ default: React.ComponentType<Record<string, unknown>> }>
     ) => {
@@ -64,7 +41,7 @@ if (typeof window !== 'undefined') {
   }));
 
   // Mock the Dexie database to avoid IndexedDB issues in tests
-  vi.mock('@/db/dexie/schema', () => {
+  vi.doMock('@/db/dexie/schema', () => {
     const mockTable = {
       toArray: vi.fn().mockResolvedValue([]),
       get: vi.fn().mockResolvedValue(undefined),
@@ -112,7 +89,7 @@ if (typeof window !== 'undefined') {
 
   // Mock React Query with graceful fallback for tests that don't mount QueryClientProvider.
   // When provider is present, preserve real hook behavior to avoid diverging package-ui tests.
-  vi.mock('@tanstack/react-query', async () => {
+  vi.doMock('@tanstack/react-query', async () => {
     const actual = await vi.importActual<typeof import('@tanstack/react-query')>(
       '@tanstack/react-query'
     );
@@ -175,6 +152,29 @@ if (typeof window !== 'undefined') {
       }) as typeof actualHooks.useQueryClient,
     };
   });
+
+  await import('../packages/ui/vitest.setup');
+
+  // jsdom 27 lacks Blob/File.text(); characters import preview depends on it.
+  if (typeof Blob !== 'undefined' && typeof (Blob.prototype as any).text !== 'function') {
+    Object.defineProperty(Blob.prototype, 'text', {
+      configurable: true,
+      writable: true,
+      value: function text(this: Blob): Promise<string> {
+        return readBlobAsText(this);
+      },
+    });
+  }
+
+  if (typeof File !== 'undefined' && typeof (File.prototype as any).text !== 'function') {
+    Object.defineProperty(File.prototype, 'text', {
+      configurable: true,
+      writable: true,
+      value: function text(this: File): Promise<string> {
+        return readBlobAsText(this);
+      },
+    });
+  }
 
   afterEach(() => {
     cleanup();

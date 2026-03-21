@@ -1,23 +1,9 @@
-import type { CompanionHomeItem } from "@/services/companion-home"
-
 import {
-  CompanionHomeCardShell,
-  type CompanionHomeCardState
-} from "./CardShell"
+  COMPANION_HOME_CARD_CONFIG,
+  createCompanionHomeCard
+} from "./factory"
 
-type NeedsAttentionCardProps = {
-  items: CompanionHomeItem[]
-  state?: CompanionHomeCardState
-}
-
-export function NeedsAttentionCard({ items, state }: NeedsAttentionCardProps) {
-  return (
-    <CompanionHomeCardShell
-      title="Needs Attention"
-      items={items}
-      state={state}
-      emptyLabel="No follow-ups are overdue"
-      emptyDescription="Derived reminders from goals, reading, and unfinished work will surface here."
-    />
-  )
-}
+export const NeedsAttentionCard = createCompanionHomeCard(
+  "NeedsAttentionCard",
+  COMPANION_HOME_CARD_CONFIG.needsAttention
+)

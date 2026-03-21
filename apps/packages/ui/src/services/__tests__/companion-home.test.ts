@@ -224,6 +224,71 @@ describe("fetchCompanionHomeSnapshot", () => {
     )
   })
 
+  it("does not suppress unrelated derived items when inbox ids overlap across types", async () => {
+    mocks.fetchCompanionWorkspaceSnapshot.mockResolvedValueOnce(
+      buildWorkspaceSnapshot({
+        inbox: [
+          {
+            id: 303,
+            kind: "goal_prompt",
+            title: "Goal with shared id",
+            message: "A goal uses the shared entity id.",
+            severity: "info",
+            link_type: "companion_goal",
+            link_id: "shared-42",
+            created_at: "2026-03-19T10:00:00Z",
+            read_at: null,
+            dismissed_at: null
+          }
+        ]
+      })
+    )
+    mocks.getReadingList.mockResolvedValueOnce({
+      items: [
+        {
+          id: "shared-42",
+          title: "Shared id article",
+          url: "https://example.com/shared",
+          status: "saved",
+          favorite: false,
+          tags: ["research"],
+          created_at: "2026-03-05T08:00:00Z",
+          updated_at: "2026-03-05T08:00:00Z"
+        }
+      ],
+      total: 1,
+      page: 1,
+      size: 25
+    })
+    mocks.listNotes.mockResolvedValueOnce({
+      items: [
+        {
+          id: "shared-42",
+          title: "Shared id note",
+          content: "A note reuses the same raw id as the goal.",
+          status: "draft",
+          updated_at: "2026-03-04T12:00:00Z"
+        }
+      ],
+      total: 1
+    })
+
+    const snapshot = await fetchCompanionHomeSnapshot("options")
+
+    expect(snapshot.resumeWork).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityId: "shared-42",
+          entityType: "reading_item"
+        }),
+        expect.objectContaining({
+          entityId: "shared-42",
+          entityType: "note"
+        })
+      ])
+    )
+  })
+
   it("normalizes notes from a bare array payload", async () => {
     mocks.listNotes.mockResolvedValueOnce([
       {
@@ -288,5 +353,42 @@ describe("fetchCompanionHomeSnapshot", () => {
       expect.arrayContaining([expect.objectContaining({ entityId: "reading-1" })])
     )
     expect(snapshot.readingQueue).toEqual([])
+  })
+
+  it("omits unsupported sidepanel links for reading and note entities", async () => {
+    const snapshot = await fetchCompanionHomeSnapshot("sidepanel")
+
+    expect(snapshot.readingQueue).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityId: "reading-1",
+          href: undefined
+        })
+      ])
+    )
+    expect(snapshot.resumeWork).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityId: "note-1",
+          href: undefined
+        })
+      ])
+    )
+    expect(snapshot.goalsFocus).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityId: "goal-1",
+          href: "/companion"
+        })
+      ])
+    )
+    expect(snapshot.inbox).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityId: "reflection-1",
+          href: "/companion"
+        })
+      ])
+    )
   })
 })

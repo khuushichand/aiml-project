@@ -103,18 +103,12 @@ const inferNotificationEventName = (payload: Record<string, unknown>): string =>
 }
 
 export const parseNotificationStreamEvent = (line: string): NotificationStreamEvent | null => {
+  // `bgStream` strips SSE framing and yields one payload line at a time.
+  // This helper therefore expects single-line payloads, not raw multi-line SSE.
   const trimmed = line.trim()
   if (!trimmed || trimmed.startsWith(":")) return null
 
   let payload: unknown = trimmed
-  if (
-    trimmed.startsWith("data:") ||
-    trimmed.startsWith("event:") ||
-    trimmed.startsWith("id:")
-  ) {
-    const dataIndex = trimmed.indexOf(":")
-    payload = trimmed.slice(dataIndex + 1).trim()
-  }
 
   if (typeof payload === "string" && payload.length > 0) {
     try {
@@ -220,6 +214,8 @@ export function createNotificationStreamSubscription(options: SubscribeNotificat
     while (!controller.signal.aborted) {
       try {
         cursor = await options.readStream(controller.signal, cursor, options.onEvent)
+        if (controller.signal.aborted) break
+        await delay(reconnectDelayMs)
       } catch (error) {
         if (controller.signal.aborted) break
         const nextCursor =

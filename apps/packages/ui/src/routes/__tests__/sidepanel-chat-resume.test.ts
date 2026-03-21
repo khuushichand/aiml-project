@@ -21,6 +21,14 @@ vi.mock("@/db/dexie/helpers", () => ({
   getRecentChatFromCopilot: () => mocks.getRecentChatFromCopilot()
 }))
 
+vi.mock("wxt/browser", () => ({
+  browser: {
+    runtime: {
+      sendMessage: (message: { type: string }) => mocks.sendMessage(message)
+    }
+  }
+}))
+
 import { hasResumableSidepanelChat } from "../sidepanel-chat-resume"
 
 describe("hasResumableSidepanelChat", () => {
@@ -29,13 +37,6 @@ describe("hasResumableSidepanelChat", () => {
     mocks.copilotResumeLastChat.mockResolvedValue(false)
     mocks.getRecentChatFromCopilot.mockResolvedValue(null)
     mocks.sendMessage.mockResolvedValue({ tabId: 7 })
-    Object.assign(globalThis, {
-      browser: {
-        runtime: {
-          sendMessage: mocks.sendMessage
-        }
-      }
-    })
   })
 
   it("treats a stored tabs snapshot with real chat state as resumable", async () => {

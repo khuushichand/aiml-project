@@ -2,6 +2,7 @@ import React from "react"
 import { render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { ConnectionPhase } from "@/types/connection"
 import { EmptySidePanel } from "../empty"
 
 const connectionStateMock = vi.hoisted(() => ({
@@ -47,6 +48,8 @@ vi.mock("@/hooks/useConnectionState", () => ({
 }))
 
 describe("EmptySidePanel", () => {
+  const renderPanel = () => render(<EmptySidePanel />)
+
   beforeEach(() => {
     connectionStateMock.state = {
       phase: "unconfigured",
@@ -62,7 +65,7 @@ describe("EmptySidePanel", () => {
   })
 
   it("frames setup around Companion Home instead of a chat-only launch", () => {
-    render(<EmptySidePanel />)
+    renderPanel()
 
     expect(screen.getByText("Finish setup to open Companion Home")).toBeInTheDocument()
     expect(
@@ -71,5 +74,89 @@ describe("EmptySidePanel", () => {
       )
     ).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Finish setup" })).toBeInTheDocument()
+  })
+
+  it("shows the auth recovery copy when credentials need attention", () => {
+    connectionStateMock.uxState = {
+      uxState: "error_auth",
+      mode: "normal",
+      configStep: "auth",
+      hasCompletedFirstRun: true
+    }
+
+    renderPanel()
+
+    expect(screen.getByText("API key needs attention")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Your server is up but the API key is wrong or missing. Fix the key in Settings → tldw server, then retry."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Review settings" })).toBeInTheDocument()
+  })
+
+  it("shows the unreachable-server copy when the server cannot be reached", () => {
+    connectionStateMock.state = {
+      phase: "error",
+      isConnected: false,
+      serverUrl: "http://localhost:8000"
+    }
+    connectionStateMock.uxState = {
+      uxState: "error_unreachable",
+      mode: "normal",
+      configStep: "health",
+      hasCompletedFirstRun: true
+    }
+
+    renderPanel()
+
+    expect(screen.getByText("Can’t reach your tldw server")).toBeInTheDocument()
+    expect(
+      screen.getByText(/We couldn’t reach \{\{host\}\}\./)
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Review settings" })).toBeInTheDocument()
+  })
+
+  it("shows the post-onboarding connection copy when first run is complete", () => {
+    connectionStateMock.uxState = {
+      uxState: "unconfigured",
+      mode: "normal",
+      configStep: "url",
+      hasCompletedFirstRun: true
+    }
+
+    renderPanel()
+
+    expect(
+      screen.getByText("Connect tldw Assistant to your server to open Companion Home")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "tldw_server is your private AI workspace that keeps your home dashboard, chats, notes, and media on your own machine. Add your server URL to get started."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Open tldw Settings" })).toBeInTheDocument()
+  })
+
+  it("shows suggestion cards when the sidepanel is connected", () => {
+    connectionStateMock.state = {
+      phase: ConnectionPhase.CONNECTED,
+      isConnected: true,
+      serverUrl: "http://localhost:8000"
+    }
+    connectionStateMock.uxState = {
+      uxState: "connected_ok",
+      mode: "normal",
+      configStep: "health",
+      hasCompletedFirstRun: true
+    }
+
+    renderPanel()
+
+    expect(screen.getByTestId("chat-empty-connected")).toBeInTheDocument()
+    expect(screen.getByText("Try asking")).toBeInTheDocument()
+    expect(screen.getByTestId("chat-suggestion-1")).toBeInTheDocument()
+    expect(screen.getByTestId("chat-suggestion-2")).toBeInTheDocument()
+    expect(screen.getByTestId("chat-suggestion-3")).toBeInTheDocument()
   })
 })
