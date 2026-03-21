@@ -11,7 +11,7 @@ export const AboutApp = () => {
   const { t } = useTranslation("settings")
 
   const { data, status } = useQuery({
-    queryKey: ["fetchOllamaURL"],
+    queryKey: ["fetchServerVersion"],
     queryFn: async () => {
       const runtime =
         typeof browser !== "undefined" && browser?.runtime?.getManifest
@@ -22,7 +22,7 @@ export const AboutApp = () => {
       const chromeVersion = runtime?.getManifest()?.version ?? "unknown"
       try {
         const url = await getOllamaURL()
-        const req = await fetcher(`${cleanUrl(url)}/api/version`)
+        const req = await fetcher(`${cleanUrl(url)}/openapi.json`)
 
         if (!req.ok) {
           return {
@@ -31,9 +31,13 @@ export const AboutApp = () => {
           }
         }
 
-        const res = (await req.json()) as { version: string }
+        const res = (await req.json()) as {
+          info?: {
+            version?: string
+          }
+        }
         return {
-          ollama: res.version,
+          ollama: res.info?.version || "N/A",
           chromeVersion
         }
       } catch {

@@ -13,9 +13,15 @@ import {
   deriveAdminGuardFromError,
   sanitizeAdminErrorMessage
 } from "./admin-error-utils"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 
+const ADMIN_RATE_LIMITS_PATH = "/api/v1/admin/rate-limits"
+const ADMIN_RATE_LIMITS_UNAVAILABLE_MESSAGE =
+  "Rate limits listing endpoint is not available on this server."
+
 const RateLimitingPage: React.FC = () => {
+  const { config: connectionConfig, loading: connectionConfigLoading } = useCanonicalConnectionConfig()
   // Admin guard state
   const [adminGuard, setAdminGuard] = useState<"forbidden" | "notFound" | null>(null)
 
@@ -33,6 +39,7 @@ const RateLimitingPage: React.FC = () => {
   const [rateLimitsError, setRateLimitsError] = useState<string | null>(null)
 
   const initialLoadRef = useRef(false)
+  const rateLimitsSupportedRef = useRef<boolean | null>(null)
 
   const markAdminGuardFromError = useCallback((err: any) => {
     const guardState = deriveAdminGuardFromError(err)
@@ -70,33 +77,63 @@ const RateLimitingPage: React.FC = () => {
   // ── Admin Rate Limits ──
 
   const loadRateLimits = useCallback(async () => {
+    if (connectionConfigLoading) {
+      return
+    }
     setRateLimitsLoading(true)
     setRateLimitsError(null)
     try {
+      if (rateLimitsSupportedRef.current == null) {
+        const serverUrl = connectionConfig?.serverUrl?.trim()
+        if (serverUrl) {
+          try {
+            const response = await fetch(`${serverUrl}/openapi.json`)
+            if (response.ok) {
+              const spec = await response.json()
+              const paths =
+                spec && typeof spec === "object" && spec.paths && typeof spec.paths === "object"
+                  ? (spec.paths as Record<string, unknown>)
+                  : null
+              rateLimitsSupportedRef.current = Boolean(paths && ADMIN_RATE_LIMITS_PATH in paths)
+            }
+          } catch {
+            rateLimitsSupportedRef.current = null
+          }
+        }
+      }
+
+      if (rateLimitsSupportedRef.current === false) {
+        setRateLimits([])
+        setRateLimitsError(ADMIN_RATE_LIMITS_UNAVAILABLE_MESSAGE)
+        return
+      }
+
       const result = await tldwClient.listAdminRateLimits()
       setRateLimits(Array.isArray(result) ? result : [])
     } catch (err: any) {
       // This endpoint may not exist yet; handle gracefully
       const status = err?.status ?? err?.response?.status
       if (status === 404 || status === 405) {
-        setRateLimitsError("Rate limits listing endpoint is not available on this server.")
+        rateLimitsSupportedRef.current = false
+        setRateLimits([])
+        setRateLimitsError(ADMIN_RATE_LIMITS_UNAVAILABLE_MESSAGE)
       } else {
         markAdminGuardFromError(err)
       }
     } finally {
       setRateLimitsLoading(false)
     }
-  }, [markAdminGuardFromError])
+  }, [connectionConfig?.serverUrl, connectionConfigLoading, markAdminGuardFromError])
 
   // ── Initial Load ──
 
   useEffect(() => {
-    if (initialLoadRef.current) return
+    if (initialLoadRef.current || connectionConfigLoading) return
     initialLoadRef.current = true
     void loadPolicy()
     void loadCoverage()
     void loadRateLimits()
-  }, [loadPolicy, loadCoverage, loadRateLimits])
+  }, [connectionConfigLoading, loadPolicy, loadCoverage, loadRateLimits])
 
   // ── Coverage Table Columns ──
 
@@ -156,10 +193,10 @@ const RateLimitingPage: React.FC = () => {
   // ── Render ──
 
   if (adminGuard === "forbidden") {
-    return <Alert type="error" message="Access Denied" description="You don't have permission to access rate limiting administration." showIcon />
+    return <Alert type="error" title="Access Denied" description="You don't have permission to access rate limiting administration." showIcon />
   }
   if (adminGuard === "notFound") {
-    return <Alert type="warning" message="Not Available" description="Rate limiting administration is not available on this server." showIcon />
+    return <Alert type="warning" title="Not Available" description="Rate limiting administration is not available on this server." showIcon />
   }
 
   return (
@@ -178,7 +215,7 @@ const RateLimitingPage: React.FC = () => {
         }
       >
         {policy ? (
-          <Space direction="vertical" style={{ width: "100%" }}>
+          <Space orientation="vertical" style={{ width: "100%" }}>
             <div>
               <strong>Status:</strong>{" "}
               <Tag color={policy.status === "ok" ? "green" : policy.status === "unavailable" ? "orange" : "red"}>
@@ -204,7 +241,7 @@ const RateLimitingPage: React.FC = () => {
             )}
           </Space>
         ) : (
-          <Alert type="info" message="No policy data loaded yet." showIcon />
+          <Alert type="info" title="No policy data loaded yet." showIcon />
         )}
       </Card>
 
@@ -220,7 +257,7 @@ const RateLimitingPage: React.FC = () => {
         }
       >
         {coverage ? (
-          <Space direction="vertical" style={{ width: "100%" }} size="middle">
+          <Space orientation="vertical" style={{ width: "100%" }} size="middle">
             <div style={{ maxWidth: 300 }}>
               <strong>Coverage:</strong>
               <Progress
@@ -249,7 +286,7 @@ const RateLimitingPage: React.FC = () => {
             )}
           </Space>
         ) : (
-          <Alert type="info" message="No coverage data loaded yet." showIcon />
+          <Alert type="info" title="No coverage data loaded yet." showIcon />
         )}
       </Card>
 
@@ -264,7 +301,7 @@ const RateLimitingPage: React.FC = () => {
         }
       >
         {rateLimitsError ? (
-          <Alert type="info" message={rateLimitsError} showIcon />
+          <Alert type="info" title={rateLimitsError} showIcon />
         ) : (
           <Table
             dataSource={rateLimits}

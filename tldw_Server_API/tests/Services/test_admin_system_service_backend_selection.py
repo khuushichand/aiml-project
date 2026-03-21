@@ -152,6 +152,13 @@ class _PostgresDbWithSqliteTraps:
         ]
 
 
+class _FailingStatsDb:
+    _is_sqlite = True
+
+    async def execute(self, query: str, params: Any = ()) -> _CursorStub:
+        raise RuntimeError("stats unavailable")
+
+
 def _admin_principal() -> AuthPrincipal:
     return AuthPrincipal(
         kind="user",
@@ -231,6 +238,17 @@ async def test_get_system_stats_postgres_backend_selection_uses_fetchrow() -> No
     assert response.sessions.unique_users == 4
     assert len(db.fetchrow_calls) >= 3
     assert not db.execute_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_get_system_stats_returns_empty_snapshot_when_queries_fail() -> None:
+    response = await svc.get_system_stats(_FailingStatsDb())
+
+    assert response.users.total == 0
+    assert response.users.active == 0
+    assert response.storage.total_used_mb == 0.0
+    assert response.sessions.active == 0
 
 
 @pytest.mark.asyncio

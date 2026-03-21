@@ -312,10 +312,10 @@ const MonitoringDashboardPage: React.FC = () => {
   // ── Render ──
 
   if (adminGuard === "forbidden") {
-    return <Alert type="error" message="Access Denied" description="You don't have permission to access the monitoring dashboard." showIcon />
+    return <Alert type="error" title="Access Denied" description="You don't have permission to access the monitoring dashboard." showIcon />
   }
   if (adminGuard === "notFound") {
-    return <Alert type="warning" message="Not Available" description="The monitoring dashboard is not available on this server." showIcon />
+    return <Alert type="warning" title="Not Available" description="The monitoring dashboard is not available on this server." showIcon />
   }
 
   const activityEntries = Array.isArray(activity?.entries)
@@ -339,7 +339,7 @@ const MonitoringDashboardPage: React.FC = () => {
           </Button>
         }
       >
-        <Space direction="vertical" style={{ width: "100%" }} size="middle">
+        <Space orientation="vertical" style={{ width: "100%" }} size="middle">
           {systemStats && (
             <div>
               <strong>System Stats:</strong>
@@ -379,7 +379,7 @@ const MonitoringDashboardPage: React.FC = () => {
             </div>
           )}
           {!systemStats && !securityStatus && !statsLoading && !securityLoading && (
-            <Alert type="info" message="No system data available yet." showIcon />
+            <Alert type="info" title="No system data available yet." showIcon />
           )}
         </Space>
       </Card>
@@ -514,7 +514,7 @@ const MonitoringDashboardPage: React.FC = () => {
             size="small"
           />
         ) : (
-          <Alert type="info" message="No recent activity data available." showIcon />
+          <Alert type="info" title="No recent activity data available." showIcon />
         )}
       </CollapsibleSection>
     </div>

@@ -16,8 +16,6 @@ import {
 } from "./admin-error-utils"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 
-const { Panel } = Collapse
-
 const downloadCsv = (data: string, filename: string) => {
   const blob = new Blob([data], { type: "text/csv" })
   const url = URL.createObjectURL(blob)
@@ -244,10 +242,10 @@ const UsageAnalyticsPage: React.FC = () => {
   // ── Render ──
 
   if (adminGuard === "forbidden") {
-    return <Alert type="error" message="Access Denied" description="You don't have permission to access usage analytics." showIcon />
+    return <Alert type="error" title="Access Denied" description="You don't have permission to access usage analytics." showIcon />
   }
   if (adminGuard === "notFound") {
-    return <Alert type="warning" message="Not Available" description="Usage analytics is not available on this server." showIcon />
+    return <Alert type="warning" title="Not Available" description="Usage analytics is not available on this server." showIcon />
   }
 
   return (
@@ -370,23 +368,31 @@ const UsageAnalyticsPage: React.FC = () => {
       </Card>
 
       {/* Provider Analytics (Collapsible) */}
-      <Collapse>
-        <Panel header="Provider Analytics" key="provider-analytics">
-          <Space style={{ marginBottom: 12 }}>
-            <Button size="small" onClick={() => loadProviderAnalytics()}>
-              Refresh
-            </Button>
-          </Space>
-          <Table
-            dataSource={providerAnalytics}
-            columns={providerColumns}
-            rowKey="provider"
-            loading={providerLoading}
-            pagination={false}
-            size="small"
-          />
-        </Panel>
-      </Collapse>
+      <Collapse
+        items={[
+          {
+            key: "provider-analytics",
+            label: "Provider Analytics",
+            children: (
+              <>
+                <Space style={{ marginBottom: 12 }}>
+                  <Button size="small" onClick={() => loadProviderAnalytics()}>
+                    Refresh
+                  </Button>
+                </Space>
+                <Table
+                  dataSource={providerAnalytics}
+                  columns={providerColumns}
+                  rowKey="provider"
+                  loading={providerLoading}
+                  pagination={false}
+                  size="small"
+                />
+              </>
+            )
+          }
+        ]}
+      />
     </div>
   )
 }
