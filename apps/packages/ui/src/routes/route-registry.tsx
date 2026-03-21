@@ -205,6 +205,9 @@ const OptionGuardianSettings = createSettingsRoute(
 )
 const OptionChatbooksPlayground = lazy(() => import("./option-chatbooks-playground"))
 const OptionWatchlists = lazy(() => import("./option-watchlists"))
+const OptionIntegrations = lazy(() => import("./option-integrations"))
+const OptionAdminIntegrations = lazy(() => import("./option-admin-integrations"))
+const OptionScheduledTasks = lazy(() => import("./option-scheduled-tasks"))
 const OptionCompanion = lazy(() => import("./option-companion"))
 const OptionCompanionConversation = lazy(
   () => import("./option-companion-conversation")
@@ -577,6 +580,33 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   { kind: "options", path: "/chatbooks", element: <OptionChatbooksPlayground /> },
   { kind: "options", path: "/watchlists", element: <OptionWatchlists /> },
+  {
+    kind: "options",
+    path: "/integrations",
+    element: <OptionIntegrations />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.integrations",
+      icon: Bot,
+      order: 3.2
+    }
+  },
+  {
+    kind: "options",
+    path: "/admin/integrations",
+    element: <OptionAdminIntegrations />
+  },
+  {
+    kind: "options",
+    path: "/scheduled-tasks",
+    element: <OptionScheduledTasks />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.scheduledTasks",
+      icon: ListTodo,
+      order: 3.4
+    }
+  },
   { kind: "options", path: "/kanban", element: <OptionKanbanPlayground /> },
   {
     kind: "options",

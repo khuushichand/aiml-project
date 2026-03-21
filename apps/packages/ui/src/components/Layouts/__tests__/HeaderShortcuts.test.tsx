@@ -21,13 +21,13 @@ const ALL_SHORTCUT_IDS = [
   "knowledge-qa", "media", "document-workspace",
   "repo2txt",
   "multi-item-review", "collections",
-  "watchlists", "notes", "chatbooks-playground", "flashcards",
+  "watchlists", "integrations", "scheduled-tasks", "notes", "chatbooks-playground", "flashcards",
   "quizzes", "evaluations", "chunking-playground",
   "stt-playground", "tts-playground", "audiobook-studio",
   "workflows", "writing-playground", "acp-playground",
   "skills", "kanban-playground",
   "model-playground", "data-tables",
-  "admin-server", "documentation", "moderation-playground",
+  "admin-server", "admin-integrations", "documentation", "moderation-playground",
   "admin-llamacpp", "admin-mlx", "settings"
 ]
 
@@ -99,6 +99,25 @@ describe("HeaderShortcuts launcher modal", () => {
     const chatShortcut = HEADER_SHORTCUT_ITEMS.find((item) => item.id === "chat")
 
     expect(chatShortcut?.to).toBe("/chat")
+  })
+
+  it("includes launcher shortcuts for integrations and scheduled tasks", () => {
+    expect(HEADER_SHORTCUT_ITEMS).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          to: "/integrations",
+          labelDefault: "Integrations"
+        }),
+        expect.objectContaining({
+          to: "/scheduled-tasks",
+          labelDefault: "Scheduled Tasks"
+        }),
+        expect.objectContaining({
+          to: "/admin/integrations",
+          labelDefault: "Admin Integrations"
+        })
+      ])
+    )
   })
 
   it("renders a dialog when open (expanded=true)", () => {

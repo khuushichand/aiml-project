@@ -17,8 +17,9 @@
 - Task 5: Complete
 - Task 6: Complete
 - Task 7: Complete
-- Task 8: In Progress
-- Task 9: Not Started
+- Task 8: Complete
+- Task 9: Complete
+- Task 10: Complete
 
 ---
 

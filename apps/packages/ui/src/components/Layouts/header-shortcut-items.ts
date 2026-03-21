@@ -18,6 +18,7 @@ import {
   Layers,
   LayoutGrid,
   Library,
+  ListTodo,
   MessageSquare,
   Mic,
   Microscope,
@@ -301,6 +302,20 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         labelDefault: "Workflows"
       },
       {
+        id: "integrations",
+        to: "/integrations",
+        icon: Bot,
+        labelKey: "option:header.integrations",
+        labelDefault: "Integrations"
+      },
+      {
+        id: "scheduled-tasks",
+        to: "/scheduled-tasks",
+        icon: ListTodo,
+        labelKey: "option:header.scheduledTasks",
+        labelDefault: "Scheduled Tasks"
+      },
+      {
         id: "acp-playground",
         to: "/acp-playground",
         icon: Bot,
@@ -355,6 +370,13 @@ const BASE_HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: CogIcon,
         labelKey: "option:header.adminServer",
         labelDefault: "Server Admin"
+      },
+      {
+        id: "admin-integrations",
+        to: "/admin/integrations",
+        icon: CombineIcon,
+        labelKey: "option:header.adminIntegrations",
+        labelDefault: "Admin Integrations"
       },
       {
         id: "admin-llamacpp",

@@ -49,6 +49,11 @@ Use a hybrid IA:
 
 This keeps personal and admin responsibilities distinct while still giving each a first-class page.
 
+Navigation exposure for V1:
+
+- `/integrations` and `/scheduled-tasks` should be reachable from the shared options launcher/header shortcuts.
+- `/admin/integrations` should remain a distinct admin-oriented route and shortcut rather than being folded into the general user workspace list.
+
 ### Platform Scope
 
 Ship full parity in both:
