@@ -43,16 +43,16 @@ export interface SlackWorkspacePolicy {
 }
 
 export interface SlackWorkspacePolicyUpdate {
-  allowed_commands?: IntegrationCommand[] | null
-  channel_allowlist?: string[] | null
-  channel_denylist?: string[] | null
-  default_response_mode?: "ephemeral" | "thread" | "channel" | null
-  strict_user_mapping?: boolean | null
-  service_user_id?: string | null
-  user_mappings?: Record<string, string> | null
-  workspace_quota_per_minute?: number | null
-  user_quota_per_minute?: number | null
-  status_scope?: "workspace" | "workspace_and_user" | null
+  allowed_commands?: IntegrationCommand[]
+  channel_allowlist?: string[]
+  channel_denylist?: string[]
+  default_response_mode?: "ephemeral" | "thread" | "channel"
+  strict_user_mapping?: boolean
+  service_user_id?: string
+  user_mappings?: Record<string, string>
+  workspace_quota_per_minute?: number
+  user_quota_per_minute?: number
+  status_scope?: "workspace" | "workspace_and_user"
 }
 
 export interface SlackWorkspacePolicyResponse {
@@ -77,16 +77,16 @@ export interface DiscordWorkspacePolicy {
 }
 
 export interface DiscordWorkspacePolicyUpdate {
-  allowed_commands?: IntegrationCommand[] | null
-  channel_allowlist?: string[] | null
-  channel_denylist?: string[] | null
-  default_response_mode?: "ephemeral" | "channel" | null
-  strict_user_mapping?: boolean | null
-  service_user_id?: string | null
-  user_mappings?: Record<string, string> | null
-  guild_quota_per_minute?: number | null
-  user_quota_per_minute?: number | null
-  status_scope?: "guild" | "guild_and_user" | null
+  allowed_commands?: IntegrationCommand[]
+  channel_allowlist?: string[]
+  channel_denylist?: string[]
+  default_response_mode?: "ephemeral" | "channel"
+  strict_user_mapping?: boolean
+  service_user_id?: string
+  user_mappings?: Record<string, string>
+  guild_quota_per_minute?: number
+  user_quota_per_minute?: number
+  status_scope?: "guild" | "guild_and_user"
 }
 
 export interface DiscordWorkspacePolicyResponse {
@@ -110,7 +110,15 @@ export interface TelegramBotConfigUpdate {
   bot_token: string
   webhook_secret: string
   bot_username?: string | null
-  enabled?: boolean
+  enabled: boolean
+}
+
+const assertNoNullPolicyFields = (payload: Record<string, unknown>): void => {
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === null) {
+      throw new Error(`Null policy fields are not supported: ${key}`)
+    }
+  }
 }
 
 export interface TelegramLinkedActorItem {
@@ -171,6 +179,7 @@ export async function getWorkspaceSlackPolicy(): Promise<SlackWorkspacePolicyRes
 export async function updateWorkspaceSlackPolicy(
   payload: SlackWorkspacePolicyUpdate
 ): Promise<SlackWorkspacePolicyResponse> {
+  assertNoNullPolicyFields(payload as Record<string, unknown>)
   return await bgRequest<SlackWorkspacePolicyResponse>({
     path: "/api/v1/integrations/workspace/slack/policy",
     method: "PUT",
@@ -188,6 +197,7 @@ export async function getWorkspaceDiscordPolicy(): Promise<DiscordWorkspacePolic
 export async function updateWorkspaceDiscordPolicy(
   payload: DiscordWorkspacePolicyUpdate
 ): Promise<DiscordWorkspacePolicyResponse> {
+  assertNoNullPolicyFields(payload as Record<string, unknown>)
   return await bgRequest<DiscordWorkspacePolicyResponse>({
     path: "/api/v1/integrations/workspace/discord/policy",
     method: "PUT",
@@ -205,6 +215,9 @@ export async function getWorkspaceTelegramBot(): Promise<TelegramBotConfigRespon
 export async function updateWorkspaceTelegramBot(
   payload: TelegramBotConfigUpdate
 ): Promise<TelegramBotConfigResponse> {
+  if (typeof payload.enabled !== "boolean") {
+    throw new Error("enabled must be set explicitly")
+  }
   return await bgRequest<TelegramBotConfigResponse>({
     path: "/api/v1/integrations/workspace/telegram/bot",
     method: "PUT",

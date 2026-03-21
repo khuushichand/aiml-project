@@ -20,7 +20,7 @@ import {
 
 describe("scheduled-tasks control-plane contract", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mocks.bgRequest.mockReset()
   })
 
   it("lists normalized scheduled tasks including partial metadata", async () => {
@@ -135,8 +135,8 @@ describe("scheduled-tasks control-plane contract", () => {
       })
       .mockResolvedValueOnce({ deleted: true })
 
-    const updated = await updateScheduledTaskReminder("abc", updatePayload)
-    const deleted = await deleteScheduledTaskReminder("abc")
+    const updated = await updateScheduledTaskReminder("reminder_task:abc", updatePayload)
+    const deleted = await deleteScheduledTaskReminder("reminder_task:abc")
 
     expect(updated.enabled).toBe(false)
     expect(deleted.deleted).toBe(true)
@@ -158,5 +158,19 @@ describe("scheduled-tasks control-plane contract", () => {
         path: "/api/v1/scheduled-tasks/reminders/abc"
       })
     )
+  })
+
+  it("rejects unsafe null reminder patch fields before sending the request", async () => {
+    await expect(
+      updateScheduledTaskReminder(
+        "reminder_task:abc",
+        {
+          title: null,
+          body: "Still unsafe"
+        } as unknown as UpdateScheduledTaskReminderPayload
+      )
+    ).rejects.toThrow("title cannot be null")
+
+    expect(mocks.bgRequest).not.toHaveBeenCalled()
   })
 })

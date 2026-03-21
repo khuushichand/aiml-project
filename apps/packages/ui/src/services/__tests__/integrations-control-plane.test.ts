@@ -27,7 +27,7 @@ import {
 
 describe("integrations control-plane contract", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mocks.bgRequest.mockReset()
   })
 
   it("lists personal integrations via the normalized endpoint", async () => {
@@ -225,6 +225,40 @@ describe("integrations control-plane contract", () => {
         })
       })
     )
+  })
+
+  it("requires an explicit enabled flag when updating the telegram bot", async () => {
+    await expect(
+      updateWorkspaceTelegramBot(
+        {
+          bot_token: "token-123",
+          webhook_secret: "webhook-secret",
+          bot_username: "@ExampleBot"
+        } as unknown as TelegramBotConfigUpdate
+      )
+    ).rejects.toThrow("enabled must be set explicitly")
+
+    expect(mocks.bgRequest).not.toHaveBeenCalled()
+  })
+
+  it("rejects null clear payloads that the workspace policy backend currently ignores", async () => {
+    await expect(
+      updateWorkspaceSlackPolicy(
+        {
+          service_user_id: null
+        } as unknown as SlackWorkspacePolicyUpdate
+      )
+    ).rejects.toThrow("Null policy fields are not supported")
+
+    await expect(
+      updateWorkspaceDiscordPolicy(
+        {
+          user_mappings: null
+        } as unknown as DiscordWorkspacePolicyUpdate
+      )
+    ).rejects.toThrow("Null policy fields are not supported")
+
+    expect(mocks.bgRequest).not.toHaveBeenCalled()
   })
 
   it("reads the workspace integrations overview", async () => {
