@@ -34,11 +34,8 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.goto()
       await mediaPage.waitForReady()
 
-      // Verify page loaded
-      const mediaContainer = authedPage.locator(
-        "[data-testid='media-container'], .media-page, .media-list"
-      )
-      await expect(mediaContainer.first()).toBeVisible({ timeout: 20000 })
+      await expect(mediaPage.heading).toBeVisible({ timeout: 20_000 })
+      await expect(mediaPage.searchInput).toBeVisible({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -51,16 +48,13 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.goto()
       await mediaPage.waitForReady()
 
-      // Either empty state or media items should be visible
       const emptyState = authedPage.locator(
         "[data-testid='empty-state'], .empty-state, .no-media"
-      )
-      const mediaList = authedPage.locator(
-        "[data-testid='media-list'], .media-list, .ant-table"
-      )
+      ).first()
+      const mediaList = mediaPage.mediaList
 
-      const hasEmpty = (await emptyState.count()) > 0 && (await emptyState.isVisible())
-      const hasList = (await mediaList.count()) > 0 && (await mediaList.isVisible())
+      const hasEmpty = await emptyState.isVisible().catch(() => false)
+      const hasList = await mediaList.isVisible().catch(() => false)
 
       expect(hasEmpty || hasList).toBeTruthy()
 

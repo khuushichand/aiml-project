@@ -28,8 +28,8 @@ test.describe("Chat Workflow", () => {
       await chatPage.goto()
       await chatPage.waitForReady()
 
-      // Verify chat header is visible
-      await expect(chatPage.header).toBeVisible()
+      // Verify the main transcript surface is visible
+      await expect(chatPage.messageList).toBeVisible()
 
       // Verify chat input is available
       const input = await chatPage.getChatInput()
@@ -362,19 +362,7 @@ test.describe("Chat Workflow", () => {
       await chatPage.sendMessage("Say exactly: COPY_TEST_MESSAGE")
       await chatPage.waitForResponse(60000)
 
-      // Look for copy button
-      const copyButton = authedPage.locator(
-        "[data-testid='copy-message'], button[aria-label*='copy' i], .copy-button"
-      )
-
-      if ((await copyButton.count()) > 0) {
-        await copyButton.last().click()
-        // Verify copy feedback (toast, button state change, etc.)
-        const _copyFeedback = authedPage.locator(
-          ".ant-message-success, [data-copied='true'], .copy-success"
-        )
-        // Copy feedback is optional
-      }
+      await chatPage.copyLastMessage()
 
       await assertNoCriticalErrors(diagnostics)
     })

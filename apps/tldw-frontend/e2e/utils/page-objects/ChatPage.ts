@@ -16,13 +16,19 @@ export class ChatPage {
 
   constructor(page: Page) {
     this.page = page
-    this.header = page.getByTestId("chat-header")
+    this.header = page.locator("h1, h2, [role='heading']").filter({
+      hasText: /start a new chat/i
+    }).first()
     this.messageInput = page.locator("#textarea-message, [data-testid='chat-input']")
-    this.sendButton = page.getByTestId("chat-send")
-    this.messageList = page.getByTestId("chat-messages")
+    this.sendButton = page.getByRole("button", { name: /send message|send/i }).first()
+    this.messageList = page.getByRole("log", { name: /chat messages/i })
     this.sidebar = page.getByTestId("chat-sidebar")
-    this.newChatButton = page.getByRole("button", { name: /new chat|start chat/i })
-    this.modelSelector = page.getByTestId("model-selector")
+    this.newChatButton = page
+      .getByTestId("new-chat-button")
+      .or(page.getByRole("button", { name: /new (saved )?chat|start chatting/i }).first())
+    this.modelSelector = page.locator(
+      "[data-testid='model-selector'], [data-testid='model-select-trigger']"
+    ).first()
   }
 
   /**
@@ -37,13 +43,19 @@ export class ChatPage {
    * Wait for the chat page to be ready
    */
   async waitForReady(): Promise<void> {
-    // chat-header only renders in extension sidepanel; web shows chat-workspace or empty state
-    await Promise.race([
-      this.header.waitFor({ state: "visible", timeout: 20000 }),
-      this.page.getByTestId("chat-workspace").waitFor({ state: "visible", timeout: 20000 }),
-      this.page.getByTestId("chat-empty-connected").waitFor({ state: "visible", timeout: 20000 }),
-      this.page.getByTestId("chat-input").waitFor({ state: "visible", timeout: 20000 }),
-    ]).catch(() => {})
+    const waitForSurface = async () => {
+      await Promise.race([
+        this.page
+          .getByRole("button", { name: /start chatting/i })
+          .waitFor({ state: "visible", timeout: 20_000 }),
+        this.page
+          .getByPlaceholder(/type a message/i)
+          .waitFor({ state: "visible", timeout: 20_000 }),
+        this.messageList.waitFor({ state: "visible", timeout: 20_000 }),
+      ])
+    }
+
+    await waitForSurface().catch(() => {})
     // Check for Next.js error overlay (e.g. rate_limited) and reload if found
     const hasErrorOverlay = await this.page.locator("nextjs-portal").count().catch(() => 0)
     if (hasErrorOverlay > 0) {
@@ -55,6 +67,7 @@ export class ChatPage {
       document.querySelectorAll('.ant-modal-root, .ant-modal-wrap, .ant-modal-mask').forEach(el => el.remove());
       document.querySelectorAll('nextjs-portal').forEach(el => { if (el.children.length > 0) el.remove(); });
     }).catch(() => {})
+    await waitForSurface()
   }
 
   /**
@@ -84,13 +97,6 @@ export class ChatPage {
       await this.page.waitForTimeout(1_000)
     }
 
-    // If "New saved chat" button is visible, click it to start a saved chat
-    const newSavedChat = this.page.getByRole("button", { name: /new saved chat/i })
-    if (await newSavedChat.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      await newSavedChat.click()
-      await this.page.waitForTimeout(500)
-    }
-
     const input = await this.getChatInput()
     await expect(input).toBeVisible({ timeout: 15000 })
 
@@ -117,11 +123,33 @@ export class ChatPage {
    * Wait for a response to appear
    */
   async waitForResponse(timeoutMs = 60000): Promise<void> {
-    // Wait for assistant message to appear
-    const assistantMessage = this.page.locator(
-      "[data-role='assistant'], [data-message-role='assistant'], .assistant-message"
+    const assistantMessages = this.page.locator(
+      "article[aria-label*='Assistant message'], [data-role='assistant'], [data-message-role='assistant'], .assistant-message"
     )
-    await expect(assistantMessage.first()).toBeVisible({ timeout: timeoutMs })
+
+    await expect(assistantMessages.last()).toBeVisible({ timeout: timeoutMs })
+
+    await expect
+      .poll(
+        async () => {
+          const lastAssistant = assistantMessages.last()
+          const text = ((await lastAssistant.textContent().catch(() => "")) || "")
+            .replace(/▋/g, "")
+            .trim()
+          const isGenerating = await lastAssistant
+            .getByText(/Generating response/i)
+            .isVisible()
+            .catch(() => false)
+          const hasStopStreaming = await lastAssistant
+            .getByRole("button", { name: /Stop streaming response|Stop Streaming/i })
+            .isVisible()
+            .catch(() => false)
+
+          return Boolean(text) && !isGenerating && !hasStopStreaming
+        },
+        { timeout: timeoutMs, message: "Timed out waiting for a completed assistant response" }
+      )
+      .toBe(true)
   }
 
   /**
@@ -149,16 +177,22 @@ export class ChatPage {
     const messages: Array<{ role: string; content: string }> = []
 
     const messageElements = this.page.locator(
-      "[data-role], [data-message-role], .message"
+      "article[aria-label*='message'], [data-role], [data-message-role], .message"
     )
     const count = await messageElements.count()
 
     for (let i = 0; i < count; i++) {
       const el = messageElements.nth(i)
+      const ariaLabel = (await el.getAttribute("aria-label")) || ""
       const role =
-        (await el.getAttribute("data-role")) ||
-        (await el.getAttribute("data-message-role")) ||
+        /assistant message/i.test(ariaLabel)
+          ? "assistant"
+          : /user message/i.test(ariaLabel)
+            ? "user"
+            : ((await el.getAttribute("data-role")) ||
+              (await el.getAttribute("data-message-role")) ||
         "unknown"
+            )
       const content = (await el.textContent()) || ""
       messages.push({ role, content })
     }
@@ -257,13 +291,27 @@ export class ChatPage {
    * Copy the last message to clipboard
    */
   async copyLastMessage(): Promise<void> {
-    const copyButtons = this.page.locator(
-      "[data-testid='copy-message'], button[aria-label*='copy' i]"
+    const assistantMessages = this.page.locator(
+      "article[aria-label*='Assistant message']"
     )
-    const lastCopy = copyButtons.last()
+    const lastAssistant = assistantMessages.last()
 
-    if ((await lastCopy.count()) > 0) {
-      await lastCopy.click()
+    if ((await lastAssistant.count()) > 0) {
+      await lastAssistant.hover().catch(() => {})
+      const lastCopy = lastAssistant.getByRole("button", {
+        name: /copy to clipboard|copy/i
+      })
+      if ((await lastCopy.count()) > 0) {
+        await lastCopy.click()
+        return
+      }
+    }
+
+    const fallbackCopy = this.page.locator(
+      "[data-testid='copy-message'], button[aria-label*='copy' i]"
+    ).last()
+    if ((await fallbackCopy.count()) > 0) {
+      await fallbackCopy.click()
     }
   }
 

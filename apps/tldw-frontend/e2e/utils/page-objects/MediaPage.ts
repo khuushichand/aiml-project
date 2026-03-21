@@ -6,6 +6,7 @@ import { waitForConnection } from "../helpers"
 
 export class MediaPage {
   readonly page: Page
+  readonly heading: Locator
   readonly uploadButton: Locator
   readonly urlInput: Locator
   readonly processButton: Locator
@@ -14,11 +15,17 @@ export class MediaPage {
 
   constructor(page: Page) {
     this.page = page
+    this.heading = page.getByRole("heading", { name: /media inspector/i })
     this.uploadButton = page.getByRole("button", { name: /upload|add file/i })
     this.urlInput = page.getByPlaceholder(/url|enter url/i)
     this.processButton = page.getByRole("button", { name: /process|ingest|add/i })
-    this.mediaList = page.getByTestId("media-list")
-    this.searchInput = page.getByPlaceholder(/search|filter/i)
+    this.mediaList = page
+      .getByTestId("media-results-list")
+      .or(page.locator("button[aria-label^='Select media:']").first())
+    this.searchInput = page
+      .getByRole("textbox", { name: /search media/i })
+      .or(page.getByPlaceholder(/search media/i))
+      .first()
   }
 
   /**
@@ -33,14 +40,11 @@ export class MediaPage {
    * Wait for the media page to be ready
    */
   async waitForReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {})
-    // The page shows "Media Inspector" heading with search and filter controls
     await Promise.race([
-      this.page.locator("[data-testid='media-list'], [data-testid='empty-state'], .media-container")
-        .first().waitFor({ state: "visible", timeout: 20_000 }),
-      this.page.getByText("Media Inspector").waitFor({ state: "visible", timeout: 20_000 }),
-      this.page.getByPlaceholder(/search media/i).waitFor({ state: "visible", timeout: 20_000 }),
-    ]).catch(() => {})
+      this.heading.waitFor({ state: "visible", timeout: 20_000 }),
+      this.searchInput.waitFor({ state: "visible", timeout: 20_000 }),
+      this.mediaList.waitFor({ state: "visible", timeout: 20_000 })
+    ])
   }
 
   /**
