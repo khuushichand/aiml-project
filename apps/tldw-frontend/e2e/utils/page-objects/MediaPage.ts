@@ -268,7 +268,7 @@ export class MediaPage {
    * Open Quick Ingest modal
    */
   async openQuickIngest(): Promise<Locator> {
-    const modal = this.page.locator(".quick-ingest-modal .ant-modal-content")
+    const modal = this.page.getByRole("dialog", { name: /Quick Ingest/i }).first()
     if (await modal.isVisible().catch(() => false)) return modal
 
     // Try different triggers
@@ -290,6 +290,9 @@ export class MediaPage {
     })
 
     await expect(modal).toBeVisible({ timeout: 15000 })
+    await expect(modal.locator('[data-testid="qi-file-input"]').first()).toHaveCount(1, {
+      timeout: 20000,
+    })
     return modal
   }
 

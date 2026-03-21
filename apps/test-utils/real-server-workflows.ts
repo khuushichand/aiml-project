@@ -1020,6 +1020,30 @@ const dismissQuickIngestInspectorIntro = async (page: Page) => {
 
 const clickQuickIngestRun = async (modal: Locator) => {
   const page = modal.page()
+  const resolveQuickIngestAction = async (): Promise<Locator> => {
+    const candidates = [
+      modal.getByTestId("quick-ingest-run"),
+      modal.getByRole("button", { name: /Use defaults & process/i }),
+      modal.getByRole("button", { name: /Start Processing/i }),
+      modal.getByRole("button", { name: /Run quick ingest/i }),
+      modal.getByRole("button", { name: /Configure \d+ items?/i }),
+      modal.getByRole("button", { name: /Review \d+ items?/i }),
+      modal.getByRole("button", { name: /Process \d+ items?/i }),
+      modal.getByRole("button", { name: /Ingest/i })
+    ]
+
+    for (const candidate of candidates) {
+      const target = candidate.first()
+      if (await target.isVisible().catch(() => false)) {
+        return target
+      }
+    }
+
+    return modal.getByRole("button", {
+      name: /Use defaults & process|Start Processing|Run quick ingest|Configure|Review|Process|Ingest/i
+    }).first()
+  }
+
   const waitForStableConnection = async (label: string) => {
     await page.waitForFunction(
       () => {
@@ -1040,29 +1064,32 @@ const clickQuickIngestRun = async (modal: Locator) => {
   }
   await waitForStableConnection("before-click")
 
-  let runButton = modal.getByTestId("quick-ingest-run")
-  if ((await runButton.count()) === 0) {
-    runButton = modal.getByRole("button", {
-      name: /Run quick ingest|Ingest|Process|Review/i
-    })
-  }
-  const visibleRun = runButton
-    .filter({ hasText: /Ingest|Process|Review|Processing/i })
-    .first()
-  await visibleRun.waitFor({ state: "visible", timeout: 15000 })
-  await visibleRun.scrollIntoViewIfNeeded()
-  await expect(visibleRun).toBeEnabled({ timeout: 15000 })
+  let activeAction = await resolveQuickIngestAction()
   const getRunState = async () => ({
-    disabled: await visibleRun.isDisabled().catch(() => false),
-    text: ((await visibleRun.textContent().catch(() => "")) || "").trim(),
-    dataState: await visibleRun.getAttribute("data-state").catch(() => null),
-    dataRunning: await visibleRun.getAttribute("data-running").catch(() => null),
-    ariaDisabled: await visibleRun.getAttribute("aria-disabled").catch(() => null)
+    disabled: await activeAction.isDisabled().catch(() => false),
+    text: ((await activeAction.textContent().catch(() => "")) || "").trim(),
+    dataState: await activeAction.getAttribute("data-state").catch(() => null),
+    dataRunning: await activeAction.getAttribute("data-running").catch(() => null),
+    ariaDisabled: await activeAction.getAttribute("aria-disabled").catch(() => null)
   })
   const triggerRun = async () => {
-    await visibleRun.click({ timeout: 10000, force: true })
+    activeAction = await resolveQuickIngestAction()
+    await activeAction.waitFor({ state: "visible", timeout: 15000 })
+    await activeAction.scrollIntoViewIfNeeded()
+    await expect(activeAction).toBeEnabled({ timeout: 15000 })
+    const label = ((await activeAction.textContent().catch(() => "")) || "").trim()
+    await activeAction.click({ timeout: 10000, force: true })
+    return label
   }
-  await triggerRun()
+
+  let clickedLabel = await triggerRun()
+  for (let step = 0; step < 3; step += 1) {
+    if (/use defaults|start processing|run quick ingest|process|ingest/i.test(clickedLabel)) {
+      break
+    }
+    await page.waitForTimeout(500)
+    clickedLabel = await triggerRun()
+  }
   let lastState: Awaited<ReturnType<typeof getRunState>> | null = null
   const detectStarted = async () => {
     return expect
@@ -1134,8 +1161,18 @@ const waitForQuickIngestCompletion = async (
   return false
 }
 
+const resolveQuickIngestModal = (page: Page) =>
+  page.getByRole("dialog", { name: /Quick Ingest/i }).first()
+
+const waitForQuickIngestReady = async (modal: Locator) => {
+  await expect(modal).toBeVisible({ timeout: 15000 })
+  await expect(
+    modal.locator('[data-testid="qi-file-input"]').first()
+  ).toHaveCount(1, { timeout: 20000 })
+}
+
 const openQuickIngestModal = async (page: Page) => {
-  const modal = page.locator(".quick-ingest-modal .ant-modal-content")
+  const modal = resolveQuickIngestModal(page)
   if (await modal.isVisible().catch(() => false)) return modal
 
   const triggerCandidates = [
@@ -1153,8 +1190,34 @@ const openQuickIngestModal = async (page: Page) => {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
   })
-  await expect(modal).toBeVisible({ timeout: 15000 })
+  await waitForQuickIngestReady(modal)
   return modal
+}
+
+const clickSaveToNotesAction = async (page: Page, message: Locator) => {
+  await message.hover().catch(() => {})
+
+  const directSave = message.getByRole("button", {
+    name: /Save to Notes/i
+  })
+  if (await directSave.first().isVisible().catch(() => false)) {
+    await directSave.first().click()
+    return
+  }
+
+  const moreActions = message.getByRole("button", {
+    name: /More actions/i
+  })
+  await expect
+    .poll(() => moreActions.count(), { timeout: 15000 })
+    .toBeGreaterThan(0)
+  await moreActions.first().click()
+
+  const saveToNotes = page.getByRole("button", {
+    name: /Save to Notes/i
+  })
+  await expect(saveToNotes.first()).toBeVisible({ timeout: 10000 })
+  await saveToNotes.first().click()
 }
 
 const resolveChatInput = async (page: Page) => {
@@ -1999,6 +2062,188 @@ const pollForDictionaryByName = async (
 
 const normalizeMessageContent = (value: unknown) =>
   String(value || "").replace(/\s+/g, " ").trim()
+
+type AssistantSnapshot = {
+  text: string
+  localId: string | null
+  serverMessageId: string | null
+  serverChatId: string
+}
+
+const waitForAssistantSnapshot = async (
+  page: Page,
+  timeoutMs = 90000
+): Promise<AssistantSnapshot | null> =>
+  page
+    .waitForFunction(
+      () => {
+        const store = (window as any).__tldw_useStoreMessageOption
+        const state = store?.getState?.()
+        if (!state?.serverChatId) return null
+        const messages = Array.isArray(state?.messages) ? state.messages : []
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          const msg = messages[i]
+          if (!msg?.isBot) continue
+          if (msg?.messageType === "character:greeting") continue
+          const content =
+            typeof msg?.message === "string" ? msg.message : ""
+          const trimmed = content.replace(/\s+/g, " ").trim()
+          if (!trimmed || trimmed.includes("▋")) return null
+          return {
+            text: trimmed,
+            localId: msg?.id != null ? String(msg.id) : null,
+            serverMessageId:
+              msg?.serverMessageId != null
+                ? String(msg.serverMessageId)
+                : null,
+            serverChatId: String(state.serverChatId)
+          }
+        }
+        return null
+      },
+      undefined,
+      { timeout: timeoutMs }
+    )
+    .then((handle) => handle.jsonValue())
+
+const waitForAssistantServerMessageIdInStore = async (
+  page: Page,
+  options: {
+    localId?: string | null
+    assistantText: string
+    timeoutMs?: number
+  }
+): Promise<string | null> => {
+  const payload = {
+    localId: options.localId ?? null,
+    assistantText: normalizeMessageContent(options.assistantText),
+    timeoutMs: options.timeoutMs ?? 30000
+  }
+
+  return page
+    .waitForFunction(
+      ({ localId, assistantText }) => {
+        const normalize = (value: unknown) =>
+          String(value || "").replace(/\s+/g, " ").trim()
+        const store = (window as any).__tldw_useStoreMessageOption
+        const messages = Array.isArray(store?.getState?.()?.messages)
+          ? store.getState().messages
+          : []
+        if (messages.length === 0) return null
+
+        const findServerId = (candidate: any) => {
+          if (candidate?.serverMessageId != null) {
+            return String(candidate.serverMessageId)
+          }
+          const variants = Array.isArray(candidate?.variants)
+            ? candidate.variants
+            : []
+          for (const variant of variants) {
+            if (variant?.serverMessageId != null) {
+              return String(variant.serverMessageId)
+            }
+          }
+          return null
+        }
+
+        if (localId) {
+          const directMatch = messages.find(
+            (msg: any) => String(msg?.id || "") === String(localId)
+          )
+          const directServerId = findServerId(directMatch)
+          if (directServerId) return directServerId
+        }
+
+        const normalizedTarget = normalize(assistantText)
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          const candidate = messages[i]
+          if (!candidate?.isBot) continue
+          if (candidate?.messageType === "character:greeting") continue
+          const normalizedMessage = normalize(candidate?.message)
+          if (
+            normalizedTarget.length > 0 &&
+            normalizedMessage !== normalizedTarget
+          ) {
+            continue
+          }
+          const serverId = findServerId(candidate)
+          if (serverId) return serverId
+        }
+
+        return null
+      },
+      {
+        localId: payload.localId,
+        assistantText: payload.assistantText
+      },
+      { timeout: payload.timeoutMs }
+    )
+    .then((handle) => handle.jsonValue())
+    .catch(() => null)
+}
+
+const syncAssistantServerMessageIdIntoStore = async (
+  page: Page,
+  options: {
+    localId?: string | null
+    serverMessageId: string
+  }
+) =>
+  page.evaluate(
+    ({ localId, serverMessageId }) => {
+      const store = (window as any).__tldw_useStoreMessageOption
+      if (!store?.getState || !store?.setState) return false
+      const state = store.getState?.()
+      const messages = Array.isArray(state?.messages) ? [...state.messages] : []
+      if (messages.length === 0) return false
+      let targetIndex = -1
+      if (localId) {
+        targetIndex = messages.findIndex(
+          (msg) => String(msg?.id || "") === String(localId)
+        )
+      }
+      if (targetIndex === -1) {
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+          const msg = messages[i]
+          if (!msg?.isBot) continue
+          if (msg?.messageType === "character:greeting") continue
+          targetIndex = i
+          break
+        }
+      }
+      if (targetIndex === -1) return false
+      const target = messages[targetIndex]
+      if (target?.serverMessageId === serverMessageId) return true
+      const updatedVariants = Array.isArray(target?.variants)
+        ? target.variants.map((variant) => ({
+            ...variant,
+            serverMessageId: variant?.serverMessageId ?? serverMessageId
+          }))
+        : target?.variants
+      messages[targetIndex] = {
+        ...target,
+        serverMessageId,
+        variants: updatedVariants
+      }
+      store.setState({ messages })
+      return true
+    },
+    options
+  )
+
+const getAssistantMessageLocator = (
+  page: Page,
+  snapshot: Pick<AssistantSnapshot, "localId">
+) => {
+  if (snapshot.localId) {
+    return page.locator(
+      `[data-testid="chat-message"][data-message-id="${snapshot.localId}"]`
+    )
+  }
+  return page
+    .locator('[data-testid="chat-message"][data-role="assistant"]')
+    .last()
+}
 
 const pollForServerAssistantMessageId = async (
   serverUrl: string,
@@ -2943,42 +3188,8 @@ test.describe("Real server end-to-end workflows", () => {
         await step("wait for message store", async () => {
           await waitForMessageStore(chatPage, "notes-assistant-snapshot", 30000)
         })
-        const assistantSnapshot = await step(
-          "wait for assistant snapshot",
-          async () =>
-            chatPage
-              .waitForFunction(
-                () => {
-                  const store = (window as any).__tldw_useStoreMessageOption
-                  const state = store?.getState?.()
-                  if (!state?.serverChatId) return null
-                  const messages = Array.isArray(state?.messages)
-                    ? state.messages
-                    : []
-                  for (let i = messages.length - 1; i >= 0; i -= 1) {
-                    const msg = messages[i]
-                    if (!msg?.isBot) continue
-                    if (msg?.messageType === "character:greeting") continue
-                    const content =
-                      typeof msg?.message === "string" ? msg.message : ""
-                    const trimmed = content.replace(/\s+/g, " ").trim()
-                    if (!trimmed || trimmed.includes("▋")) return null
-                    return {
-                      text: trimmed,
-                      localId: msg?.id != null ? String(msg.id) : null,
-                      serverMessageId:
-                        msg?.serverMessageId != null
-                          ? String(msg.serverMessageId)
-                          : null,
-                      serverChatId: String(state.serverChatId)
-                    }
-                  }
-                  return null
-                },
-                undefined,
-                { timeout: 90000 }
-              )
-              .then((handle) => handle.jsonValue())
+        const assistantSnapshot = await step("wait for assistant snapshot", async () =>
+          waitForAssistantSnapshot(chatPage)
         )
         if (!assistantSnapshot?.serverChatId || !assistantSnapshot?.text) {
           skipOrThrow(
@@ -2997,11 +3208,25 @@ test.describe("Real server end-to-end workflows", () => {
         let serverMessageId = assistantSnapshot.serverMessageId
           ? String(assistantSnapshot.serverMessageId)
           : null
+        const assistantMessage = getAssistantMessageLocator(chatPage, assistantSnapshot)
+        await step("locate assistant message by local id", async () => {
+          await expect(assistantMessage).toBeVisible({ timeout: 30000 })
+        })
         logStep("assistant text captured", {
           serverChatId,
           serverMessageId,
           textPreview: assistantText.slice(0, 80)
         })
+        if (!serverMessageId) {
+          serverMessageId = await step(
+            "wait for assistant server message id in store",
+            async () =>
+              waitForAssistantServerMessageIdInStore(chatPage, {
+                localId: assistantSnapshot.localId,
+                assistantText
+              })
+          )
+        }
         if (!serverMessageId) {
           serverMessageId = await step("poll server message id", async () => {
             const resolved = await pollForServerAssistantMessageId(
@@ -3015,50 +3240,11 @@ test.describe("Real server end-to-end workflows", () => {
           })
           if (serverMessageId) {
             await step("sync server message id into store", async () => {
-              await chatPage.evaluate(
-                ({ localId, serverMessageId }) => {
-                  const store = (window as any).__tldw_useStoreMessageOption
-                  if (!store?.getState || !store?.setState) return false
-                  const state = store.getState?.()
-                  const messages = Array.isArray(state?.messages)
-                    ? [...state.messages]
-                    : []
-                  if (messages.length === 0) return false
-                  let targetIndex = -1
-                  if (localId) {
-                    targetIndex = messages.findIndex(
-                      (msg) => String(msg?.id || "") === String(localId)
-                    )
-                  }
-                  if (targetIndex === -1) {
-                    for (let i = messages.length - 1; i >= 0; i -= 1) {
-                      const msg = messages[i]
-                      if (!msg?.isBot) continue
-                      if (msg?.messageType === "character:greeting") continue
-                      targetIndex = i
-                      break
-                    }
-                  }
-                  if (targetIndex === -1) return false
-                  const target = messages[targetIndex]
-                  if (target?.serverMessageId === serverMessageId) return true
-                  const updatedVariants = Array.isArray(target?.variants)
-                    ? target.variants.map((variant) => ({
-                        ...variant,
-                        serverMessageId:
-                          variant?.serverMessageId ?? serverMessageId
-                      }))
-                    : target?.variants
-                  messages[targetIndex] = {
-                    ...target,
-                    serverMessageId,
-                    variants: updatedVariants
-                  }
-                  store.setState({ messages })
-                  return true
-                },
-                { localId: assistantSnapshot.localId, serverMessageId }
-              )
+              const synced = await syncAssistantServerMessageIdIntoStore(chatPage, {
+                localId: assistantSnapshot.localId,
+                serverMessageId
+              })
+              logStep("assistant store sync result", { synced, serverMessageId })
             })
           }
         }
@@ -3069,24 +3255,26 @@ test.describe("Real server end-to-end workflows", () => {
           )
           return
         }
-        const lastAssistant = chatPage.locator(
-          `[data-testid="chat-message"][data-server-message-id="${serverMessageId}"]`
-        )
-        await step("locate assistant message", async () => {
-          await expect(lastAssistant).toBeVisible({ timeout: 30000 })
+        await step("wait for assistant save action to become eligible", async () => {
+          await expect
+            .poll(
+              async () => {
+                const latestId = await waitForAssistantServerMessageIdInStore(chatPage, {
+                  localId: assistantSnapshot.localId,
+                  assistantText,
+                  timeoutMs: 2000
+                })
+                return latestId ?? serverMessageId
+              },
+              { timeout: 30000, intervals: [500, 1000, 2000] }
+            )
+            .toBeTruthy()
         })
         const snippet = assistantText.slice(0, 80)
         logStep("assistant snippet", { snippet })
   
         await step("save assistant to notes", async () => {
-          await lastAssistant.hover().catch(() => {})
-          const saveToNotes = lastAssistant.getByRole("button", {
-            name: /Save to Notes/i
-          })
-          await expect
-            .poll(() => saveToNotes.count(), { timeout: 15000 })
-            .toBeGreaterThan(0)
-          await saveToNotes.first().click()
+          await clickSaveToNotesAction(chatPage, assistantMessage)
         })
         const savedNote = await step("poll for saved note", async () => {
           const note = await pollForNoteByConversation(
@@ -3601,39 +3789,7 @@ test.describe("Real server end-to-end workflows", () => {
       await sendChatMessage(chatPage, userMessage)
       await waitForAssistantMessage(chatPage)
       await waitForMessageStore(chatPage, "flashcards-assistant-snapshot", 30000)
-      const assistantSnapshot = await chatPage
-        .waitForFunction(
-          () => {
-            const store = (window as any).__tldw_useStoreMessageOption
-            const state = store?.getState?.()
-            if (!state?.serverChatId) return null
-            const messages = Array.isArray(state?.messages)
-              ? state.messages
-              : []
-            for (let i = messages.length - 1; i >= 0; i -= 1) {
-              const msg = messages[i]
-              if (!msg?.isBot) continue
-              if (msg?.messageType === "character:greeting") continue
-              const content =
-                typeof msg?.message === "string" ? msg.message : ""
-              const trimmed = content.replace(/\s+/g, " ").trim()
-              if (!trimmed || trimmed.includes("▋")) return null
-              return {
-                text: trimmed,
-                localId: msg?.id != null ? String(msg.id) : null,
-                serverMessageId:
-                  msg?.serverMessageId != null
-                    ? String(msg.serverMessageId)
-                    : null,
-                serverChatId: String(state.serverChatId)
-              }
-            }
-            return null
-          },
-          undefined,
-          { timeout: 90000 }
-        )
-        .then((handle) => handle.jsonValue())
+      const assistantSnapshot = await waitForAssistantSnapshot(chatPage)
       if (!assistantSnapshot?.serverChatId || !assistantSnapshot?.text) {
         skipOrThrow(
           true,
@@ -3649,6 +3805,14 @@ test.describe("Real server end-to-end workflows", () => {
       let serverMessageId = assistantSnapshot.serverMessageId
         ? String(assistantSnapshot.serverMessageId)
         : null
+      const assistantMessage = getAssistantMessageLocator(chatPage, assistantSnapshot)
+      await expect(assistantMessage).toBeVisible({ timeout: 30000 })
+      if (!serverMessageId) {
+        serverMessageId = await waitForAssistantServerMessageIdInStore(chatPage, {
+          localId: assistantSnapshot.localId,
+          assistantText
+        })
+      }
       if (!serverMessageId) {
         serverMessageId = await pollForServerAssistantMessageId(
           normalizedServerUrl,
@@ -3657,50 +3821,10 @@ test.describe("Real server end-to-end workflows", () => {
           assistantText
         )
         if (serverMessageId) {
-          await chatPage.evaluate(
-            ({ localId, serverMessageId }) => {
-              const store = (window as any).__tldw_useStoreMessageOption
-              if (!store?.getState || !store?.setState) return false
-              const state = store.getState?.()
-              const messages = Array.isArray(state?.messages)
-                ? [...state.messages]
-                : []
-              if (messages.length === 0) return false
-              let targetIndex = -1
-              if (localId) {
-                targetIndex = messages.findIndex(
-                  (msg) => String(msg?.id || "") === String(localId)
-                )
-              }
-              if (targetIndex === -1) {
-                for (let i = messages.length - 1; i >= 0; i -= 1) {
-                  const msg = messages[i]
-                  if (!msg?.isBot) continue
-                  if (msg?.messageType === "character:greeting") continue
-                  targetIndex = i
-                  break
-                }
-              }
-              if (targetIndex === -1) return false
-              const target = messages[targetIndex]
-              if (target?.serverMessageId === serverMessageId) return true
-              const updatedVariants = Array.isArray(target?.variants)
-                ? target.variants.map((variant) => ({
-                    ...variant,
-                    serverMessageId:
-                      variant?.serverMessageId ?? serverMessageId
-                  }))
-                : target?.variants
-              messages[targetIndex] = {
-                ...target,
-                serverMessageId,
-                variants: updatedVariants
-              }
-              store.setState({ messages })
-              return true
-            },
-            { localId: assistantSnapshot.localId, serverMessageId }
-          )
+          await syncAssistantServerMessageIdIntoStore(chatPage, {
+            localId: assistantSnapshot.localId,
+            serverMessageId
+          })
         }
       }
       if (!serverMessageId) {
@@ -3710,10 +3834,17 @@ test.describe("Real server end-to-end workflows", () => {
         )
         return
       }
-      const lastAssistant = chatPage.locator(
-        `[data-testid="chat-message"][data-server-message-id="${serverMessageId}"]`
-      )
-      await expect(lastAssistant).toBeVisible({ timeout: 30000 })
+      await expect
+        .poll(
+          async () =>
+            waitForAssistantServerMessageIdInStore(chatPage, {
+              localId: assistantSnapshot.localId,
+              assistantText,
+              timeoutMs: 2000
+            }),
+          { timeout: 30000, intervals: [500, 1000, 2000] }
+        )
+        .toBeTruthy()
       const baselineFlashcards = await fetchRecentFlashcards(
         normalizedServerUrl,
         apiKey,
@@ -3725,8 +3856,8 @@ test.describe("Real server end-to-end workflows", () => {
           .filter((id: string | null): id is string => Boolean(id))
       )
 
-      await lastAssistant.hover().catch(() => {})
-      const saveToFlashcards = lastAssistant.getByRole("button", {
+      await assistantMessage.hover().catch(() => {})
+      const saveToFlashcards = assistantMessage.getByRole("button", {
         name: /Save to Flashcards/i
       })
       await expect
@@ -3918,9 +4049,7 @@ test.describe("Real server end-to-end workflows", () => {
         await waitForConnected(page, "workflow-quick-ingest-fallback")
         modal = await openQuickIngestModal(page)
       }
-      await expect(
-        page.locator('.quick-ingest-modal [data-state="ready"]')
-      ).toBeVisible({ timeout: 20000 })
+      await waitForQuickIngestReady(modal)
 
       const unique = Date.now()
       const fileName = `e2e-media-${unique}.txt`
@@ -3943,7 +4072,11 @@ test.describe("Real server end-to-end workflows", () => {
         await chunkingToggle.click()
       }
 
-      const runButton = modal.getByTestId("quick-ingest-run")
+      const runButton = modal
+        .getByRole("button", {
+          name: /Use defaults & process|Configure \d+ items?|Start Processing|Run quick ingest/i
+        })
+        .first()
       await expect(runButton).toBeEnabled({ timeout: 15000 })
       logStep("pre-run state", {
         url: page.url(),
@@ -3964,7 +4097,21 @@ test.describe("Real server end-to-end workflows", () => {
       logStep("run click")
       await clickQuickIngestRun(modal)
       try {
-        await expect(runButton).toBeDisabled({ timeout: 15000 })
+        await expect
+          .poll(async () => {
+            const disabled = await runButton.isDisabled().catch(() => false)
+            const hidden = !(await runButton.isVisible().catch(() => false))
+            const processing = await modal
+              .getByRole("button", { name: /Step 4: Processing|Processing/i })
+              .isVisible()
+              .catch(() => false)
+            const results = await modal
+              .getByRole("button", { name: /Step 5: Results|Results/i })
+              .isVisible()
+              .catch(() => false)
+            return disabled || hidden || processing || results
+          }, { timeout: 15000 })
+          .toBe(true)
       } catch (error) {
         logStep("run did not start", {
           runLabel: await runButton.textContent().catch(() => null),
@@ -4144,19 +4291,18 @@ test.describe("Real server end-to-end workflows", () => {
       })
 
       const closeQuickIngestModal = async () => {
-        const modalRoot = page.locator(".quick-ingest-modal")
-        const modalContent = modalRoot.locator(".ant-modal-content")
-        const isOpen = await modalContent.isVisible().catch(() => false)
+        const modalRoot = resolveQuickIngestModal(page)
+        const isOpen = await modalRoot.isVisible().catch(() => false)
         if (!isOpen) return
         logStep("closing quick ingest modal")
-        const closeButton = modalRoot.locator(".ant-modal-close")
+        const closeButton = modalRoot.getByRole("button", { name: /^Close$/i })
         const closeVisible = await closeButton.isVisible().catch(() => false)
         if (closeVisible) {
           await closeButton.click()
         } else {
           await page.keyboard.press("Escape").catch(() => {})
         }
-        await expect(modalContent).toBeHidden({ timeout: 10000 })
+        await expect(modalRoot).toBeHidden({ timeout: 10000 })
       }
       await closeQuickIngestModal()
 
@@ -6573,9 +6719,7 @@ test.describe("Real server end-to-end workflows", () => {
         await waitForConnected(page, "workflow-media-trash-ingest-fallback")
         modal = await openQuickIngestModal(page)
       }
-      await expect(
-        page.locator('.quick-ingest-modal [data-state="ready"]')
-      ).toBeVisible({ timeout: 20000 })
+      await waitForQuickIngestReady(modal)
 
       await page.setInputFiles('[data-testid="qi-file-input"]', {
         name: fileName,
@@ -6779,9 +6923,7 @@ test.describe("Real server end-to-end workflows", () => {
         await waitForConnected(page, "workflow-analysis-ingest-fallback")
         modal = await openQuickIngestModal(page)
       }
-      await expect(
-        page.locator('.quick-ingest-modal [data-state="ready"]')
-      ).toBeVisible({ timeout: 20000 })
+      await waitForQuickIngestReady(modal)
 
       await page.setInputFiles('[data-testid="qi-file-input"]', {
         name: fileName,

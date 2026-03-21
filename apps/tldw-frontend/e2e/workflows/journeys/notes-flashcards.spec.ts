@@ -4,8 +4,14 @@
  * End-to-end workflow that creates a note, then generates flashcards
  * from the note content, and verifies flashcards were created.
  */
-import { test, expect, skipIfServerUnavailable } from "../../utils/fixtures"
+import {
+  test,
+  expect,
+  skipIfServerUnavailable,
+  skipIfNoModels
+} from "../../utils/fixtures"
 import { NotesPage, FlashcardsPage } from "../../utils/page-objects"
+import { expectApiCall } from "../../utils/api-assertions"
 import { createNote } from "../../utils/journey-helpers"
 
 test.describe("Notes -> Flashcards journey", () => {
@@ -23,6 +29,7 @@ test.describe("Notes -> Flashcards journey", () => {
     serverInfo,
   }) => {
     skipIfServerUnavailable(serverInfo)
+    skipIfNoModels(serverInfo)
 
     await test.step("Create a note with study content", async () => {
       // Use the journey helper to create the note
@@ -74,10 +81,33 @@ test.describe("Notes -> Flashcards journey", () => {
         .catch(() => false)
 
       if (generateBtnVisible) {
+        const generateApiCall = expectApiCall(page, {
+          method: "POST",
+          url: "/api/v1/flashcards/generate",
+        }, 60_000)
+
         await flashcardsPage.generateButton.click()
 
-        // Wait for generation to complete (may take time with LLM)
-        await page.waitForTimeout(5_000)
+        const { response } = await generateApiCall
+        expect(response.status()).toBeLessThan(400)
+        const responseBody = await response.json().catch(() => ({}))
+        expect(Number(responseBody?.count ?? 0)).toBeGreaterThan(0)
+
+        const saveGeneratedButton = page.getByTestId("flashcards-generate-save-button")
+        await expect(saveGeneratedButton).toBeVisible({ timeout: 15_000 })
+
+        const saveApiCall = expectApiCall(page, {
+          method: "POST",
+          url: /\/api\/v1\/flashcards(?:\?|$)/,
+        }, 60_000)
+
+        await saveGeneratedButton.click()
+
+        const { response: saveResponse } = await saveApiCall
+        expect(saveResponse.status()).toBeLessThan(400)
+        await expect(
+          page.getByText(/Saved \d+ generated cards/i)
+        ).toBeVisible({ timeout: 15_000 })
       }
     })
 
@@ -88,15 +118,10 @@ test.describe("Notes -> Flashcards journey", () => {
       await flashcardsPage.switchToTab("manage")
       await page.waitForTimeout(1_000)
 
-      // Check if any cards or the empty state is visible
-      // The manage tab should show cards if generation succeeded
-      const manageTopBar = await flashcardsPage.manageTopBar
-        .isVisible()
-        .catch(() => false)
-
-      // If the manage tab loaded, the feature is working
-      // Cards may or may not be present depending on generation success
-      expect(manageTopBar || (await flashcardsPage.isOnline())).toBe(true)
+      await expect(flashcardsPage.manageTopBar).toBeVisible({ timeout: 15_000 })
+      await expect(
+        page.getByTestId("flashcards-generate-save-button")
+      ).toHaveCount(0)
     })
   })
 })
