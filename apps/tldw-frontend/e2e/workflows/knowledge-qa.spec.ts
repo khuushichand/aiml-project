@@ -95,6 +95,9 @@ test.describe("KnowledgeQA Workflow", () => {
 
       // One of these should be true
       expect(answer.length > 0 || noResults).toBeTruthy()
+      if (answer.length > 0) {
+        expect(answer).not.toMatch(/chatcmpl|finish_reason|chat\.completion\.chunk/i)
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -533,6 +536,13 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.waitForReady()
 
       // Mock a failing API by intercepting the route
+      await authedPage.route("**/api/v1/rag/search/stream", (route) => {
+        route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Internal server error" })
+        })
+      })
       await authedPage.route("**/api/v1/rag/search", (route) => {
         route.fulfill({
           status: 500,
@@ -550,6 +560,7 @@ test.describe("KnowledgeQA Workflow", () => {
       expect(errorMsg).not.toBeNull()
 
       // Unroute to not affect other tests
+      await authedPage.unroute("**/api/v1/rag/search/stream")
       await authedPage.unroute("**/api/v1/rag/search")
 
       await assertNoCriticalErrors(diagnostics)

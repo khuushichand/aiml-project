@@ -89,3 +89,43 @@ async def test_generate_streaming_response_ignores_non_generator_kwargs(
     assert captured_configs == [
         {"provider": "openai", "model": "gpt-4o-mini", "streaming": True}
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_generator_ignores_finish_only_openai_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _stream() -> AsyncIterator[dict[str, Any]]:
+        yield {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "Machine learning "},
+                    "finish_reason": None,
+                }
+            ]
+        }
+        yield {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }
+            ],
+            "id": "chatcmpl-terminal",
+            "object": "chat.completion.chunk",
+        }
+
+    async def _fake_call_llm(_prompt: str, **_kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        return _stream()
+
+    generator = generation_mod.StreamingGenerator(
+        generation_mod.GenerationConfig(provider="openai", model="gpt-4o-mini")
+    )
+    monkeypatch.setattr(generator, "_call_llm", _fake_call_llm)
+
+    ctx = SimpleNamespace(documents=[], query="What is machine learning?")
+    chunks = [chunk async for chunk in generator.generate_stream(ctx, ctx.query)]
+
+    assert chunks == ["Machine learning "]

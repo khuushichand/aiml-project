@@ -68,14 +68,18 @@ export class MediaReviewPage {
     return items.count()
   }
 
-  async clickItem(index: number): Promise<void> {
+  async getItemRow(index: number): Promise<Locator> {
     const items = await this.getMediaItems()
-    await items.nth(index).click()
+    return items.nth(index)
+  }
+
+  async clickItem(index: number): Promise<void> {
+    const row = await this.getItemRow(index)
+    await row.click()
   }
 
   async getItemTitle(index: number): Promise<string> {
-    const items = await this.getMediaItems()
-    const row = items.nth(index)
+    const row = await this.getItemRow(index)
     const title = row.locator(".font-medium").first()
     if ((await title.count()) > 0) {
       return ((await title.textContent()) ?? "").trim()
@@ -84,14 +88,18 @@ export class MediaReviewPage {
     return ((await fallback.textContent()) ?? "").trim()
   }
 
-  async shiftClickItem(index: number): Promise<void> {
-    const items = await this.getMediaItems()
-    await items.nth(index).click({ modifiers: ["Shift"] })
+  async toggleItemSelection(index: number, modifiers?: ("Shift" | "Meta")[]): Promise<void> {
+    const row = await this.getItemRow(index)
+    const checkbox = row.getByRole("checkbox").first()
+    await checkbox.click({ modifiers })
   }
 
-  async ctrlClickItem(index: number): Promise<void> {
-    const items = await this.getMediaItems()
-    await items.nth(index).click({ modifiers: ["Meta"] })
+  async shiftToggleItemSelection(index: number): Promise<void> {
+    await this.toggleItemSelection(index, ["Shift"])
+  }
+
+  async ctrlToggleItemSelection(index: number): Promise<void> {
+    await this.toggleItemSelection(index, ["Meta"])
   }
 
   async getSelectedCount(): Promise<number> {
@@ -128,14 +136,13 @@ export class MediaReviewPage {
   }
 
   async selectFirstNItems(count: number): Promise<void> {
-    const items = await this.getMediaItems()
-    const total = await items.count()
+    const total = await this.getItemCount()
     const limit = Math.min(Math.max(0, count), total)
     for (let idx = 0; idx < limit; idx += 1) {
-      const row = items.nth(idx)
+      const row = await this.getItemRow(idx)
       const selected = (await row.getAttribute("aria-selected")) === "true"
       if (!selected) {
-        await row.click()
+        await this.toggleItemSelection(idx)
       }
     }
   }
@@ -300,30 +307,67 @@ export class MediaReviewPage {
 
   async setSort(sortValue: "relevance" | "date_desc" | "date_asc" | "title_asc" | "title_desc"): Promise<void> {
     await this.ensureFiltersVisible()
+    const optionLabels: Record<string, string> = {
+      relevance: "Relevance",
+      date_desc: "Date: newest first",
+      date_asc: "Date: oldest first",
+      title_asc: "Title: A-Z",
+      title_desc: "Title: Z-A"
+    }
+    const selectedLabel = optionLabels[sortValue]
+    const sortCombo = this.page.getByRole("combobox", { name: /sort/i }).first()
+    const sortTrigger = this.page
+      .locator("#filter-section .ant-select")
+      .filter({ has: this.page.getByRole("combobox", { name: /sort/i }) })
+      .first()
+    const labelPattern = new RegExp(
+      `^\\s*${selectedLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`,
+      "i"
+    )
+
+    if (await sortTrigger.isVisible().catch(() => false)) {
+      await sortTrigger.click()
+      const dropdown = this.page.locator(".ant-select-dropdown:visible").last()
+      await dropdown.waitFor({ state: "visible", timeout: 5_000 })
+      const option = dropdown
+        .locator(".ant-select-item-option-content")
+        .filter({ hasText: labelPattern })
+        .first()
+      if (await option.isVisible().catch(() => false)) {
+        await option.click({ force: true })
+        await expect(sortTrigger).toContainText(selectedLabel, { timeout: 10_000 })
+        return
+      }
+
+      await this.page.keyboard.press("Escape").catch(() => {})
+    } else if (await sortCombo.isVisible().catch(() => false)) {
+      await sortCombo.click()
+      const dropdown = this.page.locator(".ant-select-dropdown:visible").last()
+      await dropdown.waitFor({ state: "visible", timeout: 5_000 })
+      const option = dropdown
+        .locator(".ant-select-item-option-content")
+        .filter({ hasText: labelPattern })
+        .first()
+      if (await option.isVisible().catch(() => false)) {
+        await option.click({ force: true })
+        await expect(sortCombo.locator("xpath=..")).toContainText(selectedLabel, { timeout: 10_000 })
+        return
+      }
+      await this.page.keyboard.press("Escape").catch(() => {})
+    }
+
     const sortSelect = this.page.locator("select[aria-label='Sort']").first()
     if ((await sortSelect.count()) > 0 && (await sortSelect.isVisible().catch(() => false))) {
       await sortSelect.selectOption(sortValue)
       return
     }
 
-    const sortCombo = this.page.getByRole("combobox", { name: /sort/i }).first()
-    if (!(await sortCombo.isVisible().catch(() => false))) return
-    await sortCombo.click()
-    const optionLabels: Record<string, RegExp> = {
-      relevance: /relevance/i,
-      date_desc: /date:\s*newest first/i,
-      date_asc: /date:\s*oldest first/i,
-      title_asc: /title:\s*a-z/i,
-      title_desc: /title:\s*z-a/i
-    }
-    const option = this.page
-      .locator(".ant-select-item-option")
-      .filter({ hasText: optionLabels[sortValue] })
+    const fallbackOption = this.page
+      .locator(".ant-select-dropdown:visible .ant-select-item-option-content")
+      .filter({ hasText: labelPattern })
       .first()
-    if ((await option.count()) > 0 && (await option.isVisible().catch(() => false))) {
-      await option.click()
-    } else {
-      await this.page.keyboard.press("Escape").catch(() => {})
+    if ((await fallbackOption.count()) > 0 && (await fallbackOption.isVisible().catch(() => false))) {
+      await fallbackOption.click({ force: true })
     }
   }
 
@@ -400,6 +444,11 @@ export class MediaReviewPage {
   }
 
   async openCompareContentDiff(): Promise<void> {
+    const exitCompareButton = this.page.getByRole("button", { name: /exit compare/i }).first()
+    if (await exitCompareButton.isVisible().catch(() => false)) {
+      return
+    }
+
     const compareBtn = this.page.getByRole("button", { name: /compare content/i }).first()
     await compareBtn.click({ timeout: 10_000 })
   }

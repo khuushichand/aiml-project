@@ -186,7 +186,7 @@ Let me explain:"""
         return templates.get(name, cls.DEFAULT)
 
 
-def _extract_openai_content(response: Any) -> str:
+def _extract_openai_text_content(response: Any) -> Optional[str]:
     if isinstance(response, str):
         return response
     if isinstance(response, dict):
@@ -218,12 +218,20 @@ def _extract_openai_content(response: Any) -> str:
         content = response.get("content") or response.get("text")
         if isinstance(content, str):
             return content
+        return None
+    return None
+
+
+def _extract_openai_content(response: Any) -> str:
+    text = _extract_openai_text_content(response)
+    if text is not None:
+        return text
     return str(response)
 
 
 def _extract_stream_text(chunk: Any) -> Optional[str]:
     if isinstance(chunk, dict):
-        return _extract_openai_content(chunk)
+        return _extract_openai_text_content(chunk)
     if isinstance(chunk, (bytes, bytearray)):
         try:
             chunk = chunk.decode("utf-8", errors="ignore")
@@ -241,7 +249,11 @@ def _extract_stream_text(chunk: Any) -> Optional[str]:
                 payload = json.loads(data)
             except json.JSONDecodeError:
                 return data or None
-            return _extract_openai_content(payload) or None
+            if isinstance(payload, dict):
+                return _extract_openai_text_content(payload)
+            if isinstance(payload, str):
+                return payload or None
+            return None
         return stripped
     try:
         return str(chunk)

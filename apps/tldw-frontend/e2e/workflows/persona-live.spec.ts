@@ -72,7 +72,7 @@ test.describe("Persona Live Workflow", () => {
     )
   })
 
-  test("connects to live persona websocket and receives a plan/cancel notice", async ({
+  test("shows setup gate or connects to live persona websocket and receives a plan/cancel notice", async ({
     authedPage,
     serverInfo,
     diagnostics
@@ -103,6 +103,21 @@ test.describe("Persona Live Workflow", () => {
       .catch(() => false)
     if (personaUnavailableVisible) {
       test.skip(true, "webui marked persona unavailable")
+    }
+
+    const setupOverlay = authedPage.getByTestId("assistant-setup-overlay")
+    const setupHeading = authedPage.getByText("Assistant Setup").first()
+    const setupRequired =
+      (await setupHeading.isVisible().catch(() => false)) ||
+      (await setupHeading.waitFor({ state: "visible", timeout: 5_000 }).then(() => true).catch(() => false))
+    if (setupRequired) {
+      await expect(setupOverlay).toBeVisible()
+      await expect(setupHeading).toBeVisible()
+      await expect(
+        authedPage.getByText("Choose a persona")
+      ).toBeVisible()
+      expect(diagnostics.pageErrors).toHaveLength(0)
+      return
     }
 
     await authedPage

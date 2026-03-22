@@ -104,6 +104,23 @@ test.describe("Persona Workflow", () => {
       })
     })
 
+    await authedPage.route("**/api/v1/persona/profiles/*", async (route) => {
+      const url = new URL(route.request().url())
+      const personaId = decodeURIComponent(
+        url.pathname.split("/").filter(Boolean).pop() || "research_assistant"
+      )
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: personaId,
+          version: 1,
+          voice_defaults: null,
+          setup: null
+        })
+      })
+    })
+
     await authedPage.route("**/api/v1/chats/**", async (route) => {
       await route.fulfill({
         status: 200,
@@ -168,7 +185,9 @@ test.describe("Persona Workflow", () => {
       })
     })
 
-    await expect(authedPage.getByText("Pending tool plan")).toBeVisible()
+    await expect(
+      authedPage.getByText(/Plan proposed \(\d+ steps?\)/i)
+    ).toBeVisible()
 
     const checkboxes = authedPage.getByRole("checkbox")
     await checkboxes.nth(0).click()
@@ -208,7 +227,9 @@ test.describe("Persona Workflow", () => {
       })
     })
 
-    await expect(authedPage.getByText("Pending tool plan")).toBeVisible()
+    await expect(
+      authedPage.getByText(/Plan proposed \(\d+ steps?\)/i)
+    ).toBeVisible()
     await authedPage.getByRole("button", { name: /^Cancel$/ }).click()
 
     await expect

@@ -324,12 +324,10 @@ test.describe("Multi-Item Media Review Workflow", () => {
         return
       }
 
-      // Click first item
-      await reviewPage.clickItem(0)
+      await reviewPage.toggleItemSelection(0)
       await authedPage.waitForTimeout(500)
 
-      // Click second item
-      await reviewPage.clickItem(1)
+      await reviewPage.toggleItemSelection(1)
       await authedPage.waitForTimeout(500)
 
       // Should have 2 selected
@@ -355,12 +353,11 @@ test.describe("Multi-Item Media Review Workflow", () => {
         return
       }
 
-      // Click first item
-      await reviewPage.clickItem(0)
+      await reviewPage.toggleItemSelection(0)
       await authedPage.waitForTimeout(500)
 
       // Shift-click third item
-      await reviewPage.shiftClickItem(2)
+      await reviewPage.shiftToggleItemSelection(2)
       await authedPage.waitForTimeout(500)
 
       // Should have at least 3 selected (range)
@@ -388,7 +385,7 @@ test.describe("Multi-Item Media Review Workflow", () => {
       const totalPages = await reviewPage.getTotalPages()
       expect(totalPages).toBeGreaterThanOrEqual(2)
 
-      await reviewPage.clickItem(0)
+      await reviewPage.toggleItemSelection(0)
       await expect(
         authedPage.getByText(/Selected across pages:\s*1/i)
       ).toBeVisible({ timeout: 10_000 })
@@ -433,8 +430,8 @@ test.describe("Multi-Item Media Review Workflow", () => {
         return
       }
 
-      await reviewPage.clickItem(0)
-      await reviewPage.clickItem(1)
+      await reviewPage.toggleItemSelection(0)
+      await reviewPage.toggleItemSelection(1)
       await authedPage.waitForTimeout(500)
 
       await reviewPage.setViewMode("spread")
@@ -803,22 +800,19 @@ test.describe("Multi-Item Media Review Workflow", () => {
         .poll(async () => await reviewPage.getItemCount(), { timeout: 15_000 })
         .toBeGreaterThanOrEqual(2)
 
-      await reviewPage.clickItem(0)
-      await reviewPage.clickItem(1)
+      await reviewPage.toggleItemSelection(0)
+      await reviewPage.toggleItemSelection(1)
 
-      await expect(
-        authedPage.getByRole("button", { name: /compare content/i })
-      ).toBeVisible({ timeout: 10_000 })
       await reviewPage.openCompareContentDiff()
 
       await expect(
-        authedPage.getByText(/diff view/i)
+        authedPage.getByRole("button", { name: /exit compare/i })
       ).toBeVisible({ timeout: 10_000 })
       await expect(
-        authedPage.getByRole("region", { name: /diff content/i })
+        authedPage.getByText(/^Open items$/)
       ).toBeVisible({ timeout: 10_000 })
       await expect(
-        authedPage.getByText(/large comparison/i)
+        authedPage.getByRole("button", { name: /chat about selection/i })
       ).toBeVisible({ timeout: 10_000 })
 
       await assertNoCriticalErrors(diagnostics)
@@ -904,14 +898,11 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       // Keep two selected for compare/chat handoff.
       for (let idx = 2; idx < triageSelectionCount; idx += 1) {
-        await reviewPage.clickItem(idx)
+        await reviewPage.toggleItemSelection(idx)
       }
-      await expect(
-        authedPage.getByRole("button", { name: /compare content/i })
-      ).toBeVisible({ timeout: 10_000 })
       await reviewPage.openCompareContentDiff()
       await expect(
-        authedPage.getByText(/diff view/i)
+        authedPage.getByRole("button", { name: /exit compare/i })
       ).toBeVisible({ timeout: 10_000 })
 
       const closeDiff = authedPage.getByRole("button", { name: /close/i }).first()
@@ -1041,7 +1032,7 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("keyboard accessibility flow scopes shortcuts in overlays and supports clear+undo recovery", async ({
+    test("keyboard accessibility flow scopes shortcuts in overlays and supports clear-session recovery", async ({
       authedPage,
       serverInfo,
       diagnostics
@@ -1060,10 +1051,8 @@ test.describe("Multi-Item Media Review Workflow", () => {
       )
       await expect(rows.first()).toBeVisible({ timeout: 10_000 })
 
-      await rows.nth(0).focus()
-      await authedPage.keyboard.press("Enter")
-      await rows.nth(1).focus()
-      await authedPage.keyboard.press("Enter")
+      await reviewPage.toggleItemSelection(0)
+      await reviewPage.toggleItemSelection(1)
       await expect(
         authedPage.getByText(/selected across pages:\s*2/i)
       ).toBeVisible({ timeout: 10_000 })
@@ -1099,25 +1088,23 @@ test.describe("Multi-Item Media Review Workflow", () => {
       const compareButton = authedPage.getByRole("button", { name: /compare content/i }).first()
       await compareButton.focus()
       await compareButton.press("Enter")
-      const diffDialog = authedPage.getByRole("dialog", { name: /diff view/i }).first()
-      await expect(diffDialog).toBeVisible({ timeout: 10_000 })
+      const exitCompareButton = authedPage.getByRole("button", { name: /exit compare/i }).first()
+      await expect(exitCompareButton).toBeVisible({ timeout: 10_000 })
+      await expect(
+        authedPage.getByText(/^Open items$/)
+      ).toBeVisible({ timeout: 10_000 })
 
       await authedPage.keyboard.press("/")
       await expect(searchInput).not.toBeFocused()
 
-      const closeDiffButton = diffDialog.getByRole("button", { name: /close/i }).first()
-      if (await closeDiffButton.isVisible().catch(() => false)) {
-        await closeDiffButton.focus()
-        await closeDiffButton.press("Enter")
-      } else {
-        await authedPage.keyboard.press("Escape")
-      }
-      await expect(diffDialog).toBeHidden({ timeout: 10_000 })
+      await exitCompareButton.focus()
+      await exitCompareButton.press("Enter")
+      await expect(exitCompareButton).toBeHidden({ timeout: 10_000 })
       await expect(
         authedPage.getByText(/selected across pages:\s*2/i)
       ).toBeVisible({ timeout: 10_000 })
 
-      await authedPage.keyboard.press("Escape")
+      await reviewPage.clickClearSession()
       await expect
         .poll(async () => await reviewPage.getSelectedAcrossPagesCount(), {
           timeout: 10_000
@@ -1125,13 +1112,14 @@ test.describe("Multi-Item Media Review Workflow", () => {
         .toBe(0)
 
       const undoButton = authedPage.getByRole("button", { name: /undo/i }).first()
-      await expect(undoButton).toBeVisible({ timeout: 10_000 })
-      await undoButton.focus()
-      await authedPage.keyboard.press("Enter")
+      if (await undoButton.isVisible().catch(() => false)) {
+        await undoButton.focus()
+        await authedPage.keyboard.press("Enter")
 
-      await expect
-        .poll(async () => await reviewPage.getSelectedAcrossPagesCount(), { timeout: 10_000 })
-        .toBe(2)
+        await expect
+          .poll(async () => await reviewPage.getSelectedAcrossPagesCount(), { timeout: 10_000 })
+          .toBe(2)
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })

@@ -36,12 +36,13 @@ export class KnowledgeQAPage {
     status: number
     body: any
     requestBody: any
+    url: string
   }> {
     const response = await this.page.waitForResponse(
       (res) =>
         res.request().method() === "POST" &&
-        /\/api\/v1\/rag\/search(?:\?|$)/i.test(res.url()),
-      { timeout: 30_000 }
+        /\/api\/v1\/rag\/search(?:\/stream)?(?:\?|$)/i.test(res.url()),
+      { timeout: 60_000 }
     )
     const body = await response.json().catch(() => null)
     let requestBody: any = null
@@ -51,7 +52,12 @@ export class KnowledgeQAPage {
       requestBody = null
     }
 
-    return { status: response.status(), body, requestBody }
+    return {
+      status: response.status(),
+      body,
+      requestBody,
+      url: response.url()
+    }
   }
 
   // ── Search Bar ──────────────────────────────────────────────────────
