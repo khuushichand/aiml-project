@@ -4,6 +4,9 @@
 import { type Page, type Locator, expect } from "@playwright/test"
 import { waitForConnection } from "../helpers"
 
+const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
 export class DictionariesPage {
   readonly page: Page
 
@@ -23,6 +26,11 @@ export class DictionariesPage {
     // Wait for table or empty state
     const container = this.page.locator(".ant-table, .ant-empty, [data-testid='dictionaries-list']")
     await container.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {})
+  }
+
+  async searchDictionaries(query: string): Promise<void> {
+    const searchInput = this.page.getByRole("textbox", { name: /search dictionaries/i })
+    await searchInput.fill(query)
   }
 
   // ── API Request Helpers ─────────────────────────────────────────────
@@ -47,7 +55,7 @@ export class DictionariesPage {
   // ── Dictionary CRUD ─────────────────────────────────────────────────
 
   async clickNewDictionary(): Promise<void> {
-    const btn = this.page.getByRole("button", { name: /new dictionary|create|add/i })
+    const btn = this.page.getByRole("button", { name: /^New Dictionary$/i })
     await btn.click()
   }
 
@@ -76,7 +84,10 @@ export class DictionariesPage {
   }
 
   async findDictionaryRow(name: string): Promise<Locator> {
-    return this.page.locator(`.ant-table-row:has-text("${name}")`)
+    await this.searchDictionaries(name)
+    return this.page.locator(".ant-table-row").filter({
+      has: this.page.getByRole("cell", { name: new RegExp(`^${escapeRegex(name)}$`) })
+    })
   }
 
   async clickEditOnRow(name: string): Promise<void> {

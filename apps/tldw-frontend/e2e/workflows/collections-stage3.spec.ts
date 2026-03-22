@@ -287,8 +287,13 @@ test.describe("Collections Stage 3 Skeleton", () => {
     const { response: saveResponse } = await saveApiCall
     expect(saveResponse.status()).toBeLessThan(400)
 
-    await authedPage.keyboard.press("Escape")
-    await expect(authedPage.locator(".reading-item-detail-drawer")).not.toBeVisible({ timeout: 10_000 })
+    await authedPage
+      .locator(".reading-item-detail-drawer")
+      .getByRole("button", { name: "Close" })
+      .click()
+    await expect(authedPage.locator(".reading-item-detail-drawer")).not.toBeVisible({
+      timeout: 10_000
+    })
 
     await openReadingItemByTitle(authedPage, seed.title)
     await authedPage.getByRole("tab", { name: /Notes/i }).click()

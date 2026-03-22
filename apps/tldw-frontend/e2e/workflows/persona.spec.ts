@@ -186,11 +186,12 @@ test.describe("Persona Workflow", () => {
     })
 
     await expect(
-      authedPage.getByText(/Plan proposed \(\d+ steps?\)/i)
+      authedPage.getByLabel(/0\. ingest_url\s*-\s*ingest source/i)
     ).toBeVisible()
 
-    const checkboxes = authedPage.getByRole("checkbox")
-    await checkboxes.nth(0).click()
+    await authedPage
+      .getByLabel(/0\. ingest_url\s*-\s*ingest source/i)
+      .click()
     await authedPage.getByRole("button", { name: /^Confirm plan$/ }).click()
 
     await expect
@@ -228,7 +229,7 @@ test.describe("Persona Workflow", () => {
     })
 
     await expect(
-      authedPage.getByText(/Plan proposed \(\d+ steps?\)/i)
+      authedPage.getByLabel(/0\. summarize\s*-\s*summarize result/i)
     ).toBeVisible()
     await authedPage.getByRole("button", { name: /^Cancel$/ }).click()
 

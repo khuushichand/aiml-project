@@ -291,6 +291,20 @@ const mockFamilyWizardApi = async (
     })
   })
 
+  await page.route("**/openapi.json", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        openapi: "3.1.0",
+        info: { title: "tldw test API", version: "1.0.0" },
+        paths: {
+          "/api/v1/guardian/wizard/drafts": {}
+        }
+      })
+    })
+  })
+
   await page.route("**/api/v1/guardian/wizard/**", async (route, request) => {
     const method = request.method()
     const url = new URL(request.url())
