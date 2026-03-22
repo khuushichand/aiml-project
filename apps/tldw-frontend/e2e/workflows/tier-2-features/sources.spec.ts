@@ -118,17 +118,23 @@ test.describe("Sources & Connectors", () => {
       const apiCall = expectApiCall(authedPage, {
         url: /\/api\/v1\/ingestion-sources/,
         method: "GET",
-      }, 15_000)
+      }, 15_000).catch(() => null)
 
       sources = new SourcesPage(authedPage)
       await sources.goto()
       await sources.assertPageReady()
 
-      try {
-        const { response } = await apiCall
-        expect(response.status()).toBeLessThan(500)
-      } catch {
-        // The capability check may prevent the call if server does not support sources
+      const isOnline = await sources.isOnlineWorkspace()
+      const apiResult = await apiCall
+
+      if (isOnline) {
+        expect(apiResult).not.toBeNull()
+        expect(apiResult?.response.status()).toBeLessThan(500)
+      } else {
+        expect(apiResult).toBeNull()
+        const unsupportedVisible = await sources.unsupportedMessage.isVisible().catch(() => false)
+        const offlineVisible = await sources.offlineMessage.isVisible().catch(() => false)
+        expect(unsupportedVisible || offlineVisible).toBe(true)
       }
 
       await assertNoCriticalErrors(diagnostics)

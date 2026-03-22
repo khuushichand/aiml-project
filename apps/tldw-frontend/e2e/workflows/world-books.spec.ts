@@ -95,7 +95,7 @@ test.describe("World Books Workflow", () => {
 
       // Change description
       const modal = authedPage.getByRole("dialog", { name: /edit world book/i })
-      const descInput = modal.getByLabel(/description/i).first()
+      const descInput = modal.getByRole("textbox").nth(1)
       await descInput.fill("Updated description via E2E")
 
       // Submit
@@ -137,17 +137,12 @@ test.describe("World Books Workflow", () => {
 
       // Add entry
       await wbPage.fillEntryForm("dragon, fire", "Dragons breathe fire", 50)
-
-      const [addResult] = await Promise.all([
-        wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+\/entries/, "POST"),
-        wbPage.submitEntry()
-      ])
-
-      expect(addResult.status).toBeLessThan(300)
+      await wbPage.submitEntry()
 
       // Verify entry count
-      const count = await wbPage.getEntryCount()
-      expect(count).toBeGreaterThanOrEqual(1)
+      await expect
+        .poll(async () => wbPage.getEntryCount(), { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(1)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -162,13 +157,11 @@ test.describe("World Books Workflow", () => {
       await wbPage.goto()
       await wbPage.waitForReady()
 
-      const names = await wbPage.getWorldBookNames()
-      if (names.length === 0) {
-        test.skip(true, "No world books available")
-        return
-      }
+      const name = `${testPrefix}-bulk`
+      await wbPage.createWorldBook(name, "For bulk entry tests")
+      await authedPage.waitForTimeout(1000)
 
-      await wbPage.clickEntriesOnRow(names[0])
+      await wbPage.clickEntriesOnRow(name)
       await authedPage.waitForTimeout(500)
 
       // Toggle bulk mode
@@ -181,6 +174,9 @@ test.describe("World Books Workflow", () => {
 
         // Submit
         await wbPage.submitEntry()
+        await expect
+          .poll(async () => wbPage.getEntryCount(), { timeout: 15_000 })
+          .toBeGreaterThanOrEqual(2)
       } catch {
         // Bulk mode may not be available
       }
@@ -204,17 +200,15 @@ test.describe("World Books Workflow", () => {
       await wbPage.goto()
       await wbPage.waitForReady()
 
-      const names = await wbPage.getWorldBookNames()
-      if (names.length === 0) {
-        test.skip(true, "No world books available for attachment test")
-        return
-      }
+      const name = `${testPrefix}-attach`
+      await wbPage.createWorldBook(name, "For attachment tests")
+      await authedPage.waitForTimeout(1000)
 
       try {
-        await wbPage.clickLinkOnRow(names[0])
-        // Verify modal/drawer opened
-        const attachModal = authedPage.locator(".ant-modal, .ant-drawer")
+        await wbPage.clickLinkOnRow(name)
+        const attachModal = authedPage.getByRole("dialog", { name: /quick attach/i })
         await expect(attachModal).toBeVisible({ timeout: 10_000 })
+        await expect(attachModal.getByRole("button", { name: /attach character/i })).toBeVisible()
       } catch {
         // Link button may use different label
       }
@@ -330,20 +324,16 @@ test.describe("World Books Workflow", () => {
       await wbPage.goto()
       await wbPage.waitForReady()
 
-      const names = await wbPage.getWorldBookNames()
-      if (names.length === 0) {
-        test.skip(true, "No world books available for export")
-        return
-      }
+      const name = `${testPrefix}-export`
+      await wbPage.createWorldBook(name, "For export tests")
+      await authedPage.waitForTimeout(1000)
 
-      const [download] = await Promise.all([
-        authedPage.waitForEvent("download", { timeout: 15_000 }).catch(() => null),
-        wbPage.clickExport(names[0])
+      const [apiResult] = await Promise.all([
+        wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+\/export/, "GET"),
+        wbPage.clickExport(name)
       ])
 
-      if (download) {
-        expect(download.suggestedFilename()).toMatch(/\.json$/i)
-      }
+      expect(apiResult.status).toBe(200)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -380,16 +370,14 @@ test.describe("World Books Workflow", () => {
       await wbPage.goto()
       await wbPage.waitForReady()
 
-      const names = await wbPage.getWorldBookNames()
-      if (names.length === 0) {
-        test.skip(true, "No world books available for stats")
-        return
-      }
+      const name = `${testPrefix}-stats`
+      await wbPage.createWorldBook(name, "For statistics tests")
+      await authedPage.waitForTimeout(1000)
 
       try {
         const [apiResult] = await Promise.all([
-          wbPage.waitForApiCall(/world-books\/\d+\/statistics/, "GET"),
-          wbPage.clickStats(names[0])
+          wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+\/statistics/, "GET"),
+          wbPage.clickStats(name)
         ])
 
         expect(apiResult.status).toBe(200)

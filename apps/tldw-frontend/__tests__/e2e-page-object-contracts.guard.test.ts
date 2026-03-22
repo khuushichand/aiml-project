@@ -67,7 +67,8 @@ describe("e2e page object contracts", () => {
     expect(source).toContain("manage entries")
     expect(source).toContain("quick attach characters")
     expect(source).toContain('getByRole("dialog", { name: title })')
-    expect(worldBooksSpecSource).toContain("/api/v1/characters/world-books")
+    expect(source).toContain('getByRole("combobox", { name: /keywords/i })')
+    expect(worldBooksSpecSource).toContain("characters\\/world-books")
   })
 
   it("grants clipboard permissions for workflow tests", () => {

@@ -167,10 +167,17 @@ export class WorldBooksPage {
     await entriesBtn.first().click()
   }
 
+  private entryDialog(): Locator {
+    return this.page.getByRole("dialog", { name: /entries:/i })
+  }
+
   async fillEntryForm(keywords: string, content: string, priority?: number): Promise<void> {
-    const container = this.page.locator(".ant-modal, .ant-drawer")
-    const keywordsInput = container.getByLabel(/keyword/i).first()
+    const container = this.entryDialog()
+    await expect(container).toBeVisible({ timeout: 10_000 })
+    const keywordsInput = container.getByRole("combobox", { name: /keywords/i }).first()
+    await keywordsInput.click()
     await keywordsInput.fill(keywords)
+    await keywordsInput.press("Enter")
 
     const contentInput = container.locator("textarea").first().or(
       container.getByLabel(/content/i).first()
@@ -178,7 +185,7 @@ export class WorldBooksPage {
     await contentInput.fill(content)
 
     if (priority !== undefined) {
-      const priorityInput = container.getByLabel(/priority/i).first()
+      const priorityInput = container.getByRole("spinbutton", { name: /priority/i }).first()
       if (await priorityInput.isVisible().catch(() => false)) {
         await priorityInput.fill(String(priority))
       }
@@ -186,26 +193,23 @@ export class WorldBooksPage {
   }
 
   async submitEntry(): Promise<void> {
-    const container = this.page.locator(".ant-modal, .ant-drawer")
-    const btn = container.getByRole("button", { name: /add|create|save|submit/i }).first()
+    const container = this.entryDialog()
+    const btn = container.getByRole("button", { name: /^add entries?$/i }).last()
     await btn.click()
   }
 
   async getEntryCount(): Promise<number> {
-    const container = this.page.locator(".ant-modal, .ant-drawer")
+    const container = this.entryDialog()
     const rows = container.locator(".ant-table-row")
     return rows.count()
   }
 
   async toggleBulkAddMode(): Promise<void> {
-    const toggle = this.page.getByText(/bulk/i).or(
-      this.page.locator("[data-testid*='bulk']")
-    )
-    await toggle.first().click()
+    await this.entryDialog().getByLabel(/toggle bulk add mode/i).click()
   }
 
   async fillBulkText(text: string): Promise<void> {
-    const textarea = this.page.locator("textarea").last()
+    const textarea = this.entryDialog().getByLabel(/bulk entry input/i)
     await textarea.fill(text)
   }
 
@@ -285,7 +289,7 @@ export class WorldBooksPage {
   }
 
   async getStatsModalContent(): Promise<string> {
-    const modal = this.page.locator(".ant-modal")
+    const modal = this.page.getByRole("dialog", { name: /world book statistics/i })
     await modal.waitFor({ state: "visible", timeout: 10_000 })
     return (await modal.textContent()) ?? ""
   }
