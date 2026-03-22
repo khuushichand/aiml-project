@@ -377,15 +377,26 @@ test.describe("Settings Workflow", () => {
       diagnostics
     }) => {
       const settingsPage = new SettingsPage(authedPage)
+      await settingsPage.gotoSection("chat")
+      await settingsPage.waitForReady()
 
-      try {
-        await settingsPage.configureChatSettings({
-          temperature: 0.7,
-          systemPrompt: "You are a helpful assistant."
-        })
-      } catch {
-        // Chat settings configuration may not be available
-      }
+      const namespaceInput = authedPage.getByLabel(/quick chat project docs namespace/i)
+      await expect(namespaceInput).toBeVisible({ timeout: 10_000 })
+
+      const originalValue = await namespaceInput.inputValue()
+      const updatedValue =
+        originalValue === "project_docs_e2e" ? "project_docs_alt_e2e" : "project_docs_e2e"
+      await namespaceInput.fill(updatedValue)
+      await authedPage.waitForTimeout(500)
+
+      await authedPage.reload({ waitUntil: "domcontentloaded" })
+      await settingsPage.waitForReady()
+      await expect(authedPage.getByLabel(/quick chat project docs namespace/i)).toHaveValue(
+        updatedValue
+      )
+
+      await authedPage.getByLabel(/quick chat project docs namespace/i).fill(originalValue)
+      await authedPage.waitForTimeout(500)
 
       await assertNoCriticalErrors(diagnostics)
     })

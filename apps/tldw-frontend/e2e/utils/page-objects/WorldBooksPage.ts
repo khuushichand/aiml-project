@@ -194,8 +194,14 @@ export class WorldBooksPage {
 
   async submitEntry(): Promise<void> {
     const container = this.entryDialog()
-    const btn = container.getByRole("button", { name: /^add entries?$/i }).last()
-    await btn.click()
+    const singleEntryButton = container.getByRole("button", { name: /^add entry$/i })
+    if (await singleEntryButton.isVisible().catch(() => false)) {
+      await singleEntryButton.click()
+      return
+    }
+
+    const bulkEntryButton = container.getByRole("button", { name: /^add entries$/i })
+    await bulkEntryButton.click()
   }
 
   async getEntryCount(): Promise<number> {
