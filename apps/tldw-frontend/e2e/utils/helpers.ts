@@ -330,7 +330,7 @@ export async function dismissConnectionModals(page: Page): Promise<void> {
     const dismissBtn = page.getByRole('button', { name: /dismiss/i });
     if (await dismissBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
       await dismissBtn.click();
-      await page.waitForTimeout(500);
+      await dismissBtn.waitFor({ state: 'hidden', timeout: 2_000 }).catch(() => {});
     }
   } catch {
     // No modal to dismiss

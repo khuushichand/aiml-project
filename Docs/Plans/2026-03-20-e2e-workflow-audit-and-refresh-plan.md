@@ -137,6 +137,22 @@
   - the long mocked backend delay inside the progressive-loading test was intentionally retained because it simulates the delayed response contract rather than papering over UI readiness
 - Verification for that pass:
   - `e2e/workflows/knowledge-qa.spec.ts` passed clean against `http://localhost:8091` after the handler fix and the stricter readiness assertions (`17/17`, `1.1m`)
+- `dictionaries.spec.ts` and `world-books.spec.ts` were cleaned up further on `March 22, 2026` to remove the remaining fixed post-action sleeps. Both workflows now wait on the actual row/drawer/visibility transitions instead of blind `waitForTimeout(...)` calls, and the host reruns stayed green after the cleanup:
+  - `dictionaries.spec.ts` remained green at `7 passed / 3 skipped` while dropping the stale sleeps from create/manage/delete flows
+  - `world-books.spec.ts` remained green at `12/12` while moving create, bulk-entry, delete, and undo verification onto real row visibility and the accessible `combobox "Keywords"` contract
+- Continuing the audit uncovered one real `/chat` regression on `March 22, 2026`: once a server-backed chat hydrated its assistant identity, `useMessageOption` would clear `serverChatId`, messages, history, and `historyId` as if the user had manually switched assistants. In practice that wiped the active chat after the first server-backed turn and was the root cause behind the earlier red `chat.spec.ts` history/code-block cases.
+  - the regression is now pinned by `src/hooks/__tests__/useMessageOption.selected-model-sync.test.tsx`, which proves the current server chat is not cleared when the hydrated assistant identity matches the loaded chat
+  - `useMessageOption.tsx` now skips the assistant-change reset path when the new assistant key matches the current server chat's own assistant identity (`serverChatAssistantKind` + `serverChatAssistantId`/`serverChatCharacterId`)
+  - targeted verification for the fix passed on `March 22, 2026`:
+    - `bunx vitest run src/hooks/__tests__/useMessageOption.selected-model-sync.test.tsx` (`3/3`)
+    - host Playwright rerun for `e2e/workflows/chat.spec.ts --grep "maintain conversation history across multiple messages|render code blocks properly"` against `http://localhost:8091` (`2/2`, `24.1s`)
+- The shared smoke harness took another small cleanup pass on `March 22, 2026`:
+  - `e2e/smoke/all-pages.spec.ts` no longer uses fixed retry sleeps before reattempting routes after transient runtime overlays or transient navigation timeouts; it now polls for the app shell plus the absence of the overlay signal before retrying
+  - `e2e/utils/helpers.ts` no longer uses a fixed `500ms` sleep after dismissing connection modals; it now waits for the dismiss button to become hidden
+  - verification for that pass:
+    - `rg -n "waitForLoadState\\(\\s*['\\\"]networkidle|waitForTimeout\\(" e2e/review/parallel-review.spec.ts e2e/smoke/all-pages.spec.ts e2e/utils/page-objects` returned no remaining matches
+    - host Playwright rerun for `e2e/smoke/all-pages.spec.ts --grep "/chat|/knowledge|/prompts"` against `http://localhost:8091` passed clean (`13/13`, `14.5s`)
+- The next high-risk workflow pass targeted `media-ingest.spec.ts` on `March 22, 2026`. That live host rerun did not expose a new product regression: the current Media page, Quick Ingest, metadata, review, search, media-multi, and trash navigation flows all passed clean against `http://localhost:8091` (`21/21`, `2.1m`). The remaining debt in that file is mostly stale fixed waits and `networkidle` usage, not an active user-facing failure.
 - After the `March 22, 2026` reruns, the remaining e2e risk is now mostly test-hygiene debt rather than active product failures. The highest-signal cleanup targets are the remaining page objects and smoke/review harnesses still depending on `waitForLoadState("networkidle")` or fixed sleeps, especially `e2e/review/parallel-review.spec.ts`, `e2e/smoke/all-pages.spec.ts`, and page objects such as `WritingPlaygroundPage`, `AudiobookStudioPage`, `KnowledgeQAPage`, `WorldBooksPage`, `AgentRegistryPage`, `AgentTasksPage`, and the generic readiness helpers in `e2e/utils`.
 - With the blocking smoke regressions fixed, the remaining audit findings are non-blocking quality debt:
   - several older workflow specs outside the refreshed smoke/admin/tier-5 packs still rely on `waitForLoadState("networkidle")` and should be migrated to visible UI readiness markers

@@ -244,6 +244,27 @@ function resetDiagnostics(diagnostics: DiagnosticsData): void {
   diagnostics.requestFailures.length = 0;
 }
 
+async function waitForTransientRetryReady(page: Page): Promise<void> {
+  const retryWindowMs = Math.max(1_000, TRANSIENT_RUNTIME_RETRY_DELAY_MS);
+  await expect
+    .poll(
+      async () => {
+        const bodyText = await page
+          .evaluate(() => document.body?.innerText ?? '')
+          .catch(() => '');
+        const shellVisible = await page
+          .locator('#root, #__next')
+          .first()
+          .isVisible()
+          .catch(() => false);
+        return shellVisible && !hasTransientRuntimeOverlaySignal(bodyText);
+      },
+      { timeout: retryWindowMs }
+    )
+    .toBe(true)
+    .catch(() => {});
+}
+
 type RouteVisitResult = {
   response: Awaited<ReturnType<Page['goto']>>;
   issues: ReturnType<typeof getCriticalIssues>;
@@ -292,9 +313,7 @@ async function visitRouteWithTransientRetry(
       console.warn(
         `[smoke-transient-navigation-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_NAVIGATION_RETRY_ATTEMPTS} after navigation timeout`
       );
-      if (TRANSIENT_RUNTIME_RETRY_DELAY_MS > 0) {
-        await page.waitForTimeout(TRANSIENT_RUNTIME_RETRY_DELAY_MS);
-      }
+      await waitForTransientRetryReady(page);
       continue;
     }
 
@@ -320,9 +339,7 @@ async function visitRouteWithTransientRetry(
     console.warn(
       `[smoke-transient-runtime-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_RUNTIME_RETRY_ATTEMPTS} after transient runtime overlay signal: ${transientSignals[0]}`
     );
-    if (TRANSIENT_RUNTIME_RETRY_DELAY_MS > 0) {
-      await page.waitForTimeout(TRANSIENT_RUNTIME_RETRY_DELAY_MS);
-    }
+    await waitForTransientRetryReady(page);
   }
 
   return {
