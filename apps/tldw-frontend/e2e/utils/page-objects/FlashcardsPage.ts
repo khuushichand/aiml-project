@@ -207,7 +207,7 @@ export class FlashcardsPage extends BasePage {
         },
         setup: async () => {
           await this.switchToTab("transfer")
-          await this.page.waitForTimeout(500)
+          await expect(this.importTextarea.or(this.exportDeckSelect)).toBeVisible({ timeout: 5_000 })
         },
       },
       {
@@ -220,7 +220,7 @@ export class FlashcardsPage extends BasePage {
         },
         setup: async () => {
           await this.switchToTab("transfer")
-          await this.page.waitForTimeout(500)
+          await expect(this.importTextarea.or(this.exportDeckSelect)).toBeVisible({ timeout: 5_000 })
         },
       },
     ]

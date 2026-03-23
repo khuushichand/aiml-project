@@ -94,11 +94,11 @@ test.describe("ACP Playground", () => {
       const workspaceTabVisible = await acp.workspaceTab.isVisible().catch(() => false)
       if (workspaceTabVisible) {
         await acp.workspaceTab.click()
-        await authedPage.waitForTimeout(500)
+        await expect(acp.workspaceTab).toHaveAttribute("aria-selected", "true")
 
         // Switch back to Tools tab
         await acp.toolsTab.click()
-        await authedPage.waitForTimeout(500)
+        await expect(acp.toolsTab).toHaveAttribute("aria-selected", "true")
       }
 
       await assertNoCriticalErrors(diagnostics)

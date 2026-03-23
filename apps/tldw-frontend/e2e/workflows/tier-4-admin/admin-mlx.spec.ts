@@ -109,12 +109,8 @@ test.describe("Admin MLX", () => {
       // Scroll to Load Model button (may be below the fold)
       await admin.mlxLoadButton.waitFor({ state: "attached", timeout: 10_000 }).catch(() => {})
       await admin.mlxLoadButton.scrollIntoViewIfNeeded().catch(() => {})
-      await authedPage.waitForTimeout(300)
-      const loadVisible = await admin.mlxLoadButton.isVisible().catch(() => false)
-      const unloadVisible = await admin.mlxUnloadButton.isVisible().catch(() => false)
-
-      expect(loadVisible).toBe(true)
-      expect(unloadVisible).toBe(true)
+      await expect(admin.mlxLoadButton).toBeVisible({ timeout: 10_000 })
+      await expect(admin.mlxUnloadButton).toBeVisible({ timeout: 10_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })

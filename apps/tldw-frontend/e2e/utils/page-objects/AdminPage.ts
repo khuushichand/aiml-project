@@ -240,40 +240,24 @@ export class AdminPage extends BasePage {
 
   async assertSectionReady(section: AdminSection): Promise<void> {
     await this.page.waitForLoadState("domcontentloaded")
-    await waitForNetworkIdle(this.page, 15_000).catch(() => {})
+    await waitForNetworkIdle(this.page, 20_000).catch(() => {})
 
-    switch (section) {
-      case "server": {
-        const visible = await this.serverHeading.isVisible().catch(() => false)
-        const guarded = await this.adminGuardAlert.isVisible().catch(() => false)
-        expect(visible || guarded).toBe(true)
-        break
-      }
-      case "llamacpp": {
-        const visible = await this.llamacppHeading.isVisible().catch(() => false)
-        const guarded = await this.adminGuardAlert.isVisible().catch(() => false)
-        expect(visible || guarded).toBe(true)
-        break
-      }
-      case "mlx": {
-        const visible = await this.mlxHeading.isVisible().catch(() => false)
-        const guarded = await this.adminGuardAlert.isVisible().catch(() => false)
-        expect(visible || guarded).toBe(true)
-        break
-      }
-      case "orgs": {
-        const visible = await this.orgsHeading.isVisible().catch(() => false)
-        const guarded = await this.adminGuardAlert.isVisible().catch(() => false)
-        expect(visible || guarded).toBe(true)
-        break
-      }
-      case "data-ops": {
-        const visible = await this.dataOpsHeading.isVisible().catch(() => false)
-        const guarded = await this.adminGuardAlert.isVisible().catch(() => false)
-        expect(visible || guarded).toBe(true)
-        break
-      }
-    }
+    const sectionHeading = {
+      server: this.serverHeading,
+      llamacpp: this.llamacppHeading,
+      mlx: this.mlxHeading,
+      orgs: this.orgsHeading,
+      "data-ops": this.dataOpsHeading,
+    }[section]
+
+    await expect
+      .poll(
+        async () =>
+          (await sectionHeading.isVisible().catch(() => false)) ||
+          (await this.adminGuardAlert.isVisible().catch(() => false)),
+        { timeout: 20_000 }
+      )
+      .toBe(true)
   }
 
   /** Check whether the placeholder panel is visible (for placeholder pages) */

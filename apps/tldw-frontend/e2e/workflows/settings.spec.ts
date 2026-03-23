@@ -238,10 +238,9 @@ test.describe("Settings Workflow", () => {
       // Try to save
       await settingsPage.saveButton.click()
 
-      // Check for validation errors
-      await authedPage.waitForTimeout(500)
-      const _hasErrors = await settingsPage.hasValidationErrors()
-      // Validation behavior depends on implementation
+      await expect
+        .poll(() => settingsPage.hasValidationErrors(), { timeout: 5_000 })
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -260,7 +259,9 @@ test.describe("Settings Workflow", () => {
       // Try to save
       await settingsPage.saveButton.click()
 
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(() => settingsPage.hasValidationErrors(), { timeout: 5_000 })
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -278,10 +279,9 @@ test.describe("Settings Workflow", () => {
 
       await settingsPage.saveButton.click()
 
-      await authedPage.waitForTimeout(500)
-
-      const _errors = await settingsPage.getValidationErrors()
-      // Errors may or may not appear based on validation rules
+      await expect
+        .poll(async () => (await settingsPage.getValidationErrors()).length, { timeout: 5_000 })
+        .toBeGreaterThan(0)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -387,7 +387,21 @@ test.describe("Settings Workflow", () => {
       const updatedValue =
         originalValue === "project_docs_e2e" ? "project_docs_alt_e2e" : "project_docs_e2e"
       await namespaceInput.fill(updatedValue)
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          () =>
+            authedPage.evaluate(() => {
+              const raw = localStorage.getItem("quickChatDocsIndexNamespace")
+              if (raw == null) return null
+              try {
+                return JSON.parse(raw)
+              } catch {
+                return raw
+              }
+            }),
+          { timeout: 5_000 }
+        )
+        .toBe(updatedValue)
 
       await authedPage.reload({ waitUntil: "domcontentloaded" })
       await settingsPage.waitForReady()
@@ -396,7 +410,21 @@ test.describe("Settings Workflow", () => {
       )
 
       await authedPage.getByLabel(/quick chat project docs namespace/i).fill(originalValue)
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          () =>
+            authedPage.evaluate(() => {
+              const raw = localStorage.getItem("quickChatDocsIndexNamespace")
+              if (raw == null) return null
+              try {
+                return JSON.parse(raw)
+              } catch {
+                return raw
+              }
+            }),
+          { timeout: 5_000 }
+        )
+        .toBe(originalValue)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -557,7 +585,7 @@ test.describe("Settings Workflow", () => {
         "[data-testid='version'], .version-info, .about-version"
       )
 
-      await authedPage.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {})
+      await expect(authedPage.getByRole("main")).toBeVisible({ timeout: 10_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })

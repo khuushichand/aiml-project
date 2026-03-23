@@ -157,8 +157,7 @@ export class CharactersPage extends BasePage {
    */
   async search(query: string): Promise<void> {
     await this.searchInput.fill(query)
-    // Allow debounce / filter to settle
-    await this.page.waitForTimeout(500)
+    await expect(this.searchInput).toHaveValue(query, { timeout: 5_000 })
   }
 
   /**

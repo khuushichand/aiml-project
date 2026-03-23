@@ -67,8 +67,13 @@ test.describe("Audiobook Studio", () => {
       // Switch to each tab and verify no crashes
       for (const tab of ["chapters", "generate", "output", "content"] as const) {
         await studio.switchToTab(tab)
-        // Small wait for tab content to render
-        await authedPage.waitForTimeout(500)
+        const tabLocator = {
+          chapters: studio.chaptersTab,
+          generate: studio.generateTab,
+          output: studio.outputTab,
+          content: studio.contentTab,
+        }[tab]
+        await expect(tabLocator).toHaveAttribute("aria-selected", "true")
       }
 
       await assertNoCriticalErrors(diagnostics)

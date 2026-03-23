@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest"
 const pageObjectsDir = path.join(process.cwd(), "e2e/utils/page-objects")
 const fixedSleepGuardFiles = [
   "ChatPage.ts",
+  "CharactersPage.ts",
+  "EvaluationsPage.ts",
+  "FlashcardsPage.ts",
   "NotesPage.ts",
   "PromptsWorkspacePage.ts",
   "SearchPage.ts",

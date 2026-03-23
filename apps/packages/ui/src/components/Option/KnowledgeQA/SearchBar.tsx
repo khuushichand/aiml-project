@@ -67,6 +67,10 @@ function isInteractiveControlTarget(target: EventTarget | null): boolean {
   )
 }
 
+function isKnowledgeSearchInputTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement && target.id === "knowledge-search-input"
+}
+
 export function SearchBar({
   className,
   autoFocus = true,
@@ -151,6 +155,7 @@ export function SearchBar({
     const handleKeyDown = (e: KeyboardEvent) => {
       const targetIsEditable = isEditableTarget(e.target)
       const targetIsInteractiveControl = isInteractiveControlTarget(e.target)
+      const targetIsKnowledgeSearchInput = isKnowledgeSearchInputTarget(e.target)
 
       // Focus search bar on "/" key
       if (e.key === "/" && !e.metaKey && !e.ctrlKey) {
@@ -163,8 +168,8 @@ export function SearchBar({
       if (
         (e.metaKey || e.ctrlKey) &&
         e.key.toLowerCase() === "k" &&
-        !targetIsEditable &&
-        !targetIsInteractiveControl
+        (!targetIsEditable || targetIsKnowledgeSearchInput) &&
+        (!targetIsInteractiveControl || targetIsKnowledgeSearchInput)
       ) {
         e.preventDefault()
         clearResults()

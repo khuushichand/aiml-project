@@ -178,6 +178,22 @@ describe("SearchBar behavior", () => {
     expect(state.setQuery).toHaveBeenCalledWith("")
   })
 
+  it("runs clear-full shortcut when the knowledge search input itself has focus", () => {
+    state.query = "existing query"
+    state.results = [{ id: "r1" }]
+
+    render(<SearchBar autoFocus={false} />)
+
+    const input = screen.getByRole("textbox", {
+      name: "Search your knowledge base",
+    })
+    input.focus()
+    fireEvent.keyDown(input, { key: "k", metaKey: true })
+
+    expect(state.clearResults).toHaveBeenCalledTimes(1)
+    expect(state.setQuery).toHaveBeenCalledWith("")
+  })
+
   it("does not clear the active session when Cmd/Ctrl+K originates from another editable control", () => {
     state.query = "existing query"
     state.results = [{ id: "r1" }]

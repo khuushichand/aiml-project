@@ -70,7 +70,12 @@ test.describe("Chatbooks Playground", () => {
 
       for (const tab of ["import", "jobs", "export"] as const) {
         await chatbooks.switchToTab(tab)
-        await authedPage.waitForTimeout(500)
+        const tabLocator = {
+          import: chatbooks.importTab,
+          jobs: chatbooks.jobsTab,
+          export: chatbooks.exportTab,
+        }[tab]
+        await expect(tabLocator).toHaveAttribute("aria-selected", "true")
       }
 
       await assertNoCriticalErrors(diagnostics)

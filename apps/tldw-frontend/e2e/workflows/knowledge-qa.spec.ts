@@ -486,12 +486,14 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.goto()
       await qaPage.waitForReady()
 
-      await qaPage.pressNewSearch()
-      await authedPage.waitForTimeout(500)
-
-      // Search input should be focused/cleared
       const input = await qaPage.getSearchInput()
-      await expect(input).toBeVisible()
+      await input.fill("temporary knowledge query")
+
+      await qaPage.pressNewSearch()
+
+      // Search input should be focused and cleared for the next query
+      await expect(input).toBeFocused({ timeout: 5_000 })
+      await expect(input).toHaveValue("", { timeout: 5_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -551,17 +553,22 @@ test.describe("KnowledgeQA Workflow", () => {
         })
       })
 
-      await qaPage.search("trigger error")
-      await authedPage.waitForTimeout(3000)
+      try {
+        await qaPage.search("trigger error")
+        await qaPage.waitForResults()
 
-      // Should show some kind of error state
-      const errorMsg = await qaPage.getErrorMessage()
+        await expect
+          .poll(async () => await qaPage.getErrorMessage(), { timeout: 10_000 })
+          .not.toBeNull()
 
-      expect(errorMsg).not.toBeNull()
-
-      // Unroute to not affect other tests
-      await authedPage.unroute("**/api/v1/rag/search/stream")
-      await authedPage.unroute("**/api/v1/rag/search")
+        // Should show some kind of error state
+        const errorMsg = await qaPage.getErrorMessage()
+        expect(errorMsg).not.toBeNull()
+      } finally {
+        // Unroute to not affect other tests
+        await authedPage.unroute("**/api/v1/rag/search/stream")
+        await authedPage.unroute("**/api/v1/rag/search")
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })

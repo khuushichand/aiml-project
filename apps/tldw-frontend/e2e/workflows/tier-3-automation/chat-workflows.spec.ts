@@ -129,12 +129,7 @@ test.describe("Chat Workflows", () => {
       if (!newTemplateVisible) return
 
       await chatWorkflows.newTemplateButton.click()
-      await authedPage.waitForTimeout(500)
-
-      const builderSelected = await chatWorkflows.builderTab
-        .getAttribute("aria-selected")
-        .catch(() => "false")
-      expect(builderSelected).toBe("true")
+      await expect(chatWorkflows.builderTab).toHaveAttribute("aria-selected", "true")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -154,12 +149,7 @@ test.describe("Chat Workflows", () => {
       if (!generatorVisible) return
 
       await chatWorkflows.openGeneratorButton.click()
-      await authedPage.waitForTimeout(500)
-
-      const generateSelected = await chatWorkflows.generateTab
-        .getAttribute("aria-selected")
-        .catch(() => "false")
-      expect(generateSelected).toBe("true")
+      await expect(chatWorkflows.generateTab).toHaveAttribute("aria-selected", "true")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -175,14 +165,14 @@ test.describe("Chat Workflows", () => {
       const offline = await chatWorkflows.isOffline()
       if (offline) return
 
-      // Wait for library to load
-      await authedPage.waitForTimeout(1_000)
-
-      const emptyVisible = await chatWorkflows.libraryEmpty.isVisible().catch(() => false)
-      const templateCount = await chatWorkflows.getTemplateCount()
-
-      // Either empty state or template cards should be present
-      expect(emptyVisible || templateCount >= 0).toBe(true)
+      await expect
+        .poll(
+          async () =>
+            (await chatWorkflows.libraryEmpty.isVisible().catch(() => false)) ||
+            (await chatWorkflows.getTemplateCount()) >= 0,
+          { timeout: 10_000 }
+        )
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })

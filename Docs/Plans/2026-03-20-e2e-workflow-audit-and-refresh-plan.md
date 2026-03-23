@@ -81,6 +81,62 @@
   - `bunx vitest -c vitest.config.ts run __tests__/e2e-page-object-readiness.guard.test.ts __tests__/e2e-page-object-contracts.guard.test.ts __tests__/e2e-harness-readiness.guard.test.ts` passed (`11/11`)
   - the host Playwright readiness bundle against `http://localhost:8091` passed clean on `March 22, 2026`: `workflow-editor.spec.ts`, `document-workspace.spec.ts`, `characters.spec.ts`, `tts-synthesis.spec.ts`, `stt-transcription.spec.ts`, `speech-playground.spec.ts`, `chat-workflows.spec.ts`, `acp-playground.spec.ts`, `chatbooks.spec.ts`, `flashcards.spec.ts`, `media-review.spec.ts`, `sources.spec.ts`, `content-review.spec.ts`, `data-tables.spec.ts`, `mcp-hub.spec.ts`, `kanban.spec.ts`, `quiz.spec.ts`, and `dictionaries.spec.ts` (`119 passed, 7 skipped` in `5.0m`)
 - The follow-up pass on `March 22, 2026` targeted fixed-sleep flake inside the shared page objects that still sit on the hot path for broad workflow coverage. `NotesPage`, `SearchPage`, `ChatPage`, `PromptsWorkspacePage`, `WorldBooksPage`, and `WritingPlaygroundPage` now use visible-state polling or value assertions instead of fixed `waitForTimeout(...)` sleeps for readiness, debounced search, reload recovery, and post-action stabilization. The shared guard in `apps/tldw-frontend/__tests__/e2e-page-object-readiness.guard.test.ts` now also pins that subset against direct fixed sleeps so those regressions do not creep back in.
+- The host verification for that fixed-sleep cleanup exposed one real stale page-object contract on `March 22, 2026`: `ChatPage.ensureModelSelected()` was still assuming the chat model picker opened only from a visible `Select a model` control and rendered as a `listbox` of `option`s. The live chat surface now exposes the active model through `data-testid="model-selector"` with the current model label as its accessible name, and its picker can open as a `menu` of `menuitem`s. `ChatPage` now short-circuits when a real model chip is already active, uses the chip itself as the fallback trigger when the placeholder is still visible, and accepts both `listbox/option` and `menu/menuitem` picker contracts.
+- Verification for the fixed-sleep cleanup plus the chat model-chip contract fix:
+  - `bunx vitest -c vitest.config.ts run __tests__/e2e-page-object-readiness.guard.test.ts __tests__/e2e-page-object-contracts.guard.test.ts __tests__/e2e-harness-readiness.guard.test.ts` passed (`12/12`)
+  - `python -m bandit -r apps/tldw-frontend/e2e/utils/page-objects apps/tldw-frontend/__tests__/e2e-page-object-readiness.guard.test.ts -f json -o /tmp/bandit_page_object_fixed_sleep_cleanup.json` completed with no findings
+  - focused host Playwright reruns against `http://localhost:8091` passed after the page-object cleanup:
+    - `e2e/workflows/chat.spec.ts` (`15/15`, `2.5m`)
+    - `e2e/workflows/tier-1-critical/notes.spec.ts`, `e2e/workflows/search.spec.ts`, `e2e/workflows/tier-2-features/prompts-workspace.spec.ts`, `e2e/workflows/world-books.spec.ts`, and `e2e/workflows/tier-2-features/writing-playground.spec.ts` as a bundle (`48/48`, `3.2m`)
+- The final page-object fixed-sleep sweep on `March 22, 2026` removed the remaining direct `waitForTimeout(...)` calls from `CharactersPage`, `FlashcardsPage`, and `EvaluationsPage`. That pass also uncovered two stale e2e contracts:
+  - `EvaluationsPage` was checking `aria-selected` on the inner tab label span instead of the ancestor `role="tab"`.
+  - `tier-2-features/evaluations.spec.ts` was still expecting an empty-state `/api/v1/evaluations` run call, but the current UI contract is `New evaluation` opening the create-evaluation modal.
+- Verification for that final page-object sweep:
+  - `python -m bandit -r apps/tldw-frontend/e2e/utils/page-objects apps/tldw-frontend/__tests__/e2e-page-object-readiness.guard.test.ts -f json -o /tmp/bandit_page_object_fixed_sleep_cleanup_round2.json` completed with no findings
+  - `e2e/workflows/tier-2-features/characters.spec.ts`, `e2e/workflows/tier-2-features/flashcards.spec.ts`, and the pre-fix `e2e/workflows/tier-2-features/evaluations.spec.ts` rerun showed `12 passed / 1 failed`, isolating the stale Evaluations contract while clearing Characters and Flashcards
+  - after updating the Evaluations spec to assert the `New evaluation` modal flow, `e2e/workflows/tier-2-features/evaluations.spec.ts` passed clean against `http://localhost:8091` (`2/2`, `5.2s`)
+  - `rg -n 'waitForTimeout\\(' apps/tldw-frontend/e2e/utils/page-objects` now returns no matches, so the shared page-object layer is fully off fixed sleeps
+- The next workflow-level fixed-sleep pass on `March 22, 2026` moved several refreshed route specs off direct post-click sleeps and onto real UI readiness markers:
+  - `tier-2-features/characters.spec.ts` now waits for the new character row instead of sleeping after create.
+  - `tier-2-features/flashcards.spec.ts` now asserts the Transfer tab's real dual-button layout (`Import` and `Export`) instead of using strict-mode-breaking locator unions.
+  - `tier-2-features/writing-playground.spec.ts` now polls the library and inspector sidebars for visibility changes, and the session bootstrap path now waits on the actual `New Session` affordance.
+  - `tier-2-features/stt-transcription.spec.ts` now waits for the visible settings-language label transition instead of sleeping after toggle.
+  - `tier-2-features/audiobook-studio.spec.ts`, `tier-2-features/speech-playground.spec.ts`, `tier-2-features/quiz.spec.ts`, `tier-2-features/mcp-hub.spec.ts`, `tier-2-features/chatbooks.spec.ts`, `tier-3-automation/acp-playground.spec.ts`, and `tier-2-features/data-tables.spec.ts` now use `aria-selected`, segmented-control selection, or visible empty/list state polling in place of direct `waitForTimeout(...)`.
+- Verification for that workflow-level cleanup:
+  - `e2e/workflows/tier-2-features/characters.spec.ts`, `e2e/workflows/tier-2-features/flashcards.spec.ts`, `e2e/workflows/tier-2-features/writing-playground.spec.ts`, and `e2e/workflows/tier-2-features/stt-transcription.spec.ts` passed as a focused host bundle against `http://localhost:8091` (`19/19`, `1.1m`).
+  - `e2e/workflows/tier-2-features/audiobook-studio.spec.ts`, `e2e/workflows/tier-2-features/speech-playground.spec.ts`, `e2e/workflows/tier-2-features/quiz.spec.ts`, `e2e/workflows/tier-2-features/mcp-hub.spec.ts`, `e2e/workflows/tier-2-features/chatbooks.spec.ts`, `e2e/workflows/tier-3-automation/acp-playground.spec.ts`, and `e2e/workflows/tier-2-features/data-tables.spec.ts` passed as the next host bundle against `http://localhost:8091` (`38/38`, `1.6m`).
+- A subsequent focused workflow-spec pass on `March 22, 2026` replaced more stale fixed-sleep assumptions:
+  - `tier-2-features/document-workspace.spec.ts` now validates the current left/right panel toggle contract by polling the buttons' `aria-label` transitions (`Collapse ...` -> `Expand ...`) instead of assuming the panels disappear from the DOM.
+  - `tier-3-automation/chat-workflows.spec.ts` now waits on `aria-selected` for the `Builder` and `Generate` tabs, and on the real empty/library state instead of sleeping after navigation.
+  - `tier-4-admin/notifications.spec.ts` now proves refresh behavior by polling the request observer instead of using fixed post-click sleeps.
+  - `e2e/utils/page-objects/AdminPage.ts` now waits for the section-specific heading or admin-guard signal, which fixes a real e2e readiness bug where the shared shell text could satisfy generic route readiness before a lazily loaded admin page like `/admin/mlx` had mounted.
+- Root-cause note from that pass:
+  - `/admin/mlx` looked blank in the first failing bundle, but direct headless browser diagnostics against `http://localhost:8091/admin/mlx` rendered the full `MLX LM Admin` surface both with and without seeded auth. The product route was fine; the admin page object was checking readiness too early.
+- Verification for that admin/document/chat-workflows cleanup:
+  - the initial host rerun surfaced the stale document-workspace sidebar assertion and the premature admin-readiness contract (`21 passed / 8 failed`), which gave the evidence for the fixes above
+  - after patching the route-specific contracts, `e2e/workflows/tier-2-features/document-workspace.spec.ts`, `e2e/workflows/tier-3-automation/chat-workflows.spec.ts`, `e2e/workflows/tier-4-admin/notifications.spec.ts`, and `e2e/workflows/tier-4-admin/admin-mlx.spec.ts` passed together against `http://localhost:8091` (`29/29`, `39.6s`)
+- `tier-3-automation/workflow-editor.spec.ts` also came off fixed sleeps on `March 22, 2026`. The spec now waits on the real toolbar-button class transitions, the `More actions` menu items, the editable workflow-name input, and the actual sidebar panel content markers (`Search nodes...`, `Node Configuration`, `Execution`) instead of sleeping after every click.
+- `settings.spec.ts` was refreshed in the same pass to stop using blind waits for validation and chat-setting persistence:
+  - validation cases now poll `SettingsPage.hasValidationErrors()` / `getValidationErrors()` directly
+  - the Quick Chat namespace persistence case now polls the real storage key (`quickChatDocsIndexNamespace`) before reload and again on cleanup
+  - the About page no longer blocks on `networkidle`, and instead waits on the rendered main surface
+- Verification for that pass:
+  - `e2e/workflows/tier-3-automation/workflow-editor.spec.ts` passed clean against `http://localhost:8091` (`9/9`, `9.7s`)
+  - `e2e/workflows/settings.spec.ts` passed clean against `http://localhost:8091` with the stronger validation/persistence assertions (`31/31`, `41.5s`)
+- `search.spec.ts` was refreshed again on `March 22, 2026` to remove the remaining post-click sleeps and `networkidle` fallback on the Knowledge surface:
+  - result interaction now waits for either a route change or the modern answer-context affordances (`New search` / `Start new topic`)
+  - navigation back to search now waits for the search input to become interactive again
+  - Knowledge page checks now wait on the real `Ask Your Library` / `Ask` surface instead of `networkidle`
+  - the loading/suggestions cases no longer sleep without asserting any state
+- Verification for that pass:
+  - `e2e/workflows/search.spec.ts` passed clean against `http://localhost:8091` (`23/23`, `56.1s`)
+- `knowledge-qa.spec.ts` was tightened again on `March 22, 2026`, and that refresh uncovered one real UX bug rather than just more stale test code. When the Knowledge search input itself had focus, `Cmd+K` did not start a fresh search because `SearchBar` was globally suppressing the shortcut for all editable targets. `SearchBar.tsx` now allows the Knowledge input itself to honor `Cmd/Ctrl+K` while still blocking other editable controls and buttons, and `SearchBar.behavior.test.tsx` now pins that distinction.
+  - the `Cmd+K` e2e assertion now proves the actual contract by filling the search input first, then asserting the input is both focused and cleared after the shortcut
+  - the new unit coverage caught the pre-fix regression (`18 tests | 1 failed`), and the targeted rerun passed after the handler fix (`18/18`)
+  - the API-failure e2e case now waits on `KnowledgeQAPage.waitForResults()` plus the terminal error message instead of sleeping for three seconds
+  - the long mocked backend delay inside the progressive-loading test was intentionally retained because it simulates the delayed response contract rather than papering over UI readiness
+- Verification for that pass:
+  - `e2e/workflows/knowledge-qa.spec.ts` passed clean against `http://localhost:8091` after the handler fix and the stricter readiness assertions (`17/17`, `1.1m`)
 - After the `March 22, 2026` reruns, the remaining e2e risk is now mostly test-hygiene debt rather than active product failures. The highest-signal cleanup targets are the remaining page objects and smoke/review harnesses still depending on `waitForLoadState("networkidle")` or fixed sleeps, especially `e2e/review/parallel-review.spec.ts`, `e2e/smoke/all-pages.spec.ts`, and page objects such as `WritingPlaygroundPage`, `AudiobookStudioPage`, `KnowledgeQAPage`, `WorldBooksPage`, `AgentRegistryPage`, `AgentTasksPage`, and the generic readiness helpers in `e2e/utils`.
 - With the blocking smoke regressions fixed, the remaining audit findings are non-blocking quality debt:
   - several older workflow specs outside the refreshed smoke/admin/tier-5 packs still rely on `waitForLoadState("networkidle")` and should be migrated to visible UI readiness markers

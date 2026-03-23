@@ -60,9 +60,22 @@ export class ChatPage {
   }
 
   private async ensureModelSelected(): Promise<void> {
-    const selectModelTrigger = this.page.getByRole("button", {
-      name: /select a model/i
-    }).first()
+    const modelChip = this.page.getByTestId("model-selector").first()
+    const chipVisible = await modelChip.isVisible().catch(() => false)
+    if (chipVisible) {
+      const chipLabel =
+        (await modelChip.getAttribute("aria-label").catch(() => null))
+        || (await modelChip.getAttribute("title").catch(() => null))
+        || (await modelChip.textContent().catch(() => null))
+        || ""
+      if (chipLabel.trim() && !/select a model/i.test(chipLabel)) {
+        return
+      }
+    }
+
+    const selectModelTrigger = chipVisible
+      ? modelChip
+      : this.page.getByRole("button", { name: /select a model/i }).first()
 
     if (!(await selectModelTrigger.isVisible().catch(() => false))) {
       return
@@ -70,12 +83,58 @@ export class ChatPage {
 
     await selectModelTrigger.click()
 
-    const listbox = this.page.getByRole("listbox").first()
-    await expect(listbox).toBeVisible({ timeout: 10_000 })
+    const pickerSurfaceCandidates = [
+      this.page.getByRole("listbox").first(),
+      this.page.getByRole("menu").first(),
+    ]
 
-    const firstOption = listbox.getByRole("option").first()
-    await expect(firstOption).toBeVisible({ timeout: 10_000 })
-    await firstOption.click()
+    let pickerSurface: Locator | null = null
+    await expect
+      .poll(
+        async () => {
+          for (const candidate of pickerSurfaceCandidates) {
+            if (await candidate.isVisible().catch(() => false)) {
+              pickerSurface = candidate
+              return true
+            }
+          }
+          return false
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(true)
+
+    if (!pickerSurface) {
+      throw new Error("Model picker surface did not appear after opening Select a model")
+    }
+
+    const choiceCandidates = [
+      pickerSurface.getByRole("option").first(),
+      pickerSurface.getByRole("menuitem").first(),
+      this.page.getByRole("menuitem").first(),
+    ]
+
+    let firstChoice: Locator | null = null
+    await expect
+      .poll(
+        async () => {
+          for (const candidate of choiceCandidates) {
+            if (await candidate.isVisible().catch(() => false)) {
+              firstChoice = candidate
+              return true
+            }
+          }
+          return false
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(true)
+
+    if (!firstChoice) {
+      throw new Error("Model picker did not render a selectable option")
+    }
+
+    await firstChoice.click()
 
     await expect(selectModelTrigger).not.toBeVisible({ timeout: 10_000 }).catch(() => {})
   }
@@ -323,10 +382,16 @@ export class ChatPage {
     if ((await selector.count()) > 0) {
       await selector.click()
 
-      // Find and click the model option
-      const modelOption = this.page.getByRole("option", { name: new RegExp(modelId, "i") })
-      if ((await modelOption.count()) > 0) {
-        await modelOption.click()
+      const modelChoiceCandidates = [
+        this.page.getByRole("option", { name: new RegExp(modelId, "i") }).first(),
+        this.page.getByRole("menuitem", { name: new RegExp(modelId, "i") }).first(),
+      ]
+
+      for (const candidate of modelChoiceCandidates) {
+        if (await candidate.isVisible().catch(() => false)) {
+          await candidate.click()
+          return
+        }
       }
     }
   }

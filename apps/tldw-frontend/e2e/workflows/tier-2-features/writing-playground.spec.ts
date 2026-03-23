@@ -100,12 +100,23 @@ test.describe("Writing Playground", () => {
       if (!toggleVisible) return
 
       // Click to toggle open (or closed, depending on default state)
+      const beforeLibraryVisible = await writing.librarySidebar.isVisible().catch(() => false)
       await toggleBtn.click()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          async () => await writing.librarySidebar.isVisible().catch(() => false),
+          { timeout: 5_000 }
+        )
+        .not.toBe(beforeLibraryVisible)
 
       // Click again to toggle the other way
       await toggleBtn.click()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          async () => await writing.librarySidebar.isVisible().catch(() => false),
+          { timeout: 5_000 }
+        )
+        .toBe(beforeLibraryVisible)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -122,11 +133,22 @@ test.describe("Writing Playground", () => {
       const toggleVisible = await toggleBtn.isVisible().catch(() => false)
       if (!toggleVisible) return
 
+      const beforeInspectorVisible = await writing.inspectorSidebar.isVisible().catch(() => false)
       await toggleBtn.click()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          async () => await writing.inspectorSidebar.isVisible().catch(() => false),
+          { timeout: 5_000 }
+        )
+        .not.toBe(beforeInspectorVisible)
 
       await toggleBtn.click()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          async () => await writing.inspectorSidebar.isVisible().catch(() => false),
+          { timeout: 5_000 }
+        )
+        .toBe(beforeInspectorVisible)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -155,7 +177,12 @@ test.describe("Writing Playground", () => {
         const canToggle = await toggleBtn.isVisible().catch(() => false)
         if (canToggle) {
           await toggleBtn.click()
-          await authedPage.waitForTimeout(500)
+          await expect
+            .poll(
+              async () => await writing.newSessionButton.isVisible().catch(() => false),
+              { timeout: 5_000 }
+            )
+            .toBe(true)
         }
       }
 

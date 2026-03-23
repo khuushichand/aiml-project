@@ -87,14 +87,12 @@ test.describe("Notifications", () => {
 
     // Dismiss any Next.js error overlay that might block clicks
     await authedPage.keyboard.press("Escape")
-    await authedPage.waitForTimeout(500)
-
-    // Reset tracker - page load may have already triggered API calls
     apiCallMade = false
 
     await notifications.refreshButton.click({ force: true })
-    // Give time for the request to be initiated
-    await authedPage.waitForTimeout(3_000)
+    await expect
+      .poll(() => apiCallMade, { timeout: 10_000 })
+      .toBe(true)
     authedPage.removeListener("request", handler)
 
     expect(apiCallMade).toBe(true)

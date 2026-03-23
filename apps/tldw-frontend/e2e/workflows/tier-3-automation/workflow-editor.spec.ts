@@ -106,11 +106,9 @@ test.describe("Workflow Editor", () => {
       // Get initial class (tracks primary vs text type)
       const classBefore = await editor.toggleGridButton.getAttribute("class") ?? ""
       await editor.toggleGridButton.click()
-      await authedPage.waitForTimeout(300)
-      const classAfter = await editor.toggleGridButton.getAttribute("class") ?? ""
-
-      // Button type should toggle between "primary" and "text"
-      expect(classBefore).not.toBe(classAfter)
+      await expect
+        .poll(() => editor.toggleGridButton.getAttribute("class"), { timeout: 5_000 })
+        .not.toBe(classBefore)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -128,10 +126,9 @@ test.describe("Workflow Editor", () => {
 
       const classBefore = await editor.toggleMinimapButton.getAttribute("class") ?? ""
       await editor.toggleMinimapButton.click()
-      await authedPage.waitForTimeout(300)
-      const classAfter = await editor.toggleMinimapButton.getAttribute("class") ?? ""
-
-      expect(classBefore).not.toBe(classAfter)
+      await expect
+        .poll(() => editor.toggleMinimapButton.getAttribute("class"), { timeout: 5_000 })
+        .not.toBe(classBefore)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -148,7 +145,6 @@ test.describe("Workflow Editor", () => {
       if (!moreBtnVisible) return
 
       await editor.openMoreActions()
-      await authedPage.waitForTimeout(500)
 
       // Dropdown menu should appear with New Workflow, Import, Export, Clear Canvas
       const newWorkflowVisible = await editor.newWorkflowMenuItem.isVisible().catch(() => false)
@@ -175,20 +171,18 @@ test.describe("Workflow Editor", () => {
 
       // Click to start editing
       await editor.startEditingName()
-      await authedPage.waitForTimeout(300)
 
       // Input should appear
-      const inputVisible = await editor.workflowNameInput.isVisible().catch(() => false)
-      expect(inputVisible).toBe(true)
+      await expect(editor.workflowNameInput).toBeVisible({ timeout: 5_000 })
 
       // Type a new name and press Enter
       await editor.workflowNameInput.fill("E2E Test Workflow")
       await editor.workflowNameInput.press("Enter")
-      await authedPage.waitForTimeout(300)
 
       // Name should update
-      const nameText = await editor.workflowNameDisplay.textContent().catch(() => "")
-      expect(nameText).toContain("E2E Test Workflow")
+      await expect
+        .poll(() => editor.workflowNameDisplay.textContent(), { timeout: 5_000 })
+        .toContain("E2E Test Workflow")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -214,21 +208,21 @@ test.describe("Workflow Editor", () => {
       const configVisible = await editor.configTab.isVisible().catch(() => false)
       if (configVisible) {
         await editor.switchSidebarPanel("config")
-        await authedPage.waitForTimeout(300)
+        await expect(authedPage.getByText("Node Configuration")).toBeVisible({ timeout: 5_000 })
       }
 
       // Switch to Run
       const runVisible = await editor.runTab.isVisible().catch(() => false)
       if (runVisible) {
         await editor.switchSidebarPanel("execution")
-        await authedPage.waitForTimeout(300)
+        await expect(authedPage.getByText("Execution")).toBeVisible({ timeout: 5_000 })
       }
 
       // Switch back to Palette
       const paletteVisible = await editor.nodesPaletteTab.isVisible().catch(() => false)
       if (paletteVisible) {
         await editor.switchSidebarPanel("palette")
-        await authedPage.waitForTimeout(300)
+        await expect(authedPage.getByPlaceholder("Search nodes...")).toBeVisible({ timeout: 5_000 })
       }
 
       await assertNoCriticalErrors(diagnostics)

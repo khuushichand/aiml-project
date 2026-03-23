@@ -87,7 +87,14 @@ test.describe("Quiz Playground", () => {
 
       for (const tab of ["generate", "create", "manage", "results", "take"] as const) {
         await quiz.switchToTab(tab)
-        await authedPage.waitForTimeout(500)
+        const tabLocator = {
+          generate: quiz.generateTab,
+          create: quiz.createTab,
+          manage: quiz.manageTab,
+          results: quiz.resultsTab,
+          take: quiz.takeTab,
+        }[tab]
+        await expect(tabLocator).toHaveAttribute("aria-selected", "true")
       }
 
       await assertNoCriticalErrors(diagnostics)
