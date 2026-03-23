@@ -2,7 +2,7 @@
  * Page Object for World Books workflow
  */
 import { type Page, type Locator, expect } from "@playwright/test"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -23,7 +23,7 @@ export class WorldBooksPage {
   }
 
   async waitForReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     const container = this.page.locator(
       "[data-testid='world-books-table'], .ant-table, .ant-empty, [data-testid='world-books-list']"
     )
@@ -108,7 +108,7 @@ export class WorldBooksPage {
     const searchInput = this.page.getByTestId("world-books-search-input")
     await expect(searchInput).toBeVisible({ timeout: 10_000 })
     await searchInput.fill(query)
-    await this.page.waitForTimeout(500)
+    await expect(searchInput).toHaveValue(query, { timeout: 5_000 })
   }
 
   async findWorldBookRow(name: string): Promise<Locator> {

@@ -284,6 +284,42 @@ export async function waitForConnection(page: Page, timeoutMs = 20000): Promise<
 }
 
 /**
+ * Wait for the app shell to mount enough DOM to interact with the route.
+ * This is more stable than Playwright's networkidle on apps with polling/HMR.
+ */
+export async function waitForAppShell(page: Page, timeoutMs = 15000): Promise<void> {
+  await page.waitForLoadState('domcontentloaded');
+
+  const root = page.locator('#root, #__next');
+  await root.first().waitFor({ state: 'attached', timeout: Math.min(timeoutMs, 15_000) }).catch(
+    () => {}
+  );
+
+  await page
+    .waitForFunction(
+      () => {
+        if (
+          document.querySelector(
+            [
+              'main',
+              '[role="main"]',
+              '[data-testid="error-boundary"]',
+              '[data-testid="not-found-recovery-panel"]',
+              '[data-testid^="route-error-boundary-"]',
+            ].join(', ')
+          )
+        ) {
+          return true;
+        }
+        return (document.body?.innerText ?? '').trim().length > 0;
+      },
+      undefined,
+      { timeout: timeoutMs }
+    )
+    .catch(() => {});
+}
+
+/**
  * Dismiss any connection/server error modals (Ant Design modals).
  * Also removes the modal backdrop via DOM manipulation to prevent
  * modals from re-blocking interaction.
@@ -359,14 +395,11 @@ export async function fetchWithApiKey(
 }
 
 /**
- * Wait for network to be idle
+ * Backward-compatible page readiness helper for page objects.
+ * Historically this waited on `networkidle`, which is brittle on polling pages.
  */
 export async function waitForNetworkIdle(page: Page, timeoutMs = 30000): Promise<void> {
-  try {
-    await page.waitForLoadState('networkidle', { timeout: timeoutMs });
-  } catch {
-    // Non-blocking - some pages may have long-polling
-  }
+  await waitForAppShell(page, timeoutMs);
 }
 
 /**

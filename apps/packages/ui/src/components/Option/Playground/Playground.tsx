@@ -617,6 +617,7 @@ export const Playground = () => {
   // Session persistence for draft restoration
   const {
     restoreSession,
+    sessionScopeReady,
     hasPersistedSession,
     persistedHistoryId,
     persistedServerChatId
@@ -685,6 +686,9 @@ export const Playground = () => {
   ])
 
   React.useEffect(() => {
+    if (!sessionScopeReady) {
+      return
+    }
     if (initializePlaygroundRef.current) {
       return
     }
@@ -700,7 +704,7 @@ export const Playground = () => {
     return () => {
       cancelled = true
     }
-  }, [initializePlayground])
+  }, [initializePlayground, sessionScopeReady])
 
   useCharacterGreeting({
     playgroundReady,

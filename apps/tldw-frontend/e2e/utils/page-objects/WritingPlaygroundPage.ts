@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class WritingPlaygroundPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class WritingPlaygroundPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the shell or the topbar to appear
     const shell = this.page.locator('[data-testid="writing-playground-shell"]')
     const routeShell = this.page.locator('[data-testid="writing-playground-route-shell"]')
@@ -132,7 +132,16 @@ export class WritingPlaygroundPage extends BasePage {
           const visible = await this.newSessionButton.isVisible().catch(() => false)
           if (!visible) {
             await this.toggleLibraryButton.click()
-            await page.waitForTimeout(500)
+            await expect
+              .poll(
+                async () => {
+                  const buttonVisible = await this.newSessionButton.isVisible().catch(() => false)
+                  const sidebarVisible = await this.librarySidebar.isVisible().catch(() => false)
+                  return buttonVisible || sidebarVisible
+                },
+                { timeout: 5_000 }
+              )
+              .toBe(true)
           }
         },
       },

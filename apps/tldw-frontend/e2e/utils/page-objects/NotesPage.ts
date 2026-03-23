@@ -75,8 +75,19 @@ export class NotesPage extends BasePage {
       listRegion.waitFor({ state: "visible", timeout: 20_000 }),
       searchInput.waitFor({ state: "visible", timeout: 20_000 }),
     ]).catch(() => {})
-    // Also wait for the editor area or the "No notes yet" text
-    await this.page.waitForTimeout(1_000)
+    await expect
+      .poll(
+        async () => {
+          const signals = await Promise.all([
+            this.editorRegion.isVisible().catch(() => false),
+            this.titleInput.isVisible().catch(() => false),
+            this.page.getByText(/no notes yet|select a note|create your first note/i).first().isVisible().catch(() => false),
+          ])
+          return signals.some(Boolean)
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(true)
   }
 
   async getInteractiveElements(): Promise<InteractiveElement[]> {
@@ -147,8 +158,7 @@ export class NotesPage extends BasePage {
     await expect(this.searchInput).toBeVisible({ timeout: 10_000 })
     await this.searchInput.fill(query)
     await this.searchInput.press("Enter")
-    // Allow list to update
-    await this.page.waitForTimeout(1_000)
+    await expect(this.searchInput).toHaveValue(query, { timeout: 5_000 })
   }
 
   /**
@@ -164,16 +174,18 @@ export class NotesPage extends BasePage {
    * (It may still appear in "RECENT NOTES" section after soft-delete.)
    */
   async assertNoteNotVisible(title: string): Promise<void> {
-    // Wait a moment for the list to update after deletion
-    await this.page.waitForTimeout(2_000)
-    // The deletion succeeded if the toast "Note deleted" appeared
-    // or the note is no longer in the main list (may remain in recent notes)
     const noteDeleted = this.page.getByText(/note deleted/i)
     const noteHidden = this.page.getByText(title, { exact: false })
-    // Accept either: toast visible OR note not in view
-    const toastVisible = await noteDeleted.isVisible().catch(() => false)
-    if (toastVisible) return // deletion confirmed
-    await expect(noteHidden).toBeHidden({ timeout: 10_000 })
+    await expect
+      .poll(
+        async () => {
+          const toastVisible = await noteDeleted.isVisible().catch(() => false)
+          const noteVisible = await noteHidden.isVisible().catch(() => false)
+          return toastVisible || !noteVisible
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(true)
   }
 
   /**

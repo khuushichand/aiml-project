@@ -19,7 +19,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class CharactersPage extends BasePage {
   constructor(page: Page) {
@@ -34,7 +34,7 @@ export class CharactersPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the characters page root or a feature-unavailable / empty state
     const ready = this.page.locator(
       '[data-testid="characters-page"], [data-testid="characters-new-button"], .ant-empty, .ant-result'

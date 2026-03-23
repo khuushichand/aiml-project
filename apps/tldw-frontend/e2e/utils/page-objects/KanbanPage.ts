@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class KanbanPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class KanbanPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the heading or the empty-state gallery
     const heading = this.page.getByText("Kanban Playground")
     const emptyState = this.page.getByText("Organize research tasks, track projects with boards and cards.")

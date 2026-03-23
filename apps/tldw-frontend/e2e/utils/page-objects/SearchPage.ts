@@ -93,20 +93,28 @@ export class SearchPage {
    * Wait for search results to load
    */
   async waitForResults(timeoutMs = 30000): Promise<void> {
-    // "Ask Your Library" streams an answer with citations.
-    // Wait for any response content to appear, or traditional result items.
-    const possibleResults = this.page.locator(
-      "[data-testid='search-result'], .search-result, .result-item, " +
-      "[data-role='assistant'], .prose, .answer-content, .citation, " +
-      "[data-testid='empty-results'], .no-results, .empty-state"
-    )
+    await expect
+      .poll(
+        async () => {
+          const signals = [
+            this.page.locator("[data-testid='search-result'], .search-result, .result-item").first(),
+            this.page.locator("[data-role='assistant'], .prose, .answer-content, .citation").first(),
+            this.page.locator("[data-testid='empty-results'], .no-results, .empty-state").first(),
+            this.page.getByText(/search complete\.\s*0 sources found\./i),
+            this.page.getByText(/no relevant context found/i),
+          ]
 
-    // Wait for streaming/loading to settle
-    await this.page.waitForTimeout(2_000)
+          for (const signal of signals) {
+            if (await signal.isVisible().catch(() => false)) {
+              return true
+            }
+          }
 
-    await expect(possibleResults.first()).toBeVisible({ timeout: timeoutMs }).catch(() => {
-      // Answer may have rendered in a different container — just ensure page changed
-    })
+          return false
+        },
+        { timeout: timeoutMs }
+      )
+      .toBe(true)
   }
 
   /**

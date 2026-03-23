@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class AudiobookStudioPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class AudiobookStudioPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the page heading or the tabs container to appear
     const heading = this.page.getByText("Audiobook Studio")
     await heading.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {})

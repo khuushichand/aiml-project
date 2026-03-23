@@ -2,7 +2,7 @@
  * Page Object for Chat Dictionaries workflow
  */
 import { type Page, type Locator, expect } from "@playwright/test"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -22,7 +22,7 @@ export class DictionariesPage {
   }
 
   async waitForReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for table or empty state
     const container = this.page.locator(".ant-table, .ant-empty, [data-testid='dictionaries-list']")
     await container.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {})
@@ -60,16 +60,20 @@ export class DictionariesPage {
   }
 
   async fillDictionaryForm(name: string, description?: string): Promise<void> {
-    const nameInput = this.page.locator(".ant-modal").getByLabel(/name/i).first()
+    const modal = this.page.getByRole("dialog", { name: /create dictionary|edit dictionary/i }).last()
+    await modal.waitFor({ state: "visible", timeout: 10_000 })
+    const nameInput = modal.getByRole("textbox").first()
     await nameInput.fill(name)
     if (description) {
-      const descInput = this.page.locator(".ant-modal").getByLabel(/description/i).first()
+      const descInput = modal.getByRole("textbox").nth(1)
       await descInput.fill(description)
     }
   }
 
   async submitDictionaryForm(): Promise<void> {
-    const submitBtn = this.page.locator(".ant-modal").getByRole("button", {
+    const submitBtn = this.page.getByRole("dialog", {
+      name: /create dictionary|edit dictionary/i
+    }).last().getByRole("button", {
       name: /create|save|ok|submit/i
     })
     await submitBtn.click()
@@ -91,19 +95,23 @@ export class DictionariesPage {
   }
 
   async clickEditOnRow(name: string): Promise<void> {
-    const row = await this.findDictionaryRow(name)
-    const editBtn = row.getByRole("button", { name: /edit/i }).or(
-      row.locator("[title='Edit'], [aria-label='Edit']")
-    )
-    await editBtn.first().click()
+    await this.searchDictionaries(name)
+    const button = this.page.getByRole("button", {
+      name: new RegExp(`^Edit dictionary ${escapeRegex(name)}$`)
+    })
+    await this.clickRowActionButton(button)
+    await this.page.getByRole("dialog", { name: /edit dictionary/i }).waitFor({
+      state: "visible",
+      timeout: 10_000
+    })
   }
 
   async clickDeleteOnRow(name: string): Promise<void> {
-    const row = await this.findDictionaryRow(name)
-    const deleteBtn = row.getByRole("button", { name: /delete/i }).or(
-      row.locator("[title='Delete'], [aria-label='Delete']")
-    )
-    await deleteBtn.first().click()
+    await this.searchDictionaries(name)
+    const button = this.page.getByRole("button", {
+      name: new RegExp(`^Delete dictionary ${escapeRegex(name)}$`)
+    })
+    await this.clickRowActionButton(button)
   }
 
   async confirmDeletion(): Promise<void> {
@@ -125,23 +133,30 @@ export class DictionariesPage {
   // ── Entry Management ────────────────────────────────────────────────
 
   async clickManageEntries(dictionaryName: string): Promise<void> {
-    const row = await this.findDictionaryRow(dictionaryName)
-    const entriesBtn = row.getByRole("button", { name: /entries|manage/i }).or(
-      row.locator("[title*='Entries'], [title*='entries']")
-    )
-    await entriesBtn.first().click()
+    await this.searchDictionaries(dictionaryName)
+    const button = this.page.getByRole("button", {
+      name: new RegExp(`^Manage entries for ${escapeRegex(dictionaryName)}$`)
+    })
+    await this.clickRowActionButton(button)
+    await this.page.locator(".ant-drawer:visible").last().waitFor({
+      state: "visible",
+      timeout: 10_000
+    })
   }
 
   async fillEntryForm(pattern: string, replacement: string, type: "literal" | "regex" = "literal"): Promise<void> {
-    const modal = this.page.locator(".ant-modal, .ant-drawer")
-    const patternInput = modal.getByLabel(/pattern/i).first()
+    const drawer = this.page.locator(".ant-drawer:visible").last()
+    await drawer.waitFor({ state: "visible", timeout: 10_000 })
+    const patternInput = drawer.getByRole("textbox", { name: /find/i }).first()
     await patternInput.fill(pattern)
 
-    const replacementInput = modal.getByLabel(/replacement/i).first()
+    const replacementInput = drawer.getByRole("textbox", { name: /replace with/i }).first()
     await replacementInput.fill(replacement)
 
     // Select type if dropdown exists
-    const typeSelect = modal.locator("[id*='type'], [data-testid*='type']").first()
+    const typeSelect = drawer.getByRole("combobox", { name: /match type/i }).first().or(
+      drawer.locator("[id*='type'], [data-testid*='type']").first()
+    )
     if (await typeSelect.isVisible().catch(() => false)) {
       await typeSelect.click()
       await this.page.getByTitle(type, { exact: true }).or(
@@ -151,15 +166,16 @@ export class DictionariesPage {
   }
 
   async submitEntry(): Promise<void> {
-    const modal = this.page.locator(".ant-modal, .ant-drawer")
-    const btn = modal.getByRole("button", { name: /add|create|save|submit/i }).first()
+    const drawer = this.page.locator(".ant-drawer:visible").last()
+    const btn = drawer.getByRole("button", { name: /^Add Entry$/i }).last()
     await btn.click()
   }
 
   async getEntryCount(): Promise<number> {
-    const modal = this.page.locator(".ant-modal, .ant-drawer")
-    const rows = modal.locator(".ant-table-row")
-    return rows.count()
+    const drawer = this.page.locator(".ant-drawer:visible").last()
+    const rows = drawer.getByRole("row")
+    const count = await rows.count()
+    return Math.max(0, count - 1)
   }
 
   // ── Validate & Preview ──────────────────────────────────────────────
@@ -212,5 +228,13 @@ export class DictionariesPage {
       row.locator("[title*='Stat'], [title*='stat']")
     )
     await statsBtn.first().click()
+  }
+
+  private async clickRowActionButton(button: Locator): Promise<void> {
+    await button.scrollIntoViewIfNeeded()
+    await button.waitFor({ state: "visible", timeout: 10_000 })
+    await button.evaluate((element: Element) => {
+      ;(element as HTMLElement).click()
+    })
   }
 }

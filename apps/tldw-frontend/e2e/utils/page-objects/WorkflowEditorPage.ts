@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class WorkflowEditorPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class WorkflowEditorPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the toolbar (Save button) or canvas area
     const saveButton = this.page.getByRole("button", { name: /^Save$/i })
     const statusBar = this.page.getByText(/\d+ nodes/)

@@ -40,11 +40,30 @@ test.describe("Queued chat requests", () => {
     await authedPage.evaluate((promptText) => {
       const queuedMessages = [{ promptText }]
       const store = (window as any).__tldw_useStoreMessageOption
-      const sessionStore = (window as any).__tldw_usePlaygroundSessionStore
 
       store?.getState?.().setQueuedMessages?.(queuedMessages)
-      sessionStore?.getState?.().saveSession?.({ queuedMessages })
     }, queuedPrompt)
+
+    await expect
+      .poll(
+        () =>
+          authedPage.evaluate(() => {
+            const state =
+              (window as any).__tldw_usePlaygroundSessionStore?.getState?.() ?? {}
+            return {
+              queuedCount: state.queuedMessages?.length ?? 0,
+              scopeKey: typeof state.scopeKey === "string" ? state.scopeKey : "",
+              lastUpdated: Number(state.lastUpdated ?? 0)
+            }
+          }),
+        { timeout: 15_000 }
+      )
+      .toEqual(
+        expect.objectContaining({
+          queuedCount: 1,
+          lastUpdated: expect.any(Number)
+        })
+      )
 
     await expect(authedPage.getByText(/1 queued/i)).toBeVisible({
       timeout: 10_000
@@ -61,10 +80,29 @@ test.describe("Queued chat requests", () => {
     await expect(authedPage.getByText(/1 queued/i)).toBeVisible({
       timeout: 10_000
     })
-    await authedPage.getByRole("button", { name: /view queue/i }).click()
-    await expect(
-      authedPage.getByText(queuedPrompt, { exact: true })
-    ).toBeVisible()
+    await expect(authedPage.getByText(`Next: ${queuedPrompt}`)).toBeVisible({
+      timeout: 10_000
+    })
+    await expect
+      .poll(
+        () =>
+          authedPage.evaluate(() => {
+            const store =
+              (window as any).__tldw_useStoreMessageOption?.getState?.() ?? {}
+            return {
+              queuedCount: store.queuedMessages?.length ?? 0,
+              nextPrompt:
+                typeof store.queuedMessages?.[0]?.promptText === "string"
+                  ? store.queuedMessages[0].promptText
+                  : ""
+            }
+          }),
+        { timeout: 10_000 }
+      )
+      .toEqual({
+        queuedCount: 1,
+        nextPrompt: queuedPrompt
+      })
 
     await assertNoCriticalErrors(diagnostics)
   })

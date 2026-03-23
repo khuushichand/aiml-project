@@ -8,6 +8,26 @@ const chatPagePath = path.resolve(testDir, "../e2e/utils/page-objects/ChatPage.t
 const mediaPagePath = path.resolve(testDir, "../e2e/utils/page-objects/MediaPage.ts")
 const notesPagePath = path.resolve(testDir, "../e2e/utils/page-objects/NotesPage.ts")
 const worldBooksPagePath = path.resolve(testDir, "../e2e/utils/page-objects/WorldBooksPage.ts")
+const writingPlaygroundPagePath = path.resolve(
+  testDir,
+  "../e2e/utils/page-objects/WritingPlaygroundPage.ts"
+)
+const audiobookStudioPagePath = path.resolve(
+  testDir,
+  "../e2e/utils/page-objects/AudiobookStudioPage.ts"
+)
+const knowledgeQaPagePath = path.resolve(
+  testDir,
+  "../e2e/utils/page-objects/KnowledgeQAPage.ts"
+)
+const agentRegistryPagePath = path.resolve(
+  testDir,
+  "../e2e/utils/page-objects/AgentRegistryPage.ts"
+)
+const agentTasksPagePath = path.resolve(
+  testDir,
+  "../e2e/utils/page-objects/AgentTasksPage.ts"
+)
 const journeyHelpersPath = path.resolve(testDir, "../e2e/utils/journey-helpers.ts")
 const workflowFixturesPath = path.resolve(testDir, "../e2e/utils/fixtures.ts")
 const notesFlashcardsJourneySpecPath = path.resolve(
@@ -69,6 +89,22 @@ describe("e2e page object contracts", () => {
     expect(source).toContain('getByRole("dialog", { name: title })')
     expect(source).toContain('getByRole("combobox", { name: /keywords/i })')
     expect(worldBooksSpecSource).toContain("characters\\/world-books")
+  })
+
+  it("keeps key page objects off direct networkidle readiness checks", () => {
+    const sources = [
+      readFileSync(writingPlaygroundPagePath, "utf8"),
+      readFileSync(audiobookStudioPagePath, "utf8"),
+      readFileSync(knowledgeQaPagePath, "utf8"),
+      readFileSync(worldBooksPagePath, "utf8"),
+      readFileSync(agentRegistryPagePath, "utf8"),
+      readFileSync(agentTasksPagePath, "utf8"),
+    ]
+
+    for (const source of sources) {
+      expect(source).not.toContain('waitForLoadState("networkidle"')
+      expect(source).toContain("waitForAppShell")
+    }
   })
 
   it("grants clipboard permissions for workflow tests", () => {

@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class QuizPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class QuizPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the quiz playground (online), beta badge, demo preview, or connection banner
     const betaBadge = this.page.locator('[data-testid="quiz-beta-badge"]')
     const demoPreview = this.page.locator('[data-testid="quiz-demo-preview"]')

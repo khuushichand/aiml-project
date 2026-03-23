@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class DataTablesPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class DataTablesPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for heading or the offline empty state
     const heading = this.page.getByText("Data Tables Studio")
     const offline = this.page.getByText("Server is offline. Please connect to use Data Tables.")

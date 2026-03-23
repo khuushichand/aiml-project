@@ -6,7 +6,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class TTSPage extends BasePage {
   constructor(page: Page) {
@@ -21,7 +21,7 @@ export class TTSPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the TTS Playground heading
     const heading = this.page.getByText("TTS Playground")
     await heading.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {})

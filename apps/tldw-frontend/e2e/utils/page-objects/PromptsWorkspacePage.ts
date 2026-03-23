@@ -170,11 +170,11 @@ export class PromptsWorkspacePage extends BasePage {
       const saveBtn = this.page.getByTestId("prompt-full-page-editor")
         .getByRole("button", { name: /save/i }).first()
       await saveBtn.click()
-      await this.page.waitForTimeout(1_000)
+      await expect(saveBtn).toBeEnabled({ timeout: 15_000 })
 
       // Close any auto-opened details drawer after save
       await this.page.keyboard.press("Escape")
-      await this.page.waitForTimeout(300)
+      await expect(this.fullPageEditor).toBeHidden({ timeout: 2_000 }).catch(() => {})
       // Force-remove any lingering drawer/dialog portals
       await this.page.evaluate(() => {
         document.querySelectorAll('.ant-drawer-root, .ant-drawer-mask').forEach(el => el.remove())
@@ -208,7 +208,7 @@ export class PromptsWorkspacePage extends BasePage {
     if (editorOpen) {
       // Navigate directly to the prompts list page to escape the editor
       await this.page.goto("/prompts", { waitUntil: "domcontentloaded" })
-      await this.page.waitForTimeout(1_000)
+      await this.assertPageReady()
     }
 
     // Find the prompt text in the list to identify its row
@@ -217,7 +217,16 @@ export class PromptsWorkspacePage extends BasePage {
 
     // Click the prompt row to open the details drawer/panel
     await promptText.click()
-    await this.page.waitForTimeout(500)
+    await expect
+      .poll(
+        async () => {
+          const detailDeleteVisible = await this.page.getByRole("button", { name: /^delete$/i }).first().isVisible().catch(() => false)
+          const moreVisible = await this.page.locator("[data-testid^='prompt-more-']").first().isVisible().catch(() => false)
+          return detailDeleteVisible || moreVisible
+        },
+        { timeout: 5_000 }
+      )
+      .toBe(true)
 
     // The "Prompt details" panel should open with a Delete button.
     // Try to find "Delete" in the details panel first.
@@ -256,8 +265,7 @@ export class PromptsWorkspacePage extends BasePage {
   async searchPrompts(query: string): Promise<void> {
     await expect(this.searchInput).toBeVisible({ timeout: 10_000 })
     await this.searchInput.locator("input").fill(query)
-    // Allow debounced search to settle
-    await this.page.waitForTimeout(500)
+    await expect(this.searchInput.locator("input")).toHaveValue(query, { timeout: 5_000 })
   }
 
   /**
@@ -288,6 +296,6 @@ export class PromptsWorkspacePage extends BasePage {
     }
     const segmented = this.segmentedTabs
     await segmented.getByText(labels[tab]).click()
-    await this.page.waitForTimeout(500)
+    await expect(segmented.getByText(labels[tab])).toBeVisible({ timeout: 5_000 })
   }
 }

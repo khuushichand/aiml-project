@@ -126,7 +126,6 @@ export class ChatPage {
     const hasErrorOverlay = await this.page.locator("nextjs-portal").count().catch(() => 0)
     if (hasErrorOverlay > 0) {
       await this.page.reload({ waitUntil: "domcontentloaded" })
-      await this.page.waitForTimeout(2_000)
     }
     // Dismiss any blocking modals
     await this.page.evaluate(() => {

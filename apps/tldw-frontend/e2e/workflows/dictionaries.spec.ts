@@ -252,8 +252,9 @@ test.describe("Chat Dictionaries Workflow", () => {
       expect(addResult.status).toBeLessThan(300)
 
       // Verify entry appears
-      const entryCount = await dictPage.getEntryCount()
-      expect(entryCount).toBeGreaterThanOrEqual(1)
+      await expect
+        .poll(async () => dictPage.getEntryCount(), { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(1)
 
       await assertNoCriticalErrors(diagnostics)
     })

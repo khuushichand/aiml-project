@@ -2,7 +2,7 @@
  * Page Object for Multi-Item Media Review workflow
  */
 import { type Page, type Locator, expect } from "@playwright/test"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class MediaReviewPage {
   readonly page: Page
@@ -19,7 +19,7 @@ export class MediaReviewPage {
   }
 
   async waitForReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the media list or empty state
     const container = this.page.locator(
       "[data-testid='media-review-results-list'], .ant-empty, .ant-pagination"
