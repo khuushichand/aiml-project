@@ -472,4 +472,28 @@ describe("MediaReviewPage stage6 keyboard shortcut scope", () => {
       expect(screen.getByText("1 / 30 selected")).toBeInTheDocument()
     })
   })
+
+  it("keeps j/k navigation active after previewing a result row", async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
+    })
+
+    const row = getResultRowByTitle("Item 1")
+    row.focus()
+    expect(row).toHaveFocus()
+
+    fireEvent.click(row)
+
+    await waitFor(() => {
+      expect(screen.getByText("Item 1 of 8")).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(document.activeElement ?? row, { key: "j" })
+
+    await waitFor(() => {
+      expect(screen.getByText("Item 2 of 8")).toBeInTheDocument()
+    })
+  })
 })

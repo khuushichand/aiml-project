@@ -153,6 +153,21 @@
     - `rg -n "waitForLoadState\\(\\s*['\\\"]networkidle|waitForTimeout\\(" e2e/review/parallel-review.spec.ts e2e/smoke/all-pages.spec.ts e2e/utils/page-objects` returned no remaining matches
     - host Playwright rerun for `e2e/smoke/all-pages.spec.ts --grep "/chat|/knowledge|/prompts"` against `http://localhost:8091` passed clean (`13/13`, `14.5s`)
 - The next high-risk workflow pass targeted `media-ingest.spec.ts` on `March 22, 2026`. That live host rerun did not expose a new product regression: the current Media page, Quick Ingest, metadata, review, search, media-multi, and trash navigation flows all passed clean against `http://localhost:8091` (`21/21`, `2.1m`). The remaining debt in that file is mostly stale fixed waits and `networkidle` usage, not an active user-facing failure.
+- The next shared-journey helper pass on `March 22, 2026` uncovered a real contract gap rather than a route-level product bug:
+  - `e2e/utils/journey-helpers.ts` had an `ingestAndWaitForReady(...)` helper that did not actually wait for quick-ingest completion; it returned immediately after the ingest job submission request.
+  - the same helper file still used raw one-second sleeps for quick-ingest modal progression and as the fallback for chat stream completion.
+  - the helper is now pinned by `__tests__/e2e-harness-readiness.guard.test.ts`, which requires explicit quick-ingest completion markers (`wizard-results-step`, `quick-ingest-complete`, `/api/v1/media/ingest/jobs/`) and the assistant-message streaming contract (`article[aria-label*='Assistant message']`, `Generating response`) instead of blind sleeps.
+  - `journey-helpers.ts` now waits for the real Quick Ingest dialog, results/completion UI, and completed ingest-job status polling path before returning, and `waitForStreamComplete(...)` now polls the latest rendered assistant message until the generating/stop controls are gone.
+  - verification for that helper refresh passed on `March 22, 2026`:
+    - `bunx vitest -c vitest.config.ts run __tests__/e2e-harness-readiness.guard.test.ts` (`3/3`)
+    - host Playwright rerun for `e2e/workflows/media-review.spec.ts` against `http://localhost:8091` stayed green (`20 passed / 7 skipped`, `1.4m`)
+    - host Playwright rerun for the affected journey pack against `http://localhost:8091` passed clean:
+      - `e2e/workflows/journeys/character-chat.spec.ts`
+      - `e2e/workflows/journeys/ingest-evaluate-review.spec.ts`
+      - `e2e/workflows/journeys/ingest-search-chat.spec.ts`
+      - `e2e/workflows/journeys/prompts-chat.spec.ts`
+      - combined result: `4/4`, `1.0m`
+    - `python -m bandit -r apps/tldw-frontend/e2e/utils/journey-helpers.ts apps/tldw-frontend/__tests__/e2e-harness-readiness.guard.test.ts -f json -o /tmp/bandit_journey_helper_refresh.json` completed with no findings
 - After the `March 22, 2026` reruns, the remaining e2e risk is now mostly test-hygiene debt rather than active product failures. The highest-signal cleanup targets are the remaining page objects and smoke/review harnesses still depending on `waitForLoadState("networkidle")` or fixed sleeps, especially `e2e/review/parallel-review.spec.ts`, `e2e/smoke/all-pages.spec.ts`, and page objects such as `WritingPlaygroundPage`, `AudiobookStudioPage`, `KnowledgeQAPage`, `WorldBooksPage`, `AgentRegistryPage`, `AgentTasksPage`, and the generic readiness helpers in `e2e/utils`.
 - With the blocking smoke regressions fixed, the remaining audit findings are non-blocking quality debt:
   - several older workflow specs outside the refreshed smoke/admin/tier-5 packs still rely on `waitForLoadState("networkidle")` and should be migrated to visible UI readiness markers

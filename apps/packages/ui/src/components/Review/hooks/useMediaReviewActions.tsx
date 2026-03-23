@@ -261,8 +261,9 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
   const previewItem = React.useCallback((id: string | number) => {
     setPreviewedId(id)
     setFocusedId(id)
+    viewerRef.current?.focus()
     void ensureDetail(id)
-  }, [setPreviewedId, setFocusedId, ensureDetail])
+  }, [setPreviewedId, setFocusedId, viewerRef, ensureDetail])
 
   const toggleSelect = React.useCallback(async (id: string | number, event?: React.MouseEvent) => {
     if (event?.shiftKey && lastClickedRef.current != null && Array.isArray(data)) {

@@ -264,11 +264,9 @@ export class MediaReviewPage {
   }
 
   async getItemPosition(): Promise<string> {
-    const positionText = this.page.locator(
-      ":text-matches('Item \\\\d+ of \\\\d+')"
-    ).or(this.page.locator(".text-text-muted:has-text('Item')"))
-    if (await positionText.first().isVisible().catch(() => false)) {
-      return (await positionText.first().textContent()) ?? ""
+    const toolbarPosition = this.page.getByText(/^Item \d+ of \d+$/).first()
+    if (await toolbarPosition.isVisible().catch(() => false)) {
+      return (await toolbarPosition.textContent()) ?? ""
     }
     return ""
   }

@@ -31,6 +31,58 @@ const MEDIA_COUNT_POLL_INTERVAL_MS = 500
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+const waitForViewerItems = async (
+  reviewPage: MediaReviewPage,
+  minimumCount = 1,
+  timeoutMs = 15_000
+): Promise<void> => {
+  await expect
+    .poll(async () => await reviewPage.getViewerItemCount(), {
+      timeout: timeoutMs,
+      message: "Timed out waiting for media review viewer cards to render",
+    })
+    .toBeGreaterThanOrEqual(minimumCount)
+}
+
+const waitForSelectedCount = async (
+  reviewPage: MediaReviewPage,
+  minimumCount: number,
+  timeoutMs = 10_000
+): Promise<void> => {
+  await expect
+    .poll(async () => await reviewPage.getSelectedCount(), {
+      timeout: timeoutMs,
+      message: "Timed out waiting for media review selection count to update",
+    })
+    .toBeGreaterThanOrEqual(minimumCount)
+}
+
+const waitForSelectedAcrossPagesCount = async (
+  reviewPage: MediaReviewPage,
+  minimumCount: number,
+  timeoutMs = 10_000
+): Promise<void> => {
+  await expect
+    .poll(async () => await reviewPage.getSelectedAcrossPagesCount(), {
+      timeout: timeoutMs,
+      message: "Timed out waiting for cross-page selection count to update",
+    })
+    .toBeGreaterThanOrEqual(minimumCount)
+}
+
+const waitForCurrentPage = async (
+  reviewPage: MediaReviewPage,
+  expectedPage: number,
+  timeoutMs = 10_000
+): Promise<void> => {
+  await expect
+    .poll(async () => await reviewPage.getCurrentPage(), {
+      timeout: timeoutMs,
+      message: "Timed out waiting for media review pagination to settle",
+    })
+    .toBe(expectedPage)
+}
+
 const seedAppAuthWithApiKey = async (page: import("@playwright/test").Page) => {
   await page.context().addInitScript((cfg) => {
     try {
@@ -258,13 +310,7 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       // Click first item
       await reviewPage.clickItem(0)
-      await authedPage.waitForTimeout(1000)
-
-      // Viewer should no longer be empty
-      const isEmpty = await reviewPage.isViewerEmpty()
-      // After clicking an item, the viewer should show content
-      // (may take a moment to load)
-      await authedPage.waitForTimeout(2000)
+      await waitForViewerItems(reviewPage)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -291,7 +337,7 @@ test.describe("Multi-Item Media Review Workflow", () => {
         reviewPage.clickItem(0)
       ])
 
-      await authedPage.waitForTimeout(2000)
+      await waitForViewerItems(reviewPage)
 
       // Content should show title and type
       const viewerCount = await reviewPage.getViewerItemCount()
@@ -325,10 +371,10 @@ test.describe("Multi-Item Media Review Workflow", () => {
       }
 
       await reviewPage.toggleItemSelection(0)
-      await authedPage.waitForTimeout(500)
+      await waitForSelectedCount(reviewPage, 1)
 
       await reviewPage.toggleItemSelection(1)
-      await authedPage.waitForTimeout(500)
+      await waitForSelectedCount(reviewPage, 2)
 
       // Should have 2 selected
       const selectedCount = await reviewPage.getSelectedCount()
@@ -354,11 +400,11 @@ test.describe("Multi-Item Media Review Workflow", () => {
       }
 
       await reviewPage.toggleItemSelection(0)
-      await authedPage.waitForTimeout(500)
+      await waitForSelectedCount(reviewPage, 1)
 
       // Shift-click third item
       await reviewPage.shiftToggleItemSelection(2)
-      await authedPage.waitForTimeout(500)
+      await waitForSelectedCount(reviewPage, 3)
 
       // Should have at least 3 selected (range)
       const selectedCount = await reviewPage.getSelectedCount()
@@ -379,8 +425,12 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await reviewPage.goto()
       await reviewPage.waitForReady()
 
-      const itemCount = await reviewPage.getItemCount()
-      expect(itemCount).toBeGreaterThan(0)
+      await expect
+        .poll(async () => await reviewPage.getItemCount(), {
+          timeout: 15_000,
+          message: "Timed out waiting for media review results to render seeded cross-page items",
+        })
+        .toBeGreaterThan(0)
 
       const totalPages = await reviewPage.getTotalPages()
       expect(totalPages).toBeGreaterThanOrEqual(2)
@@ -394,10 +444,10 @@ test.describe("Multi-Item Media Review Workflow", () => {
       expect(selectionBefore).toBeGreaterThanOrEqual(1)
 
       await reviewPage.goToPage(2)
-      await authedPage.waitForTimeout(800)
+      await waitForCurrentPage(reviewPage, 2)
 
       await reviewPage.clickAddVisibleToSelection()
-      await authedPage.waitForTimeout(800)
+      await waitForSelectedAcrossPagesCount(reviewPage, selectionBefore + 1)
 
       const selectionAfter = await reviewPage.getSelectedAcrossPagesCount()
       expect(selectionAfter).toBeGreaterThan(selectionBefore)
@@ -432,11 +482,12 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       await reviewPage.toggleItemSelection(0)
       await reviewPage.toggleItemSelection(1)
-      await authedPage.waitForTimeout(500)
+      await waitForSelectedCount(reviewPage, 2)
 
       await reviewPage.setViewMode("spread")
-      const mode = await reviewPage.getCurrentViewMode()
-      expect(mode).toBe("spread")
+      await expect
+        .poll(async () => await reviewPage.getCurrentViewMode(), { timeout: 10_000 })
+        .toBe("spread")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -458,11 +509,12 @@ test.describe("Multi-Item Media Review Workflow", () => {
       }
 
       await reviewPage.clickItem(0)
-      await authedPage.waitForTimeout(500)
+      await waitForViewerItems(reviewPage)
 
       await reviewPage.setViewMode("list")
-      const mode = await reviewPage.getCurrentViewMode()
-      expect(mode).toBe("list")
+      await expect
+        .poll(async () => await reviewPage.getCurrentViewMode(), { timeout: 10_000 })
+        .toBe("list")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -484,11 +536,12 @@ test.describe("Multi-Item Media Review Workflow", () => {
       }
 
       await reviewPage.clickItem(0)
-      await authedPage.waitForTimeout(500)
+      await waitForViewerItems(reviewPage)
 
       await reviewPage.setViewMode("all")
-      const mode = await reviewPage.getCurrentViewMode()
-      expect(mode).toBe("all")
+      await expect
+        .poll(async () => await reviewPage.getCurrentViewMode(), { timeout: 10_000 })
+        .toBe("all")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -503,10 +556,7 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       try {
         await reviewPage.setOrientation("horizontal")
-        await authedPage.waitForTimeout(300)
-
         await reviewPage.setOrientation("vertical")
-        await authedPage.waitForTimeout(300)
       } catch {
         // Orientation toggle may not be available without selected items
       }
@@ -532,7 +582,6 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       // Enter a search query
       await reviewPage.fillSearchQuery("test")
-      await authedPage.waitForTimeout(2000)
 
       // Results should update
       const itemCount = await reviewPage.getItemCount()
@@ -554,7 +603,6 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       try {
         await reviewPage.filterByMediaType("video")
-        await authedPage.waitForTimeout(2000)
 
         // Results should be filtered
         const itemCount = await reviewPage.getItemCount()
@@ -578,11 +626,9 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       // Apply a filter first
       await reviewPage.fillSearchQuery("filter-test")
-      await authedPage.waitForTimeout(1000)
 
       // Clear filters
       await reviewPage.clearFilters()
-      await authedPage.waitForTimeout(2000)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -600,7 +646,6 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await reviewPage.waitForReady()
 
       await reviewPage.fillSearchQuery(fixture.query)
-      await authedPage.waitForTimeout(800)
       await reviewPage.setSort("title_asc")
       await reviewPage.setDateRange("2026-01-01", "2026-12-31")
       const searchRequestPromise = authedPage.waitForRequest((request) => (
@@ -615,7 +660,10 @@ test.describe("Multi-Item Media Review Workflow", () => {
       expect(payload.date_range?.end ?? payload.date_range?.end_date).toBe("2026-12-31")
 
       await expect
-        .poll(async () => await reviewPage.getItemCount(), { timeout: 15_000 })
+        .poll(async () => await reviewPage.getItemCount(), {
+          timeout: 45_000,
+          message: "Timed out waiting for seeded media-review search fixtures to become searchable",
+        })
         .toBeGreaterThanOrEqual(1)
 
       await assertNoCriticalErrors(diagnostics)
@@ -706,16 +754,14 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       // Select items
       await reviewPage.clickItem(0)
-      await authedPage.waitForTimeout(500)
+      await waitForViewerItems(reviewPage)
 
       // Clear via options menu
       try {
         await reviewPage.clickClearSession()
-        await authedPage.waitForTimeout(1000)
-
-        // Viewer should be empty after clear
-        const isEmpty = await reviewPage.isViewerEmpty()
-        // May show undo notification
+        await expect
+          .poll(async () => await reviewPage.isViewerEmpty(), { timeout: 10_000 })
+          .toBe(true)
       } catch {
         // Clear session button may not be accessible without items open
       }
@@ -831,11 +877,10 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await reviewPage.waitForReady()
 
       await reviewPage.clickAddVisibleToSelection()
-      await authedPage.waitForTimeout(700)
+      await waitForSelectedAcrossPagesCount(reviewPage, 1)
       await reviewPage.goToPage(2)
-      await authedPage.waitForTimeout(700)
+      await waitForCurrentPage(reviewPage, 2)
       await reviewPage.clickAddVisibleToSelection()
-      await authedPage.waitForTimeout(900)
 
       await expect(
         authedPage.getByText(/selected across pages:\s*30/i)
@@ -874,7 +919,6 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await reviewPage.goto()
       await reviewPage.waitForReady()
       await reviewPage.pressEscapeTwice()
-      await authedPage.waitForTimeout(250)
 
       await reviewPage.fillSearchQuery(fixture.query)
       await authedPage.getByRole("button", { name: /^search$/i }).click()
@@ -931,7 +975,6 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await reviewPage.goto()
       await reviewPage.waitForReady()
       await reviewPage.pressEscapeTwice()
-      await authedPage.waitForTimeout(250)
 
       await reviewPage.fillSearchQuery(fixture.query)
       await reviewPage.setSort("date_asc")
@@ -987,7 +1030,8 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       // Select first item to start
       await reviewPage.clickItem(0)
-      await authedPage.waitForTimeout(500)
+      await waitForViewerItems(reviewPage)
+      const startingPosition = await reviewPage.getItemPosition()
 
       // Focus the viewer panel first
       const viewer = authedPage.locator("[tabindex='-1']").first()
@@ -997,11 +1041,17 @@ test.describe("Multi-Item Media Review Workflow", () => {
 
       // Press j to go next
       await reviewPage.pressNextItemShortcut()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(async () => await reviewPage.getItemPosition(), { timeout: 10_000 })
+        .not.toBe(startingPosition)
+      const advancedPosition = await reviewPage.getItemPosition()
 
       // Press k to go back
       await reviewPage.pressPrevItemShortcut()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(async () => await reviewPage.getItemPosition(), { timeout: 10_000 })
+        .toBe(startingPosition)
+      expect(advancedPosition).not.toBe(startingPosition)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -1023,11 +1073,10 @@ test.describe("Multi-Item Media Review Workflow", () => {
       }
 
       await reviewPage.clickItem(0)
-      await authedPage.waitForTimeout(1000)
+      await waitForViewerItems(reviewPage)
 
       // Press o to toggle expand
       await reviewPage.pressToggleExpand()
-      await authedPage.waitForTimeout(500)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -1044,7 +1093,6 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await reviewPage.goto()
       await reviewPage.waitForReady()
       await reviewPage.pressEscapeTwice()
-      await authedPage.waitForTimeout(250)
 
       const rows = authedPage.locator(
         "[data-testid='media-review-results-list'] [role='button'][aria-selected]"
