@@ -65,7 +65,7 @@ Add to `config.txt` under `[ACP-WORKSPACE]`:
 
 ```ini
 [ACP-WORKSPACE]
-# Optional. If set, workspace root_path must be under one of these paths.
+# Required for workspace create, update, discovery, and dispatch path entry points.
 # Comma-separated absolute paths.
 allowed_base_paths = /home,/projects,/workspaces
 
@@ -88,11 +88,11 @@ services:
       - ACP_WORKSPACE_ALLOWED_BASE_PATHS=/workspaces
 ```
 
-The `allowed_base_paths` config (or `ACP_WORKSPACE_ALLOWED_BASE_PATHS` env var) prevents workspaces from being created outside the mounted volume.
+The `allowed_base_paths` config (or `ACP_WORKSPACE_ALLOWED_BASE_PATHS` env var) is required for ACP workspace path entry points and prevents workspaces from being created outside the mounted volume.
 
 ## Security Notes
 
-- `root_path` sets the session CWD; no forced sandboxing (MCP Hub handles path enforcement separately)
+- `root_path` must stay under a configured allowlist before it can be stored or used as a session CWD
 - `env_vars` are stored as plaintext JSON in the per-user SQLite DB
 - Path validation uses `Path.is_relative_to()` for allowed_base_paths enforcement
 - Discovery service uses `followlinks=False` to prevent symlink loop attacks

@@ -6,6 +6,7 @@ and workspace CRUD with discovery and health monitoring.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any
 
@@ -53,22 +54,62 @@ async def _run_sync(fn: Any) -> Any:
     return await loop.run_in_executor(None, fn)
 
 
+def _allowed_workspace_roots() -> tuple[Path, ...]:
+    """Return the configured ACP workspace allowlist."""
+    from tldw_Server_API.app.core.config import get_config_value
+
+    raw_values: list[str] = []
+    raw_values.extend(
+        entry.strip()
+        for entry in str(get_config_value("ACP-WORKSPACE", "allowed_base_paths", "") or "").replace(
+            os.pathsep,
+            ",",
+        ).split(",")
+        if entry.strip()
+    )
+    raw_values.extend(
+        entry.strip()
+        for entry in str(os.getenv("ACP_WORKSPACE_ALLOWED_BASE_PATHS", "") or "").replace(
+            os.pathsep,
+            ",",
+        ).split(",")
+        if entry.strip()
+    )
+
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        candidate = Path(raw_value).expanduser()
+        if not candidate.is_absolute():
+            logger.warning("Ignoring non-absolute ACP workspace allowlist entry: {}", raw_value)
+            continue
+        resolved = candidate.resolve()
+        marker = str(resolved)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        roots.append(resolved)
+    return tuple(roots)
+
+
 def _validate_workspace_root(root_path: str) -> str:
-    """Validate and normalize root_path. Check allowed_base_paths if configured."""
+    """Validate and normalize root_path within configured ACP workspace roots."""
     candidate = Path(root_path).expanduser()
     if not candidate.is_absolute():
         raise HTTPException(400, "root_path must be absolute")
     path = candidate.resolve()
 
-    from tldw_Server_API.app.core.config import get_config_value
-    allowed = get_config_value("ACP-WORKSPACE", "allowed_base_paths", "")
-    if allowed:
-        bases = [Path(b.strip()).resolve() for b in allowed.split(",") if b.strip()]
-        if bases and not any(path == b or path.is_relative_to(b) for b in bases):
-            raise HTTPException(
-                403,
-                f"root_path not under allowed base paths: {', '.join(str(b) for b in bases)}",
-            )
+    bases = _allowed_workspace_roots()
+    if not bases:
+        raise HTTPException(
+            503,
+            "ACP workspace roots are not configured. Set ACP-WORKSPACE.allowed_base_paths or ACP_WORKSPACE_ALLOWED_BASE_PATHS.",
+        )
+    if not any(path == b or path.is_relative_to(b) for b in bases):
+        raise HTTPException(
+            403,
+            f"root_path not under allowed base paths: {', '.join(str(b) for b in bases)}",
+        )
     return str(path)
 
 
@@ -84,12 +125,10 @@ def _resolve_dispatch_cwd(raw_cwd: str, *, workspace_root: str | None = None) ->
     if candidate == ".":
         return str(workspace_path)
 
-    requested_path = Path(candidate).expanduser()
-    resolved_path = (
-        requested_path.resolve()
-        if requested_path.is_absolute()
-        else (workspace_path / requested_path).resolve()
-    )
+    if os.path.isabs(os.path.expanduser(candidate)):
+        raise HTTPException(403, "cwd must be relative to the workspace root")
+
+    resolved_path = (workspace_path / candidate).resolve()
     if resolved_path != workspace_path and not resolved_path.is_relative_to(workspace_path):
         raise HTTPException(403, "cwd must stay within the workspace root")
     return str(resolved_path)

@@ -44,6 +44,8 @@ from ..schemas.sharing_schemas import (
 )
 
 router = APIRouter(prefix="/sharing", tags=["sharing"])
+_SHARED_CHAT_ERROR_MESSAGE = "Chat request failed"
+_SHARED_CHAT_ERRORS_MESSAGE = "One or more internal pipeline errors were suppressed."
 
 
 # ── Lazy service construction ──
@@ -68,6 +70,29 @@ def _get_audit_service():
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
+
+
+def _sanitize_shared_chat_result(value: Any) -> Any:
+    """Redact internal error details before returning shared chat responses."""
+    if hasattr(value, "model_dump"):
+        return _sanitize_shared_chat_result(value.model_dump())
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "error" and item:
+                sanitized[key] = _SHARED_CHAT_ERROR_MESSAGE
+                continue
+            if key == "errors" and item:
+                sanitized[key] = [_SHARED_CHAT_ERRORS_MESSAGE]
+                continue
+            if key in {"exception", "traceback", "stack", "stack_trace"} and item:
+                sanitized[key] = _SHARED_CHAT_ERROR_MESSAGE
+                continue
+            sanitized[key] = _sanitize_shared_chat_result(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_shared_chat_result(item) for item in value]
+    return value
 
 
 # ── IP-based rate limiter for public (unauthenticated) endpoints ──
@@ -632,7 +657,7 @@ async def chat_with_shared_workspace(
             ip_address=_client_ip(request),
         )
 
-        return result
+        return _sanitize_shared_chat_result(result)
     except ImportError:
         raise HTTPException(
             status_code=501,
