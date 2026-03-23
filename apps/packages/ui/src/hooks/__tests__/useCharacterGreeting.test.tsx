@@ -320,4 +320,71 @@ describe("useCharacterGreeting", () => {
     })
     expect(mocks.selectedCharacterStorageGet).not.toHaveBeenCalled()
   })
+
+  it("does not refetch a character after merging fetched details for the same id", async () => {
+    const initialCharacter = {
+      id: "char-loop",
+      name: "Loop Guide",
+      greeting: "Hello"
+    } as Character
+    const fetchedCharacter = {
+      ...initialCharacter,
+      avatar_url: "https://example.com/avatar.png",
+      alternateGreetings: ["Hydrated greeting"]
+    } as Character
+
+    let selectedCharacter = initialCharacter
+    let messageState: Message[] = []
+    let historyState: ChatHistory = []
+    const setMessages = vi.fn(
+      (next: Message[] | ((prev: Message[]) => Message[])) => {
+        messageState = applyMessageUpdate(messageState, next)
+      }
+    )
+    const setHistory = vi.fn(
+      (next: ChatHistory | ((prev: ChatHistory) => ChatHistory)) => {
+        historyState = applyHistoryUpdate(historyState, next)
+      }
+    )
+    const setSelectedCharacter = vi.fn((next: Character | null) => {
+      if (next) {
+        selectedCharacter = next
+      }
+    })
+
+    mocks.getCharacter.mockResolvedValue(fetchedCharacter)
+
+    const { rerender } = renderHook(
+      ({ currentCharacter }: { currentCharacter: Character | null }) =>
+        useCharacterGreeting({
+          playgroundReady: true,
+          selectedCharacter: currentCharacter,
+          serverChatId: null,
+          historyId: "history-loop",
+          messagesLength: messageState.length,
+          setMessages,
+          setHistory,
+          setSelectedCharacter
+        }),
+      {
+        initialProps: {
+          currentCharacter: selectedCharacter
+        }
+      }
+    )
+
+    await waitFor(() => {
+      expect(setSelectedCharacter).toHaveBeenCalledTimes(1)
+    })
+    expect(mocks.getCharacter).toHaveBeenCalledTimes(1)
+
+    rerender({ currentCharacter: selectedCharacter })
+
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(mocks.getCharacter).toHaveBeenCalledTimes(1)
+    expect(messageState[0]?.message).toBeTruthy()
+    expect(historyState[0]?.content).toBeTruthy()
+  })
 })

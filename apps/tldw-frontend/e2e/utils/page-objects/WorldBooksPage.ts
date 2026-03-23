@@ -216,6 +216,7 @@ export class WorldBooksPage {
 
   async fillBulkText(text: string): Promise<void> {
     const textarea = this.entryDialog().getByLabel(/bulk entry input/i)
+    await expect(textarea).toBeVisible({ timeout: 10_000 })
     await textarea.fill(text)
   }
 

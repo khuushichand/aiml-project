@@ -252,8 +252,18 @@ test.describe("Chat Workflow", () => {
         ".connection-error, .error-boundary, [data-testid='connection-error']"
       )
 
-      // Either shows error or falls back gracefully
-      await authedPage.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {})
+      // Either shows error or falls back gracefully without stalling on background traffic
+      await expect
+        .poll(
+          async () => {
+            const urlOk = /\/chat|\/settings|\/login/.test(authedPage.url())
+            const errorVisible = await _errorState.first().isVisible().catch(() => false)
+            const mainVisible = await authedPage.locator("main").first().isVisible().catch(() => false)
+            return urlOk && (errorVisible || mainVisible)
+          },
+          { timeout: 10_000 }
+        )
+        .toBe(true)
 
       // Page should not crash
       await expect(authedPage).toHaveURL(/\/chat|\/settings|\/login/)

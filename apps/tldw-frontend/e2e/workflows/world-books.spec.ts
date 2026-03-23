@@ -88,7 +88,9 @@ test.describe("World Books Workflow", () => {
 
       const name = `${testPrefix}-edit`
       await wbPage.createWorldBook(name, "Original")
-      await authedPage.waitForTimeout(1000)
+      await expect(await wbPage.findWorldBookRow(name)).toBeVisible({
+        timeout: 10_000
+      })
 
       // Open edit
       await wbPage.clickEditOnRow(name)
@@ -129,11 +131,12 @@ test.describe("World Books Workflow", () => {
 
       const name = `${testPrefix}-entries`
       await wbPage.createWorldBook(name, "For entry tests")
-      await authedPage.waitForTimeout(1000)
+      await expect(await wbPage.findWorldBookRow(name)).toBeVisible({
+        timeout: 10_000
+      })
 
       // Open entries
       await wbPage.clickEntriesOnRow(name)
-      await authedPage.waitForTimeout(500)
 
       // Add entry
       await wbPage.fillEntryForm("dragon, fire", "Dragons breathe fire", 50)
@@ -159,15 +162,15 @@ test.describe("World Books Workflow", () => {
 
       const name = `${testPrefix}-bulk`
       await wbPage.createWorldBook(name, "For bulk entry tests")
-      await authedPage.waitForTimeout(1000)
+      await expect(await wbPage.findWorldBookRow(name)).toBeVisible({
+        timeout: 10_000
+      })
 
       await wbPage.clickEntriesOnRow(name)
-      await authedPage.waitForTimeout(500)
 
       // Toggle bulk mode
       try {
         await wbPage.toggleBulkAddMode()
-        await authedPage.waitForTimeout(300)
 
         // Fill bulk text using -> separator
         await wbPage.fillBulkText("elf, forest -> Elves live in ancient forests\nwizard, magic -> Wizards wield powerful magic")
@@ -202,7 +205,9 @@ test.describe("World Books Workflow", () => {
 
       const name = `${testPrefix}-attach`
       await wbPage.createWorldBook(name, "For attachment tests")
-      await authedPage.waitForTimeout(1000)
+      await expect(await wbPage.findWorldBookRow(name)).toBeVisible({
+        timeout: 10_000
+      })
 
       try {
         await wbPage.clickLinkOnRow(name)
@@ -256,21 +261,14 @@ test.describe("World Books Workflow", () => {
 
       const name = `${testPrefix}-del`
       await wbPage.createWorldBook(name, "To be deleted")
-      await authedPage.waitForTimeout(1000)
+      const row = await wbPage.findWorldBookRow(name)
+      await expect(row).toBeVisible({ timeout: 10_000 })
 
       // Delete
       await wbPage.clickDeleteOnRow(name)
       await wbPage.confirmDeletion()
 
-      // The row should eventually disappear (after undo timeout or immediately)
-      await authedPage.waitForTimeout(2000)
-
-      // If undo button appears, let it expire
-      const undoBtn = authedPage.getByRole("button", { name: /undo/i })
-      if (await undoBtn.isVisible().catch(() => false)) {
-        // Wait for the 10s undo window to pass, then verify deletion
-        await authedPage.waitForTimeout(11_000)
-      }
+      await expect(row).toBeHidden({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -287,7 +285,8 @@ test.describe("World Books Workflow", () => {
 
       const name = `${testPrefix}-undo`
       await wbPage.createWorldBook(name, "Will undo delete")
-      await authedPage.waitForTimeout(1000)
+      const row = await wbPage.findWorldBookRow(name)
+      await expect(row).toBeVisible({ timeout: 10_000 })
 
       // Delete
       await wbPage.clickDeleteOnRow(name)
@@ -296,10 +295,6 @@ test.describe("World Books Workflow", () => {
       // Try to click undo
       try {
         await wbPage.clickUndoDelete()
-        await authedPage.waitForTimeout(1000)
-
-        // Row should still exist after undo
-        const row = await wbPage.findWorldBookRow(name)
         await expect(row).toBeVisible({ timeout: 5_000 })
       } catch {
         // Undo may not be available for all delete patterns
@@ -326,7 +321,9 @@ test.describe("World Books Workflow", () => {
 
       const name = `${testPrefix}-export`
       await wbPage.createWorldBook(name, "For export tests")
-      await authedPage.waitForTimeout(1000)
+      await expect(await wbPage.findWorldBookRow(name)).toBeVisible({
+        timeout: 10_000
+      })
 
       const [apiResult] = await Promise.all([
         wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+\/export/, "GET"),
@@ -372,7 +369,9 @@ test.describe("World Books Workflow", () => {
 
       const name = `${testPrefix}-stats`
       await wbPage.createWorldBook(name, "For statistics tests")
-      await authedPage.waitForTimeout(1000)
+      await expect(await wbPage.findWorldBookRow(name)).toBeVisible({
+        timeout: 10_000
+      })
 
       try {
         const [apiResult] = await Promise.all([
