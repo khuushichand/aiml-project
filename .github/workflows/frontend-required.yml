@@ -108,7 +108,7 @@ jobs:
           fi
 
       - name: Run family guardrails parity tests
-        if: needs.changes.outputs.tldw_frontend_changed == 'true'
+        if: needs.changes.outputs.family_guardrails_changed == 'true'
         working-directory: apps/packages/ui
         run: bun run test:family-guardrails
 

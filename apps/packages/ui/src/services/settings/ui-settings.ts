@@ -366,7 +366,9 @@ export const HEADER_SHORTCUT_IDS = [
   "moderation-playground",
   "admin-llamacpp",
   "admin-mlx",
-  "settings"
+  "settings",
+  "account",
+  "billing"
 ] as const
 export type HeaderShortcutId = (typeof HEADER_SHORTCUT_IDS)[number]
 

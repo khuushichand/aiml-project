@@ -2,7 +2,7 @@ import type { LucideIcon } from "lucide-react"
 import { UploadCloud } from "lucide-react"
 import type { SidebarShortcutId } from "@/services/settings/ui-settings"
 import { SIDEBAR_SHORTCUT_IDS } from "@/services/settings/ui-settings"
-import { HEADER_SHORTCUT_ITEMS } from "@/components/Layouts/header-shortcut-items"
+import { getHeaderShortcutItems } from "@/components/Layouts/header-shortcut-items"
 
 export type SidebarShortcutAction =
   | {
@@ -23,7 +23,7 @@ export type SidebarShortcutAction =
     }
 
 const headerShortcutEntries = Object.fromEntries(
-  HEADER_SHORTCUT_ITEMS.map((item) => [
+  getHeaderShortcutItems().map((item) => [
     item.id,
     {
       id: item.id,

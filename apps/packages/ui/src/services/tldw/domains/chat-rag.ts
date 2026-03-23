@@ -21,6 +21,51 @@ import type {
 
 const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
 
+const isConnectionErrorMessage = (message: string): boolean =>
+  /network|offline|failed to fetch|connection|unreachable/i.test(message)
+
+const isTimeoutErrorMessage = (message: string): boolean =>
+  /timeout|timed out|etimedout/i.test(message)
+
+const buildSanitizedRagSearchError = (
+  error: unknown
+): Error & { status?: number; code?: string } => {
+  const status =
+    (error as { status?: number; response?: { status?: number }; statusCode?: number } | null)
+      ?.status ??
+    (error as { response?: { status?: number } } | null)?.response?.status ??
+    (error as { statusCode?: number } | null)?.statusCode
+  const rawMessage = error instanceof Error ? error.message : String(error ?? "")
+
+  let message = "RAG search failed."
+  if (isConnectionErrorMessage(rawMessage)) {
+    message = "Cannot reach server. Check your connection and try again."
+  } else if (isTimeoutErrorMessage(rawMessage) || status === 408) {
+    message = "RAG search timed out. Try again."
+  } else if (status === 400 || status === 422) {
+    message = "RAG search request is invalid."
+  } else if (status === 401) {
+    message = "RAG search failed. Authentication is required."
+  } else if (status === 403) {
+    message = "RAG search failed. Access was denied."
+  } else if (status === 404) {
+    message = "RAG search endpoint is unavailable."
+  } else if (status === 429) {
+    message = "RAG search is rate limited. Please wait and try again."
+  } else if (typeof status === "number" && status >= 500) {
+    message = "RAG search failed due to a server error."
+  }
+
+  const sanitizedError = new Error(message) as Error & {
+    status?: number
+    code?: string
+  }
+  if (typeof status === "number") {
+    sanitizedError.status = status
+  }
+  return sanitizedError
+}
+
 export const chatRagMethods = {
   normalizeChatSummary(input: any): ServerChatSummary {
     const created_at = String(input?.created_at || input?.createdAt || "")
@@ -200,28 +245,32 @@ export const chatRagMethods = {
         rest?.reranking_strategy !== 'none'
 
       if (!shouldRetryWithoutRerank) {
-        throw error
+        throw buildSanitizedRagSearchError(error)
       }
 
       // Some local/dev servers fail hard when FlashRank assets are missing.
       // Retry once with reranking disabled so retrieval still works.
       console.warn(
         '[tldw:rag] /api/v1/rag/search failed; retrying once without reranking',
-        { status, message }
+        { status }
       )
-      return await bgRequest<any>({
-        path: '/api/v1/rag/search',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: {
-          query: normalizedQuery,
-          ...rest,
-          enable_reranking: false,
-          reranking_strategy: 'none'
-        },
-        timeoutMs,
-        abortSignal: signal
-      })
+      try {
+        return await bgRequest<any>({
+          path: '/api/v1/rag/search',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: {
+            query: normalizedQuery,
+            ...rest,
+            enable_reranking: false,
+            reranking_strategy: 'none'
+          },
+          timeoutMs,
+          abortSignal: signal
+        })
+      } catch (retryError) {
+        throw buildSanitizedRagSearchError(retryError)
+      }
     }
   },
 

@@ -55,9 +55,10 @@ async def _run_sync(fn: Any) -> Any:
 
 def _validate_workspace_root(root_path: str) -> str:
     """Validate and normalize root_path. Check allowed_base_paths if configured."""
-    path = Path(root_path).expanduser().resolve()
-    if not path.is_absolute():
+    candidate = Path(root_path).expanduser()
+    if not candidate.is_absolute():
         raise HTTPException(400, "root_path must be absolute")
+    path = candidate.resolve()
 
     from tldw_Server_API.app.core.config import get_config_value
     allowed = get_config_value("ACP-WORKSPACE", "allowed_base_paths", "")
@@ -69,6 +70,29 @@ def _validate_workspace_root(root_path: str) -> str:
                 f"root_path not under allowed base paths: {', '.join(str(b) for b in bases)}",
             )
     return str(path)
+
+
+def _resolve_dispatch_cwd(raw_cwd: str, *, workspace_root: str | None = None) -> str:
+    """Resolve a run cwd, confining workspace-relative paths to the workspace root."""
+    candidate = (raw_cwd or ".").strip() or "."
+    if not workspace_root:
+        if candidate == ".":
+            return "."
+        return _validate_workspace_root(candidate)
+
+    workspace_path = Path(_validate_workspace_root(workspace_root))
+    if candidate == ".":
+        return str(workspace_path)
+
+    requested_path = Path(candidate).expanduser()
+    resolved_path = (
+        requested_path.resolve()
+        if requested_path.is_absolute()
+        else (workspace_path / requested_path).resolve()
+    )
+    if resolved_path != workspace_path and not resolved_path.is_relative_to(workspace_path):
+        raise HTTPException(403, "cwd must stay within the workspace root")
+    return str(resolved_path)
 
 
 # ---------------------------------------------------------------------------
@@ -744,9 +768,10 @@ async def dispatch_run(
     if project and project.workspace_id:
         workspace = await _run_sync(lambda: db.get_workspace(project.workspace_id))
 
-    effective_cwd = payload.cwd
-    if effective_cwd == "." and workspace:
-        effective_cwd = workspace.root_path
+    effective_cwd = _resolve_dispatch_cwd(
+        payload.cwd,
+        workspace_root=workspace.root_path if workspace else None,
+    )
 
     # Gather workspace MCP servers for injection
     workspace_mcp_servers: list[dict[str, Any]] = []

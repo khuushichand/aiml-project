@@ -220,7 +220,7 @@ cython_debug/
 *.mp3
 
 # Optional Docker host-storage bind mounts
-docker-data/
+/docker-data/
 *.ogg
 *.opus
 *.wav

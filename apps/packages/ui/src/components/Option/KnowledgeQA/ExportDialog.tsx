@@ -76,13 +76,20 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
   const copiedTimeoutRef = useRef<number | null>(null)
   const shareLinkCopiedTimeoutRef = useRef<number | null>(null)
   const activeDialogSessionKeyRef = useRef("")
+  const dialogSessionNonceRef = useRef(open ? 1 : 0)
+  const wasOpenRef = useRef(open)
   const hasExportableContent =
     query.trim().length > 0 || Boolean(answer) || results.length > 0 || messages.length > 0
   const hasServerThread = Boolean(
     currentThreadId && !currentThreadId.startsWith("local-")
   )
   const canCopyThreadLink = SHARE_THREAD_LINKS_ENABLED && hasServerThread
-  const dialogSessionKey = `${open ? "open" : "closed"}::${currentThreadId ?? "no-thread"}`
+  if (open && !wasOpenRef.current) {
+    dialogSessionNonceRef.current += 1
+  }
+  wasOpenRef.current = open
+  const dialogSessionKey = `${dialogSessionNonceRef.current}::${open ? "open" : "closed"}::${currentThreadId ?? "no-thread"}`
+  activeDialogSessionKeyRef.current = dialogSessionKey
 
   const clearCopiedTimeout = useCallback(() => {
     if (copiedTimeoutRef.current != null) {
@@ -99,16 +106,22 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
   }, [])
 
   useEffect(() => {
-    activeDialogSessionKeyRef.current = dialogSessionKey
-  }, [dialogSessionKey])
-
-  useEffect(() => {
+    clearCopiedTimeout()
     clearShareLinkCopiedTimeout()
+    if (pendingPrintTimeoutRef.current != null) {
+      window.clearTimeout(pendingPrintTimeoutRef.current)
+      pendingPrintTimeoutRef.current = null
+    }
+    setIsExporting(false)
+    setIsSavingNote(false)
+    setExportedContent(null)
+    setExportError(null)
+    setCopied(false)
     setActiveShareLink(null)
     setShareLinkCopied(false)
     setIsPreparingShareLink(false)
     setIsRevokingShareLink(false)
-  }, [clearShareLinkCopiedTimeout, currentThreadId])
+  }, [clearCopiedTimeout, clearShareLinkCopiedTimeout, currentThreadId])
 
   const handleExport = useCallback(async () => {
     const requestSessionKey = dialogSessionKey
@@ -355,16 +368,31 @@ export function ExportDialog({ open, onClose, className }: ExportDialogProps) {
           ? shareLink.share_path.trim()
           : `/knowledge/shared/${encodeURIComponent(String(shareLink?.token || ""))}`
       const shareUrl = `${window.location.origin}${sharePath}`
-      await navigator.clipboard.writeText(shareUrl)
-      if (activeDialogSessionKeyRef.current !== requestSessionKey) {
-        return
-      }
-      setActiveShareLink({
+      const nextShareLink = {
         id: String(shareLink.share_id),
         sharePath,
         expiresAt: String(shareLink.expires_at),
-      })
+      }
+      setActiveShareLink(nextShareLink)
       clearShareLinkCopiedTimeout()
+      setShareLinkCopied(false)
+      try {
+        await navigator.clipboard.writeText(shareUrl)
+      } catch (error) {
+        if (activeDialogSessionKeyRef.current !== requestSessionKey) {
+          return
+        }
+        message.open({
+          type: "warning",
+          content: "Share link created, but copying it to the clipboard failed.",
+          duration: 4,
+        })
+        console.error("Share link clipboard copy failed:", error)
+        return
+      }
+      if (activeDialogSessionKeyRef.current !== requestSessionKey) {
+        return
+      }
       setShareLinkCopied(true)
       message.open({
         type: "success",

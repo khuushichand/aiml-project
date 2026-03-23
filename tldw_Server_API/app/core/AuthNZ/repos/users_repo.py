@@ -524,8 +524,7 @@ class AuthnzUsersRepo:
                     """,
                     (int(user_id), role_id),
                 )
-                with contextlib.suppress(Exception):
-                    await conn.commit()
+                await conn.commit()
                 try:
                     return bool((delete_cursor.rowcount or 0) > 0)
                 except AttributeError:

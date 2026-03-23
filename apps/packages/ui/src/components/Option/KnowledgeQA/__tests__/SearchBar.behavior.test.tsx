@@ -332,5 +332,6 @@ describe("SearchBar behavior", () => {
     expect(state.setQuery).toHaveBeenCalledWith(
       "Compare findings across Q1 and Q2 reports"
     )
+    expect(state.search).not.toHaveBeenCalled()
   })
 })

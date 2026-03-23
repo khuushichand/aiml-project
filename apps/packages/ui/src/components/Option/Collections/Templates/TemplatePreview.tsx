@@ -140,6 +140,13 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
   ])
 
   const activeContent = step === "output" ? generatedContent : previewContent
+  const sanitizedPreviewHtml = useMemo(
+    () =>
+      previewFormat === "html" && previewContent
+        ? DOMPurify.sanitize(previewContent, { USE_PROFILES: { html: true } })
+        : null,
+    [previewContent, previewFormat]
+  )
 
   const handleCopy = useCallback(async () => {
     if (!activeContent) return
@@ -472,7 +479,7 @@ export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
               className="prose prose-sm dark:prose-invert max-w-none"
               role="region"
               aria-label={t("collections:templatePreview.contentRegion", { defaultValue: "Template preview" })}
-              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(previewContent, { USE_PROFILES: { html: true } }) }}
+              dangerouslySetInnerHTML={{ __html: sanitizedPreviewHtml ?? "" }}
             />
           ) : (
             <pre className="whitespace-pre-wrap rounded-lg bg-bg p-4 text-sm">

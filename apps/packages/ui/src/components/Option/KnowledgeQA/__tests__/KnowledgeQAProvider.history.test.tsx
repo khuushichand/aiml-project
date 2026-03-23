@@ -717,6 +717,14 @@ describe("KnowledgeQAProvider history hydration", () => {
 
     await waitFor(() => {
       expect(ragSearchMock).toHaveBeenCalledTimes(1)
+      expect(ragSearchMock).toHaveBeenCalledWith(
+        "Recover from local-only session",
+        expect.objectContaining({
+          sources: ["notes"],
+          include_note_ids: ["note-local-1"],
+          enable_web_fallback: false,
+        })
+      )
       expect(latestContext!.answer).toBe("Recovered local answer [1]")
       expect(latestContext!.results).toHaveLength(1)
       expect(latestContext!.settings.sources).toEqual(["notes"])

@@ -353,8 +353,8 @@ async def shared_with_me(
             for oid in owner_ids:
                 try:
                     owner_dbs[oid] = await get_chacha_db_for_owner(oid)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Skipping shared workspace name preload for owner {}: {}", oid, exc)
 
             for item in items:
                 db = owner_dbs.get(item.owner_user_id)
@@ -363,10 +363,15 @@ async def shared_with_me(
                         ws = db.get_workspace(item.workspace_id)
                         if ws:
                             item.workspace_name = ws.get("name")
-                    except Exception:
-                        pass
-        except Exception:
-            pass  # workspace names are best-effort
+                    except Exception as exc:
+                        logger.debug(
+                            "Failed to resolve shared workspace name share_id={} owner_user_id={}: {}",
+                            item.share_id,
+                            item.owner_user_id,
+                            exc,
+                        )
+        except Exception as exc:
+            logger.debug("Shared workspace name population skipped: {}", exc)
 
     return SharedWithMeResponse(items=items, total=len(items))
 
@@ -459,7 +464,7 @@ def _run_clone_task(
     async def _do_clone() -> None:
         from ....core.Sharing.clone_service import CloneService
         from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_owner, get_chacha_db_for_user_id
-        from ..API_Deps.DB_Deps import get_media_db_for_owner
+        from ..API_Deps.DB_Deps import managed_media_db_for_owner
 
         owner_id = share["owner_user_id"]
         workspace_id = share["workspace_id"]
@@ -467,16 +472,14 @@ def _run_clone_task(
         try:
             src_chacha = await get_chacha_db_for_owner(owner_id)
             tgt_chacha = await get_chacha_db_for_user_id(user_id)
-            src_media = get_media_db_for_owner(owner_id)
-            tgt_media = get_media_db_for_owner(user_id)
-
-            svc = CloneService(
-                source_chacha_db=src_chacha,
-                source_media_db=src_media,
-                target_chacha_db=tgt_chacha,
-                target_media_db=tgt_media,
-            )
-            result = svc.clone_workspace(workspace_id, new_name=new_name)
+            with managed_media_db_for_owner(owner_id) as src_media, managed_media_db_for_owner(user_id) as tgt_media:
+                svc = CloneService(
+                    source_chacha_db=src_chacha,
+                    source_media_db=src_media,
+                    target_chacha_db=tgt_chacha,
+                    target_media_db=tgt_media,
+                )
+                result = svc.clone_workspace(workspace_id, new_name=new_name)
             logger.info(f"Clone job {job_id} completed: {result.get('workspace_id')}")
         except Exception as exc:
             logger.error(f"Clone job {job_id} failed: {exc}")
@@ -560,9 +563,10 @@ async def get_shared_workspace_media(
             detail="Media item not found in this shared workspace",
         )
 
-    from ..API_Deps.DB_Deps import get_media_db_for_owner
-    media_db = get_media_db_for_owner(share["owner_user_id"])
-    media = media_db.get_media_by_id(media_id)
+    from ..API_Deps.DB_Deps import managed_media_db_for_owner
+
+    with managed_media_db_for_owner(share["owner_user_id"]) as media_db:
+        media = media_db.get_media_by_id(media_id)
     if not media:
         raise HTTPException(status_code=404, detail="Media item not found")
 
@@ -599,24 +603,24 @@ async def chat_with_shared_workspace(
     await _validate_user_has_share_access(share, user)
 
     from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_owner
-    from ..API_Deps.DB_Deps import get_media_db_for_owner
+    from ..API_Deps.DB_Deps import get_media_db_path_for_rag, managed_media_db_for_owner
 
     owner_chacha = await get_chacha_db_for_owner(share["owner_user_id"])
-    owner_media = get_media_db_for_owner(share["owner_user_id"])
 
     # Build RAG pipeline kwargs using the owner's databases but the accessor's namespace
     try:
         from ....core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 
-        result = await unified_rag_pipeline(
-            query=body.query,
-            media_db_path=owner_media.db_path if hasattr(owner_media, "db_path") else None,
-            notes_db_path=owner_chacha.db_path if hasattr(owner_chacha, "db_path") else None,
-            api_name=body.api_name,
-            model=body.model,
-            system_message=body.system_message,
-            index_namespace=f"user_{share['owner_user_id']}_media_embeddings",
-        )
+        with managed_media_db_for_owner(share["owner_user_id"]) as owner_media:
+            result = await unified_rag_pipeline(
+                query=body.query,
+                media_db_path=get_media_db_path_for_rag(owner_media),
+                notes_db_path=owner_chacha.db_path if hasattr(owner_chacha, "db_path") else None,
+                api_name=body.api_name,
+                model=body.model,
+                system_message=body.system_message,
+                index_namespace=f"user_{share['owner_user_id']}_media_embeddings",
+            )
 
         await audit.log(
             "share.chat",
@@ -629,14 +633,14 @@ async def chat_with_shared_workspace(
         )
 
         return result
-    except ImportError as exc:
+    except ImportError:
         raise HTTPException(
             status_code=501,
             detail="RAG pipeline not available",
-        ) from exc
+        ) from None
     except Exception as exc:
         logger.error(f"Shared workspace chat failed for share {share_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Chat request failed") from exc
+        raise HTTPException(status_code=500, detail="Chat request failed") from None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

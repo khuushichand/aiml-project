@@ -310,6 +310,7 @@ export function SearchBar({
             if (e.key === "Enter" && activeSuggestionIndex >= 0) {
               const activeSuggestion = suggestions[activeSuggestionIndex]
               if (!activeSuggestion) {
+                e.preventDefault()
                 setActiveSuggestionIndex(
                   suggestions.length > 0 ? suggestions.length - 1 : -1
                 )

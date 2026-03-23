@@ -36,6 +36,15 @@ class TestValidateWorkspaceRoot:
         # Should resolve to /tmp (or /private/tmp on macOS)
         assert ".." not in result
 
+    def test_rejects_relative_root_path(self):
+        from fastapi import HTTPException
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _validate_workspace_root
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_workspace_root("relative/path")
+
+        assert exc_info.value.status_code == 400
+
     def test_allowed_base_paths_enforcement(self):
         """When allowed_base_paths is configured, paths outside it should be rejected."""
         from fastapi import HTTPException
@@ -69,6 +78,31 @@ class TestValidateWorkspaceRoot:
             # Should not raise
             result = _validate_workspace_root("/tmp")
             assert result.startswith("/")
+
+
+class TestResolveDispatchCwd:
+    def test_relative_cwd_resolves_inside_workspace_root(self, tmp_path):
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _resolve_dispatch_cwd
+
+        workspace_root = tmp_path / "workspace"
+        nested = workspace_root / "nested"
+        nested.mkdir(parents=True)
+
+        result = _resolve_dispatch_cwd("nested", workspace_root=str(workspace_root))
+
+        assert result == str(nested.resolve())
+
+    def test_relative_cwd_cannot_escape_workspace_root(self, tmp_path):
+        from fastapi import HTTPException
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _resolve_dispatch_cwd
+
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+
+        with pytest.raises(HTTPException) as exc_info:
+            _resolve_dispatch_cwd("../outside", workspace_root=str(workspace_root))
+
+        assert exc_info.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

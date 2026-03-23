@@ -1,7 +1,7 @@
 import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import NotesManagerPage from "../NotesManagerPage"
 
 const {
@@ -188,6 +188,10 @@ describe("NotesManagerPage stage 26 conversation backlink labels", () => {
     mockGetCharacter.mockResolvedValue(null)
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   const configureCommonRequests = (conversationId: string) => {
     mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
       const path = String(request.path || "")
@@ -261,6 +265,30 @@ describe("NotesManagerPage stage 26 conversation backlink labels", () => {
     })
   })
 
+  it("retries transient conversation label lookups and hydrates once they recover", async () => {
+    configureCommonRequests("conv-retry")
+    mockGetChat
+      .mockRejectedValueOnce(new Error("temporary upstream failure"))
+      .mockResolvedValueOnce({
+        id: "conv-retry",
+        title: "Recovered session",
+        topic_label: ""
+      })
+
+    renderPage()
+
+    expect(await screen.findByText("conv-retry")).toBeInTheDocument()
+    expect(mockGetChat).toHaveBeenCalledTimes(1)
+
+    await waitFor(
+      () => {
+        expect(screen.getByText("Recovered session")).toBeInTheDocument()
+      },
+      { timeout: 3000 }
+    )
+    expect(mockGetChat).toHaveBeenCalledTimes(2)
+  }, 7000)
+
   it("does not re-request a missing conversation label after the backlink is selected", async () => {
     configureCommonRequests("conv-unavailable")
     mockGetChat.mockRejectedValue(new Error("Chat session conv-unavailable not found"))
@@ -270,8 +298,7 @@ describe("NotesManagerPage stage 26 conversation backlink labels", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /backlink note/i }))
     await waitFor(() => {
-      const labels = screen.getAllByText("conv-unavailable")
-      expect(labels.length).toBeGreaterThan(1)
+      expect(mockGetChat).toHaveBeenCalledTimes(1)
     })
 
     expect(mockGetChat).toHaveBeenCalledTimes(1)

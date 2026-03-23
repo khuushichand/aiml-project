@@ -42,4 +42,20 @@ describe("header shortcut defaults", () => {
       ])
     )
   })
+
+  it("keeps hosted account and billing shortcuts when they appear in persisted selections", () => {
+    const normalized = normalizeSettingValue(
+      HEADER_SHORTCUT_SELECTION_SETTING,
+      ["chat", "account", "billing", "settings"]
+    )
+
+    expect(normalized).toEqual(
+      expect.arrayContaining([
+        "chat",
+        "account",
+        "billing",
+        "settings",
+      ])
+    )
+  })
 })

@@ -349,7 +349,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
     })
   }, [])
 
-  const loadDetail = React.useCallback(async (id: string | number) => {
+  const loadDetail = React.useCallback(async (id: string | number): Promise<boolean> => {
     setLoadingDetail(true)
     try {
       const d = await bgRequest<any>({ path: `/api/v1/notes/${id}` as any, method: 'GET' as any })
@@ -381,8 +381,10 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
       if (queuedDraft) {
         applyOfflineDraftToEditor(queuedDraft)
       }
+      return true
     } catch {
       message.error('Failed to load note')
+      return false
     } finally { setLoadingDetail(false) }
   }, [applyOfflineDraftToEditor, message, rememberRecentNote, setEditorKeywords])
 
@@ -447,13 +449,15 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
   )
 
   const handleSelectNote = React.useCallback(
-    async (id: string | number) => {
+    async (id: string | number): Promise<boolean> => {
       const ok = await confirmDiscardIfDirty()
-      if (!ok) return
-      await loadDetail(id)
+      if (!ok) return false
+      const opened = await loadDetail(id)
+      if (!opened) return false
       if (isMobileViewport) {
         setMobileSidebarOpen(false)
       }
+      return true
     },
     [confirmDiscardIfDirty, isMobileViewport, loadDetail, setMobileSidebarOpen]
   )
