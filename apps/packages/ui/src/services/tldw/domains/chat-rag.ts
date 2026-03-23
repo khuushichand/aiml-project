@@ -66,6 +66,41 @@ const buildSanitizedRagSearchError = (
   return sanitizedError
 }
 
+const CHAT_COMPLETION_ERROR_MESSAGE = "Chat completion failed."
+const CHAT_COMPLETION_ERRORS_MESSAGE =
+  "One or more internal errors were suppressed."
+
+const sanitizeChatCompletionPayload = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeChatCompletionPayload(item))
+  }
+  if (value && typeof value === "object") {
+    const sanitized: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (
+        key === "details" ||
+        key === "exception" ||
+        key === "traceback" ||
+        key === "stack" ||
+        key === "stack_trace"
+      ) {
+        continue
+      }
+      if (key === "error" && item) {
+        sanitized[key] = CHAT_COMPLETION_ERROR_MESSAGE
+        continue
+      }
+      if (key === "errors" && item) {
+        sanitized[key] = [CHAT_COMPLETION_ERRORS_MESSAGE]
+        continue
+      }
+      sanitized[key] = sanitizeChatCompletionPayload(item)
+    }
+    return sanitized
+  }
+  return value
+}
+
 export const chatRagMethods = {
   normalizeChatSummary(input: any): ServerChatSummary {
     const created_at = String(input?.created_at || input?.createdAt || "")
@@ -188,7 +223,18 @@ export const chatRagMethods = {
     // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
     // For simplicity, return a minimal object with json() and text()
     const data = res as any
-    return new Response(typeof data === 'string' ? data : JSON.stringify(data), { status: 200, headers: { 'content-type': typeof data === 'string' ? 'text/plain' : 'application/json' } })
+    const safeData =
+      typeof data === "string" ? data : sanitizeChatCompletionPayload(data)
+    return new Response(
+      typeof safeData === "string" ? safeData : JSON.stringify(safeData),
+      {
+        status: 200,
+        headers: {
+          'content-type':
+            typeof safeData === 'string' ? 'text/plain' : 'application/json'
+        }
+      }
+    )
   },
 
   async *streamChatCompletion(this: TldwApiClientCore, request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {
