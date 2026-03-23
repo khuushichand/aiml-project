@@ -121,17 +121,18 @@ def _resolve_dispatch_cwd(raw_cwd: str, *, workspace_root: str | None = None) ->
             return "."
         return _validate_workspace_root(candidate)
 
-    workspace_path = Path(_validate_workspace_root(workspace_root))
+    workspace_root_text = _validate_workspace_root(workspace_root)
     if candidate == ".":
-        return str(workspace_path)
+        return workspace_root_text
 
-    if os.path.isabs(os.path.expanduser(candidate)):
+    expanded_candidate = os.path.expanduser(candidate)
+    if os.path.isabs(expanded_candidate):
         raise HTTPException(403, "cwd must be relative to the workspace root")
 
-    resolved_path = (workspace_path / candidate).resolve()
-    if resolved_path != workspace_path and not resolved_path.is_relative_to(workspace_path):
+    resolved_path = os.path.realpath(os.path.join(workspace_root_text, expanded_candidate))
+    if os.path.commonpath([workspace_root_text, resolved_path]) != workspace_root_text:
         raise HTTPException(403, "cwd must stay within the workspace root")
-    return str(resolved_path)
+    return resolved_path
 
 
 # ---------------------------------------------------------------------------

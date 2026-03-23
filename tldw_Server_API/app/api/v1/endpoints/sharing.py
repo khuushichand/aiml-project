@@ -73,26 +73,57 @@ def _client_ip(request: Request) -> str:
 
 
 def _sanitize_shared_chat_result(value: Any) -> Any:
-    """Redact internal error details before returning shared chat responses."""
-    if hasattr(value, "model_dump"):
-        return _sanitize_shared_chat_result(value.model_dump())
+    """Redact nested internal error details from shared chat data."""
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
-            if key == "error" and item:
-                sanitized[key] = _SHARED_CHAT_ERROR_MESSAGE
-                continue
-            if key == "errors" and item:
-                sanitized[key] = [_SHARED_CHAT_ERRORS_MESSAGE]
-                continue
             if key in {"exception", "traceback", "stack", "stack_trace"} and item:
                 sanitized[key] = _SHARED_CHAT_ERROR_MESSAGE
+                continue
+            if key in {"error", "errors"}:
                 continue
             sanitized[key] = _sanitize_shared_chat_result(item)
         return sanitized
     if isinstance(value, list):
         return [_sanitize_shared_chat_result(item) for item in value]
     return value
+
+
+def _build_shared_chat_response(result: Any) -> dict[str, Any]:
+    """Construct a safe shared-chat response without echoing raw pipeline errors."""
+    if hasattr(result, "model_dump"):
+        payload = result.model_dump()
+    elif isinstance(result, dict):
+        payload = dict(result)
+    else:
+        return {"result": _sanitize_shared_chat_result(result)}
+
+    response: dict[str, Any] = {}
+    for key in (
+        "query",
+        "documents",
+        "expanded_queries",
+        "metadata",
+        "timings",
+        "citations",
+        "academic_citations",
+        "chunk_citations",
+        "generated_answer",
+        "cache_hit",
+        "security_report",
+        "total_time",
+        "claims",
+        "factuality",
+    ):
+        if key in payload:
+            response[key] = _sanitize_shared_chat_result(payload[key])
+
+    if payload.get("error"):
+        response["error"] = _SHARED_CHAT_ERROR_MESSAGE
+    if payload.get("errors"):
+        response["errors"] = [_SHARED_CHAT_ERRORS_MESSAGE]
+
+    return response
 
 
 # ── IP-based rate limiter for public (unauthenticated) endpoints ──
@@ -657,7 +688,7 @@ async def chat_with_shared_workspace(
             ip_address=_client_ip(request),
         )
 
-        return _sanitize_shared_chat_result(result)
+        return _build_shared_chat_response(result)
     except ImportError:
         raise HTTPException(
             status_code=501,

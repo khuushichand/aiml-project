@@ -46,6 +46,9 @@ const ICON_NAME_MAP: Record<DetectedMediaType, string> = {
   unknown: "File",
 }
 
+const hostnameMatches = (hostname: string, allowedHost: string): boolean =>
+  hostname === allowedHost || hostname.endsWith(`.${allowedHost}`)
+
 const detectTypeFromExtension = (name: string): DetectedMediaType => {
   const ext = name.split(".").pop()?.toLowerCase() || ""
   if (["mp3", "wav", "ogg", "flac", "m4a", "aac", "wma", "opus"].includes(ext)) return "audio"
@@ -57,10 +60,11 @@ const detectTypeFromExtension = (name: string): DetectedMediaType => {
   return "unknown"
 }
 
-const detectTypeFromUrl = (url: string): DetectedMediaType => {
+export const detectTypeFromUrl = (url: string): DetectedMediaType => {
   try {
     const parsed = new URL(url)
     const pathname = parsed.pathname.toLowerCase()
+    const hostname = parsed.hostname.toLowerCase()
     // Check common file extensions in URL path
     const ext = pathname.split(".").pop() || ""
     if (["mp3", "wav", "ogg", "flac", "m4a"].includes(ext)) return "audio"
@@ -68,10 +72,10 @@ const detectTypeFromUrl = (url: string): DetectedMediaType => {
     if (ext === "pdf") return "pdf"
     if (["epub", "mobi"].includes(ext)) return "ebook"
     // YouTube and common video platforms
-    if (parsed.hostname.includes("youtube.com") || parsed.hostname.includes("youtu.be")) return "video"
-    if (parsed.hostname.includes("vimeo.com")) return "video"
-    if (parsed.hostname.includes("soundcloud.com")) return "audio"
-    if (parsed.hostname.includes("spotify.com")) return "audio"
+    if (hostnameMatches(hostname, "youtube.com") || hostnameMatches(hostname, "youtu.be")) return "video"
+    if (hostnameMatches(hostname, "vimeo.com")) return "video"
+    if (hostnameMatches(hostname, "soundcloud.com")) return "audio"
+    if (hostnameMatches(hostname, "spotify.com")) return "audio"
     // Default for URLs is web
     return "web"
   } catch {
