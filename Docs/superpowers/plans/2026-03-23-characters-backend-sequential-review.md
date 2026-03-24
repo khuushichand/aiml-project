@@ -162,7 +162,7 @@ git status --short
 
 Expected: only docs changes appear, or the tree is clean before the review artifacts are created.
 
-- [ ] **Step 5: Commit the review scaffold**
+- [x] **Step 5: Commit the review scaffold**
 
 Run:
 ```bash
