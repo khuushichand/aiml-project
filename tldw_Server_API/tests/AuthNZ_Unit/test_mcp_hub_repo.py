@@ -114,6 +114,33 @@ async def test_repo_external_server_secret_is_stored_separately(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_repo_ensure_tables_requires_governance_pack_distribution_tables(tmp_path, monkeypatch) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.repos.mcp_hub_repo import McpHubRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    db_path = tmp_path / "users.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
+
+    repo = McpHubRepo(pool)
+    await repo.ensure_tables()
+
+    await pool.execute("DROP TABLE mcp_governance_pack_source_candidates", ())
+    await pool.execute("DROP TABLE mcp_governance_pack_trust_policy", ())
+
+    with pytest.raises(RuntimeError, match="mcp_governance_pack_source_candidates"):
+        await repo.ensure_tables()
+
+
+@pytest.mark.asyncio
 async def test_repo_can_crud_permission_profile_and_policy_assignment(tmp_path, monkeypatch) -> None:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables

@@ -311,13 +311,17 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
           <div
             data-testid="knowledge-search-shell"
             className={cn(
-              "px-4 transition-all duration-300 md:px-6",
-              "pt-6 pb-4"
+              "transition-all duration-300",
+              effectiveSimple && !hasVisibleResultsArea
+                ? "mx-auto flex flex-1 w-full max-w-3xl items-center justify-center px-4 py-10 md:px-6"
+                : effectiveSimple
+                  ? "mx-auto w-full max-w-3xl px-4 pt-6 pb-4 md:px-6"
+                  : "px-4 pt-6 pb-4 md:px-6"
             )}
           >
             <div className={cn(
-              "mx-auto w-full space-y-4",
-              effectiveSimple ? "max-w-3xl" : "max-w-4xl"
+              "w-full space-y-4",
+              effectiveSimple ? "" : "mx-auto max-w-4xl"
             )}>
               {/* Compact toolbar in Simple mode, full context bar in Research mode */}
               {effectiveSimple ? (
@@ -387,11 +391,16 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
           {hasVisibleResultsArea ? (
             <div
               data-testid="knowledge-results-shell"
-              className="flex-1 overflow-y-auto px-4 pb-24 md:px-6 md:pb-6 animate-in fade-in duration-200"
+              className={cn(
+                "flex-1 overflow-y-auto pb-24 md:pb-6 animate-in fade-in duration-200",
+                effectiveSimple
+                  ? "mx-auto w-full max-w-3xl px-4 md:px-6"
+                  : "px-4 md:px-6"
+              )}
             >
               <div className={cn(
-                "mx-auto space-y-6",
-                effectiveSimple ? "max-w-3xl" : "max-w-4xl"
+                "w-full space-y-6",
+                effectiveSimple ? "" : "mx-auto max-w-4xl"
               )}>
                 {hasResults ? (
                   <div className="flex justify-end">

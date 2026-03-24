@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 
 import pytest
+from fastapi import HTTPException, status
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
@@ -81,3 +82,26 @@ def test_chacha_dependency_health_check_uses_shared_sqlite_policy_helper(monkeyp
         }
     ]
     assert conn.statements == ["SELECT 1"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [True, False, 0, -1])
+async def test_get_chacha_db_for_user_id_rejects_bool_and_non_positive_ids(monkeypatch, user_id):
+    import tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps as deps
+
+    called = False
+
+    async def fake_get_or_init_db_instance(_user_id, _client_id):
+        nonlocal called
+        called = True
+        return object()
+
+    monkeypatch.setattr(deps, "_get_or_init_db_instance", fake_get_or_init_db_instance)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await deps.get_chacha_db_for_user_id(user_id)
+
+    assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == "Invalid owner_user_id."
+    assert called is False

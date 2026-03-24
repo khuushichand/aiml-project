@@ -71,7 +71,14 @@ test.describe("Flashcards", () => {
 
       for (const tab of ["manage", "transfer", "study"] as const) {
         await flashcards.switchToTab(tab)
-        await authedPage.waitForTimeout(500)
+        if (tab === "manage") {
+          await expect(flashcards.manageTopBar).toBeVisible({ timeout: 10_000 })
+        } else if (tab === "transfer") {
+          await expect(flashcards.importButton).toBeVisible({ timeout: 10_000 })
+          await expect(flashcards.exportButton).toBeVisible({ timeout: 10_000 })
+        } else {
+          await expect(flashcards.reviewDeckSelect).toBeVisible({ timeout: 10_000 })
+        }
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -95,7 +102,6 @@ test.describe("Flashcards", () => {
       if (!online) return
 
       await flashcards.switchToTab("study")
-      await authedPage.waitForTimeout(500)
 
       // The deck selector should always be present on the Study tab
       await expect(flashcards.reviewDeckSelect).toBeVisible({ timeout: 10_000 })
@@ -126,7 +132,6 @@ test.describe("Flashcards", () => {
       if (!online) return
 
       await flashcards.switchToTab("manage")
-      await authedPage.waitForTimeout(500)
 
       await expect(flashcards.manageTopBar).toBeVisible({ timeout: 10_000 })
       await expect(flashcards.manageSearchInput).toBeVisible()
@@ -151,7 +156,7 @@ test.describe("Flashcards", () => {
       if (!online) return
 
       await flashcards.switchToTab("manage")
-      await authedPage.waitForTimeout(500)
+      await expect(flashcards.manageSearchInput).toBeVisible({ timeout: 10_000 })
 
       const searchVisible = await flashcards.manageSearchInput.isVisible().catch(() => false)
       if (!searchVisible) return
@@ -195,7 +200,8 @@ test.describe("Flashcards", () => {
       if (!online) return
 
       await flashcards.switchToTab("transfer")
-      await authedPage.waitForTimeout(500)
+      await expect(flashcards.importButton).toBeVisible({ timeout: 10_000 })
+      await expect(flashcards.exportButton).toBeVisible({ timeout: 10_000 })
 
       const exportVisible = await flashcards.exportButton.isVisible().catch(() => false)
       if (!exportVisible) return
@@ -238,7 +244,8 @@ test.describe("Flashcards", () => {
       if (!online) return
 
       await flashcards.switchToTab("transfer")
-      await authedPage.waitForTimeout(500)
+      await expect(flashcards.importButton).toBeVisible({ timeout: 10_000 })
+      await expect(flashcards.exportButton).toBeVisible({ timeout: 10_000 })
 
       await expect(flashcards.importFormatSelect).toBeVisible({ timeout: 10_000 })
       await expect(flashcards.importButton).toBeVisible()

@@ -157,7 +157,7 @@ export const CreateOptimizationWizard: React.FC<
   // Fetch test cases
   const { data: testCasesResponse } = useQuery({
     queryKey: ["prompt-studio", "test-cases", projectId],
-    queryFn: () => listTestCases(projectId, { per_page: 200 }),
+    queryFn: () => listTestCases(projectId, { per_page: 100 }),
     enabled: open
   })
   const testCases: TestCase[] = (testCasesResponse as any)?.data?.data ?? []

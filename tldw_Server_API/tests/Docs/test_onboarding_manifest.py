@@ -1,6 +1,12 @@
 from pathlib import Path
 
+import pytest
 import yaml
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        pytest.fail(message)
 
 
 def test_manifest_has_required_profiles() -> None:
@@ -9,9 +15,14 @@ def test_manifest_has_required_profiles() -> None:
         "local_single_user",
         "docker_single_user",
         "docker_multi_user_postgres",
+        "first_time_audio_cpu",
+        "first_time_audio_gpu_accelerated",
         "gpu_stt_addon",
     }
-    assert set(manifest["profiles"].keys()) == expected
+    _require(
+        set(manifest["profiles"].keys()) == expected,
+        f"Unexpected onboarding profiles: {sorted(manifest['profiles'].keys())}",
+    )
 
 
 def test_manifest_profile_schema_fields() -> None:
@@ -19,4 +30,4 @@ def test_manifest_profile_schema_fields() -> None:
     required = {"title", "path", "published_path", "profile_type"}
     for key, meta in manifest["profiles"].items():
         missing = required - set(meta.keys())
-        assert not missing, f"{key} missing fields: {sorted(missing)}"
+        _require(not missing, f"{key} missing fields: {sorted(missing)}")

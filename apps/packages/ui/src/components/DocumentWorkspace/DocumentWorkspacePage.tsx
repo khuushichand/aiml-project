@@ -851,7 +851,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             placement="left"
             onClose={() => setLeftDrawerOpen(false)}
             open={leftDrawerOpen}
-            width={Math.min(360, typeof window !== "undefined" ? window.innerWidth * 0.85 : 360)}
+            size={Math.min(360, typeof window !== "undefined" ? window.innerWidth * 0.85 : 360)}
             className="lg:hidden"
             styles={{ body: { padding: 0, height: "100%", display: "flex", flexDirection: "column" } }}
           >
@@ -895,7 +895,7 @@ export const DocumentWorkspacePage: React.FC = () => {
             placement="right"
             onClose={() => setRightDrawerOpen(false)}
             open={rightDrawerOpen}
-            width={Math.min(360, typeof window !== "undefined" ? window.innerWidth * 0.85 : 360)}
+            size={Math.min(360, typeof window !== "undefined" ? window.innerWidth * 0.85 : 360)}
             className="lg:hidden"
             styles={{ body: { padding: 0 } }}
           >

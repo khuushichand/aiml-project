@@ -1,4 +1,5 @@
 import { test, expect, seedAuth } from "./smoke.setup"
+import { waitForAppShell } from "../utils/helpers"
 
 const LOAD_TIMEOUT = 30_000
 
@@ -12,7 +13,7 @@ test.describe("Stage 4 accessibility controls", () => {
       waitUntil: "domcontentloaded",
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const leftToggle = page.getByTestId("document-workspace-toggle-left")
     const rightToggle = page.getByTestId("document-workspace-toggle-right")
@@ -52,7 +53,7 @@ test.describe("Stage 4 accessibility controls", () => {
       waitUntil: "domcontentloaded",
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const badges = page.locator('[data-testid="settings-navigation"] .ant-tag')
     const toggle = page.getByTestId("settings-beta-badges-toggle")
@@ -66,7 +67,7 @@ test.describe("Stage 4 accessibility controls", () => {
     await expect(badges).toHaveCount(0)
 
     await page.reload({ waitUntil: "domcontentloaded", timeout: LOAD_TIMEOUT })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
     await expect(toggle).toHaveText(/show beta badges/i)
     await expect(badges).toHaveCount(0)
 

@@ -1,8 +1,8 @@
 {
-  "captured_at": "2026-02-19T03:18:14.997Z",
+  "captured_at": "2026-03-23T13:10:15.831Z",
   "source": "natural-passive-session",
   "run_context": {
-    "base_url": "http://localhost:8080",
+    "base_url": "http://localhost:8091",
     "browser": "chromium",
     "seeded_auth": true,
     "synthetic_alias_flows_executed": false

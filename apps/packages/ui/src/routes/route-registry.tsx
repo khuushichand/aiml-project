@@ -36,11 +36,13 @@ import {
   Zap,
   Sparkles,
   ListTodo,
+  Users,
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
 import { DOCUMENT_WORKSPACE_PATH, REPO2TXT_PATH } from "@/routes/route-paths"
+import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -67,6 +69,14 @@ export type RouteDefinition = {
   targets?: PlatformTarget[]
   nav?: RouteNav
 }
+
+const HOSTED_VISIBLE_OPTION_PATHS = new Set([
+  "/",
+  "/chat",
+  "/media",
+  "/knowledge",
+  "/collections"
+])
 const OptionSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/general-settings"),
   "GeneralSettings"
@@ -99,6 +109,7 @@ const OptionChatbooks = createSettingsRoute(
   "ChatbooksSettings"
 )
 const SidepanelChat = lazy(() => import("./sidepanel-chat"))
+const SidepanelHomeResolver = lazy(() => import("./sidepanel-home-resolver"))
 const SidepanelSettings = lazy(() => import("./sidepanel-settings"))
 const SidepanelAgent = lazy(() => import("./sidepanel-agent"))
 const SidepanelCompanion = lazy(() => import("./sidepanel-companion"))
@@ -195,6 +206,9 @@ const OptionGuardianSettings = createSettingsRoute(
 )
 const OptionChatbooksPlayground = lazy(() => import("./option-chatbooks-playground"))
 const OptionWatchlists = lazy(() => import("./option-watchlists"))
+const OptionIntegrations = lazy(() => import("./option-integrations"))
+const OptionAdminIntegrations = lazy(() => import("./option-admin-integrations"))
+const OptionScheduledTasks = lazy(() => import("./option-scheduled-tasks"))
 const OptionCompanion = lazy(() => import("./option-companion"))
 const OptionCompanionConversation = lazy(
   () => import("./option-companion-conversation")
@@ -224,6 +238,8 @@ const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 const OptionSetup = lazy(() => import("./option-setup"))
 const OptionOnboardingTest = lazy(() => import("./option-onboarding-test"))
 const OptionWorkspacePlayground = lazy(() => import("./option-workspace-playground"))
+const OptionSharedWithMe = lazy(() => import("./option-shared-with-me"))
+const OptionPublicShare = lazy(() => import("./option-public-share"))
 // OptionChat is eagerly imported above
 
 export const ROUTE_DEFINITIONS: RouteDefinition[] = [
@@ -433,6 +449,17 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
+    path: "/shared",
+    element: <OptionSharedWithMe />,
+    nav: {
+      group: "knowledge",
+      labelToken: "settings:sharedWithMe",
+      icon: Users,
+      order: 4.5
+    }
+  },
+  {
+    kind: "options",
     path: "/settings/characters",
     element: <OptionCharacters />,
     nav: {
@@ -554,6 +581,33 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   { kind: "options", path: "/chatbooks", element: <OptionChatbooksPlayground /> },
   { kind: "options", path: "/watchlists", element: <OptionWatchlists /> },
+  {
+    kind: "options",
+    path: "/integrations",
+    element: <OptionIntegrations />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.integrations",
+      icon: Bot,
+      order: 3.2
+    }
+  },
+  {
+    kind: "options",
+    path: "/admin/integrations",
+    element: <OptionAdminIntegrations />
+  },
+  {
+    kind: "options",
+    path: "/scheduled-tasks",
+    element: <OptionScheduledTasks />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.scheduledTasks",
+      icon: ListTodo,
+      order: 3.4
+    }
+  },
   { kind: "options", path: "/kanban", element: <OptionKanbanPlayground /> },
   {
     kind: "options",
@@ -667,6 +721,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       order: 3
     }
   },
+  { kind: "options", path: "/share/:token", element: <OptionPublicShare /> },
   { kind: "options", path: "/knowledge", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/knowledge/thread/:threadId", element: <OptionKnowledgeWorkspace /> },
   { kind: "options", path: "/knowledge/shared/:shareToken", element: <OptionKnowledgeWorkspace /> },
@@ -912,7 +967,13 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     element: <OptionQuickChatPopout />,
     targets: ALL_TARGETS
   },
-  { kind: "sidepanel", path: "/", element: <SidepanelChat /> },
+  { kind: "sidepanel", path: "/", element: <SidepanelHomeResolver /> },
+  {
+    kind: "sidepanel",
+    path: "/chat",
+    element: <SidepanelChat />,
+    targets: ALL_TARGETS
+  },
   {
     kind: "sidepanel",
     path: "/agent",
@@ -947,7 +1008,9 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
 ]
 
 export const optionRoutes = ROUTE_DEFINITIONS.filter(
-  (route) => route.kind === "options"
+  (route) =>
+    route.kind === "options" &&
+    (!isHostedTldwDeployment() || HOSTED_VISIBLE_OPTION_PATHS.has(route.path))
 )
 
 export const sidepanelRoutes = ROUTE_DEFINITIONS.filter(

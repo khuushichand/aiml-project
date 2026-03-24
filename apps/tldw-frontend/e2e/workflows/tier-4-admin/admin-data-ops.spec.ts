@@ -3,12 +3,9 @@
  *
  * Tests the /admin/data-ops page:
  * - Page loads without critical errors
- * - Placeholder panel visible with "Coming Soon" text
- * - Title shows "Data Operations Is Coming Soon"
- * - Primary CTA links to /admin/server
- * - Open Settings link visible
- *
- * Note: /admin/data-ops is a placeholder page (RoutePlaceholder), not yet implemented.
+ * - Data Operations heading renders
+ * - Backups controls are present
+ * - Tab navigation works across the workspace
  *
  * Run: npx playwright test e2e/workflows/tier-4-admin/admin-data-ops.spec.ts
  */
@@ -44,31 +41,38 @@ test.describe("Admin Data Ops", () => {
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should display placeholder panel with Coming Soon text", async ({
+    test("should display Data Operations heading or admin guard alert", async ({
       authedPage,
       diagnostics,
     }) => {
       admin = new AdminPage(authedPage)
       await admin.gotoSection("data-ops")
-      await admin.assertPlaceholderVisible()
+      await admin.assertSectionReady("data-ops")
 
-      // "Coming Soon" text should be visible
-      const comingSoon = admin.comingSoonText
-      await expect(comingSoon).toBeVisible({ timeout: 10_000 })
+      const hasHeading = await admin.dataOpsHeading.isVisible().catch(() => false)
+      const hasGuard = await admin.adminGuardAlert.isVisible().catch(() => false)
+      expect(hasHeading || hasGuard).toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should show Data Operations title", async ({
+    test("should show backup controls when admin API is available", async ({
       authedPage,
       diagnostics,
     }) => {
       admin = new AdminPage(authedPage)
       await admin.gotoSection("data-ops")
-      await admin.assertPlaceholderVisible()
+      await admin.assertSectionReady("data-ops")
 
-      const title = authedPage.getByText("Data Operations Is Coming Soon")
-      await expect(title).toBeVisible({ timeout: 10_000 })
+      const hasGuard = await admin.adminGuardAlert.isVisible().catch(() => false)
+      if (hasGuard) {
+        test.skip()
+        return
+      }
+
+      await expect(authedPage.getByRole("tab", { name: /backups/i })).toBeVisible()
+      await expect(authedPage.getByRole("button", { name: /create backup/i })).toBeVisible()
+      await expect(authedPage.getByRole("button", { name: /refresh/i }).first()).toBeVisible()
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -79,58 +83,45 @@ test.describe("Admin Data Ops", () => {
   // =========================================================================
 
   test.describe("Key Controls", () => {
-    test("should show primary CTA linking to Server Admin", async ({
+    test("should show all data-ops tabs", async ({
       authedPage,
       diagnostics,
     }) => {
       admin = new AdminPage(authedPage)
       await admin.gotoSection("data-ops")
-      await admin.assertPlaceholderVisible()
+      await admin.assertSectionReady("data-ops")
 
-      const primaryCta = admin.primaryCta
-      await expect(primaryCta).toBeVisible({ timeout: 10_000 })
-      await expect(primaryCta).toHaveText(/Open Server Admin/i)
+      const hasGuard = await admin.adminGuardAlert.isVisible().catch(() => false)
+      if (hasGuard) {
+        test.skip()
+        return
+      }
 
-      // Verify it links to /admin/server
-      const href = await primaryCta.getAttribute("href")
-      expect(href).toBe("/admin/server")
+      await expect(authedPage.getByRole("tab", { name: /backups/i })).toBeVisible()
+      await expect(authedPage.getByRole("tab", { name: /data subject requests/i })).toBeVisible()
+      await expect(authedPage.getByRole("tab", { name: /retention policies/i })).toBeVisible()
+      await expect(authedPage.getByRole("tab", { name: /bundles/i })).toBeVisible()
 
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should show Open Settings and Go back buttons", async ({
+    test("should switch to the Data Subject Requests tab", async ({
       authedPage,
       diagnostics,
     }) => {
       admin = new AdminPage(authedPage)
       await admin.gotoSection("data-ops")
-      await admin.assertPlaceholderVisible()
+      await admin.assertSectionReady("data-ops")
 
-      const settingsLink = admin.openSettingsLink
-      await expect(settingsLink).toBeVisible({ timeout: 10_000 })
+      const hasGuard = await admin.adminGuardAlert.isVisible().catch(() => false)
+      if (hasGuard) {
+        test.skip()
+        return
+      }
 
-      const goBackBtn = admin.goBackButton
-      await expect(goBackBtn).toBeVisible({ timeout: 10_000 })
-
-      await assertNoCriticalErrors(diagnostics)
-    })
-  })
-
-  // =========================================================================
-  // Navigation
-  // =========================================================================
-
-  test.describe("Navigation", () => {
-    test("should navigate to /admin/server when primary CTA is clicked", async ({
-      authedPage,
-      diagnostics,
-    }) => {
-      admin = new AdminPage(authedPage)
-      await admin.gotoSection("data-ops")
-      await admin.assertPlaceholderVisible()
-
-      await admin.primaryCta.click()
-      await expect(authedPage).toHaveURL(/\/admin\/server/, { timeout: 10_000 })
+      const dsrTab = authedPage.getByRole("tab", { name: /data subject requests/i })
+      await dsrTab.click()
+      await expect(dsrTab).toHaveAttribute("aria-selected", "true")
 
       await assertNoCriticalErrors(diagnostics)
     })

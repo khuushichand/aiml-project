@@ -1,15 +1,26 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { Modal, Button, Select, Input, Spin } from 'antd'
-import { Storage } from '@plasmohq/storage'
 import { useStorage } from '@plasmohq/storage/hook'
 import { useTranslation } from 'react-i18next'
 import { bgRequest, bgStream } from '@/services/background-proxy'
 import { tldwModels } from '@/services/tldw'
 import { ANALYSIS_PRESETS } from "@/components/Media/analysisPresets"
 import { useAntdMessage } from "@/hooks/useAntdMessage"
-import { safeStorageSerde } from "@/utils/safe-storage"
+import { createSafeStorage } from "@/utils/safe-storage"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { DEFAULT_ANALYSIS_SUMMARY_PROMPT } from "@/utils/default-prompts"
+
+interface AnalysisTimeoutConfig {
+  chatRequestTimeoutMs?: number
+  requestTimeoutMs?: number
+  chatStreamIdleTimeoutMs?: number
+  streamIdleTimeoutMs?: number
+}
+
+interface SavedAnalysisPrompts {
+  systemPrompt?: string
+  userPrefix?: string
+}
 
 interface AnalysisModalProps {
   open: boolean
@@ -21,13 +32,14 @@ interface AnalysisModalProps {
 
 const MIN_ANALYSIS_TIMEOUT_MS = 120_000
 const MIN_ANALYSIS_STREAM_IDLE_TIMEOUT_MS = 120_000
+const LOCAL_TIMEOUT_STORAGE = createSafeStorage({ area: 'local' })
 
 const toPositiveNumber = (value: unknown): number => {
   const num = Number(value)
   return Number.isFinite(num) && num > 0 ? num : 0
 }
 
-const firstNonEmptyString = (...vals: any[]): string => {
+const firstNonEmptyString = (...vals: unknown[]): string => {
   for (const v of vals) {
     if (typeof v === 'string' && v.trim().length > 0) return v
   }
@@ -172,8 +184,9 @@ export function AnalysisModal({
 
   const getAnalysisTimeouts = async () => {
     try {
-      const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
-      const cfg = (await storage.get('tldwConfig').catch(() => null)) as any
+      const cfg = await LOCAL_TIMEOUT_STORAGE
+        .get<AnalysisTimeoutConfig>('tldwConfig')
+        .catch(() => null)
       const configuredRequest =
         toPositiveNumber(cfg?.chatRequestTimeoutMs) ||
         toPositiveNumber(cfg?.requestTimeoutMs)
@@ -224,8 +237,8 @@ export function AnalysisModal({
       let cancelled = false
       ;(async () => {
         try {
-          const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
-          const data = (await storage.get('media:analysisPrompts').catch(() => null)) as any
+          const storage = createSafeStorage({ area: 'local' })
+          const data = await storage.get<SavedAnalysisPrompts>('media:analysisPrompts').catch(() => null)
           if (!cancelled && data && typeof data === 'object') {
             if (typeof data.systemPrompt === 'string') setSystemPrompt(data.systemPrompt)
             if (typeof data.userPrefix === 'string') setUserPrefix(data.userPrefix)
@@ -243,7 +256,7 @@ export function AnalysisModal({
 
   const handleSaveAsDefault = async () => {
     try {
-      const storage = new Storage({ area: 'local', serde: safeStorageSerde } as any)
+      const storage = createSafeStorage({ area: 'local' })
       await storage.set('media:analysisPrompts', { systemPrompt, userPrefix })
       messageApi.success(t('mediaPage.savedAsDefault', 'Saved as default prompts'))
     } catch {
@@ -286,7 +299,8 @@ export function AnalysisModal({
     timerRef.current = setInterval(() => {
       setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000))
     }, 1000)
-    const extractPersistedAnalysis = (detail: any): string => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped API response with deeply nested optional fields
+    const extractPersistedAnalysis = (detail: Record<string, any>): string => {
       if (!detail || typeof detail !== 'object') return ''
       const fromProcessing = firstNonEmptyString(detail?.processing?.analysis)
       if (fromProcessing) return fromProcessing

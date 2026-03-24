@@ -6,13 +6,28 @@ import { SettingsPage } from "../../utils/page-objects"
 const SETTINGS_SECTIONS_VIA_PAGE_OBJECT = [
   "tldw", "model", "chat", "ui", "splash", "quick-ingest",
   "image-generation", "image-gen", "guardian", "prompt", "knowledge",
-  "rag", "speech", "evaluations", "characters", "health",
+  "rag", "speech", "evaluations", "characters",
 ] as const
 
 // Settings pages that exist but are outside the page-object union — use direct URL
 const SETTINGS_SECTIONS_DIRECT_NAV = [
-  "chatbooks", "world-books", "prompt-studio", "mcp-hub",
-  "share", "about", "processed", "family-guardrails",
+  "chatbooks", "world-books", "prompt-studio",
+  "share", "about", "family-guardrails",
+] as const
+
+const SETTINGS_STANDALONE_PAGES = [
+  {
+    section: "health",
+    heading: /health status/i,
+  },
+  {
+    section: "mcp-hub",
+    heading: /^mcp hub$/i,
+  },
+  {
+    section: "processed",
+    heading: /processed items \(local\)/i,
+  },
 ] as const
 
 test.describe("Settings", () => {
@@ -27,12 +42,14 @@ test.describe("Settings", () => {
   for (const section of SETTINGS_SECTIONS_VIA_PAGE_OBJECT) {
     test(`settings/${section} loads without errors`, async ({ authedPage, diagnostics }) => {
       await settings.gotoSection(section)
-      await authedPage.waitForLoadState("networkidle").catch(() => {})
+      await settings.waitForReady()
 
       // At least one interactive element should be present
-      const buttons = await authedPage.getByRole("button").count()
-      const inputs = await authedPage.locator("input, select, textarea").count()
-      expect(buttons + inputs).toBeGreaterThan(0)
+      const interactiveElements = authedPage.locator(
+        "button, input, select, textarea, a[href]"
+      )
+      await expect(interactiveElements.first()).toBeVisible({ timeout: 15_000 })
+      expect(await interactiveElements.count()).toBeGreaterThan(0)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -42,11 +59,36 @@ test.describe("Settings", () => {
   for (const section of SETTINGS_SECTIONS_DIRECT_NAV) {
     test(`settings/${section} loads without errors`, async ({ authedPage, diagnostics }) => {
       await authedPage.goto(`/settings/${section}`, { waitUntil: "domcontentloaded" })
-      await authedPage.waitForLoadState("networkidle").catch(() => {})
+      await settings.waitForReady()
 
-      const buttons = await authedPage.getByRole("button").count()
-      const inputs = await authedPage.locator("input, select, textarea").count()
-      expect(buttons + inputs).toBeGreaterThan(0)
+      const interactiveElements = authedPage.locator(
+        "button, input, select, textarea, a[href]"
+      )
+      await expect(interactiveElements.first()).toBeVisible({ timeout: 15_000 })
+      expect(await interactiveElements.count()).toBeGreaterThan(0)
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+  }
+
+  for (const page of SETTINGS_STANDALONE_PAGES) {
+    test(`settings/${page.section} loads without errors`, async ({
+      authedPage,
+      diagnostics,
+    }) => {
+      await authedPage.goto(`/settings/${page.section}`, {
+        waitUntil: "domcontentloaded",
+      })
+
+      await expect(
+        authedPage.getByRole("heading", { name: page.heading }).first()
+      ).toBeVisible({ timeout: 20_000 })
+
+      const interactiveElements = authedPage.locator(
+        "button, input, select, textarea, a[href]"
+      )
+      await expect(interactiveElements.first()).toBeVisible({ timeout: 15_000 })
+      expect(await interactiveElements.count()).toBeGreaterThan(0)
 
       await assertNoCriticalErrors(diagnostics)
     })

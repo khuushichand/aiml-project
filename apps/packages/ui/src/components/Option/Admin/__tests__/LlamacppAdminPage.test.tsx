@@ -147,4 +147,17 @@ describe("LlamacppAdminPage", () => {
     expect(await screen.findByText("Admin APIs not available")).toBeTruthy()
     expect(screen.queryByText("Load Model")).toBeNull()
   })
+
+  it("loads status and models only once during strict-mode mount", async () => {
+    render(
+      <React.StrictMode>
+        <LlamacppAdminPage />
+      </React.StrictMode>
+    )
+
+    await waitFor(() => {
+      expect(apiMock.getLlamacppStatus).toHaveBeenCalledTimes(1)
+      expect(apiMock.listLlamacppModels).toHaveBeenCalledTimes(1)
+    })
+  })
 })

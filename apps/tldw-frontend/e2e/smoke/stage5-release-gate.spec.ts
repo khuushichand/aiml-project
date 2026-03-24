@@ -5,6 +5,7 @@ import {
   getCriticalIssues,
   classifySmokeIssues
 } from "./smoke.setup"
+import { waitForAppShell } from "../utils/helpers"
 import type { DiagnosticsData } from "./smoke.setup"
 import type { Page } from "@playwright/test"
 
@@ -63,7 +64,7 @@ const gotoCriticalRoute = async (
         )
       }
       clearDiagnostics(diagnostics)
-      await page.waitForTimeout(NAVIGATION_RETRY_WAIT_MS)
+      await new Promise((resolve) => setTimeout(resolve, NAVIGATION_RETRY_WAIT_MS))
     }
   }
 
@@ -129,9 +130,7 @@ test.describe("Stage 5 release gate", () => {
       await page.waitForURL((url) => url.pathname === expectedPath, {
         timeout: routeLoadTimeout
       })
-      await page
-        .waitForLoadState("networkidle", { timeout: routeLoadTimeout })
-        .catch(() => {})
+      await waitForAppShell(page, routeLoadTimeout)
 
       const issues = getCriticalIssues(diagnostics)
       const classified = classifySmokeIssues(route.path, issues)

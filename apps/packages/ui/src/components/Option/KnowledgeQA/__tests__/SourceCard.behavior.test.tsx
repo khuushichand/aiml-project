@@ -136,4 +136,61 @@ describe("SourceCard copy interactions", () => {
 
     vi.useRealTimers()
   })
+
+  it("does not schedule a copied-state reset after unmount when clipboard resolves late", async () => {
+    let resolveCopy: (() => void) | null = null
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout")
+    const writeTextMock = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCopy = resolve
+        })
+    )
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      configurable: true,
+    })
+
+    const { unmount } = render(
+      <SourceCard
+        result={{
+          id: "source-1",
+          content: "Important quoted source text",
+          metadata: {
+            title: "Source A",
+            url: "https://example.com/source-a",
+            source_type: "web",
+          },
+          score: 0.91,
+        }}
+        index={1}
+        isCited={false}
+        isFocused={false}
+        onSourceHover={vi.fn()}
+        onAskAbout={vi.fn()}
+        onViewFull={vi.fn()}
+        onSourceFeedback={vi.fn()}
+        onRetrySourceFeedback={vi.fn()}
+        onTogglePin={vi.fn()}
+        onJumpToCitation={vi.fn()}
+        feedbackThumb={null}
+        feedbackSubmitting={false}
+        feedbackError={null}
+        isPinned={false}
+        highlightTerms={[]}
+        citationUsages={[]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /Copy text/i }))
+    unmount()
+
+    resolveCopy?.()
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(setTimeoutSpy).not.toHaveBeenCalled()
+    setTimeoutSpy.mockRestore()
+  })
 })

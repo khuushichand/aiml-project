@@ -86,3 +86,46 @@ def test_knowledge_save_export_guard(tmp_path, monkeypatch):
     monkeypatch.setenv("CHAT_CONNECTORS_V2_ENABLED", "true")
     resp_ok = app.post("/api/v1/chat/knowledge/save", json=payload)
     assert resp_ok.status_code == 201
+
+
+def test_knowledge_save_requires_exact_scope_match_for_workspace_conversations(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    db.upsert_workspace("ws-1", "Workspace One")
+    conv_id = db.add_conversation(
+        {
+            "id": "workspace-conv-1",
+            "root_id": "workspace-conv-1",
+            "character_id": 1,
+            "title": "Workspace Conv",
+            "client_id": "user-1",
+            "scope_type": "workspace",
+            "workspace_id": "ws-1",
+        }
+    )
+    msg_id = db.add_message({"conversation_id": conv_id, "sender": "assistant", "content": "scoped"})
+
+    base_payload = {
+        "conversation_id": conv_id,
+        "message_id": msg_id,
+        "snippet": "workspace snippet",
+        "make_flashcard": False,
+        "export_to": "none",
+    }
+
+    missing_scope = app.post("/api/v1/chat/knowledge/save", json=base_payload)
+    assert missing_scope.status_code == 404, missing_scope.text
+
+    wrong_scope = app.post(
+        "/api/v1/chat/knowledge/save",
+        json={**base_payload, "scope_type": "workspace", "workspace_id": "ws-2"},
+    )
+    assert wrong_scope.status_code == 404, wrong_scope.text
+
+    correct_scope = app.post(
+        "/api/v1/chat/knowledge/save",
+        json={**base_payload, "scope_type": "workspace", "workspace_id": "ws-1"},
+    )
+    assert correct_scope.status_code == 201, correct_scope.text

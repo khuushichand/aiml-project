@@ -16,7 +16,7 @@ describe("frontend dev config", () => {
     const nextConfig = await loadNextConfig()
 
     expect(nextConfig.allowedDevOrigins).toEqual(
-      expect.arrayContaining(["localhost", "127.0.0.1"])
+      expect.arrayContaining(["localhost", "127.0.0.1", "[::1]"])
     )
   })
 
@@ -28,5 +28,17 @@ describe("frontend dev config", () => {
     }
 
     expect(packageJson.scripts?.["dev:webpack"]).toBe("next dev --webpack")
+  })
+
+  it("uses Turbopack for the production build script", () => {
+    const packageJson = JSON.parse(
+      readFileSync(path.join(appDir, "package.json"), "utf8")
+    ) as {
+      scripts?: Record<string, string>
+    }
+
+    expect(packageJson.scripts?.build).toBe(
+      "next build --turbopack && node scripts/verify-shared-token-sync.mjs --dir .next"
+    )
   })
 })

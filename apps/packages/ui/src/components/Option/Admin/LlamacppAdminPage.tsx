@@ -146,6 +146,7 @@ const coerceImportedSettings = (input: unknown): LlamacppServerArgsInput | null 
 
 export const LlamacppAdminPage: React.FC = () => {
   const { t } = useTranslation(["option", "settings", "common"])
+  const initialLoadRef = React.useRef(false)
 
   // Status state
   const [status, setStatus] = React.useState<LlamacppStatus | null>(null)
@@ -224,15 +225,13 @@ export const LlamacppAdminPage: React.FC = () => {
   }, [])
 
   React.useEffect(() => {
-    let cancelled = false
+    if (initialLoadRef.current) return
+    initialLoadRef.current = true
+
     const init = async () => {
       await Promise.all([loadStatus(), loadModels()])
-      if (cancelled) return
     }
     void init()
-    return () => {
-      cancelled = true
-    }
   }, [loadModels, loadStatus])
 
   const handleStart = async () => {

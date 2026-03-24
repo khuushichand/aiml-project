@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test"
 import { test, expect, AUTH_CONFIG, getCriticalIssues } from "./smoke.setup"
+import { waitForAppShell } from "../utils/helpers"
 
 const LOAD_TIMEOUT = 30_000
 const RUNTIME_OVERLAY_PATTERNS = [
@@ -76,7 +77,7 @@ test.describe("Smoke Tests - Auth Error Degradation", () => {
       waitUntil: "domcontentloaded",
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const issues = getCriticalIssues(diagnostics)
     await assertNoRuntimeOverlay(page, issues, "/chat?invalid-api-key")

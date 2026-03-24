@@ -9,6 +9,7 @@ import { FontSizeProvider } from "@/context/FontSizeProvider"
 import { DemoModeProvider } from "@/context/demo-mode"
 import { getQueryClient } from "@/services/query-client"
 import { SplashOverlay } from "@/components/Common/SplashScreen"
+import { NotificationToastBridge } from "@web/components/notifications/NotificationToastBridge"
 import { useSplashScreen } from "@/hooks/useSplashScreen"
 import { SPLASH_TRIGGER_EVENT } from "@/services/splash-events"
 import { patchStaticAntdNotificationCompat } from "@/utils/antd-notification-compat"
@@ -83,6 +84,7 @@ export const AppProviders: React.FC<AppProvidersProps> = ({ children }) => {
                 direction={direction}
               >
                 <ToastProvider>
+                  <NotificationToastBridge />
                   <AntdApp>{children}</AntdApp>
                   {splash.visible && splash.card && (
                     <SplashOverlay

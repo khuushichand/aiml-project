@@ -25,6 +25,14 @@ class ConversationScopeParams(BaseModel):
 
 class ConversationListItem(BaseModel):
     id: str = Field(..., description="Conversation ID")
+    scope_type: Literal["global", "workspace"] = Field(
+        "global",
+        description="Conversation scope type",
+    )
+    workspace_id: str | None = Field(
+        None,
+        description="Workspace ID when scope_type='workspace'",
+    )
     character_id: int | None = Field(None, description="Character ID associated with the conversation")
     assistant_kind: Literal["character", "persona"] | None = Field(
         None,
@@ -105,6 +113,14 @@ class ConversationUpdateRequest(BaseModel):
 
 class ConversationMetadata(BaseModel):
     id: str = Field(..., description="Conversation ID")
+    scope_type: Literal["global", "workspace"] = Field(
+        "global",
+        description="Conversation scope type",
+    )
+    workspace_id: str | None = Field(
+        None,
+        description="Workspace ID when scope_type='workspace'",
+    )
     character_id: int | None = Field(None, description="Character ID associated with the conversation")
     assistant_kind: Literal["character", "persona"] | None = Field(
         None,

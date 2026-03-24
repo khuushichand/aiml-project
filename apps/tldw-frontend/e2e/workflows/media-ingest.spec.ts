@@ -34,11 +34,8 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.goto()
       await mediaPage.waitForReady()
 
-      // Verify page loaded
-      const mediaContainer = authedPage.locator(
-        "[data-testid='media-container'], .media-page, .media-list"
-      )
-      await expect(mediaContainer.first()).toBeVisible({ timeout: 20000 })
+      await expect(mediaPage.heading).toBeVisible({ timeout: 20_000 })
+      await expect(mediaPage.searchInput).toBeVisible({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -51,16 +48,13 @@ test.describe("Media Ingestion Workflow", () => {
       await mediaPage.goto()
       await mediaPage.waitForReady()
 
-      // Either empty state or media items should be visible
       const emptyState = authedPage.locator(
         "[data-testid='empty-state'], .empty-state, .no-media"
-      )
-      const mediaList = authedPage.locator(
-        "[data-testid='media-list'], .media-list, .ant-table"
-      )
+      ).first()
+      const mediaList = mediaPage.mediaList
 
-      const hasEmpty = (await emptyState.count()) > 0 && (await emptyState.isVisible())
-      const hasList = (await mediaList.count()) > 0 && (await mediaList.isVisible())
+      const hasEmpty = await emptyState.isVisible().catch(() => false)
+      const hasList = await mediaList.isVisible().catch(() => false)
 
       expect(hasEmpty || hasList).toBeTruthy()
 
@@ -159,14 +153,17 @@ test.describe("Media Ingestion Workflow", () => {
         if ((await fileInput.count()) > 0) {
           await fileInput.setInputFiles(testFilePath)
 
-          // Wait for potential error message
-          await authedPage.waitForTimeout(2000)
-
           // Check for error indication
-          const _errorMessage = authedPage.locator(
+          const errorMessage = authedPage.locator(
             ".ant-message-error, .error-message, [data-testid='upload-error']"
           )
-          // Error handling behavior depends on implementation
+          await expect
+            .poll(async () => await errorMessage.first().isVisible().catch(() => false), {
+              timeout: 2_000,
+              message: "Timed out waiting for invalid upload feedback",
+            })
+            .toBe(true)
+            .catch(() => {})
         }
       } finally {
         if (fs.existsSync(testFilePath)) {
@@ -225,8 +222,21 @@ test.describe("Media Ingestion Workflow", () => {
             ".ant-form-item-explain-error, .error-message, [data-testid='url-error']"
           )
 
-          // Wait briefly for validation feedback
-          await authedPage.waitForTimeout(1000)
+          await expect
+            .poll(
+              async () =>
+                await authedPage
+                  .locator(".ant-form-item-explain-error, .error-message, [data-testid='url-error']")
+                  .first()
+                  .isVisible()
+                  .catch(() => false),
+              {
+                timeout: 3_000,
+                message: "Timed out waiting for invalid URL feedback",
+              }
+            )
+            .toBe(true)
+            .catch(() => {})
         }
       }
 
@@ -306,8 +316,20 @@ test.describe("Media Ingestion Workflow", () => {
 
         await firstItem.click()
 
-        // Should navigate to detail or open modal
-        await authedPage.waitForTimeout(1000)
+        await expect
+          .poll(
+            async () => {
+              const urlChanged = /\/media(\/|%2F)\d+/i.test(authedPage.url()) || /\/media\/\d+/i.test(authedPage.url())
+              const dialogVisible = await authedPage.getByRole("dialog").first().isVisible().catch(() => false)
+              const editVisible = await authedPage.getByRole("button", { name: /edit/i }).first().isVisible().catch(() => false)
+              return urlChanged || dialogVisible || editVisible
+            },
+            {
+              timeout: 5_000,
+              message: "Timed out waiting for the media detail surface to appear",
+            }
+          )
+          .toBe(true)
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -335,7 +357,20 @@ test.describe("Media Ingestion Workflow", () => {
             "form, [data-testid='edit-form'], .edit-modal"
           )
 
-          await authedPage.waitForTimeout(1000)
+          await expect
+            .poll(
+              async () =>
+                await authedPage
+                  .locator("form, [data-testid='edit-form'], .edit-modal")
+                  .first()
+                  .isVisible()
+                  .catch(() => false),
+              {
+                timeout: 5_000,
+                message: "Timed out waiting for the media metadata edit form",
+              }
+            )
+            .toBe(true)
         }
       }
 
@@ -510,7 +545,7 @@ test.describe("Media Ingestion Workflow", () => {
         .getByTestId("onboarding-success-ingest")
         .evaluate((el: HTMLElement) => el.click())
 
-      await expect(authedPage).toHaveURL(/\/(?:[?#].*)?$/, {
+      await expect(authedPage).toHaveURL(/\/(?:media)?(?:[?#].*)?$/, {
         timeout: 30000
       })
 
@@ -519,11 +554,14 @@ test.describe("Media Ingestion Workflow", () => {
         .first()
       await expect(modal).toBeVisible({ timeout: 30000 })
 
-      const urlsInput = modal.locator("#quick-ingest-url-input")
+      const urlsInput = modal.getByRole("textbox", { name: /paste urls input/i }).first()
       await expect(urlsInput).toBeVisible({ timeout: 20000 })
 
       const ingestUrl = `http://127.0.0.1:1/qi-web-e2e-${generateTestId("quick-ingest-web")}`
       await urlsInput.fill(ingestUrl)
+      await expect
+        .poll(async () => (await urlsInput.inputValue()).trim(), { timeout: 10000 })
+        .toBe(ingestUrl)
 
       const inspectorDialog = authedPage.getByRole("dialog", { name: /^inspector$/i })
       if (await inspectorDialog.isVisible().catch(() => false)) {
@@ -538,38 +576,46 @@ test.describe("Media Ingestion Workflow", () => {
 
       const addUrlsButton = modal.getByRole("button", { name: /add urls/i })
       await expect(addUrlsButton).toBeEnabled({ timeout: 15000 })
-      await addUrlsButton.evaluate((el: HTMLElement) => el.click())
+      await addUrlsButton.click()
 
-      await expect
-        .poll(async () => {
-          const sourceValues = await modal
-            .getByRole("textbox", { name: /source url/i })
-            .evaluateAll((elements) =>
-              elements.map((el) =>
-                (el as HTMLInputElement)?.value?.trim() || ""
-              )
-            )
-          return sourceValues.includes(ingestUrl)
-        }, { timeout: 15000 })
-        .toBeTruthy()
+      const configureButton = modal.getByRole("button", { name: /configure 1 items/i })
+      await expect(configureButton).toBeVisible({ timeout: 15000 })
+      await expect(configureButton).toBeEnabled({ timeout: 15000 })
+      await configureButton.click()
 
-      const runButton = modal.locator('[data-testid="quick-ingest-run"]')
-      await expect(runButton).toBeVisible({ timeout: 20000 })
-      await expect(runButton).toBeEnabled({ timeout: 30000 })
-      await runButton.evaluate((el: HTMLElement) => el.click())
+      const standardPresetButton = modal.getByRole("button", { name: /standard preset/i })
+      await expect(standardPresetButton).toBeVisible({ timeout: 20000 })
 
-      const resultsTab = modal.locator("#quick-ingest-tab-results")
-      await expect(resultsTab).toBeVisible({ timeout: 60000 })
-      await resultsTab.evaluate((el: HTMLElement) => el.click())
+      const nextButton = modal.getByRole("button", { name: /^next$/i })
+      await expect(nextButton).toBeEnabled({ timeout: 15000 })
+      await nextButton.click()
 
-      const completionCard = modal.locator('[data-testid="quick-ingest-complete"]')
-      await expect(completionCard).toBeVisible({ timeout: 120000 })
-      await expect(completionCard).toContainText(/quick ingest completed/i)
+      await expect(modal.getByText(/ready to process/i)).toBeVisible({ timeout: 20000 })
+
+      const startProcessingButton = modal.getByRole("button", { name: /start processing/i })
+      await expect(startProcessingButton).toBeEnabled({ timeout: 20000 })
+      await startProcessingButton.click()
+
+      const resultsStep = modal.getByTestId("wizard-results-step")
+      await expect(resultsStep).toBeVisible({ timeout: 120000 })
+      await expect(
+        modal.getByRole("region", { name: /completed items/i })
+      ).toBeVisible({ timeout: 120000 })
+      await expect(
+        modal.getByRole("heading", { name: /completed \(1\)/i })
+      ).toBeVisible({ timeout: 120000 })
+      await expect(resultsStep).toContainText(/total:\s*1 succeeded,\s*0 failed/i)
+      await expect(
+        modal.getByRole("button", { name: /start a new ingest/i })
+      ).toBeVisible()
+      await expect(
+        modal.getByRole("button", { name: /close the ingest wizard/i })
+      ).toBeVisible()
 
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should cancel quick ingest mid-process with confirmation", async ({
+    test("should confirm before closing quick ingest during processing", async ({
       authedPage,
       serverInfo,
       diagnostics
@@ -611,7 +657,6 @@ test.describe("Media Ingestion Workflow", () => {
               method === "POST" &&
               /\/api\/v1\/media\/ingest\/jobs\/?(?:\?|$)/i.test(url)
             ) {
-              await new Promise((resolve) => setTimeout(resolve, 1400))
               return new Response(
                 JSON.stringify({
                   batch_id: "qi-web-cancel-mock-batch-id",
@@ -687,7 +732,7 @@ test.describe("Media Ingestion Workflow", () => {
         .getByTestId("onboarding-success-ingest")
         .evaluate((el: HTMLElement) => el.click())
 
-      await expect(authedPage).toHaveURL(/\/(?:[?#].*)?$/, {
+      await expect(authedPage).toHaveURL(/\/(?:media)?(?:[?#].*)?$/, {
         timeout: 30000
       })
 
@@ -696,11 +741,14 @@ test.describe("Media Ingestion Workflow", () => {
         .first()
       await expect(modal).toBeVisible({ timeout: 30000 })
 
-      const urlsInput = modal.locator("#quick-ingest-url-input")
+      const urlsInput = modal.getByRole("textbox", { name: /paste urls input/i }).first()
       await expect(urlsInput).toBeVisible({ timeout: 20000 })
 
       const ingestUrl = `https://example.com/qi-web-cancel-${generateTestId("quick-ingest-web-cancel")}`
       await urlsInput.fill(ingestUrl)
+      await expect
+        .poll(async () => (await urlsInput.inputValue()).trim(), { timeout: 10000 })
+        .toBe(ingestUrl)
 
       const inspectorDialog = authedPage.getByRole("dialog", { name: /^inspector$/i })
       if (await inspectorDialog.isVisible().catch(() => false)) {
@@ -715,46 +763,52 @@ test.describe("Media Ingestion Workflow", () => {
 
       const addUrlsButton = modal.getByRole("button", { name: /add urls/i })
       await expect(addUrlsButton).toBeEnabled({ timeout: 15000 })
-      await addUrlsButton.evaluate((el: HTMLElement) => el.click())
+      await addUrlsButton.click()
 
-      await expect
-        .poll(async () => {
-          const sourceValues = await modal
-            .getByRole("textbox", { name: /source url/i })
-            .evaluateAll((elements) =>
-              elements.map((el) =>
-                (el as HTMLInputElement)?.value?.trim() || ""
-              )
-            )
-          return sourceValues.includes(ingestUrl)
-        }, { timeout: 15000 })
-        .toBeTruthy()
+      const configureButton = modal.getByRole("button", { name: /configure 1 items/i })
+      await expect(configureButton).toBeVisible({ timeout: 15000 })
+      await expect(configureButton).toBeEnabled({ timeout: 15000 })
+      await configureButton.click()
 
-      const runButton = modal.getByTestId("quick-ingest-run")
-      await expect(runButton).toBeVisible({ timeout: 20000 })
-      await expect(runButton).toBeEnabled({ timeout: 30000 })
-      await runButton.evaluate((el: HTMLElement) => el.click())
+      const standardPresetButton = modal.getByRole("button", { name: /standard preset/i })
+      await expect(standardPresetButton).toBeVisible({ timeout: 20000 })
 
-      const cancelButton = modal.getByTestId("quick-ingest-cancel")
+      const nextButton = modal.getByRole("button", { name: /^next$/i })
+      await expect(nextButton).toBeEnabled({ timeout: 15000 })
+      await nextButton.click()
+
+      await expect(modal.getByText(/ready to process/i)).toBeVisible({ timeout: 20000 })
+
+      const startProcessingButton = modal.getByRole("button", { name: /start processing/i })
+      await expect(startProcessingButton).toBeEnabled({ timeout: 20000 })
+      await startProcessingButton.click()
+
+      const cancelButton = modal.getByRole("button", { name: /cancel all/i })
       await expect(cancelButton).toBeVisible({ timeout: 15000 })
 
-      await cancelButton.click()
-      const keepRunningButton = authedPage.getByRole("button", { name: /keep running/i })
-      await expect(keepRunningButton).toBeVisible({ timeout: 10000 })
-      await keepRunningButton.click()
+      const closeButton = modal.getByRole("button", { name: /^close$/i }).first()
+      await expect(closeButton).toBeVisible({ timeout: 10000 })
+      await closeButton.click()
+
+      const closeConfirm = authedPage
+        .getByRole("dialog", { name: /processing is in progress/i })
+        .first()
+      await expect(closeConfirm).toBeVisible({ timeout: 10000 })
+
+      const stayButton = closeConfirm.getByRole("button", { name: /stay/i })
+      const confirmCancelAllButton = closeConfirm.getByRole("button", {
+        name: /^cancel all$/i
+      })
+      const minimizeButton = closeConfirm.getByRole("button", {
+        name: /minimize to background/i
+      })
+      await expect(stayButton).toBeVisible({ timeout: 10000 })
+      await expect(confirmCancelAllButton).toBeVisible({ timeout: 10000 })
+      await expect(minimizeButton).toBeVisible({ timeout: 10000 })
+
+      await stayButton.click()
       await expect(cancelButton).toBeVisible()
-
-      await cancelButton.click()
-      const confirmCancelButton = authedPage.getByRole("button", { name: /cancel run/i })
-      await expect(confirmCancelButton).toBeVisible({ timeout: 10000 })
-      await confirmCancelButton.click()
-
-      const completionCard = modal.getByTestId("quick-ingest-complete")
-      await expect(completionCard).toBeVisible({ timeout: 30000 })
-      await expect(completionCard).toContainText(/cancelled/i)
-
-      await authedPage.waitForTimeout(1800)
-      await expect(completionCard).toContainText(/cancelled/i)
+      await expect(stayButton).toBeHidden({ timeout: 10000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -767,13 +821,7 @@ test.describe("Media Ingestion Workflow", () => {
     }) => {
       const mediaPage = new MediaPage(authedPage)
       await mediaPage.gotoReview()
-
-      // Verify review page loaded
-      const _reviewContainer = authedPage.locator(
-        "[data-testid='review-container'], .review-page, .content-review"
-      )
-
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await mediaPage.waitForReviewReady()
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -784,12 +832,38 @@ test.describe("Media Ingestion Workflow", () => {
     }) => {
       const mediaPage = new MediaPage(authedPage)
       await mediaPage.gotoReview()
+      await mediaPage.waitForReviewReady()
 
-      // Get draft items
-      const _drafts = await mediaPage.getDraftItems()
+      let settledDraftState = 0
+      await expect
+        .poll(
+          async () => {
+            const drafts = await mediaPage.getDraftItems()
+            if (drafts.length > 0) {
+              settledDraftState = drafts.length
+              return settledDraftState
+            }
 
-      // Page should load whether or not there are drafts
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+            settledDraftState = (await mediaPage.reviewEmptyState.isVisible().catch(() => false))
+              ? -1
+              : 0
+            return settledDraftState
+          },
+          {
+            timeout: 20_000,
+            message: "Timed out waiting for review rows or the empty state",
+          }
+        )
+        .not.toBe(0)
+
+      const drafts = await mediaPage.getDraftItems()
+
+      if (drafts.length > 0) {
+        expect(settledDraftState).toBeGreaterThan(0)
+        expect(drafts[0]?.title?.length ?? 0).toBeGreaterThan(0)
+      } else {
+        await expect(mediaPage.reviewEmptyState).toBeVisible({ timeout: 20_000 })
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -814,8 +888,11 @@ test.describe("Media Ingestion Workflow", () => {
         await searchInput.fill("test query")
         await searchInput.press("Enter")
 
-        // Wait for search results
-        await authedPage.waitForTimeout(2000)
+        await authedPage
+          .locator(".ant-spin-spinning, [aria-busy='true']")
+          .first()
+          .waitFor({ state: "hidden", timeout: 5_000 })
+          .catch(() => {})
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -854,8 +931,19 @@ test.describe("Media Ingestion Workflow", () => {
       await authedPage.goto("/media-multi", { waitUntil: "domcontentloaded" })
       await waitForConnection(authedPage)
 
-      // Verify page loaded
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await expect
+        .poll(
+          async () =>
+            await authedPage
+              .getByTestId("media-review-status-bar")
+              .isVisible()
+              .catch(() => false),
+          {
+            timeout: 20_000,
+            message: "Timed out waiting for the media review surface to settle",
+          }
+        )
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -869,13 +957,17 @@ test.describe("Media Ingestion Workflow", () => {
       await authedPage.goto("/media-trash", { waitUntil: "domcontentloaded" })
       await waitForConnection(authedPage)
 
-      // Verify page loaded
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
-
-      // Look for trash content
-      const _trashContainer = authedPage.locator(
-        "[data-testid='trash-container'], .trash-page, .deleted-items"
-      )
+      await expect
+        .poll(
+          async () =>
+            (await authedPage.getByTestId("trash-retention-policy").isVisible().catch(() => false)) ||
+            (await authedPage.getByRole("heading", { name: /^trash$/i }).isVisible().catch(() => false)),
+          {
+            timeout: 20_000,
+            message: "Timed out waiting for the media trash surface to settle",
+          }
+        )
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })

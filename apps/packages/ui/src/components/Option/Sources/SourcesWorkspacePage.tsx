@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 
 import { PageShell } from "@/components/Common/PageShell"
 import { useIngestionSourcesQuery } from "@/hooks/use-ingestion-sources"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { SourcesAvailabilityGate } from "./SourcesAvailabilityGate"
 import { SourceListTable } from "./SourceListTable"
 
@@ -17,10 +18,15 @@ export const SourcesWorkspacePage: React.FC<SourcesWorkspacePageProps> = ({
 }) => {
   const { t } = useTranslation(["sources", "common", "option"])
   const navigate = useNavigate()
-  const sourcesQuery = useIngestionSourcesQuery()
+  const capabilityState = useServerCapabilities()
+  const sourcesQuery = useIngestionSourcesQuery(undefined, {
+    enabled:
+      !capabilityState.loading &&
+      capabilityState.capabilities?.hasIngestionSources !== false
+  })
 
   return (
-    <SourcesAvailabilityGate>
+    <SourcesAvailabilityGate capabilityState={capabilityState}>
       <PageShell className="space-y-6 py-6" maxWidthClassName="max-w-6xl">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">

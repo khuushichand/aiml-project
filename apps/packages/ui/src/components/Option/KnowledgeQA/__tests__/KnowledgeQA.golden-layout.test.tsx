@@ -233,10 +233,10 @@ describe("KnowledgeQA golden layout guardrails", () => {
 
     expect(screen.getByText("Ask Your Library")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-bar")).toBeInTheDocument()
-    expect(screen.getByTestId("knowledge-search-shell").className).toContain("pt-6")
-    expect(screen.getByTestId("knowledge-search-shell").className).not.toContain(
-      "items-center"
-    )
+    expect(screen.getByTestId("knowledge-search-shell").className).toContain("flex-1")
+    expect(screen.getByTestId("knowledge-search-shell").className).toContain("justify-center")
+    expect(screen.getByTestId("knowledge-search-shell").className).toContain("mx-auto")
+    expect(screen.getByTestId("knowledge-search-shell").className).toContain("max-w-3xl")
     expect(
       screen.queryByTestId("knowledge-answer-panel")
     ).not.toBeInTheDocument()
@@ -518,6 +518,30 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(state.selectThread).toHaveBeenNthCalledWith(2, "thread-42")
   })
 
+  it("does not retry thread permalinks after a terminal hydration failure", async () => {
+    vi.useFakeTimers()
+    state.selectThread = vi.fn().mockResolvedValueOnce("terminal")
+
+    renderKnowledgeQa(["/knowledge/thread/thread-404"])
+
+    expect(state.selectThread).toHaveBeenCalledTimes(1)
+    expect(state.selectThread).toHaveBeenCalledWith("thread-404")
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectThread).toHaveBeenCalledTimes(1)
+  })
+
   it("resets thread permalink retry budget when navigating to a different thread on the same page", async () => {
     vi.useFakeTimers()
     state.selectThread = vi
@@ -608,6 +632,30 @@ describe("KnowledgeQA golden layout guardrails", () => {
 
     expect(state.selectSharedThread).toHaveBeenCalledTimes(2)
     expect(state.selectSharedThread).toHaveBeenNthCalledWith(2, "share-token-abc")
+  })
+
+  it("does not retry shared permalinks after a terminal hydration failure", async () => {
+    vi.useFakeTimers()
+    state.selectSharedThread = vi.fn().mockResolvedValueOnce("terminal")
+
+    renderKnowledgeQa(["/knowledge/shared/share-terminal"])
+
+    expect(state.selectSharedThread).toHaveBeenCalledTimes(1)
+    expect(state.selectSharedThread).toHaveBeenCalledWith("share-terminal")
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(state.selectSharedThread).toHaveBeenCalledTimes(1)
   })
 
   it("resets shared permalink retry budget when navigating to a different shared route on the same page", async () => {

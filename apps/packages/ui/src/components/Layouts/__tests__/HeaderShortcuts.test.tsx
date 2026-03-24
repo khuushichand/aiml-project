@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 import { HeaderShortcuts } from "../HeaderShortcuts"
+import { getHeaderShortcutItems } from "../header-shortcut-items"
 
 const mockState = vi.hoisted(() => ({
   expanded: false,
@@ -16,17 +17,17 @@ const mockUseSetting = vi.hoisted(() => vi.fn())
 
 const ALL_SHORTCUT_IDS = [
   "chat", "prompts", "prompt-studio", "characters",
-  "chat-dictionaries", "world-books", "workspace-playground",
+  "chat-dictionaries", "world-books", "deep-research", "workspace-playground",
   "knowledge-qa", "media", "document-workspace",
   "repo2txt",
   "multi-item-review", "collections",
-  "watchlists", "notes", "chatbooks-playground", "flashcards",
+  "watchlists", "integrations", "scheduled-tasks", "notes", "chatbooks-playground", "flashcards",
   "quizzes", "evaluations", "chunking-playground",
   "stt-playground", "tts-playground", "audiobook-studio",
   "workflows", "writing-playground", "acp-playground",
   "skills", "kanban-playground",
   "model-playground", "data-tables",
-  "admin-server", "documentation", "moderation-playground",
+  "admin-server", "admin-integrations", "documentation", "moderation-playground",
   "admin-llamacpp", "admin-mlx", "settings"
 ]
 
@@ -94,6 +95,31 @@ describe("HeaderShortcuts launcher modal", () => {
     expect(container.innerHTML).toBe("")
   })
 
+  it("routes the chat shortcut directly to /chat", () => {
+    const chatShortcut = getHeaderShortcutItems().find((item) => item.id === "chat")
+
+    expect(chatShortcut?.to).toBe("/chat")
+  })
+
+  it("includes launcher shortcuts for integrations and scheduled tasks", () => {
+    expect(getHeaderShortcutItems()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          to: "/integrations",
+          labelDefault: "Integrations"
+        }),
+        expect.objectContaining({
+          to: "/scheduled-tasks",
+          labelDefault: "Scheduled Tasks"
+        }),
+        expect.objectContaining({
+          to: "/admin/integrations",
+          labelDefault: "Workspace Integrations"
+        })
+      ])
+    )
+  })
+
   it("renders a dialog when open (expanded=true)", () => {
     renderWithRouter(
       <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
@@ -137,6 +163,7 @@ describe("HeaderShortcuts launcher modal", () => {
     // Items should be visible
     expect(screen.getByText("Chat")).toBeInTheDocument()
     expect(screen.getByText("Prompts")).toBeInTheDocument()
+    expect(screen.getByText("Deep Research")).toBeInTheDocument()
     expect(screen.getByText("Repo2Txt")).toBeInTheDocument()
     expect(screen.getByText("Settings")).toBeInTheDocument()
   })

@@ -1021,6 +1021,13 @@ else:
         logger.warning(f"Discord endpoints unavailable; skipping import: {_discord_err}")
         _HAS_DISCORD = False
     try:
+        from tldw_Server_API.app.api.v1.endpoints.telegram import router as telegram_router
+
+        _HAS_TELEGRAM = True
+    except _IMPORT_EXCEPTIONS as _telegram_err:
+        logger.warning(f"Telegram endpoints unavailable; skipping import: {_telegram_err}")
+        _HAS_TELEGRAM = False
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         _HAS_FILES = True
@@ -1245,6 +1252,8 @@ else:
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
+    # Sharing Endpoint
+    from tldw_Server_API.app.api.v1.endpoints.sharing import router as sharing_router
     from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
@@ -4866,6 +4875,53 @@ def _compute_openapi_cors_allow_origin(
     return None
 
 
+_cors_allow_all_origins = False
+_cors_allow_credentials = False
+_cors_allow_origin_regex: str | None = None
+_cors_allowed_openapi_origins: set[str] = set()
+
+
+def _compute_runtime_cors_allow_origin(origin: str | None) -> str | None:
+    if not origin:
+        return None
+    if _cors_allow_all_origins and not _cors_allow_credentials:
+        return "*"
+
+    normalized_origin = str(origin).rstrip("/")
+    if normalized_origin in _cors_allowed_openapi_origins:
+        return origin
+
+    if _cors_allow_origin_regex:
+        try:
+            import re as _re
+
+            if _re.match(_cors_allow_origin_regex, origin):
+                return origin
+        except _REQUEST_GUARD_EXCEPTIONS:
+            return None
+
+    if _cors_allow_all_origins:
+        return origin
+    return None
+
+
+def _apply_runtime_cors_headers(request: Request, response: Any) -> Any:
+    allow_origin = _compute_runtime_cors_allow_origin(request.headers.get("origin"))
+    if not allow_origin:
+        return response
+
+    response.headers.setdefault("Access-Control-Allow-Origin", allow_origin)
+    if allow_origin != "*":
+        response.headers.setdefault("Vary", "Origin")
+    if _cors_allow_credentials:
+        response.headers.setdefault("Access-Control-Allow-Credentials", "true")
+    response.headers.setdefault(
+        "Access-Control-Expose-Headers",
+        "X-Request-ID, traceparent, X-Trace-Id"
+    )
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Global exception handler – surfaces tracebacks that BaseHTTPMiddleware
 # layers would otherwise swallow, producing only a bare
@@ -4893,9 +4949,12 @@ async def _global_unhandled_exception_handler(request, exc):
         url=request.url,
         exc=exc,
     )
-    return _JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
+    return _apply_runtime_cors_headers(
+        request,
+        _JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        ),
     )
 
 
@@ -4906,9 +4965,12 @@ async def _client_disconnect_exception_handler(request: Request, exc: ClientDisc
         method=request.method,
         url=request.url,
     )
-    return _JSONResponse(
-        status_code=499,
-        content={"detail": "Client disconnected"},
+    return _apply_runtime_cors_headers(
+        request,
+        _JSONResponse(
+            status_code=499,
+            content={"detail": "Client disconnected"},
+        ),
     )
 
 
@@ -5140,6 +5202,7 @@ async def _display_startup_info_and_warm():
 from tldw_Server_API.app.core.config import (
     ALLOWED_ORIGINS,
     API_V1_PREFIX,
+    resolve_runtime_allowed_origins,
     is_production_environment,
     route_enabled,
     should_allow_cors_credentials,
@@ -5150,7 +5213,14 @@ from tldw_Server_API.app.core.config import (
 if should_disable_cors():
     logger.warning("CORS middleware disabled via configuration/ENV flag.")
 else:
-    origins = _resolve_cors_origins_or_raise(ALLOWED_ORIGINS)
+    origins, _cors_origin_source, _cors_origin_fallback = resolve_runtime_allowed_origins(ALLOWED_ORIGINS)
+    if _cors_origin_fallback:
+        logger.warning(
+            "ALLOWED_ORIGINS resolved to an empty list outside production. "
+            "Using local browser defaults (localhost/127.0.0.1) so self-hosted setup keeps working. "
+            "Set ALLOWED_ORIGINS only if you need a different browser origin."
+        )
+    origins = _resolve_cors_origins_or_raise(origins)
     _cors_allow_credentials = should_allow_cors_credentials()
     _cors_enforce_explicit_origins = is_production_environment()
     _validate_cors_configuration_or_raise(
@@ -5684,20 +5754,6 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_health_router, tags=["rag-health"])
     except _IMPORT_EXCEPTIONS as _rag_health_min_err:
         logger.debug(f"Skipping rag_health router in minimal test app: {_rag_health_min_err}")
-    # Billing endpoints (required by billing integration tests)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
-
-        app.include_router(billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except _IMPORT_EXCEPTIONS as _billing_min_err:
-        logger.debug(f"Skipping billing router in minimal test app: {_billing_min_err}")
-    # Billing webhooks (optional; keep consistent with full app)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
-
-        app.include_router(billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except _IMPORT_EXCEPTIONS as _billing_webhooks_min_err:
-        logger.debug(f"Skipping billing webhooks router in minimal test app: {_billing_webhooks_min_err}")
     # Consent management endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.consent import router as consent_router
@@ -5749,6 +5805,12 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _discord_min_err:
         logger.debug(f"Skipping discord router in minimal test app: {_discord_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.telegram import router as telegram_router
+
+        app.include_router(telegram_router, prefix=f"{API_V1_PREFIX}", tags=["telegram"])
+    except _IMPORT_EXCEPTIONS as _telegram_min_err:
+        logger.debug(f"Skipping telegram router in minimal test app: {_telegram_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.files import router as files_router
 
         app.include_router(files_router, prefix=f"{API_V1_PREFIX}", tags=["files"])
@@ -5785,11 +5847,27 @@ elif _MINIMAL_TEST_APP:
     except _IMPORT_EXCEPTIONS as _reminders_min_err:
         logger.debug(f"Skipping reminders router in minimal test app: {_reminders_min_err}")
     try:
+        from tldw_Server_API.app.api.v1.endpoints.integrations_control_plane import (
+            router as integrations_control_plane_router,
+        )
+
+        app.include_router(integrations_control_plane_router, prefix=f"{API_V1_PREFIX}", tags=["integrations"])
+    except _IMPORT_EXCEPTIONS as _integrations_cp_min_err:
+        logger.debug(f"Skipping integrations control plane router in minimal test app: {_integrations_cp_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.scheduled_tasks_control_plane import (
+            router as scheduled_tasks_control_plane_router,
+        )
+
+        app.include_router(scheduled_tasks_control_plane_router, prefix=f"{API_V1_PREFIX}", tags=["scheduled-tasks"])
+    except _IMPORT_EXCEPTIONS as _scheduled_tasks_cp_min_err:
+        logger.debug(f"Skipping scheduled tasks control plane router in minimal test app: {_scheduled_tasks_cp_min_err}")
+    try:
         from tldw_Server_API.app.api.v1.endpoints.notifications import router as notifications_router
 
         app.include_router(notifications_router, prefix=f"{API_V1_PREFIX}", tags=["notifications"])
     except _IMPORT_EXCEPTIONS as _notifications_min_err:
-        logger.debug(f"Skipping notifications router in minimal test app: {_notifications_min_err}")
+        logger.debug("Skipping notifications router in minimal test app: {}", _notifications_min_err)
     # Chatbooks endpoints (export/import, jobs, download)
     try:
         from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -5797,6 +5875,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     except _IMPORT_EXCEPTIONS as _chatbooks_min_err:
         logger.debug(f"Skipping chatbooks router in minimal test app: {_chatbooks_min_err}")
+    # Sharing endpoints (workspace sharing, tokens, admin)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.sharing import router as sharing_router
+
+        app.include_router(sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])
+    except _IMPORT_EXCEPTIONS as _sharing_min_err:
+        logger.debug("Skipping sharing router in minimal test app: {}", _sharing_min_err)
     # Personalization scaffold endpoints (opt-in/profile/memories) needed for unit tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.personalization import router as personalization_router
@@ -6240,20 +6325,6 @@ else:
         _include_if_enabled("org-invites", org_invites_router, prefix=f"{API_V1_PREFIX}", tags=["invites"])
     except ImportError as _inv_err:
         logger.warning(f"Skipping org_invites router due to import error: {_inv_err}")
-    # Billing and subscription management endpoints
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
-
-        _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except ImportError as _bill_err:
-        logger.warning(f"Skipping billing router due to import error: {_bill_err}")
-    # Stripe webhook handler (no auth required)
-    try:
-        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
-
-        _include_if_enabled("billing-webhooks", billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except ImportError as _wh_err:
-        logger.warning(f"Skipping billing_webhooks router due to import error: {_wh_err}")
     if _HAS_MEDIA:
         _include_if_enabled("media", media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
     try:
@@ -6351,6 +6422,10 @@ else:
         _include_if_enabled("slack", slack_router, prefix=f"{API_V1_PREFIX}", tags=["slack"], default_stable=False)
     if _HAS_DISCORD and "discord_router" in locals():
         _include_if_enabled("discord", discord_router, prefix=f"{API_V1_PREFIX}", tags=["discord"], default_stable=False)
+    if _HAS_TELEGRAM and "telegram_router" in locals():
+        _include_if_enabled(
+            "telegram", telegram_router, prefix=f"{API_V1_PREFIX}", tags=["telegram"], default_stable=False
+        )
     try:
         # Optional outputs artifacts endpoint
         from tldw_Server_API.app.api.v1.endpoints.outputs import router as _outputs_router
@@ -6432,6 +6507,34 @@ else:
         _include_if_enabled("tasks", _reminders_router, prefix=f"{API_V1_PREFIX}", tags=["tasks"])
     except _IMPORT_EXCEPTIONS as _e:
         logger.warning(f"Reminders endpoint not available: {_e}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.integrations_control_plane import (
+            router as _integrations_control_plane_router,
+        )
+
+        _include_if_enabled(
+            "integrations",
+            _integrations_control_plane_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["integrations"],
+            default_stable=False,
+        )
+    except _IMPORT_EXCEPTIONS as _e:
+        logger.warning(f"Integrations control plane endpoint not available: {_e}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.scheduled_tasks_control_plane import (
+            router as _scheduled_tasks_control_plane_router,
+        )
+
+        _include_if_enabled(
+            "scheduled-tasks",
+            _scheduled_tasks_control_plane_router,
+            prefix=f"{API_V1_PREFIX}",
+            tags=["scheduled-tasks"],
+            default_stable=False,
+        )
+    except _IMPORT_EXCEPTIONS as _e:
+        logger.warning(f"Scheduled tasks control plane endpoint not available: {_e}")
     try:
         from tldw_Server_API.app.api.v1.endpoints.notifications import router as _notifications_router
 
@@ -6699,6 +6802,7 @@ else:
         )
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
+    _include_if_enabled("sharing", sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])
     _include_if_enabled("llm", mlx_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
     _include_if_enabled("llm", llm_providers_router, prefix=f"{API_V1_PREFIX}", tags=["llm"])
     _include_if_enabled("llm", messages_router, prefix=f"{API_V1_PREFIX}", tags=["messages"])

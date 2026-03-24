@@ -779,7 +779,7 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   )
 
   const handleOpenIngestFlow = useCallback(async () => {
-    await finishAndNavigate("/", { openQuickIngestIntro: true })
+    await finishAndNavigate("/media", { openQuickIngestIntro: true })
   }, [finishAndNavigate])
 
   const handleOpenMediaFlow = useCallback(async () => {

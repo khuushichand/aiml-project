@@ -253,6 +253,42 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
     })
   })
 
+  it("preserves the pending last-note setting when note hydration fails", async () => {
+    mockGetSetting.mockResolvedValue("pending-note")
+    mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
+      const path = String(request.path || "")
+      const method = String(request.method || "GET").toUpperCase()
+
+      if (path.startsWith("/api/v1/notes/?")) {
+        return {
+          items: [
+            {
+              id: "pending-note",
+              title: "Pending note",
+              content: "Preview",
+              metadata: { keywords: [] },
+              version: 1
+            }
+          ],
+          pagination: { total_items: 1, total_pages: 1 }
+        }
+      }
+
+      if (path === "/api/v1/notes/pending-note" && method === "GET") {
+        throw new Error("load failed")
+      }
+
+      return {}
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(mockMessageError).toHaveBeenCalledWith("Failed to load note")
+    })
+    expect(mockClearSetting).not.toHaveBeenCalled()
+  })
+
   it("autosaves after idle delay without success toast spam", async () => {
     vi.useFakeTimers()
     renderPage()

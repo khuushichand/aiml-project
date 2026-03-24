@@ -74,16 +74,33 @@ export const NodeConfigPanel = ({ className = "" }: NodeConfigPanelProps) => {
     [serverSchema]
   )
 
+  const mergedServerFields = useMemo(() => {
+    if (!metadata || serverFields.length === 0) return serverFields
+    const overrides = new Map(metadata.configSchema.map((field) => [field.key, field]))
+    return serverFields.map((field) => {
+      const override = overrides.get(field.key)
+      if (!override) return field
+      return {
+        ...field,
+        ...override,
+        description: override.description ?? field.description,
+        required: field.required ?? override.required,
+        default: field.default ?? override.default,
+        options: override.options ?? field.options
+      }
+    })
+  }, [metadata, serverFields])
+
   const configFields = useMemo(() => {
     if (!metadata) return []
     if (schemaHasProperties(serverSchema)) {
-      return serverFields
+      return mergedServerFields
     }
     if (metadata.configSchema.length > 0) {
       return metadata.configSchema
     }
     return serverFields
-  }, [metadata, serverSchema, serverFields])
+  }, [metadata, serverSchema, serverFields, mergedServerFields])
 
   const { optionsByKey, loadingByKey } = useWorkflowDynamicOptions({
     fields: configFields,

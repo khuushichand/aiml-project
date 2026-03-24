@@ -1,5 +1,14 @@
-import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
+import dynamic from "next/dynamic"
+import RouteChunkLoading from "@web/components/navigation/RouteChunkLoading"
 
-export default function CompanionRedirectPage() {
-  return <RouteRedirect to="/companion" />;
-}
+export default dynamic(() => import("@/routes/option-companion"), {
+  ssr: false,
+  loading: () => (
+    <RouteChunkLoading
+      eyebrow="Companion Home"
+      title="Loading Companion"
+      description="Preparing your companion dashboard."
+      testId="companion-route-loading"
+    />
+  )
+})

@@ -46,9 +46,6 @@ export const useMigration = () => {
         const legacyExists = await hasLegacyData()
 
         if (!legacyExists) {
-          console.info(
-            "[migration] No legacy data found; marking as migrated without reload"
-          )
           return { success: true, needsReload: false }
         }
 
@@ -58,7 +55,6 @@ export const useMigration = () => {
           duration: 0,
           content: "Preparing your chat history…"
         })
-        console.info("[migration] Starting background migration…")
         await runAllMigrations()
         message.open({
           key: MIGRATION_MESSAGE_KEY,
@@ -66,7 +62,6 @@ export const useMigration = () => {
           duration: 2.5,
           content: "Chat history is up to date."
         })
-        console.info("[migration] Background migration completed successfully")
         return { success: true, needsReload: true }
       } catch (error) {
         console.error("Background migration failed:", error)
@@ -89,14 +84,7 @@ export const useMigration = () => {
       if (result.success) {
         await setIsMigrated(true)
         if (result.needsReload && !isHarnessEnvironment) {
-          console.info("[migration] Reloading extension to apply updates")
           window.setTimeout(() => window.location.reload(), 250)
-        } else if (!result.needsReload) {
-          console.info(
-            "[migration] Migration not required; skipping reload for new install"
-          )
-        } else {
-          console.info("[migration] Skipping reload in harness environment")
         }
       }
     }

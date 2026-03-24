@@ -44,16 +44,13 @@ vi.mock("@web/components/AppProviders", () => ({
   AppProviders: ({ children }: { children: React.ReactNode }) => <>{children}</>
 }))
 
-vi.mock("@/services/tldw/TldwApiClient", () => ({
-  tldwClient: {
+vi.mock("@web/lib/configured-auth-state", () => ({
+  loadTldwClient: async () => ({
     getConfig: (...args: unknown[]) => mockGetConfig(...args)
-  }
-}))
-
-vi.mock("@/services/tldw/TldwAuth", () => ({
-  tldwAuth: {
+  }),
+  loadTldwAuth: async () => ({
     getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args)
-  }
+  })
 }))
 
 const DummyPage = () => <div data-testid="page-content">Page</div>
@@ -66,6 +63,7 @@ const renderApp = (pathname: string) => {
 
 const originalEnvApiKey = process.env.NEXT_PUBLIC_X_API_KEY
 const originalEnvBearer = process.env.NEXT_PUBLIC_API_BEARER
+const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
 
 beforeEach(() => {
   mockRouter.push.mockClear()
@@ -78,11 +76,13 @@ beforeEach(() => {
   mockGetConfig.mockImplementation(async () => currentConfig)
   delete process.env.NEXT_PUBLIC_X_API_KEY
   delete process.env.NEXT_PUBLIC_API_BEARER
+  delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
 })
 
 afterAll(() => {
   process.env.NEXT_PUBLIC_X_API_KEY = originalEnvApiKey
   process.env.NEXT_PUBLIC_API_BEARER = originalEnvBearer
+  process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
 })
 
 describe("App layout routing", () => {

@@ -12,7 +12,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class ACPPage extends BasePage {
   constructor(page: Page) {
@@ -27,7 +27,7 @@ export class ACPPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for the header title "Agent Playground" or session panel to appear
     const heading = this.page.getByText("Agent Playground")
     const sessionsLabel = this.page.getByText("Sessions")

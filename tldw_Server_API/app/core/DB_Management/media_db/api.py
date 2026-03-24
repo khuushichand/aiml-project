@@ -71,6 +71,20 @@ def _deleted_false_value(db_instance: Any) -> bool | int:
     return False if backend_name == "POSTGRESQL" else 0
 
 
+def _supports_keyword_delete_repository(db_instance: Any) -> bool:
+    """Return whether a DB-like object can drive KeywordsRepository.soft_delete()."""
+    required_attrs = (
+        "client_id",
+        "transaction",
+        "_fetchone_with_connection",
+        "_execute_with_connection",
+        "_get_current_utc_timestamp_str",
+        "_log_sync_event",
+        "_delete_fts_keyword",
+    )
+    return all(hasattr(db_instance, attr) for attr in required_attrs)
+
+
 def create_media_database(
     client_id: str,
     *,
@@ -424,7 +438,7 @@ def soft_delete_keyword(
 ) -> bool:
     """Soft-delete a keyword through the package-level write helper."""
     db_instance = unwrap_media_database_like(db)
-    if is_media_database_like(db_instance):
+    if is_media_database_like(db_instance) or _supports_keyword_delete_repository(db_instance):
         return KeywordsRepository.from_legacy_db(db_instance).soft_delete(keyword)
 
     soft_delete = getattr(db_instance, "soft_delete_keyword", None)

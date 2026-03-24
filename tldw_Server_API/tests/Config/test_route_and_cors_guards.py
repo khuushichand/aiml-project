@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import os
 from pathlib import Path
@@ -5,6 +6,7 @@ import re
 
 from fastapi import FastAPI
 import pytest
+from starlette.requests import Request
 
 # Keep this module importable even when local/dev env sets ALLOWED_ORIGINS='*'.
 os.environ["ALLOWED_ORIGINS"] = "http://localhost:3000"
@@ -90,6 +92,15 @@ def test_validate_cors_configuration_allows_wildcard_without_credentials() -> No
     app_main._validate_cors_configuration_or_raise(["*"], allow_credentials=False)
 
 
+def test_default_allowed_origins_include_ipv6_loopback_dev_hosts() -> None:
+    origins = config_mod.get_default_allowed_origins()
+
+    assert "http://[::1]" in origins
+    assert "http://[::1]:3000" in origins
+    assert "http://[::1]:3001" in origins
+    assert "http://[::1]:8000" in origins
+
+
 def test_compute_dev_cors_origin_regex_allows_private_lan_origins_in_non_production() -> None:
     pattern = app_main._compute_dev_cors_origin_regex(
         ["http://localhost:3000"],
@@ -128,10 +139,10 @@ def test_compute_dev_cors_origin_regex_disabled_for_wildcard_or_production() -> 
         pytest.fail("Expected no dev private-LAN regex when explicit origins are enforced")
 
 
-def test_should_allow_cors_credentials_defaults_false() -> None:
+def test_should_allow_cors_credentials_env_override_false() -> None:
     prior_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS")
     try:
-        _restore_env("CORS_ALLOW_CREDENTIALS", None)
+        os.environ["CORS_ALLOW_CREDENTIALS"] = "false"
         reloaded_config = importlib.reload(config_mod)
         assert reloaded_config.should_allow_cors_credentials() is False
     finally:
@@ -189,6 +200,23 @@ def test_get_cors_runtime_diagnostics_marks_empty_origins_env_as_default() -> No
         importlib.reload(config_mod)
 
 
+def test_get_cors_runtime_diagnostics_uses_local_fallback_for_explicit_empty_list_outside_production() -> None:
+    prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
+    prior_env = os.getenv("ENV")
+    try:
+        os.environ["ENV"] = "development"
+        os.environ["ALLOWED_ORIGINS"] = "[]"
+        reloaded_config = importlib.reload(config_mod)
+        diagnostics = reloaded_config.get_cors_runtime_diagnostics()
+        assert diagnostics["allowed_origins_source"] == "env(local-fallback)"
+        assert diagnostics["allowed_origins_fallback"] is True
+        assert "http://localhost:3000" in diagnostics["allowed_origins"]
+    finally:
+        _restore_env("ENV", prior_env)
+        _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
+        importlib.reload(config_mod)
+
+
 def test_compute_openapi_cors_allow_origin_echoes_allowed_explicit_origin() -> None:
     allow_origin = app_main._compute_openapi_cors_allow_origin(
         "http://localhost:3000",
@@ -197,6 +225,31 @@ def test_compute_openapi_cors_allow_origin_echoes_allowed_explicit_origin() -> N
         allowed_openapi_origins={"http://localhost:3000"},
     )
     assert allow_origin == "http://localhost:3000"
+
+
+def test_global_unhandled_exception_handler_keeps_cors_for_allowed_origin() -> None:
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/boom",
+        "raw_path": b"/boom",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"origin", b"http://localhost:3000")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "app": app_main.app,
+    }
+    request = Request(scope)
+
+    response = asyncio.run(
+        app_main._global_unhandled_exception_handler(request, RuntimeError("boom"))
+    )
+
+    assert response.status_code == 500
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
 
 
 def test_compute_openapi_cors_allow_origin_rejects_disallowed_origin() -> None:
@@ -274,17 +327,53 @@ def test_empty_string_allowed_origins_env_falls_back_to_defaults() -> None:
         importlib.reload(app_main)
 
 
-def test_main_import_fails_for_explicit_empty_allowed_origins_list() -> None:
+def test_main_import_falls_back_for_explicit_empty_allowed_origins_list_outside_production() -> None:
     prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
     prior_disable_cors = os.getenv("DISABLE_CORS")
+    prior_env = os.getenv("ENV")
     try:
+        os.environ["ENV"] = "development"
         os.environ["DISABLE_CORS"] = "false"
         os.environ["ALLOWED_ORIGINS"] = "[]"
         reloaded_config = importlib.reload(config_mod)
+        effective_origins, origin_source, fallback_used = reloaded_config.resolve_runtime_allowed_origins(
+            reloaded_config.ALLOWED_ORIGINS
+        )
+        importlib.reload(app_main)
+
         assert reloaded_config.ALLOWED_ORIGINS == []
+        assert origin_source == "env(local-fallback)"
+        assert fallback_used is True
+        assert "http://localhost:3000" in effective_origins
+    finally:
+        _restore_env("ENV", prior_env)
+        _restore_env("DISABLE_CORS", prior_disable_cors)
+        _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
+        importlib.reload(config_mod)
+        importlib.reload(app_main)
+
+
+def test_main_import_fails_for_explicit_empty_allowed_origins_list_in_production() -> None:
+    prior_allowed_origins = os.getenv("ALLOWED_ORIGINS")
+    prior_disable_cors = os.getenv("DISABLE_CORS")
+    prior_env = os.getenv("ENV")
+    try:
+        os.environ["ENV"] = "production"
+        os.environ["DISABLE_CORS"] = "false"
+        os.environ["ALLOWED_ORIGINS"] = "[]"
+        reloaded_config = importlib.reload(config_mod)
+        effective_origins, origin_source, fallback_used = reloaded_config.resolve_runtime_allowed_origins(
+            reloaded_config.ALLOWED_ORIGINS
+        )
+
+        assert reloaded_config.ALLOWED_ORIGINS == []
+        assert effective_origins == []
+        assert origin_source == "env"
+        assert fallback_used is False
         with pytest.raises(RuntimeError, match="ALLOWED_ORIGINS is empty"):
             importlib.reload(app_main)
     finally:
+        _restore_env("ENV", prior_env)
         _restore_env("DISABLE_CORS", prior_disable_cors)
         _restore_env("ALLOWED_ORIGINS", prior_allowed_origins)
         importlib.reload(config_mod)

@@ -1569,7 +1569,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
                   key={action.key}
                   size="small"
                   data-testid={`watchlists-orientation-action-${action.key}`}
-                  onClick={() => setActiveTab(action.target as typeof activeTab)}
+                  onClick={() => navigateToTab(action.target)}
                 >
                   {action.label}
                 </Button>
@@ -1593,7 +1593,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
             <Button
               size="small"
               data-testid={`watchlists-teach-point-action-${activeTeachPoint.key}`}
-              onClick={() => setActiveTab(activeTeachPoint.actionTarget as typeof activeTab)}
+              onClick={() => navigateToTab(activeTeachPoint.actionTarget)}
             >
               {activeTeachPoint.actionLabel}
             </Button>
@@ -1697,7 +1697,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         title={t("watchlists:tabs.settings", "Settings")}
         open={settingsDrawerOpen}
         onClose={() => setSettingsDrawerOpen(false)}
-        width={isMobile ? "100%" : 520}
+        size={isMobile ? "100%" : 520}
         data-testid="watchlists-settings-drawer"
       >
         <SettingsTab />

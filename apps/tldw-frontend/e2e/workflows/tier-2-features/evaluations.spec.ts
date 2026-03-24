@@ -3,10 +3,9 @@
  *
  * Tests the evaluations workflow:
  * - Page loads and renders expected elements (title, tabs)
- * - Run evaluation fires API call to /api/v1/evaluations
+ * - New evaluation opens the create-evaluation flow
  */
 import { test, expect, skipIfServerUnavailable, assertNoCriticalErrors } from "../../utils/fixtures"
-import { expectApiCall } from "../../utils/api-assertions"
 import { EvaluationsPage } from "../../utils/page-objects"
 
 test.describe("Evaluations", () => {
@@ -31,17 +30,11 @@ test.describe("Evaluations", () => {
     await assertNoCriticalErrors(diagnostics)
   })
 
-  test("run evaluation fires API", async ({ authedPage, diagnostics }) => {
+  test("new evaluation opens create modal", async ({ diagnostics }) => {
     await evaluations.assertPageReady()
 
-    const apiCall = expectApiCall(authedPage, {
-      url: "/api/v1/evaluations",
-    })
-
-    await evaluations.runEvaluation()
-
-    const { response } = await apiCall
-    expect(response.status()).toBeLessThan(500)
+    await evaluations.openCreateEvaluation()
+    await expect(evaluations.createEvaluationModal).toBeVisible()
 
     await assertNoCriticalErrors(diagnostics)
   })

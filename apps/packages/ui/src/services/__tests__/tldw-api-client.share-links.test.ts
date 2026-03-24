@@ -54,7 +54,9 @@ describe("TldwApiClient conversation share links", () => {
       headers?: Record<string, string>
       body?: unknown
     }
-    expect(call.path).toBe("/api/v1/chat/conversations/chat-1/share-links")
+    expect(call.path).toBe(
+      "/api/v1/chat/conversations/chat-1/share-links?scope_type=global"
+    )
     expect(call.method).toBe("POST")
     expect(call.headers).toEqual({ "Content-Type": "application/json" })
     expect(call.body).toEqual({
@@ -63,6 +65,55 @@ describe("TldwApiClient conversation share links", () => {
       label: "QA review"
     })
     expect(result.share_id).toBe("share-1")
+  })
+
+  it("passes workspace scope to share-link endpoints", async () => {
+    mocks.bgRequest
+      .mockResolvedValueOnce({
+        share_id: "share-2",
+        permission: "view",
+        created_at: "2026-02-20T10:00:00Z",
+        expires_at: "2026-02-21T10:00:00Z"
+      })
+      .mockResolvedValueOnce({
+        conversation_id: "chat-2",
+        links: []
+      })
+      .mockResolvedValueOnce({ success: true, share_id: "share-2" })
+
+    const client = new TldwApiClient()
+
+    await client.createConversationShareLink(
+      "chat-2",
+      { label: "Scoped share" },
+      { scope: { type: "workspace", workspaceId: "workspace-2" } }
+    )
+    await client.listConversationShareLinks("chat-2", {
+      scope: { type: "workspace", workspaceId: "workspace-2" }
+    })
+    await client.revokeConversationShareLink("chat-2", "share-2", {
+      scope: { type: "workspace", workspaceId: "workspace-2" }
+    })
+
+    const createCall = mocks.bgRequest.mock.calls.at(0)?.[0] as {
+      path?: string
+    }
+    const listCall = mocks.bgRequest.mock.calls.at(1)?.[0] as {
+      path?: string
+    }
+    const revokeCall = mocks.bgRequest.mock.calls.at(2)?.[0] as {
+      path?: string
+    }
+
+    expect(createCall.path).toBe(
+      "/api/v1/chat/conversations/chat-2/share-links?scope_type=workspace&workspace_id=workspace-2"
+    )
+    expect(listCall.path).toBe(
+      "/api/v1/chat/conversations/chat-2/share-links?scope_type=workspace&workspace_id=workspace-2"
+    )
+    expect(revokeCall.path).toBe(
+      "/api/v1/chat/conversations/chat-2/share-links/share-2?scope_type=workspace&workspace_id=workspace-2"
+    )
   })
 
   it("lists and revokes share links for a conversation", async () => {
@@ -94,12 +145,14 @@ describe("TldwApiClient conversation share links", () => {
       method?: string
     }
 
-    expect(listCall.path).toBe("/api/v1/chat/conversations/chat-1/share-links")
+    expect(listCall.path).toBe(
+      "/api/v1/chat/conversations/chat-1/share-links?scope_type=global"
+    )
     expect(listCall.method).toBe("GET")
     expect(listed.links).toHaveLength(1)
 
     expect(revokeCall.path).toBe(
-      "/api/v1/chat/conversations/chat-1/share-links/share-1"
+      "/api/v1/chat/conversations/chat-1/share-links/share-1?scope_type=global"
     )
     expect(revokeCall.method).toBe("DELETE")
   })

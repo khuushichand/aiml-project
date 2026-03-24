@@ -138,6 +138,14 @@ class ChatSessionUpdate(BaseModel):
 class ChatSessionResponse(BaseModel):
     """Schema for chat session responses."""
     id: str = Field(..., description="UUID of the chat session")
+    scope_type: Literal["global", "workspace"] = Field(
+        "global",
+        description="Conversation scope type",
+    )
+    workspace_id: Optional[str] = Field(
+        None,
+        description="Workspace ID when scope_type='workspace'",
+    )
     character_id: int | None = Field(None, description="ID of the associated character")
     assistant_kind: Literal["character", "persona"] | None = Field(
         None,
@@ -176,6 +184,29 @@ class ChatSessionListResponse(BaseModel):
     total: int = Field(..., description="Total number of chats")
     limit: int = Field(..., description="Number of items per page")
     offset: int = Field(..., description="Offset for pagination")
+
+
+class ChatLinkedResearchRunResponse(BaseModel):
+    """Compact research run status surfaced alongside a chat thread."""
+
+    run_id: str = Field(..., description="Research run identifier")
+    query: str = Field(..., description="Original research query")
+    status: str = Field(..., description="Current research run status")
+    phase: str = Field(..., description="Current research phase")
+    control_state: str = Field(..., description="Current research control state")
+    latest_checkpoint_id: Optional[str] = Field(None, description="Latest checkpoint ID, when present")
+    updated_at: str = Field(..., description="Last research session update timestamp")
+
+    model_config = {"from_attributes": True}
+
+
+class ChatLinkedResearchRunsListResponse(BaseModel):
+    """Compact linked deep research runs for a single chat thread."""
+
+    runs: list[ChatLinkedResearchRunResponse] = Field(
+        default_factory=list,
+        description="Linked deep research runs for this chat",
+    )
 
 
 class ChatSettingsUpdate(BaseModel):

@@ -112,6 +112,28 @@ def test_webui_dockerfile_installs_only_frontend_and_ui_workspaces():
     )
 
 
+def test_webui_dockerfile_bakes_hosted_mode_build_args():
+    """The WebUI Docker build should accept hosted-mode public env args."""
+    text = _read_text("Dockerfiles/Dockerfile.webui")
+
+    _require(
+        "ARG NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=local" in text,
+        "Expected Dockerfile.webui to define NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE build arg",
+    )
+    _require(
+        "ARG NEXT_PUBLIC_API_BASE_URL=" in text,
+        "Expected Dockerfile.webui to define NEXT_PUBLIC_API_BASE_URL build arg",
+    )
+    _require(
+        "ENV NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=${NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE}" in text,
+        "Expected Dockerfile.webui to export NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE at build time",
+    )
+    _require(
+        "ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}" in text,
+        "Expected Dockerfile.webui to export NEXT_PUBLIC_API_BASE_URL at build time",
+    )
+
+
 def test_base_docker_compose_keeps_backward_compatible_named_volumes():
     """The base compose file should preserve existing named volume identifiers."""
     compose = _load_yaml("Dockerfiles/docker-compose.yml")

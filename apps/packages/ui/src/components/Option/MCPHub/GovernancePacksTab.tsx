@@ -1,17 +1,29 @@
 import { useEffect, useMemo, useState } from "react"
-import { Alert, Button, Card, Descriptions, Empty, Input, List, Modal, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Descriptions, Divider, Empty, Input, List, Modal, Radio, Space, Tag, Typography } from "antd"
 
 import {
+  checkGovernancePackUpdates,
   dryRunGovernancePack,
   dryRunGovernancePackUpgrade,
+  dryRunGovernancePackSourceCandidate,
+  dryRunGovernancePackSourceUpgrade,
   executeGovernancePackUpgrade,
+  executeGovernancePackSourceUpgrade,
   getGovernancePackDetail,
   importGovernancePack,
+  importGovernancePackSourceCandidate,
   listGovernancePackUpgradeHistory,
   listGovernancePacks,
+  prepareGovernancePackSourceCandidate,
+  prepareGovernancePackUpgradeCandidate,
   type McpHubGovernancePackDetail,
   type McpHubGovernancePackDocument,
   type McpHubGovernancePackDryRunReport,
+  type McpHubGovernancePackGitRefKind,
+  type McpHubGovernancePackSourceCandidate,
+  type McpHubGovernancePackSourceRequest,
+  type McpHubGovernancePackSourceUpdateCheck,
+  type McpHubGovernancePackSourceUpgradePrepareResponse,
   type McpHubGovernancePackUpgradeHistoryEntry,
   type McpHubGovernancePackUpgradeObjectDiff,
   type McpHubGovernancePackUpgradePlan,
@@ -60,6 +72,133 @@ const getInstallStateTag = (pack: Pick<McpHubGovernancePackSummary, "is_active_i
 const describeUpgradeDiffs = (diffs: McpHubGovernancePackUpgradeObjectDiff[]) =>
   diffs.map((diff) => `${diff.object_type}:${diff.source_object_id}`)
 
+const sourceRequestKey = (source: McpHubGovernancePackSourceRequest) =>
+  JSON.stringify({
+    source_type: source.source_type,
+    local_path: source.local_path ?? null,
+    repo_url: source.repo_url ?? null,
+    ref: source.ref ?? null,
+    ref_kind: source.ref_kind ?? null,
+    subpath: source.subpath ?? null
+  })
+
+const getSourceTypeTag = (sourceType?: string | null) => {
+  if (sourceType === "git") return <Tag color="geekblue">Git Source</Tag>
+  if (sourceType === "local_path") return <Tag color="purple">Local Path</Tag>
+  return null
+}
+
+const getVerificationTag = (pack: Pick<McpHubGovernancePackSummary, "source_type" | "source_verified" | "source_verification_mode">) => {
+  if (pack.source_type !== "git") {
+    return null
+  }
+  if (pack.source_verified) {
+    return <Tag color="green">{pack.source_verification_mode ? "Verified Commit" : "Verified Source"}</Tag>
+  }
+  if (pack.source_verification_mode) {
+    return <Tag color="orange">Verification Failed</Tag>
+  }
+  return <Tag color="default">Unverified Source</Tag>
+}
+
+const describeVerificationWarning = (code?: string | null) => {
+  switch (code) {
+    case "signer_rotated_trusted":
+      return "Signer rotated"
+    case "signer_revoked":
+      return "Signer revoked"
+    case "unknown_previous_signer":
+      return "Previous signer unknown"
+    default:
+      return code ?? null
+  }
+}
+
+const renderVerificationDetails = (
+  pack: Pick<
+    McpHubGovernancePackSummary,
+    | "source_type"
+    | "signer_fingerprint"
+    | "signer_identity"
+    | "verified_object_type"
+    | "verification_result_code"
+    | "verification_warning_code"
+  >
+) => {
+  if (pack.source_type !== "git") {
+    return null
+  }
+  const signerFingerprint = pack.signer_fingerprint ?? null
+  const signerIdentity = pack.signer_identity ?? null
+  const verifiedObjectType = pack.verified_object_type ?? null
+  const resultCode = pack.verification_result_code ?? null
+  const warningCode = describeVerificationWarning(pack.verification_warning_code)
+  if (!signerFingerprint && !signerIdentity && !verifiedObjectType && !resultCode && !warningCode) {
+    return null
+  }
+  return (
+    <details>
+      <summary>Verification details</summary>
+      <Descriptions bordered column={1} size="small" style={{ marginTop: 8 }}>
+        {signerFingerprint ? (
+          <Descriptions.Item label="Signer fingerprint">
+            <Typography.Text code>{signerFingerprint}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {signerIdentity ? (
+          <Descriptions.Item label="Signer identity">
+            <Typography.Text>{signerIdentity}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {verifiedObjectType ? (
+          <Descriptions.Item label="Verified object type">
+            <Typography.Text code>{verifiedObjectType}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {resultCode ? (
+          <Descriptions.Item label="Verification result">
+            <Typography.Text code>{resultCode}</Typography.Text>
+          </Descriptions.Item>
+        ) : null}
+        {warningCode ? (
+          <Descriptions.Item label="Verification warning">
+            <Tag color="orange">{warningCode}</Tag>
+          </Descriptions.Item>
+        ) : null}
+      </Descriptions>
+    </details>
+  )
+}
+
+const describeUpdateStatus = (updateCheck: McpHubGovernancePackSourceUpdateCheck) => {
+  const warningText = describeVerificationWarning(updateCheck.verification_warning_code)
+  const signerText = updateCheck.signer_fingerprint ? ` (${updateCheck.signer_fingerprint})` : ""
+  if (updateCheck.status === "newer_version_available") {
+    return {
+      type: "success" as const,
+      message: `Newer version available: ${String(updateCheck.candidate_manifest?.pack_version ?? "")}`,
+      description:
+        `Current ${updateCheck.installed_manifest.pack_version} -> candidate ${String(
+          updateCheck.candidate_manifest?.pack_version ?? ""
+        )}` + (warningText ? `. ${warningText}${signerText}.` : "")
+    }
+  }
+  if (updateCheck.status === "source_drift_same_version") {
+    return {
+      type: "warning" as const,
+      message: "Source drift detected at the same version",
+      description:
+        `Tracked source now resolves to ${String(updateCheck.source_commit_resolved ?? "a different commit")} without a version bump.` +
+        (warningText ? ` ${warningText}${signerText}.` : "")
+    }
+  }
+  return {
+    type: "info" as const,
+    message: "No update available",
+    description: `Tracked source still resolves to ${updateCheck.installed_manifest.pack_version}.`
+  }
+}
+
 export const GovernancePacksTab = () => {
   const [packs, setPacks] = useState<McpHubGovernancePackSummary[]>([])
   const [selectedPackId, setSelectedPackId] = useState<number | null>(null)
@@ -68,12 +207,24 @@ export const GovernancePacksTab = () => {
   const [report, setReport] = useState<McpHubGovernancePackDryRunReport | null>(null)
   const [upgradePlan, setUpgradePlan] = useState<McpHubGovernancePackUpgradePlan | null>(null)
   const [packJson, setPackJson] = useState(DEFAULT_PACK_JSON)
+  const [localSourcePath, setLocalSourcePath] = useState("")
+  const [gitRepoUrl, setGitRepoUrl] = useState("")
+  const [gitRef, setGitRef] = useState("main")
+  const [gitRefKind, setGitRefKind] = useState<McpHubGovernancePackGitRefKind>("branch")
+  const [gitSubpath, setGitSubpath] = useState("packs/researcher")
+  const [preparedSourceCandidate, setPreparedSourceCandidate] = useState<McpHubGovernancePackSourceCandidate | null>(null)
+  const [preparedSourceRequestKey, setPreparedSourceRequestKey] = useState<string | null>(null)
+  const [updateCheck, setUpdateCheck] = useState<McpHubGovernancePackSourceUpdateCheck | null>(null)
+  const [upgradeCandidate, setUpgradeCandidate] = useState<McpHubGovernancePackSourceUpgradePrepareResponse | null>(null)
   const [loadingInventory, setLoadingInventory] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [previewing, setPreviewing] = useState(false)
+  const [previewingSource, setPreviewingSource] = useState(false)
   const [previewingUpgrade, setPreviewingUpgrade] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [importingSource, setImportingSource] = useState(false)
+  const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [executingUpgrade, setExecutingUpgrade] = useState(false)
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -162,6 +313,11 @@ export const GovernancePacksTab = () => {
     }
   }, [selectedPackId])
 
+  useEffect(() => {
+    setUpdateCheck(null)
+    setUpgradeCandidate(null)
+  }, [selectedPackId])
+
   const handlePreview = async () => {
     setSuccessMessage(null)
     if (!parsedPack) {
@@ -183,6 +339,122 @@ export const GovernancePacksTab = () => {
     } finally {
       setPreviewing(false)
     }
+  }
+
+  const previewSourceCandidate = async (source: McpHubGovernancePackSourceRequest, failureMessage: string) => {
+    setPreviewingSource(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      const prepared = await prepareGovernancePackSourceCandidate({ source })
+      setPreparedSourceCandidate(prepared.candidate)
+      setPreparedSourceRequestKey(sourceRequestKey(source))
+      const response = await dryRunGovernancePackSourceCandidate({
+        owner_scope_type: "user",
+        candidate_id: prepared.candidate.id
+      })
+      setReport(response.report)
+    } catch {
+      setPreparedSourceCandidate(null)
+      setPreparedSourceRequestKey(null)
+      setReport(null)
+      setErrorMessage(failureMessage)
+    } finally {
+      setPreviewingSource(false)
+    }
+  }
+
+  const importSourceCandidate = async (source: McpHubGovernancePackSourceRequest, failureMessage: string) => {
+    setImportingSource(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      const requestKey = sourceRequestKey(source)
+      const prepared =
+        preparedSourceCandidate && preparedSourceRequestKey === requestKey
+          ? { candidate: preparedSourceCandidate }
+          : await prepareGovernancePackSourceCandidate({ source })
+      setPreparedSourceCandidate(prepared.candidate)
+      setPreparedSourceRequestKey(requestKey)
+      const response = await importGovernancePackSourceCandidate({
+        owner_scope_type: "user",
+        candidate_id: prepared.candidate.id
+      })
+      setReport(response.report)
+      setSelectedPackId(response.governance_pack_id)
+      setSuccessMessage(`Imported ${response.report.manifest.title} from source.`)
+      await loadInventory()
+    } catch {
+      setErrorMessage(failureMessage)
+    } finally {
+      setImportingSource(false)
+    }
+  }
+
+  const handlePreviewLocalSource = async () => {
+    const resolvedPath = localSourcePath.trim()
+    if (!resolvedPath) {
+      setErrorMessage("Local source path is required.")
+      return
+    }
+    await previewSourceCandidate(
+      {
+        source_type: "local_path",
+        local_path: resolvedPath
+      },
+      "Failed to preview local governance-pack source."
+    )
+  }
+
+  const handleImportLocalSource = async () => {
+    const resolvedPath = localSourcePath.trim()
+    if (!resolvedPath) {
+      setErrorMessage("Local source path is required.")
+      return
+    }
+    await importSourceCandidate(
+      {
+        source_type: "local_path",
+        local_path: resolvedPath
+      },
+      "Failed to import local governance-pack source."
+    )
+  }
+
+  const handlePreviewGitSource = async () => {
+    const repoUrl = gitRepoUrl.trim()
+    if (!repoUrl) {
+      setErrorMessage("Git repository URL is required.")
+      return
+    }
+    await previewSourceCandidate(
+      {
+        source_type: "git",
+        repo_url: repoUrl,
+        ref: gitRef.trim() || null,
+        ref_kind: gitRefKind,
+        subpath: gitSubpath.trim() || null
+      },
+      "Failed to preview Git governance-pack source."
+    )
+  }
+
+  const handleImportGitSource = async () => {
+    const repoUrl = gitRepoUrl.trim()
+    if (!repoUrl) {
+      setErrorMessage("Git repository URL is required.")
+      return
+    }
+    await importSourceCandidate(
+      {
+        source_type: "git",
+        repo_url: repoUrl,
+        ref: gitRef.trim() || null,
+        ref_kind: gitRefKind,
+        subpath: gitSubpath.trim() || null
+      },
+      "Failed to import Git governance-pack source."
+    )
   }
 
   const handleImport = async () => {
@@ -240,23 +512,82 @@ export const GovernancePacksTab = () => {
     }
   }
 
+  const handleCheckForUpdates = async () => {
+    if (!selectedPackId) {
+      return
+    }
+    setCheckingUpdates(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      const response = await checkGovernancePackUpdates(selectedPackId)
+      setUpdateCheck(response)
+    } catch {
+      setUpdateCheck(null)
+      setErrorMessage("Failed to check governance-pack updates.")
+    } finally {
+      setCheckingUpdates(false)
+    }
+  }
+
+  const handlePreviewSourceUpgrade = async () => {
+    if (!selectedPackId) {
+      return
+    }
+    setPreviewingUpgrade(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    try {
+      const prepared = await prepareGovernancePackUpgradeCandidate(selectedPackId)
+      setUpgradeCandidate(prepared)
+      const response = await dryRunGovernancePackSourceUpgrade({
+        source_governance_pack_id: selectedPackId,
+        owner_scope_type: "user",
+        candidate_id: prepared.candidate.id
+      })
+      setUpgradePlan(response.plan)
+      setUpgradeModalOpen(true)
+    } catch {
+      setUpgradePlan(null)
+      setUpgradeCandidate(null)
+      setUpgradeModalOpen(false)
+      setErrorMessage("Failed to preview governance-pack source upgrade.")
+    } finally {
+      setPreviewingUpgrade(false)
+    }
+  }
+
   const handleExecuteUpgrade = async () => {
     setSuccessMessage(null)
-    if (!selectedPackId || !parsedPack || !upgradePlan) {
+    if (!selectedPackId || !upgradePlan) {
       return
     }
     setExecutingUpgrade(true)
     setErrorMessage(null)
     try {
-      const response = await executeGovernancePackUpgrade({
-        source_governance_pack_id: selectedPackId,
-        owner_scope_type: "user",
-        planner_inputs_fingerprint: upgradePlan.planner_inputs_fingerprint,
-        adapter_state_fingerprint: upgradePlan.adapter_state_fingerprint,
-        pack: parsedPack
-      })
+      const response = upgradeCandidate
+        ? await executeGovernancePackSourceUpgrade({
+            source_governance_pack_id: selectedPackId,
+            owner_scope_type: "user",
+            candidate_id: upgradeCandidate.candidate.id,
+            planner_inputs_fingerprint: upgradePlan.planner_inputs_fingerprint,
+            adapter_state_fingerprint: upgradePlan.adapter_state_fingerprint
+          })
+        : parsedPack
+          ? await executeGovernancePackUpgrade({
+              source_governance_pack_id: selectedPackId,
+              owner_scope_type: "user",
+              planner_inputs_fingerprint: upgradePlan.planner_inputs_fingerprint,
+              adapter_state_fingerprint: upgradePlan.adapter_state_fingerprint,
+              pack: parsedPack
+            })
+          : null
+      if (!response) {
+        return
+      }
       setUpgradeModalOpen(false)
       setUpgradePlan(null)
+      setUpgradeCandidate(null)
       setSelectedPackId(response.target_governance_pack_id)
       setSuccessMessage(
         `Executed upgrade ${response.from_pack_version} -> ${response.to_pack_version}.`
@@ -287,9 +618,9 @@ export const GovernancePacksTab = () => {
     [upgradePlan]
   )
   const canExecuteUpgrade =
-    Boolean(parsedPack) &&
     Boolean(selectedPackId) &&
     Boolean(upgradePlan?.upgradeable) &&
+    (Boolean(upgradeCandidate) || Boolean(parsedPack)) &&
     !executingUpgrade
 
   return (
@@ -345,9 +676,47 @@ export const GovernancePacksTab = () => {
                 <Descriptions.Item label="Install state">
                   {getInstallStateTag(selectedPack)}
                 </Descriptions.Item>
+                {selectedPack.source_type ? (
+                  <Descriptions.Item label="Source">
+                    <Space wrap>
+                      {getSourceTypeTag(selectedPack.source_type)}
+                      {getVerificationTag(selectedPack)}
+                    </Space>
+                  </Descriptions.Item>
+                ) : null}
+                {selectedPack.source_location ? (
+                  <Descriptions.Item label="Source location">
+                    <Typography.Text code>{selectedPack.source_location}</Typography.Text>
+                  </Descriptions.Item>
+                ) : null}
+                {selectedPack.source_ref_requested ? (
+                  <Descriptions.Item label="Requested ref">
+                    <Typography.Text code>{selectedPack.source_ref_requested}</Typography.Text>
+                  </Descriptions.Item>
+                ) : null}
+                {selectedPack.source_ref_kind ? (
+                  <Descriptions.Item label="Requested ref kind">
+                    <Typography.Text code>{selectedPack.source_ref_kind}</Typography.Text>
+                  </Descriptions.Item>
+                ) : null}
+                {selectedPack.source_subpath ? (
+                  <Descriptions.Item label="Source subpath">
+                    <Typography.Text code>{selectedPack.source_subpath}</Typography.Text>
+                  </Descriptions.Item>
+                ) : null}
+                {selectedPack.source_commit_resolved ? (
+                  <Descriptions.Item label="Resolved commit">
+                    <Typography.Text code>{selectedPack.source_commit_resolved}</Typography.Text>
+                  </Descriptions.Item>
+                ) : null}
                 <Descriptions.Item label="Digest">
                   <Typography.Text code>{selectedPack.bundle_digest}</Typography.Text>
                 </Descriptions.Item>
+                {selectedPack.pack_content_digest ? (
+                  <Descriptions.Item label="Content digest">
+                    <Typography.Text code>{selectedPack.pack_content_digest}</Typography.Text>
+                  </Descriptions.Item>
+                ) : null}
                 <Descriptions.Item label="Imported Objects">
                   {describeItems(
                     selectedPack.imported_objects.map(
@@ -357,6 +726,30 @@ export const GovernancePacksTab = () => {
                   )}
                 </Descriptions.Item>
               </Descriptions>
+
+              {selectedPack.source_type === "git" ? (
+                <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                  {renderVerificationDetails(selectedPack)}
+                  <Space wrap>
+                    <Button onClick={() => void handleCheckForUpdates()} loading={checkingUpdates}>
+                      Check For Updates
+                    </Button>
+                    {updateCheck?.status === "newer_version_available" ? (
+                      <Button onClick={() => void handlePreviewSourceUpgrade()} loading={previewingUpgrade}>
+                        Preview Source Upgrade
+                      </Button>
+                    ) : null}
+                  </Space>
+                  {updateCheck ? (
+                    <Alert
+                      type={describeUpdateStatus(updateCheck).type}
+                      title={describeUpdateStatus(updateCheck).message}
+                      description={describeUpdateStatus(updateCheck).description}
+                      showIcon
+                    />
+                  ) : null}
+                </Space>
+              ) : null}
 
               <div>
                 <Typography.Title level={5} style={{ marginTop: 0 }}>
@@ -419,6 +812,105 @@ export const GovernancePacksTab = () => {
               Import Pack
             </Button>
           </Space>
+          <Divider style={{ marginBlock: 8 }} />
+          <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              Install From Local Path
+            </Typography.Title>
+            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+              <label htmlFor="mcp-governance-pack-local-path">Local Path</label>
+              <Input
+                id="mcp-governance-pack-local-path"
+                aria-label="Local Path"
+                value={localSourcePath}
+                onChange={(event) => setLocalSourcePath(event.target.value)}
+                placeholder="/srv/packs/researcher-pack"
+              />
+            </Space>
+            <Space>
+              <Button onClick={() => void handlePreviewLocalSource()} loading={previewingSource}>
+                Preview Local Source
+              </Button>
+              <Button onClick={() => void handleImportLocalSource()} loading={importingSource}>
+                Import Local Source
+              </Button>
+            </Space>
+          </Space>
+          <Divider style={{ marginBlock: 8 }} />
+          <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              Install From Git Source
+            </Typography.Title>
+            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+              <label htmlFor="mcp-governance-pack-git-url">Git Repository URL</label>
+              <Input
+                id="mcp-governance-pack-git-url"
+                aria-label="Git Repository URL"
+                value={gitRepoUrl}
+                onChange={(event) => setGitRepoUrl(event.target.value)}
+                placeholder="https://github.com/example/researcher-pack.git"
+              />
+            </Space>
+            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+              <label>Git Ref Kind</label>
+              <Radio.Group
+                value={gitRefKind}
+                onChange={(event) => setGitRefKind(event.target.value as McpHubGovernancePackGitRefKind)}
+              >
+                <Radio.Button value="branch">Branch</Radio.Button>
+                <Radio.Button value="tag">Tag</Radio.Button>
+                <Radio.Button value="commit">Commit</Radio.Button>
+              </Radio.Group>
+            </Space>
+            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+              <label htmlFor="mcp-governance-pack-git-ref">Git Ref</label>
+              <Input
+                id="mcp-governance-pack-git-ref"
+                aria-label="Git Ref"
+                value={gitRef}
+                onChange={(event) => setGitRef(event.target.value)}
+                placeholder="main"
+              />
+            </Space>
+            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+              <label htmlFor="mcp-governance-pack-git-subpath">Git Subpath</label>
+              <Input
+                id="mcp-governance-pack-git-subpath"
+                aria-label="Git Subpath"
+                value={gitSubpath}
+                onChange={(event) => setGitSubpath(event.target.value)}
+                placeholder="packs/researcher"
+              />
+            </Space>
+            <Space>
+              <Button onClick={() => void handlePreviewGitSource()} loading={previewingSource}>
+                Preview Git Source
+              </Button>
+              <Button onClick={() => void handleImportGitSource()} loading={importingSource}>
+                Import Git Source
+              </Button>
+            </Space>
+            {preparedSourceCandidate ? (
+              <Space orientation="vertical" size="small" style={{ width: "100%" }}>
+                <Descriptions bordered column={1} size="small">
+                  <Descriptions.Item label="Prepared candidate">
+                    <Typography.Text code>{preparedSourceCandidate.source_location}</Typography.Text>
+                  </Descriptions.Item>
+                  {preparedSourceCandidate.source_commit_resolved ? (
+                    <Descriptions.Item label="Prepared commit">
+                      <Typography.Text code>{preparedSourceCandidate.source_commit_resolved}</Typography.Text>
+                    </Descriptions.Item>
+                  ) : null}
+                  {preparedSourceCandidate.source_ref_kind ? (
+                    <Descriptions.Item label="Prepared ref kind">
+                      <Typography.Text code>{preparedSourceCandidate.source_ref_kind}</Typography.Text>
+                    </Descriptions.Item>
+                  ) : null}
+                </Descriptions>
+                {renderVerificationDetails(preparedSourceCandidate)}
+              </Space>
+            ) : null}
+          </Space>
           {report ? (
             <Descriptions bordered column={1} size="small">
               <Descriptions.Item label="Pack">{report.manifest.title}</Descriptions.Item>
@@ -470,7 +962,23 @@ export const GovernancePacksTab = () => {
                   {upgradePlan.upgradeable ? "Ready to execute" : "Blocked"}
                 </Tag>
               </Descriptions.Item>
+              {upgradeCandidate ? (
+                <Descriptions.Item label="Prepared source candidate">
+                  <Typography.Text code>{upgradeCandidate.candidate.source_location}</Typography.Text>
+                </Descriptions.Item>
+              ) : null}
+              {upgradeCandidate?.candidate.source_commit_resolved ? (
+                <Descriptions.Item label="Prepared commit">
+                  <Typography.Text code>{upgradeCandidate.candidate.source_commit_resolved}</Typography.Text>
+                </Descriptions.Item>
+              ) : null}
+              {upgradeCandidate?.candidate.source_ref_kind ? (
+                <Descriptions.Item label="Prepared ref kind">
+                  <Typography.Text code>{upgradeCandidate.candidate.source_ref_kind}</Typography.Text>
+                </Descriptions.Item>
+              ) : null}
             </Descriptions>
+            {upgradeCandidate ? renderVerificationDetails(upgradeCandidate.candidate) : null}
 
             {modifiedDiffs.length ? (
               <div>

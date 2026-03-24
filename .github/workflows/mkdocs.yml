@@ -58,6 +58,9 @@ jobs:
           count=$(find Docs/Published -type f -name "*.md" | wc -l)
           echo "Markdown files found: $count"
           [ "$count" -gt 5 ] || { echo "Not enough content in Docs/Published"; exit 1; }
+      - name: Check public/private docs boundary
+        run: |
+          python Helper_Scripts/docs/check_public_private_boundary.py
       - name: Build site (strict)
         run: |
           mkdocs build --strict

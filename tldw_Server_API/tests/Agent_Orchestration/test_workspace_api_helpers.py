@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -19,25 +20,61 @@ from tldw_Server_API.app.services.mcp_hub_workspace_root_resolver import (
 
 class TestValidateWorkspaceRoot:
     def test_valid_absolute_path(self):
+        def mock_config(section, key, default=""):
+            if section == "ACP-WORKSPACE" and key == "allowed_base_paths":
+                return "/tmp"
+            return default
+
         from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _validate_workspace_root
-        result = _validate_workspace_root("/tmp")
+
+        with patch(
+            "tldw_Server_API.app.core.config.get_config_value",
+            side_effect=mock_config,
+        ):
+            result = _validate_workspace_root("/tmp")
         assert result == "/private/tmp" or result == "/tmp"  # macOS resolves /tmp
 
     def test_expands_user_home(self):
+        def mock_config(section, key, default=""):
+            if section == "ACP-WORKSPACE" and key == "allowed_base_paths":
+                return str(Path.home())
+            return default
+
         from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _validate_workspace_root
-        result = _validate_workspace_root("~/")
-        # Should be an absolute path, not start with ~
+
+        with patch(
+            "tldw_Server_API.app.core.config.get_config_value",
+            side_effect=mock_config,
+        ):
+            result = _validate_workspace_root("~/")
         assert not result.startswith("~")
         assert result.startswith("/")
 
     def test_resolves_relative_components(self):
+        def mock_config(section, key, default=""):
+            if section == "ACP-WORKSPACE" and key == "allowed_base_paths":
+                return "/tmp"
+            return default
+
         from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _validate_workspace_root
-        result = _validate_workspace_root("/tmp/../tmp")
-        # Should resolve to /tmp (or /private/tmp on macOS)
+
+        with patch(
+            "tldw_Server_API.app.core.config.get_config_value",
+            side_effect=mock_config,
+        ):
+            result = _validate_workspace_root("/tmp/../tmp")
         assert ".." not in result
 
+    def test_rejects_relative_root_path(self):
+        from fastapi import HTTPException
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _validate_workspace_root
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_workspace_root("relative/path")
+
+        assert exc_info.value.status_code == 400
+
     def test_allowed_base_paths_enforcement(self):
-        """When allowed_base_paths is configured, paths outside it should be rejected."""
         from fastapi import HTTPException
 
         def mock_config(section, key, default=""):
@@ -54,8 +91,9 @@ class TestValidateWorkspaceRoot:
                 _validate_workspace_root("/not/allowed/path")
             assert exc_info.value.status_code == 403
 
-    def test_empty_allowed_base_paths_allows_all(self):
-        """Empty allowed_base_paths should allow any path."""
+    def test_empty_allowed_base_paths_rejects_workspace_creation(self):
+        from fastapi import HTTPException
+
         def mock_config(section, key, default=""):
             if section == "ACP-WORKSPACE" and key == "allowed_base_paths":
                 return ""
@@ -66,9 +104,75 @@ class TestValidateWorkspaceRoot:
             side_effect=mock_config,
         ):
             from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _validate_workspace_root
-            # Should not raise
-            result = _validate_workspace_root("/tmp")
-            assert result.startswith("/")
+            with pytest.raises(HTTPException) as exc_info:
+                _validate_workspace_root("/tmp")
+            assert exc_info.value.status_code == 503
+
+
+class TestResolveDispatchCwd:
+    def test_relative_cwd_resolves_inside_workspace_root(self, tmp_path):
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _resolve_dispatch_cwd
+
+        workspace_root = tmp_path / "workspace"
+        nested = workspace_root / "nested"
+        nested.mkdir(parents=True)
+
+        def mock_config(section, key, default=""):
+            if section == "ACP-WORKSPACE" and key == "allowed_base_paths":
+                return str(tmp_path)
+            return default
+
+        with patch(
+            "tldw_Server_API.app.core.config.get_config_value",
+            side_effect=mock_config,
+        ):
+            result = _resolve_dispatch_cwd("nested", workspace_root=str(workspace_root))
+
+        assert result == str(nested.resolve())
+
+    def test_relative_cwd_cannot_escape_workspace_root(self, tmp_path):
+        from fastapi import HTTPException
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _resolve_dispatch_cwd
+
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+
+        def mock_config(section, key, default=""):
+            if section == "ACP-WORKSPACE" and key == "allowed_base_paths":
+                return str(tmp_path)
+            return default
+
+        with patch(
+            "tldw_Server_API.app.core.config.get_config_value",
+            side_effect=mock_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                _resolve_dispatch_cwd("../outside", workspace_root=str(workspace_root))
+
+        assert exc_info.value.status_code == 403
+
+    def test_absolute_cwd_override_is_rejected_when_workspace_root_present(self, tmp_path):
+        from fastapi import HTTPException
+        from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import _resolve_dispatch_cwd
+
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        nested = workspace_root / "nested"
+        nested.mkdir()
+
+        def mock_config(section, key, default=""):
+            if section == "ACP-WORKSPACE" and key == "allowed_base_paths":
+                return str(tmp_path)
+            return default
+
+        with patch(
+            "tldw_Server_API.app.core.config.get_config_value",
+            side_effect=mock_config,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                _resolve_dispatch_cwd(str(nested.resolve()), workspace_root=str(workspace_root))
+
+        assert exc_info.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

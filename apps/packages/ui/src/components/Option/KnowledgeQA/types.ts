@@ -26,6 +26,8 @@ export type PinnedSourceFilters = {
   noteIds: string[]
 }
 
+export type ThreadHydrationResult = boolean | "terminal"
+
 // Retrieved document with citation info
 export type RagResult = {
   id?: string
@@ -217,8 +219,8 @@ export type KnowledgeQAActions = {
   // Thread actions
   createNewThread: (title?: string) => Promise<string>
   startNewTopic: () => Promise<string>
-  selectThread: (threadId: string) => Promise<boolean>
-  selectSharedThread: (shareToken: string) => Promise<boolean>
+  selectThread: (threadId: string) => Promise<ThreadHydrationResult>
+  selectSharedThread: (shareToken: string) => Promise<ThreadHydrationResult>
   askFollowUp: (question: string) => Promise<void>
   branchFromTurn: (messageId: string) => Promise<void>
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Alert, Button, Card, Checkbox, Empty, List, Space, Tag, Typography } from "antd"
+import { Alert, Button, Card, Checkbox, Empty, Space, Tag, Typography } from "antd"
 
 import {
   createPermissionProfile,
@@ -444,64 +444,66 @@ export const PermissionProfilesTab = () => {
         </Card>
       ) : null}
 
-      <List
-        bordered
-        loading={loading}
-        dataSource={profiles}
-        locale={{ emptyText: <Empty description="No permission profiles yet" /> }}
-        renderItem={(profile) => (
-          <List.Item>
-            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
-              <Space wrap>
-                <Typography.Text strong>{profile.name}</Typography.Text>
-                <Tag>{profile.owner_scope_type}</Tag>
-                <Tag color="blue">{profile.mode}</Tag>
-                {profile.is_active ? <Tag color="green">active</Tag> : <Tag>inactive</Tag>}
-                {profile.path_scope_object_id ? (
-                  <Tag color="purple">
-                    {`path scope ${
-                      pathScopeObjects.find((row) => row.id === profile.path_scope_object_id)?.name ||
-                      profile.path_scope_object_id
-                    }`}
-                  </Tag>
+      {loading ? (
+        <Card loading size="small" />
+      ) : profiles.length === 0 ? (
+        <Empty description="No permission profiles yet" />
+      ) : (
+        <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+          {profiles.map((profile) => (
+            <Card key={profile.id} size="small">
+              <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+                <Space wrap>
+                  <Typography.Text strong>{profile.name}</Typography.Text>
+                  <Tag>{profile.owner_scope_type}</Tag>
+                  <Tag color="blue">{profile.mode}</Tag>
+                  {profile.is_active ? <Tag color="green">active</Tag> : <Tag>inactive</Tag>}
+                  {profile.path_scope_object_id ? (
+                    <Tag color="purple">
+                      {`path scope ${
+                        pathScopeObjects.find((row) => row.id === profile.path_scope_object_id)?.name ||
+                        profile.path_scope_object_id
+                      }`}
+                    </Tag>
+                  ) : null}
+                  <Button size="small" onClick={() => openForEdit(profile)}>
+                    Edit
+                  </Button>
+                  <Button size="small" danger onClick={() => void handleDelete(profile.id)}>
+                    Delete
+                  </Button>
+                </Space>
+                {profile.description ? (
+                  <Typography.Text type="secondary">{profile.description}</Typography.Text>
                 ) : null}
-                <Button size="small" onClick={() => openForEdit(profile)}>
-                  Edit
-                </Button>
-                <Button size="small" danger onClick={() => void handleDelete(profile.id)}>
-                  Delete
-                </Button>
+                <Space wrap>
+                  {(profile.policy_document.capabilities || []).map((capability) => (
+                    <Tag key={capability}>{capability}</Tag>
+                  ))}
+                  {(profile.policy_document.allowed_tools || []).map((tool) => (
+                    <Tag key={tool} color="green">
+                      {tool}
+                    </Tag>
+                  ))}
+                  {(profile.policy_document.denied_tools || []).map((tool) => (
+                    <Tag key={tool} color="red">
+                      {tool}
+                    </Tag>
+                  ))}
+                  {getPathScopeLabel(profile.policy_document.path_scope_mode) ? (
+                    <Tag color="cyan">{getPathScopeLabel(profile.policy_document.path_scope_mode)}</Tag>
+                  ) : null}
+                  {getPathAllowlistSummary(profile.policy_document.path_allowlist_prefixes) ? (
+                    <Tag color="blue">
+                      {`paths ${getPathAllowlistSummary(profile.policy_document.path_allowlist_prefixes)}`}
+                    </Tag>
+                  ) : null}
+                </Space>
               </Space>
-              {profile.description ? (
-                <Typography.Text type="secondary">{profile.description}</Typography.Text>
-              ) : null}
-              <Space wrap>
-                {(profile.policy_document.capabilities || []).map((capability) => (
-                  <Tag key={capability}>{capability}</Tag>
-                ))}
-                {(profile.policy_document.allowed_tools || []).map((tool) => (
-                  <Tag key={tool} color="green">
-                    {tool}
-                  </Tag>
-                ))}
-                {(profile.policy_document.denied_tools || []).map((tool) => (
-                  <Tag key={tool} color="red">
-                    {tool}
-                  </Tag>
-                ))}
-                {getPathScopeLabel(profile.policy_document.path_scope_mode) ? (
-                  <Tag color="cyan">{getPathScopeLabel(profile.policy_document.path_scope_mode)}</Tag>
-                ) : null}
-                {getPathAllowlistSummary(profile.policy_document.path_allowlist_prefixes) ? (
-                  <Tag color="blue">
-                    {`paths ${getPathAllowlistSummary(profile.policy_document.path_allowlist_prefixes)}`}
-                  </Tag>
-                ) : null}
-              </Space>
-            </Space>
-          </List.Item>
-        )}
-      />
+            </Card>
+          ))}
+        </Space>
+      )}
     </Space>
   )
 }

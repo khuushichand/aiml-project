@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { test, expect, seedAuth, AUTH_CONFIG } from './smoke.setup';
+import { waitForAppShell } from '../utils/helpers';
 
 const LOAD_TIMEOUT = 30_000;
-const NETWORK_IDLE_TIMEOUT = 15_000;
 const RUNTIME_OVERLAY_PATTERNS = [
   /Runtime(?:\s+\w+)?\s+Error/i,
   /Runtime SyntaxError/i,
@@ -95,7 +95,7 @@ test.describe('Stage 1 route matrix capture', () => {
         status = 0;
       }
 
-      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
+      await waitForAppShell(page, LOAD_TIMEOUT);
 
       const finalPath = getFinalPath(page.url());
       const redirected = finalPath !== '' && finalPath !== route;

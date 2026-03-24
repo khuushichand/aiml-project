@@ -68,7 +68,9 @@ test.describe("Speech Playground", () => {
       // Switch to each mode and verify no crashes
       for (const mode of ["Speak", "Listen", "Round-trip"] as const) {
         await speech.selectMode(mode)
-        await authedPage.waitForTimeout(500)
+        await expect(
+          authedPage.locator(".ant-segmented .ant-segmented-item-selected").getByText(mode)
+        ).toBeVisible({ timeout: 5_000 })
       }
 
       await assertNoCriticalErrors(diagnostics)

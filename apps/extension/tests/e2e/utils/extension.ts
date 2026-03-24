@@ -3,6 +3,7 @@ import path from 'path'
 import fs from 'fs'
 
 import { resolveExtensionId } from './extension-id'
+import { prioritizeExtensionBuildCandidates } from './extension-paths'
 
 async function waitForStorageSeed(page: Page) {
   await page.waitForFunction(
@@ -130,7 +131,16 @@ export interface LaunchWithExtensionResult {
   extensionId: string
   optionsUrl: string
   sidepanelUrl: string
-  openSidepanel: () => Promise<Page>
+  openSidepanel: (target?: string) => Promise<Page>
+}
+
+const resolveSidepanelUrl = (baseUrl: string, target?: string): string => {
+  const normalized = String(target || "").trim()
+  if (!normalized) return baseUrl
+  if (normalized.startsWith("?") || normalized.startsWith("#")) {
+    return `${baseUrl}${normalized}`
+  }
+  return `${baseUrl}#${normalized.startsWith("/") ? normalized : `/${normalized}`}`
 }
 
 export async function launchWithExtension(
@@ -157,11 +167,11 @@ export async function launchWithExtension(
   }
 
   // Pick the first existing extension build so tests work whether dev output or prod build is present.
-  const rawCandidates = [
+  const rawCandidates = prioritizeExtensionBuildCandidates([
     extensionPath,
     path.resolve('.output/chrome-mv3'),
     path.resolve('build/chrome-mv3')
-  ].filter((p) => p && fs.existsSync(p))
+  ]).filter((p) => p && fs.existsSync(p))
   const candidates = rawCandidates.filter(isExtensionBuildDir)
   const allowDev = ['1', 'true', 'yes'].includes(
     String(process.env.TLDW_E2E_ALLOW_DEV || '').toLowerCase()
@@ -478,9 +488,11 @@ export async function launchWithExtension(
     )
   }
 
-  async function openSidepanel() {
+  async function openSidepanel(target?: string) {
     const p = await context.newPage()
-    await p.goto(sidepanelUrl, { waitUntil: 'domcontentloaded' })
+    await p.goto(resolveSidepanelUrl(sidepanelUrl, target), {
+      waitUntil: 'domcontentloaded'
+    })
     // Ensure the sidepanel tab is visible; some UI only renders when visible.
     try {
       await p.bringToFront()

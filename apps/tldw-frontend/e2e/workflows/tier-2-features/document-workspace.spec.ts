@@ -90,12 +90,24 @@ test.describe("Document Workspace", () => {
       if (!toggleVisible) return
 
       // Click to toggle left sidebar (collapse)
+      const labelBefore = await workspace.toggleLeftButton.getAttribute("aria-label")
       await workspace.toggleLeftButton.click()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          () => workspace.toggleLeftButton.getAttribute("aria-label"),
+          { timeout: 5_000 }
+        )
+        .not.toBe(labelBefore)
 
       // Click again to toggle back (expand)
+      const labelAfterFirstToggle = await workspace.toggleLeftButton.getAttribute("aria-label")
       await workspace.toggleLeftButton.click()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          () => workspace.toggleLeftButton.getAttribute("aria-label"),
+          { timeout: 5_000 }
+        )
+        .not.toBe(labelAfterFirstToggle)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -114,12 +126,24 @@ test.describe("Document Workspace", () => {
       if (!toggleVisible) return
 
       // Click to toggle right panel (collapse)
+      const labelBefore = await workspace.toggleRightButton.getAttribute("aria-label")
       await workspace.toggleRightButton.click()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          () => workspace.toggleRightButton.getAttribute("aria-label"),
+          { timeout: 5_000 }
+        )
+        .not.toBe(labelBefore)
 
       // Click again to toggle back (expand)
+      const labelAfterFirstToggle = await workspace.toggleRightButton.getAttribute("aria-label")
       await workspace.toggleRightButton.click()
-      await authedPage.waitForTimeout(500)
+      await expect
+        .poll(
+          () => workspace.toggleRightButton.getAttribute("aria-label"),
+          { timeout: 5_000 }
+        )
+        .not.toBe(labelAfterFirstToggle)
 
       await assertNoCriticalErrors(diagnostics)
     })

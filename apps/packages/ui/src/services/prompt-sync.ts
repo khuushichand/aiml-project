@@ -24,8 +24,10 @@ import {
   Prompt as ServerPrompt,
   PromptCreatePayload,
   PromptUpdatePayload,
-  Project
+  Project,
+  StandardResponse
 } from '@/services/prompt-studio'
+import type { ApiSendResponse } from '@/services/api-send'
 import {
   getPromptStudioDefaults,
   setPromptStudioDefaults
@@ -72,9 +74,21 @@ type ComparablePromptPayload = {
 const isValidProjectId = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0
 
-const unwrapResponseData = <T>(response: unknown): T | null => {
-  const payload = response as any
-  return (payload?.data?.data || payload?.data || null) as T | null
+/**
+ * Unwrap the nested `ApiSendResponse<StandardResponse<T>>` envelope.
+ *
+ * Server endpoints return `{ ok, data: { success, data: T } }`.  Some
+ * endpoints omit the inner `StandardResponse` wrapper and place the
+ * payload directly in `data`.  This helper handles both shapes.
+ */
+const unwrapResponseData = <T>(
+  response: ApiSendResponse<StandardResponse<T>> | ApiSendResponse<T>
+): T | null => {
+  const outer = response?.data
+  if (outer && typeof outer === 'object' && 'data' in outer) {
+    return (outer as StandardResponse<T>).data ?? null
+  }
+  return (outer as T) ?? null
 }
 
 const toText = (value: unknown): string => (typeof value === 'string' ? value : '')
@@ -424,8 +438,9 @@ export async function pushToStudio(
     if (local.serverId) {
       const updatePayload = localToServerUpdatePayload(local)
       const response = await updateServerPrompt(local.serverId, updatePayload)
+      const serverPrompt = unwrapResponseData<ServerPrompt>(response)
 
-      if (!(response as any)?.data?.data && !(response as any)?.data?.id) {
+      if (!serverPrompt) {
         return {
           success: false,
           localId,
@@ -435,7 +450,6 @@ export async function pushToStudio(
         }
       }
 
-      const serverPrompt = (response as any)?.data?.data || (response as any)?.data
       const updateFields = serverToLocalFields(serverPrompt)
       await db.prompts.update(localId, updateFields)
 
@@ -450,8 +464,9 @@ export async function pushToStudio(
     // Create new server prompt
     const createPayload = localToServerPayload(local, projectId)
     const response = await createServerPrompt(createPayload)
+    const serverPrompt = unwrapResponseData<ServerPrompt>(response)
 
-    if (!(response as any)?.data?.data && !(response as any)?.data?.id) {
+    if (!serverPrompt) {
       return {
         success: false,
         localId,
@@ -460,7 +475,6 @@ export async function pushToStudio(
       }
     }
 
-    const serverPrompt = (response as any)?.data?.data || (response as any)?.data
     const updateFields = serverToLocalFields(serverPrompt)
     updateFields.studioProjectId = projectId
     await db.prompts.update(localId, updateFields)
@@ -471,11 +485,11 @@ export async function pushToStudio(
       serverId: serverPrompt.id,
       syncStatus: 'synced'
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       localId,
-      error: error?.message || 'Push failed',
+      error: error instanceof Error ? error.message : 'Push failed',
       syncStatus: 'pending'
     }
   }
@@ -494,7 +508,7 @@ export async function pullFromStudio(
 ): Promise<SyncResult> {
   try {
     const response = await getServerPrompt(serverId)
-    const serverPrompt = (response as any)?.data?.data || (response as any)?.data
+    const serverPrompt = unwrapResponseData<ServerPrompt>(response)
 
     if (!serverPrompt) {
       return {
@@ -546,12 +560,12 @@ export async function pullFromStudio(
       serverId,
       syncStatus: 'synced'
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       localId: existingLocalId || '',
       serverId,
-      error: error?.message || 'Pull failed',
+      error: error instanceof Error ? error.message : 'Pull failed',
       syncStatus: 'local'
     }
   }
@@ -581,7 +595,7 @@ export async function linkPrompts(
     }
 
     const response = await getServerPrompt(serverId)
-    const serverPrompt = (response as any)?.data?.data || (response as any)?.data
+    const serverPrompt = unwrapResponseData<ServerPrompt>(response)
 
     if (!serverPrompt) {
       return {
@@ -609,12 +623,12 @@ export async function linkPrompts(
       serverId,
       syncStatus: 'pending'
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       localId,
       serverId,
-      error: error?.message || 'Link failed',
+      error: error instanceof Error ? error.message : 'Link failed',
       syncStatus: 'local'
     }
   }
@@ -651,11 +665,11 @@ export async function unlinkPrompt(localId: string): Promise<SyncResult> {
       localId,
       syncStatus: 'local'
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
       localId,
-      error: error?.message || 'Unlink failed',
+      error: error instanceof Error ? error.message : 'Unlink failed',
       syncStatus: local?.syncStatus || 'local'
     }
   }
@@ -686,7 +700,7 @@ export async function getSyncStatus(localId: string): Promise<{
   // Check for conflict by comparing timestamps and content fingerprints.
   try {
     const response = await getServerPrompt(local.serverId)
-    const serverPrompt = (response as any)?.data?.data || (response as any)?.data
+    const serverPrompt = unwrapResponseData<ServerPrompt>(response)
 
     if (!serverPrompt) {
       // Server prompt deleted
@@ -729,7 +743,7 @@ export async function getConflictInfo(localId: string): Promise<ConflictInfo | n
 
   try {
     const response = await getServerPrompt(local.serverId)
-    const serverPrompt = (response as any)?.data?.data || (response as any)?.data
+    const serverPrompt = unwrapResponseData<ServerPrompt>(response)
     if (!serverPrompt) return null
 
     return {
@@ -830,7 +844,7 @@ export async function getPromptsByProject(projectId: number): Promise<LocalPromp
 export async function getAvailableProjects(): Promise<Project[]> {
   try {
     const response = await listProjects({ per_page: 100 })
-    return (response as any)?.data?.data || []
+    return unwrapResponseData<Project[]>(response) ?? []
   } catch {
     return []
   }

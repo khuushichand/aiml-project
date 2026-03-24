@@ -2792,6 +2792,15 @@
   "header_modeWatchlists": {
     "message": "Watchlists"
   },
+  "header_integrations": {
+    "message": "Integrations"
+  },
+  "header_scheduledTasks": {
+    "message": "Scheduled Tasks"
+  },
+  "header_adminIntegrations": {
+    "message": "Workspace Integrations"
+  },
   "header_modeKanban": {
     "message": "Kanban Playground"
   },

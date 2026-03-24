@@ -10,7 +10,7 @@ import hashlib
 import inspect
 import json
 import os
-import random
+import secrets
 import re
 import time
 import uuid
@@ -32,6 +32,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from loguru import logger
+from pydantic import ValidationError
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -40,6 +41,9 @@ from tldw_Server_API.app.api.v1.API_Deps.llm_routing_deps import (
 )
 
 # Schemas
+from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
+    ConversationScopeParams,
+)
 from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     AuthorNoteInfoResponse,
     CharacterChatCompletionPrepRequest,
@@ -48,6 +52,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
     CharacterChatCompletionV2Response,
     CharacterChatStreamPersistRequest,
     CharacterChatStreamPersistResponse,
+    ChatLinkedResearchRunsListResponse,
     ChatSessionCreate,
     ChatSessionListResponse,
     ChatSessionResponse,
@@ -134,6 +139,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.DB_Management.ResearchSessionsDB import ResearchSessionsDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.LLM_Calls.routing import (
     InMemoryRoutingDecisionStore,
     RouterRequest,
@@ -150,6 +157,7 @@ from tldw_Server_API.app.core.LLM_Calls.routing.candidate_pool import (
     build_candidate_pool,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.Research.service import ResearchService
 from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
 
 # Completion schemas centralized in schemas/chat_session_schemas.py
@@ -526,8 +534,9 @@ def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
 def _verify_chat_ownership(
     conversation: Optional[dict[str, Any]],
     user_id: Any,
-    chat_id: str
-) -> None:
+    chat_id: str,
+    scope: ConversationScopeParams | None = None,
+) -> dict[str, Any]:
     """Verify that the user owns the chat session.
 
     Args:
@@ -554,9 +563,48 @@ def _verify_chat_ownership(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this chat session"
         )
+    expected_scope = scope or ConversationScopeParams()
+    conversation_scope = conversation.get("scope_type") or "global"
+    conversation_workspace_id = conversation.get("workspace_id")
+    if conversation_scope != expected_scope.scope_type:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat session {chat_id} not found",
+        )
+    if (
+        expected_scope.scope_type == "workspace"
+        and conversation_workspace_id != expected_scope.workspace_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat session {chat_id} not found",
+        )
+    return conversation
+
+
+def _resolve_chat_scope(
+    scope_type: Literal["global", "workspace"] | None,
+    workspace_id: str | None,
+) -> ConversationScopeParams:
+    try:
+        return ConversationScopeParams(
+            scope_type=scope_type or "global",
+            workspace_id=workspace_id,
+        )
+    except ValidationError as exc:
+        detail = exc.errors()[0].get("msg") if exc.errors() else str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        ) from exc
 
 
 router = APIRouter()
+
+
+def _get_research_service() -> ResearchService:
+    """Return the default deep research service for chat-linked status reads."""
+    return ResearchService(research_db_path=None, outputs_dir=None, job_manager=None)
 
 # Simple per-chat throttle used for legacy /complete endpoint in tests (TEST_MODE only)
 # Bounded to prevent unbounded memory growth - uses constants from Character_Chat.constants
@@ -631,6 +679,23 @@ class _BoundedThrottleCache:
 
 _complete_windows = _BoundedThrottleCache()
 
+_MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS = 5
+_MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS = 5
+_MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY = 3
+_DEEP_RESEARCH_ATTACHMENT_ALLOWED_KEYS = {
+    "run_id",
+    "query",
+    "question",
+    "outline",
+    "key_claims",
+    "unresolved_questions",
+    "verification_summary",
+    "source_trust_summary",
+    "research_url",
+    "attached_at",
+    "updatedAt",
+}
+
 
 def reset_complete_windows() -> None:
     """Reset legacy /complete throttle cache (useful in tests)."""
@@ -654,6 +719,8 @@ def _convert_db_conversation_to_response(
         assistant_id = str(character_id)
     return ChatSessionResponse(
         id=conv_data.get('id', ''),
+        scope_type=conv_data.get("scope_type") or "global",
+        workspace_id=conv_data.get("workspace_id"),
         character_id=character_id,
         assistant_kind=assistant_kind,
         assistant_id=assistant_id,
@@ -689,8 +756,14 @@ def _convert_db_message_to_response(msg_data: dict[str, Any]) -> MessageResponse
         version=msg_data.get('version', 1)
     )
 
-def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
+def _validate_chat_settings_payload(
+    settings: dict[str, Any],
+    *,
+    owner_user_id: str | None = None,
+    strip_invalid_deep_research: bool = False,
+) -> dict[str, Any]:
     """Validate settings payload size, shape, and known enum fields."""
+    settings = dict(settings)
     try:
         encoded = json.dumps(settings).encode("utf-8")
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
@@ -748,6 +821,12 @@ def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid updatedAt. Expected ISO timestamp string"
         )
+
+    settings = _normalize_chat_settings_deep_research_fields(
+        settings,
+        owner_user_id=owner_user_id,
+        strip_invalid_reference=strip_invalid_deep_research,
+    )
 
     memory_by_id = settings.get("characterMemoryById")
     if memory_by_id is not None:
@@ -869,6 +948,19 @@ def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Invalid summary.updatedAt. Expected ISO timestamp string"
             )
+    try:
+        normalized_encoded = json.dumps(settings).encode("utf-8")
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid settings payload: {exc}"
+        ) from exc
+    if len(normalized_encoded) > MAX_CHAT_SETTINGS_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Settings payload exceeds {MAX_CHAT_SETTINGS_BYTES} bytes"
+        )
+    return settings
 
 
 def _parse_iso_timestamp(value: Any) -> Optional[float]:
@@ -885,6 +977,428 @@ def _parse_iso_timestamp(value: Any) -> Optional[float]:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.timestamp()
+
+
+def _build_canonical_research_attachment_url(run_id: str) -> str:
+    return f"/research?run={run_id}"
+
+
+def _load_owned_research_attachment_run(
+    *,
+    owner_user_id: str,
+    run_id: str,
+) -> Any | None:
+    try:
+        db = ResearchSessionsDB(DatabasePaths.get_research_sessions_db_path(owner_user_id))
+        session = db.get_session(run_id)
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+        return None
+    if session is None or str(session.owner_user_id) != str(owner_user_id):
+        return None
+    return session
+
+
+def _validate_deep_research_attachment(
+    value: Any,
+    *,
+    detail_prefix: str,
+    owner_user_id: str | None = None,
+    strip_invalid_reference: bool = False,
+) -> Optional[dict[str, Any]]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {detail_prefix}. Expected object or null",
+        )
+
+    unknown_keys = sorted(set(value.keys()) - _DEEP_RESEARCH_ATTACHMENT_ALLOWED_KEYS)
+    if unknown_keys:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Invalid {detail_prefix}. Unknown keys: "
+                + ", ".join(unknown_keys)
+            ),
+        )
+
+    normalized: dict[str, Any] = {}
+    required_string_fields = ("run_id", "query", "question", "research_url")
+    for key in required_string_fields:
+        raw = value.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {detail_prefix}.{key}. Expected non-empty string",
+            )
+        normalized[key] = raw.strip()
+
+    for timestamp_key in ("attached_at", "updatedAt"):
+        raw = value.get(timestamp_key)
+        if not isinstance(raw, str) or _parse_iso_timestamp(raw) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.{timestamp_key}. "
+                    "Expected ISO timestamp string"
+                ),
+            )
+        normalized[timestamp_key] = raw
+
+    outline = value.get("outline")
+    if not isinstance(outline, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {detail_prefix}.outline. Expected array",
+        )
+    normalized_outline: list[dict[str, str]] = []
+    for index, section in enumerate(outline):
+        if not isinstance(section, dict) or set(section.keys()) != {"title"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.outline[{index}]. "
+                    "Expected object with title"
+                ),
+            )
+        title = section.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.outline[{index}].title. "
+                    "Expected non-empty string"
+                ),
+            )
+        normalized_outline.append({"title": title.strip()})
+    normalized["outline"] = normalized_outline
+
+    key_claims = value.get("key_claims")
+    if not isinstance(key_claims, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {detail_prefix}.key_claims. Expected array",
+        )
+    if len(key_claims) > _MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Invalid {detail_prefix}.key_claims. "
+                f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_CLAIMS} entries"
+            ),
+        )
+    normalized_key_claims: list[dict[str, str]] = []
+    for index, claim in enumerate(key_claims):
+        if not isinstance(claim, dict) or set(claim.keys()) != {"text"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.key_claims[{index}]. "
+                    "Expected object with text"
+                ),
+            )
+        text = claim.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.key_claims[{index}].text. "
+                    "Expected non-empty string"
+                ),
+            )
+        normalized_key_claims.append({"text": text.strip()})
+    normalized["key_claims"] = normalized_key_claims
+
+    unresolved_questions = value.get("unresolved_questions")
+    if not isinstance(unresolved_questions, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid {detail_prefix}.unresolved_questions. Expected array",
+        )
+    if len(unresolved_questions) > _MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Invalid {detail_prefix}.unresolved_questions. "
+                f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_UNRESOLVED_QUESTIONS} entries"
+            ),
+        )
+    normalized_unresolved_questions: list[str] = []
+    for index, question in enumerate(unresolved_questions):
+        if not isinstance(question, str) or not question.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.unresolved_questions[{index}]. "
+                    "Expected non-empty string"
+                ),
+            )
+        normalized_unresolved_questions.append(question.strip())
+    normalized["unresolved_questions"] = normalized_unresolved_questions
+
+    verification_summary = value.get("verification_summary")
+    if verification_summary is not None:
+        if not isinstance(verification_summary, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {detail_prefix}.verification_summary. Expected object",
+            )
+        if set(verification_summary.keys()) - {"unsupported_claim_count"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.verification_summary. "
+                    "Unsupported keys present"
+                ),
+            )
+        unsupported_claim_count = verification_summary.get("unsupported_claim_count")
+        if unsupported_claim_count is not None and (
+            isinstance(unsupported_claim_count, bool)
+            or not isinstance(unsupported_claim_count, int)
+            or unsupported_claim_count < 0
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.verification_summary"
+                    ".unsupported_claim_count. Expected non-negative integer"
+                ),
+            )
+        normalized["verification_summary"] = (
+            {"unsupported_claim_count": unsupported_claim_count}
+            if unsupported_claim_count is not None
+            else {}
+        )
+    else:
+        normalized["verification_summary"] = None
+
+    source_trust_summary = value.get("source_trust_summary")
+    if source_trust_summary is not None:
+        if not isinstance(source_trust_summary, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {detail_prefix}.source_trust_summary. Expected object",
+            )
+        if set(source_trust_summary.keys()) - {"high_trust_count"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.source_trust_summary. "
+                    "Unsupported keys present"
+                ),
+            )
+        high_trust_count = source_trust_summary.get("high_trust_count")
+        if high_trust_count is not None and (
+            isinstance(high_trust_count, bool)
+            or not isinstance(high_trust_count, int)
+            or high_trust_count < 0
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.source_trust_summary"
+                    ".high_trust_count. Expected non-negative integer"
+                ),
+            )
+        normalized["source_trust_summary"] = (
+            {"high_trust_count": high_trust_count}
+            if high_trust_count is not None
+            else {}
+        )
+    else:
+        normalized["source_trust_summary"] = None
+
+    if owner_user_id is not None:
+        session = _load_owned_research_attachment_run(
+            owner_user_id=str(owner_user_id),
+            run_id=normalized["run_id"],
+        )
+        if session is None:
+            if strip_invalid_reference:
+                return None
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.run_id. "
+                    "Expected an owned completed deep research run"
+                ),
+            )
+        if str(session.status) != "completed":
+            if strip_invalid_reference:
+                return None
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid {detail_prefix}.run_id. "
+                    "Attachment must reference a completed deep research run"
+                ),
+            )
+
+    normalized["research_url"] = _build_canonical_research_attachment_url(normalized["run_id"])
+    return normalized
+
+
+def _validate_deep_research_attachment_history(
+    value: Any,
+    *,
+    owner_user_id: str | None = None,
+    strip_invalid_reference: bool = False,
+) -> Optional[list[dict[str, Any]]]:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid deepResearchAttachmentHistory. Expected array or null",
+        )
+    if len(value) > _MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Invalid deepResearchAttachmentHistory. "
+                f"Maximum {_MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY} entries"
+            ),
+        )
+    normalized_history: list[dict[str, Any]] = []
+    for index, entry in enumerate(value):
+        normalized_entry = _validate_deep_research_attachment(
+            entry,
+            detail_prefix=f"deepResearchAttachmentHistory[{index}]",
+            owner_user_id=owner_user_id,
+            strip_invalid_reference=strip_invalid_reference,
+        )
+        if normalized_entry is not None:
+            normalized_history.append(normalized_entry)
+    return normalized_history
+
+
+def _normalize_chat_settings_deep_research_fields(
+    settings: dict[str, Any],
+    *,
+    owner_user_id: str | None = None,
+    strip_invalid_reference: bool = False,
+) -> dict[str, Any]:
+    normalized = dict(settings)
+
+    active_present = "deepResearchAttachment" in normalized
+    active_raw = normalized.get("deepResearchAttachment")
+    active_attachment = (
+        _validate_deep_research_attachment(
+            active_raw,
+            detail_prefix="deepResearchAttachment",
+            owner_user_id=owner_user_id,
+            strip_invalid_reference=strip_invalid_reference,
+        )
+        if active_present
+        else None
+    )
+    if active_present:
+        if active_raw is None:
+            normalized["deepResearchAttachment"] = None
+        elif active_attachment is None:
+            normalized.pop("deepResearchAttachment", None)
+        else:
+            normalized["deepResearchAttachment"] = active_attachment
+
+    pinned_present = "deepResearchPinnedAttachment" in normalized
+    pinned_raw = normalized.get("deepResearchPinnedAttachment")
+    pinned_attachment = (
+        _validate_deep_research_attachment(
+            pinned_raw,
+            detail_prefix="deepResearchPinnedAttachment",
+            owner_user_id=owner_user_id,
+            strip_invalid_reference=strip_invalid_reference,
+        )
+        if pinned_present
+        else None
+    )
+    if pinned_present:
+        if pinned_raw is None:
+            normalized["deepResearchPinnedAttachment"] = None
+        elif pinned_attachment is None:
+            normalized.pop("deepResearchPinnedAttachment", None)
+        else:
+            normalized["deepResearchPinnedAttachment"] = pinned_attachment
+
+    history_present = "deepResearchAttachmentHistory" in normalized
+    history_raw = normalized.get("deepResearchAttachmentHistory")
+    history_entries = (
+        _validate_deep_research_attachment_history(
+            history_raw,
+            owner_user_id=owner_user_id,
+            strip_invalid_reference=strip_invalid_reference,
+        )
+        if history_present
+        else None
+    )
+    if history_present:
+        if history_raw is None:
+            normalized["deepResearchAttachmentHistory"] = None
+            return normalized
+        excluded_run_ids = {
+            run_id
+            for run_id in (
+                active_attachment.get("run_id") if isinstance(active_attachment, dict) else None,
+                pinned_attachment.get("run_id") if isinstance(pinned_attachment, dict) else None,
+            )
+            if isinstance(run_id, str) and run_id
+        }
+        deduped_history: list[dict[str, Any]] = []
+        seen_run_ids: set[str] = set()
+        for entry in history_entries or []:
+            run_id = str(entry.get("run_id") or "")
+            if not run_id or run_id in excluded_run_ids or run_id in seen_run_ids:
+                continue
+            seen_run_ids.add(run_id)
+            deduped_history.append(entry)
+        if deduped_history:
+            normalized["deepResearchAttachmentHistory"] = deduped_history
+        else:
+            normalized.pop("deepResearchAttachmentHistory", None)
+
+    return normalized
+
+
+def _merge_deep_research_attachment_history(
+    server_history_raw: Any,
+    incoming_history_raw: Any,
+    *,
+    excluded_run_ids: set[str] | None,
+) -> Optional[list[dict[str, Any]]]:
+    if not isinstance(server_history_raw, list) and not isinstance(incoming_history_raw, list):
+        return None
+
+    merged_by_run_id: dict[str, tuple[float, dict[str, Any]]] = {}
+    for history in (
+        server_history_raw if isinstance(server_history_raw, list) else [],
+        incoming_history_raw if isinstance(incoming_history_raw, list) else [],
+    ):
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            run_id = entry.get("run_id")
+            if not isinstance(run_id, str) or not run_id.strip():
+                continue
+            if excluded_run_ids and run_id in excluded_run_ids:
+                continue
+            entry_updated_at = _parse_iso_timestamp(entry.get("updatedAt")) or 0.0
+            existing = merged_by_run_id.get(run_id)
+            if existing is None or entry_updated_at > existing[0]:
+                merged_by_run_id[run_id] = (entry_updated_at, entry)
+
+    if not merged_by_run_id:
+        return None
+
+    ordered_entries = sorted(
+        merged_by_run_id.values(),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    return [
+        entry
+        for _timestamp, entry in ordered_entries[:_MAX_DEEP_RESEARCH_ATTACHMENT_HISTORY]
+    ]
 
 
 def _normalize_memory_entry(entry: Any) -> Optional[dict[str, Any]]:
@@ -991,6 +1505,65 @@ def _merge_conversation_settings(
     )
     if merged_memory is not None:
         merged["characterMemoryById"] = merged_memory
+
+    if "deepResearchAttachment" in incoming_settings and incoming_settings.get("deepResearchAttachment") is None:
+        merged.pop("deepResearchAttachment", None)
+    else:
+        server_attachment = server_settings.get("deepResearchAttachment")
+        incoming_attachment = incoming_settings.get("deepResearchAttachment")
+        if isinstance(server_attachment, dict) or isinstance(incoming_attachment, dict):
+            if not isinstance(server_attachment, dict):
+                merged["deepResearchAttachment"] = incoming_attachment
+            elif not isinstance(incoming_attachment, dict):
+                merged["deepResearchAttachment"] = server_attachment
+            else:
+                server_attachment_updated_at = _parse_iso_timestamp(server_attachment.get("updatedAt")) or 0.0
+                incoming_attachment_updated_at = _parse_iso_timestamp(incoming_attachment.get("updatedAt")) or 0.0
+                if incoming_attachment_updated_at > server_attachment_updated_at:
+                    merged["deepResearchAttachment"] = incoming_attachment
+                else:
+                    merged["deepResearchAttachment"] = server_attachment
+
+    if "deepResearchPinnedAttachment" in incoming_settings and incoming_settings.get("deepResearchPinnedAttachment") is None:
+        merged.pop("deepResearchPinnedAttachment", None)
+    else:
+        server_pinned_attachment = server_settings.get("deepResearchPinnedAttachment")
+        incoming_pinned_attachment = incoming_settings.get("deepResearchPinnedAttachment")
+        if isinstance(server_pinned_attachment, dict) or isinstance(incoming_pinned_attachment, dict):
+            if not isinstance(server_pinned_attachment, dict):
+                merged["deepResearchPinnedAttachment"] = incoming_pinned_attachment
+            elif not isinstance(incoming_pinned_attachment, dict):
+                merged["deepResearchPinnedAttachment"] = server_pinned_attachment
+            else:
+                server_pinned_updated_at = _parse_iso_timestamp(server_pinned_attachment.get("updatedAt")) or 0.0
+                incoming_pinned_updated_at = _parse_iso_timestamp(incoming_pinned_attachment.get("updatedAt")) or 0.0
+                if incoming_pinned_updated_at > server_pinned_updated_at:
+                    merged["deepResearchPinnedAttachment"] = incoming_pinned_attachment
+                else:
+                    merged["deepResearchPinnedAttachment"] = server_pinned_attachment
+
+    active_attachment = merged.get("deepResearchAttachment")
+    active_run_id = active_attachment.get("run_id") if isinstance(active_attachment, dict) else None
+    pinned_attachment = merged.get("deepResearchPinnedAttachment")
+    pinned_run_id = pinned_attachment.get("run_id") if isinstance(pinned_attachment, dict) else None
+    excluded_run_ids = {
+        run_id
+        for run_id in (active_run_id, pinned_run_id)
+        if isinstance(run_id, str) and run_id
+    }
+
+    if "deepResearchAttachmentHistory" in incoming_settings and incoming_settings.get("deepResearchAttachmentHistory") is None:
+        merged.pop("deepResearchAttachmentHistory", None)
+    else:
+        merged_history = _merge_deep_research_attachment_history(
+            server_settings.get("deepResearchAttachmentHistory"),
+            incoming_settings.get("deepResearchAttachmentHistory"),
+            excluded_run_ids=excluded_run_ids or None,
+        )
+        if merged_history:
+            merged["deepResearchAttachmentHistory"] = merged_history
+        else:
+            merged.pop("deepResearchAttachmentHistory", None)
 
     schema_version = merged.get("schemaVersion")
     if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1:
@@ -2243,7 +2816,7 @@ def _persist_auto_summary_to_settings(
     merged_settings["updatedAt"] = now_iso
 
     try:
-        _validate_chat_settings_payload(merged_settings)
+        merged_settings = _validate_chat_settings_payload(merged_settings)
         db.upsert_conversation_settings(chat_id, merged_settings)
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
@@ -2496,6 +3069,7 @@ async def create_chat_session(
         HTTPException: 404 if character not found, 429 if rate limited
     """
     try:
+        scope = _resolve_chat_scope(session_data.scope_type, session_data.workspace_id)
         # Check rate limits
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "chat_create")
@@ -2504,7 +3078,11 @@ async def create_chat_session(
             # Use DB-layer count for efficiency/accuracy. The helper expects
             # the current count (before this create) and rejects when
             # current_chat_count >= max_chats_per_user.
-            user_chat_count = db.count_conversations_for_user(str(current_user.id))
+            user_chat_count = db.count_conversations_for_user(
+                str(current_user.id),
+                scope_type=scope.scope_type,
+                workspace_id=scope.workspace_id,
+            )
             await rate_limiter.check_chat_limit(current_user.id, user_chat_count)
         except HTTPException:
             # Propagate enforcement failures
@@ -2545,7 +3123,12 @@ async def create_chat_session(
         validated_forked_from_message_id: Optional[str] = None
         if session_data.parent_conversation_id:
             parent_conversation = db.get_conversation_by_id(session_data.parent_conversation_id)
-            _verify_chat_ownership(parent_conversation, current_user.id, session_data.parent_conversation_id)
+            _verify_chat_ownership(
+                parent_conversation,
+                current_user.id,
+                session_data.parent_conversation_id,
+                scope,
+            )
             if parent_conversation:
                 validated_parent_id = parent_conversation.get("id") or session_data.parent_conversation_id
                 parent_root_id = parent_conversation.get("root_id") or parent_conversation.get("id")
@@ -2620,7 +3203,7 @@ async def create_chat_session(
                     ag = character.get('alternate_greetings')
                     if isinstance(ag, list) and ag:
                         if greeting_strategy == "alternate_random":
-                            choice_text = random.choice(ag)
+                            choice_text = secrets.choice(ag)
                         elif greeting_strategy == "alternate_index" and isinstance(alternate_index, int) and 0 <= alternate_index < len(ag):
                             choice_text = ag[alternate_index]
                 if not choice_text:
@@ -2922,6 +3505,8 @@ async def get_chat_session(
         False,
         description="Include per-chat settings payload in the response.",
     ),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -2940,8 +3525,9 @@ async def get_chat_session(
         HTTPException: 404 if not found, 403 if unauthorized
     """
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         # Get message count efficiently
         try:
@@ -2970,19 +3556,56 @@ async def get_chat_session(
         ) from e
 
 
+@router.get(
+    "/{chat_id}/research-runs",
+    response_model=ChatLinkedResearchRunsListResponse,
+    summary="List deep research runs linked to a chat session",
+    tags=["Chat Sessions"],
+)
+async def list_chat_linked_research_runs(
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+    research_service: ResearchService = Depends(_get_research_service),
+):
+    """Return compact deep research run status rows linked to the chat thread."""
+    try:
+        conversation = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        runs = research_service.list_chat_linked_runs(
+            owner_user_id=str(current_user.id),
+            chat_id=chat_id,
+            terminal_limit=10,
+        )
+        return ChatLinkedResearchRunsListResponse(runs=runs)
+
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Error listing linked research runs for chat {chat_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while retrieving linked research runs",
+        ) from e
+
+
 @router.get("/{chat_id}/context", summary="Get chat context for completions", tags=["Chat Sessions"])
 async def get_chat_context(
     chat_id: str = Path(..., description="Chat session ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
     """Return chat context formatted for chat completions."""
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id)
         if not conversation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {chat_id} not found")
 
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         settings_row = db.get_conversation_settings(chat_id)
         history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
@@ -4607,6 +5230,7 @@ async def list_chat_sessions(
     try:
         user_id_str = str(current_user.id)
         include_deleted_effective = include_deleted or deleted_only
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         if character_id is not None and character_scope == "non_character":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -4622,23 +5246,18 @@ async def list_chat_sessions(
                 offset=offset,
                 include_deleted=include_deleted_effective,
                 deleted_only=deleted_only,
+                scope_type=scope.scope_type,
+                workspace_id=scope.workspace_id,
             )
-            # Post-filter by scope when character-scoped query is used
-            if scope_type:
-                conversations = [
-                    c for c in conversations
-                    if c.get("scope_type") == scope_type
-                    and (scope_type != "workspace" or c.get("workspace_id") == workspace_id)
-                ]
             try:
                 total_count = db.count_conversations_for_user_by_character(
                     user_id_str,
                     character_id,
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
+                    scope_type=scope.scope_type,
+                    workspace_id=scope.workspace_id,
                 )
-                if scope_type:
-                    total_count = len(conversations)
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fallback: filter by client_id in-memory if efficient count isn't available
                 total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
@@ -4650,8 +5269,8 @@ async def list_chat_sessions(
                 offset=offset,
                 include_deleted=include_deleted_effective,
                 deleted_only=deleted_only,
-                scope_type=scope_type,
-                workspace_id=workspace_id,
+                scope_type=scope.scope_type,
+                workspace_id=scope.workspace_id,
                 character_scope=character_scope,
             )
             try:
@@ -4660,11 +5279,9 @@ async def list_chat_sessions(
                     include_deleted=include_deleted_effective,
                     deleted_only=deleted_only,
                     character_scope=character_scope,
-                    scope_type=scope_type,
-                    workspace_id=workspace_id,
+                    scope_type=scope.scope_type,
+                    workspace_id=scope.workspace_id,
                 )
-                if scope_type:
-                    total_count = len(conversations)
             except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 total_count = len(conversations)
 
@@ -4741,6 +5358,8 @@ async def update_chat_session(
     update_data: ChatSessionUpdate,
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: int = Query(..., description="Expected version for optimistic locking"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -4761,9 +5380,10 @@ async def update_chat_session(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         # Get current conversation
         conversation = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         # Check version
         if conversation.get('version', 1) != expected_version:
@@ -4816,12 +5436,15 @@ async def update_chat_session(
 )
 async def get_chat_settings(
     chat_id: str = Path(..., description="Chat session ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         settings_row = db.get_conversation_settings(chat_id)
         if not settings_row:
@@ -4831,6 +5454,12 @@ async def get_chat_settings(
         # Internal bootstrap metadata alone should not count as user-visible settings.
         if settings and set(settings.keys()) <= {"greetingsChecksum"}:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
+
+        settings = _validate_chat_settings_payload(
+            settings,
+            owner_user_id=str(current_user.id),
+            strip_invalid_deep_research=True,
+        )
 
         # Normalize stored enum values so the client always gets valid scopes.
         _SCOPE_DEFAULTS = {
@@ -4887,20 +5516,28 @@ async def get_chat_settings(
 async def update_chat_settings(
     payload: ChatSettingsUpdate,
     chat_id: str = Path(..., description="Chat session ID"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
-        incoming_settings = payload.settings or {}
-        _validate_chat_settings_payload(incoming_settings)
+        incoming_settings = _validate_chat_settings_payload(
+            payload.settings or {},
+            owner_user_id=str(current_user.id),
+        )
 
         existing_row = db.get_conversation_settings(chat_id)
         existing_settings = (existing_row or {}).get("settings") or {}
         merged_settings = _merge_conversation_settings(existing_settings, incoming_settings)
-        _validate_chat_settings_payload(merged_settings)
+        merged_settings = _validate_chat_settings_payload(
+            merged_settings,
+            owner_user_id=str(current_user.id),
+        )
 
         if not db.upsert_conversation_settings(chat_id, merged_settings):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update chat settings")
@@ -4930,6 +5567,8 @@ async def delete_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
     hard_delete: bool = Query(False, description="Permanently delete a chat already in trash"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ) -> Response:
@@ -4946,9 +5585,10 @@ async def delete_chat_session(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         # Get current conversation. Hard-delete may target already deleted rows.
         conversation = db.get_conversation_by_id(chat_id, include_deleted=hard_delete)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         if hard_delete:
             if not conversation.get("deleted"):
@@ -5063,12 +5703,15 @@ async def delete_chat_session(
 async def restore_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
     expected_version: Optional[int] = Query(None, description="Expected version for optimistic locking"),
+    scope_type: Literal["global", "workspace"] | None = Query(None, description="Conversation scope type"),
+    workspace_id: str | None = Query(None, description="Workspace ID when scope_type='workspace'"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
+        scope = _resolve_chat_scope(scope_type, workspace_id)
         conversation = db.get_conversation_by_id(chat_id, include_deleted=True)
-        _verify_chat_ownership(conversation, current_user.id, chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id, scope)
 
         # Already active: return current state as idempotent success.
         if not conversation.get("deleted"):
@@ -5082,7 +5725,7 @@ async def restore_chat_session(
         db.restore_conversation(chat_id, exp_ver)
 
         restored = db.get_conversation_by_id(chat_id)
-        _verify_chat_ownership(restored, current_user.id, chat_id)
+        _verify_chat_ownership(restored, current_user.id, chat_id, scope)
         try:
             restored['message_count'] = db.count_messages_for_conversation(chat_id)
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:

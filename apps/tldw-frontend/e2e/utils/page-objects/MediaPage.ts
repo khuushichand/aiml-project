@@ -6,19 +6,38 @@ import { waitForConnection } from "../helpers"
 
 export class MediaPage {
   readonly page: Page
+  readonly heading: Locator
   readonly uploadButton: Locator
   readonly urlInput: Locator
   readonly processButton: Locator
   readonly mediaList: Locator
   readonly searchInput: Locator
+  readonly reviewStatusBar: Locator
+  readonly reviewResultsList: Locator
+  readonly reviewResultsHeading: Locator
+  readonly reviewResultItems: Locator
+  readonly reviewEmptyState: Locator
 
   constructor(page: Page) {
     this.page = page
+    this.heading = page.getByRole("heading", { name: /media inspector/i })
     this.uploadButton = page.getByRole("button", { name: /upload|add file/i })
     this.urlInput = page.getByPlaceholder(/url|enter url/i)
     this.processButton = page.getByRole("button", { name: /process|ingest|add/i })
-    this.mediaList = page.getByTestId("media-list")
-    this.searchInput = page.getByPlaceholder(/search|filter/i)
+    this.mediaList = page
+      .getByTestId("media-results-list")
+      .or(page.locator("button[aria-label^='Select media:']").first())
+    this.searchInput = page
+      .getByRole("textbox", { name: /search media/i })
+      .or(page.getByPlaceholder(/search media/i))
+      .first()
+    this.reviewStatusBar = page.getByTestId("media-review-status-bar")
+    this.reviewResultsList = page.getByTestId("media-review-results-list")
+    this.reviewResultsHeading = page.getByRole("heading", { name: /^results/i }).first()
+    this.reviewResultItems = page.getByRole("button").filter({
+      has: page.locator("input[type='checkbox'], [role='checkbox']")
+    })
+    this.reviewEmptyState = page.getByText(/^No results$/i).first()
   }
 
   /**
@@ -33,14 +52,11 @@ export class MediaPage {
    * Wait for the media page to be ready
    */
   async waitForReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {})
-    // The page shows "Media Inspector" heading with search and filter controls
     await Promise.race([
-      this.page.locator("[data-testid='media-list'], [data-testid='empty-state'], .media-container")
-        .first().waitFor({ state: "visible", timeout: 20_000 }),
-      this.page.getByText("Media Inspector").waitFor({ state: "visible", timeout: 20_000 }),
-      this.page.getByPlaceholder(/search media/i).waitFor({ state: "visible", timeout: 20_000 }),
-    ]).catch(() => {})
+      this.heading.waitFor({ state: "visible", timeout: 20_000 }),
+      this.searchInput.waitFor({ state: "visible", timeout: 20_000 }),
+      this.mediaList.waitFor({ state: "visible", timeout: 20_000 })
+    ])
   }
 
   /**
@@ -268,7 +284,7 @@ export class MediaPage {
    * Open Quick Ingest modal
    */
   async openQuickIngest(): Promise<Locator> {
-    const modal = this.page.locator(".quick-ingest-modal .ant-modal-content")
+    const modal = this.page.getByRole("dialog", { name: /Quick Ingest/i }).first()
     if (await modal.isVisible().catch(() => false)) return modal
 
     // Try different triggers
@@ -290,6 +306,9 @@ export class MediaPage {
     })
 
     await expect(modal).toBeVisible({ timeout: 15000 })
+    await expect(modal.locator('[data-testid="qi-file-input"]').first()).toHaveCount(1, {
+      timeout: 20000,
+    })
     return modal
   }
 
@@ -302,25 +321,34 @@ export class MediaPage {
   }
 
   /**
+   * Wait for the content review surface to reach a stable visible state.
+   */
+  async waitForReviewReady(): Promise<void> {
+    await Promise.race([
+      this.reviewStatusBar.waitFor({ state: "visible", timeout: 20_000 }),
+      this.reviewResultsHeading.waitFor({ state: "visible", timeout: 20_000 }),
+      this.reviewEmptyState.waitFor({ state: "visible", timeout: 20_000 })
+    ])
+  }
+
+  /**
    * Get draft items from review page
    */
   async getDraftItems(): Promise<Array<{ title: string; status: string }>> {
-    const items: Array<{ title: string; status: string }> = []
+    await this.waitForReviewReady()
 
-    const draftItems = this.page.locator(
-      "[data-testid='draft-item'], .draft-item, .review-item"
-    )
+    const items: Array<{ title: string; status: string }> = []
+    const draftItems = this.reviewResultItems
     const count = await draftItems.count()
 
     for (let i = 0; i < count; i++) {
       const item = draftItems.nth(i)
-      const title =
-        (await item.locator(".title").textContent()) ||
-        (await item.textContent()) ||
-        ""
-      const status =
-        (await item.getAttribute("data-status")) ||
-        "draft"
+      const itemLines = (await item.innerText())
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+      const title = itemLines[0] ?? ""
+      const status = itemLines[1] ?? "draft"
 
       items.push({ title: title.trim(), status })
     }

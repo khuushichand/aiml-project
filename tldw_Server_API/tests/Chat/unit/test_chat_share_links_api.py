@@ -137,3 +137,51 @@ def test_share_link_resolve_rejects_malformed_token(tmp_path):
     response = client.get("/api/v1/chat/shared/conversations/not-a-valid-token")
     assert response.status_code == 400
     assert response.json()["detail"] == "Malformed share token"
+
+
+def test_share_link_create_requires_exact_scope_match(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="1")
+    client = _build_app(db, user_id=1)
+    db.upsert_workspace("ws-1", "Workspace One")
+
+    char_id = db.add_character_card(
+        {
+            "name": "Scoped Share Test",
+            "description": "desc",
+            "personality": "helpful",
+            "system_prompt": "You are helpful.",
+            "client_id": "1",
+        }
+    )
+    conversation_id = db.add_conversation(
+        {
+            "id": "workspace-conversation",
+            "character_id": char_id,
+            "title": "Workspace-only conversation",
+            "client_id": "1",
+            "scope_type": "workspace",
+            "workspace_id": "ws-1",
+        }
+    )
+    assert conversation_id == "workspace-conversation"
+
+    missing_scope = client.post(
+        f"/api/v1/chat/conversations/{conversation_id}/share-links",
+        json={"permission": "view"},
+    )
+    assert missing_scope.status_code == 404
+
+    wrong_scope = client.post(
+        f"/api/v1/chat/conversations/{conversation_id}/share-links",
+        params={"scope_type": "workspace", "workspace_id": "ws-2"},
+        json={"permission": "view"},
+    )
+    assert wrong_scope.status_code == 404
+
+    correct_scope = client.post(
+        f"/api/v1/chat/conversations/{conversation_id}/share-links",
+        params={"scope_type": "workspace", "workspace_id": "ws-1"},
+        json={"permission": "view"},
+    )
+    assert correct_scope.status_code == 200, correct_scope.text

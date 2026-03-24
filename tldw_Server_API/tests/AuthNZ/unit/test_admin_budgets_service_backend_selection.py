@@ -115,7 +115,7 @@ async def test_list_org_budgets_sqlite_backend_selection_uses_sqlite_mode(
 async def test_list_org_budgets_postgres_backend_selection_uses_postgres_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, bool] = {}
+    captured: dict[str, Any] = {}
 
     async def _fake_fetchval(db, query: str, params: list[Any], *, pg: bool) -> int:
         captured["pg"] = pg
@@ -123,6 +123,7 @@ async def test_list_org_budgets_postgres_backend_selection_uses_postgres_mode(
 
     async def _fake_fetchrows(db, query: str, params: list[Any], *, pg: bool) -> list[Any]:
         captured["rows_pg"] = pg
+        captured["query"] = query
         return []
 
     monkeypatch.setattr(admin_budgets_service, "_fetchval", _fake_fetchval)
@@ -139,3 +140,45 @@ async def test_list_org_budgets_postgres_backend_selection_uses_postgres_mode(
     assert total == 0
     assert captured["pg"] is True
     assert captured["rows_pg"] is True
+    assert "org_subscriptions" not in captured["query"]
+    assert "subscription_plans" not in captured["query"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_org_budget_no_longer_reads_legacy_subscription_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def _fake_fetchrow(db, query: str, params: list[Any], *, pg: bool) -> Any:
+        calls.append(query)
+        if "FROM organizations" in query:
+            return {"id": 7, "name": "Acme", "slug": "acme"}
+        if "FROM org_budgets" in query:
+            return None
+        return None
+
+    async def _fake_emit(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(admin_budgets_service, "_fetchrow", _fake_fetchrow)
+    monkeypatch.setattr(admin_budgets_service, "_emit_budget_audit_event", _fake_emit)
+
+    class _DbStub:
+        _is_sqlite = False
+
+        async def execute(self, query: str, *params: Any) -> None:
+            calls.append(query)
+
+    item, changes = await admin_budgets_service.upsert_org_budget(
+        _DbStub(),
+        org_id=7,
+        budget_updates={"budget_month_usd": 10.0},
+        clear_budgets=False,
+    )
+
+    assert item["org_id"] == 7
+    assert item["budgets"]["budget_month_usd"] == 10.0
+    assert changes
+    assert all("org_subscriptions" not in call for call in calls)
+    assert all("subscription_plans" not in call for call in calls)

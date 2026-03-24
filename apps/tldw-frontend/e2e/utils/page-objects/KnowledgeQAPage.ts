@@ -2,7 +2,7 @@
  * Page Object for KnowledgeQA (RAG Search) workflow
  */
 import { type Page, type Locator, expect } from "@playwright/test"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class KnowledgeQAPage {
   readonly page: Page
@@ -23,7 +23,7 @@ export class KnowledgeQAPage {
   }
 
   async waitForReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     await this.searchShell.waitFor({ state: "visible", timeout: 20_000 })
     await expect(this.page.locator("#knowledge-search-input")).toBeVisible({
       timeout: 20_000
@@ -36,12 +36,13 @@ export class KnowledgeQAPage {
     status: number
     body: any
     requestBody: any
+    url: string
   }> {
     const response = await this.page.waitForResponse(
       (res) =>
         res.request().method() === "POST" &&
-        /\/api\/v1\/rag\/search(?:\?|$)/i.test(res.url()),
-      { timeout: 30_000 }
+        /\/api\/v1\/rag\/search(?:\/stream)?(?:\?|$)/i.test(res.url()),
+      { timeout: 60_000 }
     )
     const body = await response.json().catch(() => null)
     let requestBody: any = null
@@ -51,7 +52,12 @@ export class KnowledgeQAPage {
       requestBody = null
     }
 
-    return { status: response.status(), body, requestBody }
+    return {
+      status: response.status(),
+      body,
+      requestBody,
+      url: response.url()
+    }
   }
 
   // ── Search Bar ──────────────────────────────────────────────────────

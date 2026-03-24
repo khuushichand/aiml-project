@@ -6,7 +6,7 @@
  * is included in the API call.
  */
 import { test, expect, skipIfServerUnavailable, skipIfNoModels } from "../../utils/fixtures"
-import { expectApiCall, captureAllApiCalls } from "../../utils/api-assertions"
+import { captureAllApiCalls } from "../../utils/api-assertions"
 import { CharactersPage, ChatPage } from "../../utils/page-objects"
 import { waitForStreamComplete } from "../../utils/journey-helpers"
 
@@ -39,10 +39,12 @@ test.describe("Create Character -> Chat journey", () => {
         description: "E2E test character for journey spec",
       })
 
-      // Verify the character appears in the list
-      await page.waitForTimeout(1_000)
-      const visible = await charactersPage.isCharacterVisible(characterName)
-      expect(visible).toBe(true)
+      await expect
+        .poll(async () => await charactersPage.isCharacterVisible(characterName), {
+          timeout: 10_000,
+          message: "Timed out waiting for the created character to appear in the list",
+        })
+        .toBe(true)
     })
 
     await test.step("Navigate to chat and send a message", async () => {

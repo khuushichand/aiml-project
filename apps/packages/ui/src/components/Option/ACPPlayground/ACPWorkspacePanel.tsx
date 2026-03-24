@@ -1,5 +1,4 @@
 import React from "react"
-import { useStorage } from "@plasmohq/storage/hook"
 import { Empty } from "antd"
 import { Terminal as TerminalIcon } from "lucide-react"
 import { Terminal } from "xterm"
@@ -7,6 +6,8 @@ import { FitAddon } from "@xterm/addon-fit"
 import "xterm/css/xterm.css"
 import { useTranslation } from "react-i18next"
 
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
+import { buildACPAuthHeaders, resolveACPServerUrl } from "@/services/acp/connection"
 import { useACPSessionsStore } from "@/store/acp-sessions"
 
 type WebSocketWithHeaders = new (
@@ -19,20 +20,6 @@ const buildWsUrl = (baseUrl: string, path: string): string => {
   const wsBase = baseUrl.replace(/^http/, "ws").replace(/\/$/, "")
   const url = new URL(path.startsWith("/") ? path : `/${path}`, wsBase)
   return url.toString()
-}
-
-const buildAuthHeaders = (
-  authMode: string,
-  apiKey: string,
-  accessToken: string
-): Record<string, string> => {
-  if (authMode === "single-user" && apiKey) {
-    return { "X-API-KEY": apiKey }
-  }
-  if (authMode === "multi-user" && accessToken) {
-    return { Authorization: `Bearer ${accessToken}` }
-  }
-  return {}
 }
 
 const buildAuthProtocols = (headers: Record<string, string>): string[] | undefined => {
@@ -68,6 +55,7 @@ const resolveTokenColor = (tokenName: string, fallbackRgb: string): string => {
 
 export const ACPWorkspacePanel: React.FC = () => {
   const { t } = useTranslation("playground")
+  const { config: connectionConfig } = useCanonicalConnectionConfig()
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const terminalRef = React.useRef<Terminal | null>(null)
   const fitAddonRef = React.useRef<FitAddon | null>(null)
@@ -80,15 +68,10 @@ export const ACPWorkspacePanel: React.FC = () => {
     s.activeSessionId ? s.getSession(s.activeSessionId) : undefined
   )
 
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
-
   const sshPath = activeSession?.sshWsUrl || ""
 
   React.useEffect(() => {
-    if (!activeSessionId || !sshPath || !containerRef.current) return
+    if (!activeSessionId || !sshPath || !containerRef.current || !connectionConfig) return
 
     const term = new Terminal({
       fontFamily: "JetBrains Mono, Menlo, Monaco, monospace",
@@ -108,9 +91,9 @@ export const ACPWorkspacePanel: React.FC = () => {
     terminalRef.current = term
     fitAddonRef.current = fitAddon
 
-    const headers = buildAuthHeaders(authMode, apiKey, accessToken)
+    const headers = buildACPAuthHeaders(connectionConfig)
     const protocols = buildAuthProtocols(headers)
-    const wsUrl = buildWsUrl(serverUrl, sshPath)
+    const wsUrl = buildWsUrl(resolveACPServerUrl(connectionConfig), sshPath)
     const ws = createWebSocket(wsUrl, headers, protocols)
     ws.binaryType = "arraybuffer"
     wsRef.current = ws
@@ -183,7 +166,7 @@ export const ACPWorkspacePanel: React.FC = () => {
       terminalRef.current = null
       fitAddonRef.current = null
     }
-  }, [activeSessionId, sshPath, serverUrl, authMode, apiKey, accessToken])
+  }, [activeSessionId, connectionConfig, sshPath])
 
   if (!activeSessionId) {
     return (

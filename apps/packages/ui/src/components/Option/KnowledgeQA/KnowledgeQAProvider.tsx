@@ -28,6 +28,7 @@ import type {
   QueryStage,
   ScopeSnapshot,
   PinnedSourceFilters,
+  ThreadHydrationResult,
 } from "./types"
 import {
   DEFAULT_RAG_SETTINGS,
@@ -327,21 +328,11 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
     case "SET_PINNED_SOURCE_FILTERS":
       return { ...state, pinnedSourceFilters: action.payload }
     case "HYDRATE_RESTORED_SCOPE": {
-      const nextPreset = action.payload.preset ?? state.preset
-      const presetSettings =
-        action.payload.preset && action.payload.preset !== "custom"
-          ? {
-              ...applyRagPreset(action.payload.preset as Exclude<RagPresetName, "custom">),
-              ...KNOWLEDGE_QA_SETTINGS_OVERRIDES,
-              enable_web_fallback: state.settings.enable_web_fallback,
-            }
-          : state.settings
-      const nextSettings = action.payload.settingsSnapshot
-        ? {
-            ...presetSettings,
-            ...action.payload.settingsSnapshot,
-          }
-        : presetSettings
+      const { nextPreset, nextSettings } = resolveHydratedScopeState(
+        state.preset,
+        state.settings,
+        action.payload
+      )
       return {
         ...state,
         preset: nextPreset,
@@ -1247,6 +1238,68 @@ function normalizeRestorableSettingsSnapshot(
   return Object.keys(normalized).length > 0 ? normalized : null
 }
 
+function resolveHydratedScopeState(
+  currentPreset: RagPresetName,
+  currentSettings: RagSettings,
+  payload: {
+    preset?: RagPresetName
+    settingsSnapshot?: Partial<RagSettings> | null
+  }
+): { nextPreset: RagPresetName; nextSettings: RagSettings } {
+  const nextPreset = payload.preset ?? currentPreset
+  const presetSettings =
+    payload.preset && payload.preset !== "custom"
+      ? {
+          ...applyRagPreset(payload.preset as Exclude<RagPresetName, "custom">),
+          ...KNOWLEDGE_QA_SETTINGS_OVERRIDES,
+          enable_web_fallback: currentSettings.enable_web_fallback,
+        }
+      : currentSettings
+  const nextSettings = payload.settingsSnapshot
+    ? {
+        ...presetSettings,
+        ...payload.settingsSnapshot,
+      }
+    : presetSettings
+
+  return { nextPreset, nextSettings }
+}
+
+function extractHttpStatus(error: unknown): number | null {
+  if (error && typeof error === "object") {
+    const candidate = error as {
+      status?: unknown
+      response?: { status?: unknown }
+      message?: unknown
+    }
+    if (typeof candidate.status === "number") {
+      return candidate.status
+    }
+    if (typeof candidate.response?.status === "number") {
+      return candidate.response.status
+    }
+    if (typeof candidate.message === "string") {
+      const match = candidate.message.match(/\bHTTP\s+(\d{3})\b/i)
+      return match ? Number(match[1]) : null
+    }
+  }
+
+  if (error instanceof Error) {
+    const match = error.message.match(/\bHTTP\s+(\d{3})\b/i)
+    return match ? Number(match[1]) : null
+  }
+
+  return null
+}
+
+function classifyThreadHydrationFailure(error: unknown): ThreadHydrationResult {
+  const status = extractHttpStatus(error)
+  if (typeof status === "number" && status >= 400 && status < 500 && status !== 429) {
+    return "terminal"
+  }
+  return false
+}
+
 function mergeNumberFilters(
   ...values: Array<Array<number | null | undefined> | undefined>
 ): number[] {
@@ -1752,30 +1805,42 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           enable_web_fallback: effectiveSettings.enable_web_fallback,
         })
 
-        const streamSearch = (tldwClient as {
-          ragSearchStream?: (
-            query: string,
-            options?: Record<string, unknown>
-          ) => AsyncGenerator<any, void, unknown>
-        }).ragSearchStream
         const canAttemptStreaming =
           streamingFeatureEnabled &&
           effectiveSettings.enable_generation &&
-          typeof streamSearch === "function"
+          typeof (tldwClient as {
+            ragSearchStream?: (
+              query: string,
+              options?: Record<string, unknown>
+            ) => AsyncGenerator<any, void, unknown>
+          }).ragSearchStream === "function"
 
         let results: RagResult[] = []
         let answer: string | null = null
         let usedStreaming = false
         let resolvedSearchDetails: SearchRuntimeDetails | null = null
 
-        if (canAttemptStreaming && streamSearch) {
+        if (
+          canAttemptStreaming &&
+          typeof (tldwClient as {
+            ragSearchStream?: (
+              query: string,
+              options?: Record<string, unknown>
+            ) => AsyncGenerator<any, void, unknown>
+          }).ragSearchStream === "function"
+        ) {
           let streamResults: RagResult[] = []
           let streamAnswer = ""
           let receivedStreamEvent = false
           let streamWhyPayload: unknown = null
 
           try {
-            for await (const event of streamSearch(trimmedQuery, {
+            for await (const event of (tldwClient as {
+              ragSearchStream: (
+                query: string,
+                options?: Record<string, unknown>
+              ) => AsyncGenerator<any, void, unknown>
+            }).ragSearchStream(trimmedQuery, {
               ...options,
               signal: abortController.signal,
             })) {
@@ -2100,7 +2165,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     })
   }, [beginThreadHydrationRequest, clearResults, createNewThread])
 
-  const selectThread = useCallback(async (threadId: string) => {
+  const selectThread = useCallback(async (threadId: string): Promise<ThreadHydrationResult> => {
     const threadHydrationRequestId = beginThreadHydrationRequest()
     const isStaleThreadHydrationRequest = () =>
       activeThreadHydrationRequestIdRef.current !== threadHydrationRequestId
@@ -2198,19 +2263,19 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       }
       console.error("Failed to load thread messages:", error)
       dispatch({ type: "SET_ERROR", payload: "Unable to load this conversation right now." })
-      return false
+      return classifyThreadHydrationFailure(error)
     }
   }, [beginThreadHydrationRequest, markHistoryMutation, state.searchHistory])
 
   const selectSharedThread = useCallback(
-    async (shareToken: string) => {
+    async (shareToken: string): Promise<ThreadHydrationResult> => {
       const threadHydrationRequestId = beginThreadHydrationRequest()
       const isStaleThreadHydrationRequest = () =>
         activeThreadHydrationRequestIdRef.current !== threadHydrationRequestId
       const trimmedToken = shareToken.trim()
       if (!trimmedToken) {
         dispatch({ type: "SET_ERROR", payload: "Shared link is invalid." })
-        return false
+        return "terminal"
       }
 
       if (activeSearchAbortRef.current) {
@@ -2282,7 +2347,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
           type: "SET_ERROR",
           payload: "Unable to open this shared conversation link.",
         })
-        return false
+        return classifyThreadHydrationFailure(error)
       }
     },
     [beginThreadHydrationRequest]
@@ -2562,6 +2627,15 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const restoreFromHistory = useCallback(
     async (item: SearchHistoryItem) => {
       const restoredQuery = item.query.trim()
+      const restoredScopePayload = {
+        preset: item.preset,
+        settingsSnapshot: normalizeRestorableSettingsSnapshot(item.settingsSnapshot),
+      }
+      const restoredScope = resolveHydratedScopeState(
+        state.preset,
+        state.settings,
+        restoredScopePayload
+      )
       if (restoredQuery.length > 0) {
         dispatch({ type: "SET_QUERY", payload: restoredQuery })
       }
@@ -2569,13 +2643,10 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
         if (isLocalThreadId(item.conversationId)) {
           dispatch({
             type: "HYDRATE_RESTORED_SCOPE",
-            payload: {
-              preset: item.preset,
-              settingsSnapshot: normalizeRestorableSettingsSnapshot(item.settingsSnapshot),
-            },
+            payload: restoredScopePayload,
           })
           if (restoredQuery.length > 0) {
-            await runKnowledgeQuery(restoredQuery, false)
+            await runKnowledgeQuery(restoredQuery, false, restoredScope.nextSettings)
           }
           return
         }
@@ -2585,16 +2656,13 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
       dispatch({
         type: "HYDRATE_RESTORED_SCOPE",
-        payload: {
-          preset: item.preset,
-          settingsSnapshot: normalizeRestorableSettingsSnapshot(item.settingsSnapshot),
-        },
+        payload: restoredScopePayload,
       })
       if (restoredQuery.length > 0) {
-        await runKnowledgeQuery(restoredQuery, false)
+        await runKnowledgeQuery(restoredQuery, false, restoredScope.nextSettings)
       }
     },
-    [runKnowledgeQuery, selectThread]
+    [runKnowledgeQuery, selectThread, state.preset, state.settings]
   )
 
   const toggleHistoryPin = useCallback((id: string) => {

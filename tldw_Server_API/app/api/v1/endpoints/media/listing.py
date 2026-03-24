@@ -105,6 +105,35 @@ def _parse_csv_values(raw_value: str | None) -> list[str]:
     ]
 
 
+@router.get(
+    "/keywords",
+    summary="List media keywords",
+)
+async def list_media_keywords(
+    query: str | None = Query(None, description="Optional substring filter for keyword suggestions."),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of keywords to return."),
+    db: Any = Depends(get_media_db_for_user),
+) -> dict[str, list[str]]:
+    try:
+        keywords = db.fetch_all_keywords()
+    except (DatabaseError, InputError) as exc:
+        logger.error("Failed to list media keywords: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load media keywords",
+        ) from exc
+
+    normalized_query = str(query or "").strip().lower()
+    if normalized_query:
+        keywords = [
+            keyword
+            for keyword in keywords
+            if normalized_query in str(keyword).lower()
+        ]
+
+    return {"keywords": keywords[:limit]}
+
+
 def _should_delegate_media_search_to_email(
     *,
     search_params: SearchRequest,

@@ -12,6 +12,7 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.flashcards import (
     Deck,
     DeckCreate,
@@ -72,6 +73,8 @@ from tldw_Server_API.app.core.Flashcards.study_assistant import (
     build_flashcard_assistant_context,
     generate_study_assistant_reply,
 )
+from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.image_validation import (
     get_max_flashcard_asset_bytes,
     validate_uploaded_image_bytes,
@@ -135,6 +138,46 @@ def _int_env(name: str, default: int) -> int:
         return max(1, value)
     except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
         return default
+
+
+def _config_default_llm_provider() -> str | None:
+    """Return the configured server default LLM provider when present."""
+    cfg = loaded_config_data
+
+    for section in ("llm_api_settings", "API"):
+        try:
+            section_data = cfg.get(section)
+        except (AttributeError, TypeError, KeyError):
+            section_data = None
+        if not isinstance(section_data, dict):
+            continue
+        default_api = section_data.get("default_api")
+        if isinstance(default_api, str):
+            candidate = default_api.strip()
+            if candidate:
+                return candidate
+    return None
+
+
+def _resolve_flashcard_generation_provider(request_provider: str | None) -> str:
+    """Resolve provider for flashcard generation using the server's default contract."""
+    provider = str(request_provider or "").strip()
+    if provider:
+        return provider.lower()
+
+    cfg_default = _config_default_llm_provider()
+    if cfg_default:
+        return cfg_default.strip().lower()
+
+    env_default = str(os.getenv("DEFAULT_LLM_PROVIDER") or "").strip()
+    if env_default:
+        return env_default.lower()
+
+    if is_test_mode():
+        return "local-llm"
+
+    fallback = str(DEFAULT_LLM_PROVIDER or "openai").strip().lower()
+    return fallback or "openai"
 
 
 def _validate_bulk_flashcard_field_lengths(data: dict[str, Any]) -> None:
@@ -1563,6 +1606,7 @@ async def respond_flashcard_assistant(
 async def generate_flashcards(payload: FlashcardGenerateRequest):
     """Generate flashcards from free text using the workflows flashcard_generate adapter."""
     try:
+        provider = _resolve_flashcard_generation_provider(payload.provider)
         result = await run_flashcard_generate_adapter(
             {
                 "text": payload.text,
@@ -1570,7 +1614,7 @@ async def generate_flashcards(payload: FlashcardGenerateRequest):
                 "card_type": payload.card_type,
                 "difficulty": payload.difficulty,
                 "focus_topics": payload.focus_topics,
-                "provider": payload.provider,
+                "provider": provider,
                 "model": payload.model,
             },
             {},

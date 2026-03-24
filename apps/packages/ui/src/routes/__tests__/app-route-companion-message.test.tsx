@@ -72,18 +72,32 @@ vi.mock("~/components/Layouts/Layout", () => ({
   )
 }))
 
-vi.mock("@/routes/route-registry", () => ({
-  optionRoutes: [
-    { path: "/", element: <div data-testid="home-route">Home</div> }
-  ],
-  sidepanelRoutes: [
-    { path: "/chat", element: <div data-testid="sidepanel-chat">Chat</div> },
-    {
-      path: "/companion",
-      element: <div data-testid="sidepanel-companion-route">Companion</div>
-    }
-  ]
-}))
+vi.mock("@/routes/route-registry", async () => {
+  const { createElement } = await import("react")
+
+  return {
+    optionRoutes: [
+      {
+        path: "/",
+        element: createElement("div", { "data-testid": "home-route" }, "Home")
+      }
+    ],
+    sidepanelRoutes: [
+      {
+        path: "/chat",
+        element: createElement("div", { "data-testid": "sidepanel-chat" }, "Chat")
+      },
+      {
+        path: "/companion",
+        element: createElement(
+          "div",
+          { "data-testid": "companion-home-shell" },
+          "Companion Home"
+        )
+      }
+    ]
+  }
+})
 
 const renderRouteShell = (kind: "options" | "sidepanel", path: string) =>
   render(
@@ -144,7 +158,7 @@ describe("RouteShell companion capture routing", () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByTestId("sidepanel-companion-route")).toBeVisible()
+      expect(screen.getByTestId("companion-home-shell")).toBeVisible()
     })
 
     const stored = window.sessionStorage.getItem("tldw:companion:pendingCapture")

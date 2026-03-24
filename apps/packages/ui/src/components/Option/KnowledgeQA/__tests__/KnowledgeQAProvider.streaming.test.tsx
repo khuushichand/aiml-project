@@ -7,6 +7,22 @@ const ragSearchMock = vi.fn()
 const ragSearchStreamMock = vi.fn()
 const messageOpenMock = vi.fn()
 const trackMetricMock = vi.fn()
+const mockTldwClient = vi.hoisted(() => ({
+  initialize: vi.fn().mockResolvedValue(undefined),
+  fetchWithAuth: vi.fn().mockResolvedValue({
+    ok: false,
+    json: async () => [],
+    text: async () => "",
+  }),
+  normalizeRagQuery: vi.fn((query: string) => query),
+  ragSearch: vi.fn((...args: unknown[]) => ragSearchMock(...args)),
+  ragSearchStream: vi.fn(async function* (
+    this: { normalizeRagQuery: (query: string) => string },
+    ...args: unknown[]
+  ) {
+    yield* ragSearchStreamMock.apply(this, args as [])
+  }),
+}))
 
 vi.mock("@plasmohq/storage/hook", () => ({
   useStorage: () => [undefined],
@@ -23,16 +39,7 @@ vi.mock("@/utils/knowledge-qa-search-metrics", () => ({
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
-  tldwClient: {
-    initialize: vi.fn().mockResolvedValue(undefined),
-    fetchWithAuth: vi.fn().mockResolvedValue({
-      ok: false,
-      json: async () => [],
-      text: async () => "",
-    }),
-    ragSearch: (...args: unknown[]) => ragSearchMock(...args),
-    ragSearchStream: (...args: unknown[]) => ragSearchStreamMock(...args),
-  },
+  tldwClient: mockTldwClient,
 }))
 
 let latestContext: ReturnType<typeof useKnowledgeQA> | null = null
@@ -47,6 +54,7 @@ describe("KnowledgeQAProvider streaming search", () => {
     vi.clearAllMocks()
     localStorage.clear()
     latestContext = null
+    mockTldwClient.normalizeRagQuery.mockImplementation((query: string) => query)
     trackMetricMock.mockResolvedValue(undefined)
     ragSearchMock.mockResolvedValue({
       results: [{ id: "fallback-doc" }],
@@ -136,6 +144,53 @@ describe("KnowledgeQAProvider streaming search", () => {
         has_answer: true,
       })
     )
+  })
+
+  it("invokes ragSearchStream with the client binding intact", async () => {
+    mockTldwClient.normalizeRagQuery.mockImplementation((query: string) =>
+      query.toUpperCase()
+    )
+    ragSearchStreamMock.mockImplementation(async function* (
+      this: { normalizeRagQuery: (query: string) => string },
+      query: string
+    ) {
+      const normalized = this.normalizeRagQuery(query)
+      yield {
+        type: "contexts",
+        contexts: [
+          {
+            id: "doc-bound",
+            title: "Bound Doc",
+            score: 0.77,
+            source: "media_db",
+          },
+        ],
+      }
+      yield { type: "delta", text: normalized }
+    })
+
+    render(
+      <KnowledgeQAProvider>
+        <ContextProbe />
+      </KnowledgeQAProvider>
+    )
+
+    await waitFor(() => expect(latestContext).not.toBeNull())
+    await act(async () => {
+      await latestContext!.selectThread("local-stream-this-binding")
+    })
+
+    act(() => {
+      latestContext!.setQuery("bound stream")
+    })
+
+    await act(async () => {
+      await latestContext!.search()
+    })
+
+    expect(mockTldwClient.normalizeRagQuery).toHaveBeenCalledWith("bound stream")
+    expect(ragSearchMock).not.toHaveBeenCalled()
+    expect(latestContext!.answer).toBe("BOUND STREAM")
   })
 
   it("falls back to non-stream rag search when stream path fails", async () => {

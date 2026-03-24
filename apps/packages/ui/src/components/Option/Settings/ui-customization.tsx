@@ -14,8 +14,8 @@ import {
 } from "@/services/settings/ui-settings"
 import { SIDEBAR_SHORTCUT_ACTIONS } from "@/components/Common/ChatSidebar/shortcut-actions"
 import {
-  HEADER_SHORTCUT_GROUPS,
-  HEADER_SHORTCUT_ITEMS
+  getHeaderShortcutGroups,
+  getHeaderShortcutItems
 } from "@/components/Layouts/header-shortcut-items"
 
 const arraysEqual = <T,>(a: T[], b: T[]) =>
@@ -30,7 +30,7 @@ const orderShortcutSelection = (selection: SidebarShortcutId[]) => {
 
 const orderHeaderShortcutSelection = (selection: HeaderShortcutId[]) => {
   const selected = new Set(selection)
-  return HEADER_SHORTCUT_ITEMS.filter((item) => selected.has(item.id)).map(
+  return getHeaderShortcutItems().filter((item) => selected.has(item.id)).map(
     (item) => item.id
   )
 }
@@ -180,7 +180,7 @@ const HeaderShortcutSelector = ({
     [normalizedSelection]
   )
   const selectionCount = normalizedSelection.length
-  const totalCount = HEADER_SHORTCUT_ITEMS.length
+  const totalCount = getHeaderShortcutItems().length
   const isModified = !arraysEqual(normalizedSelection, defaultSelection)
 
   const handleToggle = (id: HeaderShortcutId) => {
@@ -224,7 +224,7 @@ const HeaderShortcutSelector = ({
         </span>
       </div>
       <div className="space-y-3">
-        {HEADER_SHORTCUT_GROUPS.map((group) => (
+        {getHeaderShortcutGroups().map((group) => (
           <div
             key={group.id}
             className="rounded-lg border border-border/60 bg-surface px-3 py-3"

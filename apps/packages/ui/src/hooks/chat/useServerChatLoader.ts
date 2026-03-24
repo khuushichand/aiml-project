@@ -11,6 +11,8 @@ import {
 import { getHistoriesWithMetadata, saveMessage } from "@/db/dexie/helpers"
 import { useSelectedAssistant } from "@/hooks/useSelectedAssistant"
 import { syncChatSettingsForServerChat } from "@/services/chat-settings"
+import { validateCachedServerChatId } from "@/store/workspace-sync-contract"
+import type { ChatScope } from "@/types/chat-scope"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import { updatePageTitle } from "@/utils/update-page-title"
@@ -34,6 +36,7 @@ type UseServerChatLoaderOptions = {
   ) => Promise<string | null>
   notification: NotificationApi
   t: TFunction
+  scope?: ChatScope
 }
 
 type PreserveLocalMessagesArgs = {
@@ -230,6 +233,29 @@ const resolveAssistantId = (value: unknown): string | null => {
     return String(value)
   }
   return null
+}
+
+const isMissingServerChatReferenceError = (error: unknown): boolean => {
+  const candidate = error as
+    | {
+        status?: unknown
+        response?: { status?: unknown }
+        message?: unknown
+      }
+    | null
+    | undefined
+  const rawStatus = candidate?.status ?? candidate?.response?.status
+  const statusCode =
+    typeof rawStatus === "number"
+      ? rawStatus
+      : typeof rawStatus === "string"
+        ? Number.parseInt(rawStatus, 10)
+        : Number.NaN
+
+  if (statusCode === 404) return true
+
+  const message = String(candidate?.message || "").toLowerCase()
+  return message.includes("404") || message.includes("not found")
 }
 
 export const resolveServerChatAssistantIdentity = (
@@ -521,7 +547,8 @@ const resolveDeferredCharacterId = (value: string | number | null): number | nul
 export const useServerChatLoader = ({
   ensureServerChatHistoryId,
   notification,
-  t
+  t,
+  scope
 }: UseServerChatLoaderOptions) => {
   const [, setSelectedAssistant] = useSelectedAssistant(null)
   const {
@@ -544,6 +571,7 @@ export const useServerChatLoader = ({
     serverChatPersonaMemoryMode,
     serverChatMetaLoaded,
     temporaryChat,
+    setServerChatId,
     setServerChatLoadState,
     setServerChatLoadError,
     setServerChatTitle,
@@ -568,6 +596,7 @@ export const useServerChatLoader = ({
       serverChatPersonaMemoryMode: state.serverChatPersonaMemoryMode,
       serverChatMetaLoaded: state.serverChatMetaLoaded,
       temporaryChat: state.temporaryChat,
+      setServerChatId: state.setServerChatId,
       setServerChatLoadState: state.setServerChatLoadState,
       setServerChatLoadError: state.setServerChatLoadError,
       setServerChatTitle: state.setServerChatTitle,
@@ -672,8 +701,26 @@ export const useServerChatLoader = ({
 
           if (!serverChatMetaLoaded) {
             try {
-              const chat = await tldwClient.getChat(serverChatId)
+              const chat = await tldwClient.getChat(
+                serverChatId,
+                scope ? { scope } : undefined
+              )
               if (!canCommitCurrentLoad()) {
+                return
+              }
+              const validatedServerChatId = validateCachedServerChatId({
+                cachedId: serverChatId,
+                serverScope: {
+                  scope_type: String((chat as any)?.scope_type || ""),
+                  workspace_id:
+                    typeof (chat as any)?.workspace_id === "string"
+                      ? (chat as any).workspace_id
+                      : null
+                },
+                expectedScope: scope || { type: "global" }
+              })
+              if (!validatedServerChatId) {
+                setServerChatId(null)
                 return
               }
               const meta = chat as unknown as Record<string, unknown>
@@ -715,7 +762,11 @@ export const useServerChatLoader = ({
                   : null
               )
               setServerChatMetaLoaded(true)
-            } catch {
+            } catch (error) {
+              if (isMissingServerChatReferenceError(error) && canCommitCurrentLoad()) {
+                setServerChatId(null)
+                return
+              }
               // ignore metadata failures; still try to load messages
             }
           }
@@ -815,7 +866,7 @@ export const useServerChatLoader = ({
                   limit,
                   offset
                 },
-                { signal }
+                scope ? { signal, scope } : { signal }
               ),
             {
               signal: controller.signal
@@ -956,6 +1007,10 @@ export const useServerChatLoader = ({
             e instanceof Error && e.name === "AbortError"
               ? true
               : message.toLowerCase().includes("abort")
+          if (!isAbort && isMissingServerChatReferenceError(e) && canCommitCurrentLoad()) {
+            setServerChatId(null)
+            return
+          }
           if (!isAbort && canCommitCurrentLoad()) {
             const description =
               message ||
@@ -1011,6 +1066,7 @@ export const useServerChatLoader = ({
     setServerChatCharacterId,
     setServerChatClusterId,
     setServerChatExternalRef,
+    setServerChatId,
     setServerChatLoadError,
     setServerChatLoadState,
     setServerChatMetaLoaded,
@@ -1020,6 +1076,7 @@ export const useServerChatLoader = ({
     setServerChatTitle,
     setServerChatTopic,
     setServerChatVersion,
+    scope,
     t,
     temporaryChat
   ])

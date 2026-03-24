@@ -5,6 +5,7 @@ import pytest
 
 from tldw_Server_API.app.api.v1.API_Deps import DB_Deps as deps
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.api import MediaDbFactory
 from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import session as media_db_session
@@ -264,6 +265,38 @@ def test_reset_media_db_cache_closes_cached_factories(monkeypatch) -> None:
 
     assert closed == ["closed"]
     assert deps._media_db_factories == {}
+
+
+def test_managed_media_db_for_owner_releases_session_on_exit(monkeypatch) -> None:
+    released: list[str] = []
+    fake_session = SimpleNamespace(
+        release_context_connection=lambda: released.append("released"),
+    )
+
+    monkeypatch.setattr(deps, "get_media_db_for_owner", lambda owner_user_id: fake_session, raising=True)
+
+    with deps.managed_media_db_for_owner(123) as session:
+        assert session is fake_session
+
+    assert released == ["released"]
+
+
+def test_get_media_db_path_for_rag_omits_postgres_memory_placeholder() -> None:
+    media_db = SimpleNamespace(
+        db_path=":memory:",
+        backend_type=BackendType.POSTGRESQL,
+    )
+
+    assert deps.get_media_db_path_for_rag(media_db) is None
+
+
+def test_get_media_db_path_for_rag_keeps_real_sqlite_path() -> None:
+    media_db = SimpleNamespace(
+        db_path="/tmp/media.db",
+        backend_type=BackendType.SQLITE,
+    )
+
+    assert deps.get_media_db_path_for_rag(media_db) == "/tmp/media.db"
 
 
 def test_conflict_error_str_includes_zero_identifier() -> None:

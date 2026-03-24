@@ -63,16 +63,35 @@ export const RouteRedirect: React.FC<RouteRedirectProps> = ({
   React.useEffect(() => {
     if (redirectedRef.current) return;
     redirectedRef.current = true;
+    let cancelled = false;
 
-    void trackRouteAliasRedirect({
-      sourcePath: router.asPath || router.pathname || '',
-      destinationPath: destination,
-      preserveParams,
-    });
+    const redirect = async () => {
+      await trackRouteAliasRedirect({
+        sourcePath: router.asPath || router.pathname || '',
+        destinationPath: destination,
+        preserveParams,
+      });
 
-    startTransition(() => {
-      void router.replace(destination);
-    });
+      try {
+        if (typeof router.prefetch === 'function') {
+          await router.prefetch(destination);
+        }
+      } catch {
+        // Keep the redirect moving even when prefetch is unavailable.
+      }
+
+      if (cancelled) return;
+
+      startTransition(() => {
+        void router.replace(destination);
+      });
+    };
+
+    void redirect();
+
+    return () => {
+      cancelled = true;
+    };
   }, [destination, preserveParams, router]);
 
   return (

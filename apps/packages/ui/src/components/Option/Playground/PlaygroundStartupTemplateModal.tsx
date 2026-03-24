@@ -1,0 +1,152 @@
+import React from "react"
+import { Button, Modal } from "antd"
+import type { StartupTemplateBundle } from "./startup-template-bundles"
+import type { ParameterPreset } from "./ParameterPresets"
+import { toText } from "./hooks"
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface PlaygroundStartupTemplateModalProps {
+  preview: StartupTemplateBundle | null
+  onClose: () => void
+  onDelete: (id: string) => void
+  onApply: () => void
+  promptDescription: string | null
+  promptResolution: { source?: string } | null
+  preset: ParameterPreset | undefined
+  t: (key: string, defaultValue?: string, options?: any) => any
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export const PlaygroundStartupTemplateModal: React.FC<PlaygroundStartupTemplateModalProps> =
+  React.memo(function PlaygroundStartupTemplateModal(props) {
+    const {
+      preview,
+      onClose,
+      onDelete,
+      onApply,
+      promptDescription,
+      promptResolution,
+      preset,
+      t
+    } = props
+
+    return (
+      <Modal
+        open={Boolean(preview)}
+        onCancel={onClose}
+        title={t(
+          "playground:composer.startupTemplatePreviewTitle",
+          "Launch startup template"
+        )}
+        destroyOnHidden
+        data-testid="startup-template-preview-modal"
+        footer={
+          <div className="flex flex-wrap justify-between gap-2">
+            <Button
+              danger
+              onClick={() => {
+                if (!preview) return
+                onDelete(preview.id)
+              }}
+              disabled={!preview}
+            >
+              {t(
+                "playground:composer.startupTemplateDelete",
+                "Delete template"
+              )}
+            </Button>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button onClick={onClose}>
+                {t("common:cancel", "Cancel")}
+              </Button>
+              <Button
+                type="primary"
+                onClick={onApply}
+                disabled={!preview}
+              >
+                {t(
+                  "playground:composer.startupTemplateApply",
+                  "Apply template"
+                )}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        {preview ? (
+          <div className="space-y-3">
+            <p className="text-sm text-text-muted">
+              {t(
+                "playground:composer.startupTemplatePreviewBody",
+                "Review active context that will be applied before your next send."
+              )}
+            </p>
+            <div className="grid gap-2 text-xs text-text sm:grid-cols-2">
+              <div className="rounded-md border border-border bg-surface px-2 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  {t("playground:composer.context.model", "Model")}
+                </div>
+                <div className="mt-1">
+                  {preview.selectedModel || t("common:none", "None")}
+                </div>
+              </div>
+              <div className="rounded-md border border-border bg-surface px-2 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  {t("playground:composer.context.prompt", "Prompt")}
+                </div>
+                <div className="mt-1">{promptDescription}</div>
+              </div>
+              <div className="rounded-md border border-border bg-surface px-2 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  {t("playground:composer.context.preset", "Preset")}
+                </div>
+                <div className="mt-1">
+                  {preset
+                    ? t(
+                        `playground:presets.${preset.key}.label`,
+                        preset.label
+                      )
+                    : t("common:none", "None")}
+                </div>
+              </div>
+              <div className="rounded-md border border-border bg-surface px-2 py-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  {t("playground:composer.context.character", "Character")}
+                </div>
+                <div className="mt-1">
+                  {preview.character?.name || t("common:none", "None")}
+                </div>
+              </div>
+            </div>
+            <div className="rounded-md border border-border bg-surface px-2 py-2 text-xs text-text">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                {t("playground:composer.context.pinnedSources", "Pinned")}
+              </div>
+              <div className="mt-1">
+                {toText(
+                  t("playground:composer.context.pinnedCount", {
+                    defaultValue: "{{count}} sources",
+                    count: preview.ragPinnedResults.length
+                  } as any)
+                )}
+              </div>
+              {promptResolution?.source === "prompt-studio" && (
+                <div className="mt-1 text-[11px] text-text-muted">
+                  {t(
+                    "playground:composer.startupTemplatePromptStudioApplied",
+                    "Prompt Studio mapping will be reapplied if available."
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+    )
+  })

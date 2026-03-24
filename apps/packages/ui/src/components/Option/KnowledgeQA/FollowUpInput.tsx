@@ -119,6 +119,7 @@ export function FollowUpInput({ className }: FollowUpInputProps) {
             {/* Submit button */}
             <button
               type="submit"
+              aria-label="Submit follow-up question"
               disabled={!input.trim() || controlsDisabled}
               className={cn(
                 "absolute right-2 top-1/2 -translate-y-1/2",

@@ -3,12 +3,14 @@ import type { ToolCall, ToolCallResult } from "@/types/tool-calls"
 import type { MessageVariant } from "@/store/option"
 import type { Character } from "@/types/character"
 import type { MessageSteeringMode } from "@/types/message-steering"
+import type { ChatScope } from "@/types/chat-scope"
 import type { ImageGenerationRequestSnapshot } from "@/utils/image-generation-chat"
 
 export interface MessageIdentityProps {
   conversationInstanceId: string
   serverChatId?: string | null
   serverMessageId?: string | null
+  scope?: ChatScope
   messageId?: string
   historyId?: string
   temporaryChat?: boolean

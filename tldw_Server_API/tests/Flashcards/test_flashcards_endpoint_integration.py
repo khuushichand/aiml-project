@@ -336,6 +336,49 @@ def test_generate_flashcards_endpoint_returns_generated_cards(
     assert payload["flashcards"][1]["tags"] == ["biology", "metabolism"]
 
 
+def test_generate_flashcards_endpoint_uses_default_provider_when_omitted(
+    client_with_flashcards_db: TestClient,
+    monkeypatch,
+):
+    from tldw_Server_API.app.api.v1.endpoints import flashcards as flashcards_endpoint
+
+    monkeypatch.setattr(
+        flashcards_endpoint,
+        "loaded_config_data",
+        {"API": {"default_api": "anthropic"}},
+    )
+
+    async def fake_generate_adapter(config, context):
+        assert config.get("provider") == "anthropic"
+        assert config.get("text") == "Provider fallback"
+        return {
+            "flashcards": [
+                {"front": "Q1", "back": "A1", "tags": []},
+            ],
+            "count": 1,
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.flashcards.run_flashcard_generate_adapter",
+        fake_generate_adapter,
+    )
+
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/generate",
+        json={
+            "text": "Provider fallback",
+            "num_cards": 1,
+            "card_type": "basic",
+            "difficulty": "medium",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["flashcards"][0]["front"] == "Q1"
+
+
 def test_export_apkg_include_reverse_flag_generates_reverse(client_with_flashcards_db: TestClient):
     # Create deck and a plain basic card (no reverse/model_type)
     r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckTwo"}, headers=AUTH_HEADERS)

@@ -1,16 +1,22 @@
 # TTS Providers Getting Started Guide
 
-This guide helps new operators bring text-to-speech (TTS) online inside `tldw_server`. It walks through the supported providers (cloud + local), required dependencies, configuration files, and verification commands so you can decide which adapter to enable and confirm it works end to end.
+This guide is now the TTS provider comparison and reference page, not the primary first-time onboarding guide.
+For first-time setup, start with the hardware-specific audio guides:
+
+- [First-Time Audio Setup: CPU Systems](../../Getting_Started/First_Time_Audio_Setup_CPU.md)
+- [First-Time Audio Setup: GPU/Accelerated Systems](../../Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md)
+
+Then return here if you want to compare adapters, switch providers, or tune a specific TTS backend.
 
 Scope:
 - Use this page for provider selection and first successful synthesis.
 - Use [Getting Started — STT and TTS](./Getting-Started-STT_and_TTS.md) for quick dual STT+TTS bring-up.
 - Use [TTS Provider Setup Guide](./TTS-SETUP-GUIDE.md) to jump to deep provider runbooks and tuning docs.
 
-## Recommended Setup Path - Bundle First
+## Recommended Setup Path
 
-For fresh installs, the default operator path is now `/setup`, not manual provider-by-provider bring-up.
-Open `http://127.0.0.1:8000/setup`, review the detected hardware profile, provision the recommended audio bundle, and run verification before tuning individual TTS providers in this guide.
+For fresh installs, use the CPU or GPU/accelerated first-time audio guide before doing provider-by-provider tuning here.
+`/setup` remains an option, but this page is primarily for comparing adapters and overriding the default onboarding recommendations.
 
 Use manual provider setup below when:
 - you need a provider that is not the bundle default
@@ -139,7 +145,7 @@ Installer flags:
    - FFmpeg (`brew install ffmpeg` or `apt-get install -y ffmpeg`)
    - eSpeak NG for phonemizer-backed models (`brew install espeak-ng` / `apt-get install -y espeak-ng`)
 3. **Model cache helpers**
-   `pip install huggingface-hub` and log in if you need gated repos.
+   `pip install -U "huggingface_hub"` and run `hf auth login` if you need gated repos.
 4. **Runtime**
    Start the API:
    ```bash
@@ -149,7 +155,7 @@ Installer flags:
 
 ## Recommended Setup Flow
 1. **Pick providers** you care about and install their extras.
-2. **Download models** proactively (use `huggingface-cli download ... --local-dir ...` for offline hosts).
+2. **Download models** proactively (use `hf download ... --local-dir ...` for offline hosts).
 3. **Edit `tts_providers_config.yaml`**
    - Enable providers, point to local paths, and adjust `device`, `sample_rate`, etc.
    - Adjust `provider_priority` so preferred backends run first.
@@ -284,7 +290,7 @@ Each section highlights installation, configuration, and a smoke test.
 
 ### Chatterbox
 - **Install**: `pip install -e ".[TTS_chatterbox]"`; add `.[TTS_chatterbox_lang]` if you plan to enable `use_multilingual`. If the runtime still reports missing `chatterbox`, install upstream with `pip install chatterbox-tts` (or from source).
-- **Models**: cache `ResembleAI/chatterbox` locally with `huggingface-cli download ...`.
+- **Models**: cache `ResembleAI/chatterbox` locally with `hf download ...`.
 - **Config**:
   ```yaml
   providers:
@@ -461,7 +467,7 @@ All env vars above are documented in `Env_Vars.md`.
 
 ## Troubleshooting Cheatsheet
 - **`ImportError` / missing modules** — re-run the correct extra install (e.g., `pip install -e ".[TTS_vibevoice]"`).
-- **Auto-download blocked** — set `TTS_AUTO_DOWNLOAD=0` (or per provider) and pre-populate `models/` via `huggingface-cli download`.
+- **Auto-download blocked** — set `TTS_AUTO_DOWNLOAD=0` (or per provider) and pre-populate `models/` via `hf download`.
 - **`eSpeak` not found** — install `espeak-ng`; on macOS export `PHONEMIZER_ESPEAK_LIBRARY=/opt/homebrew/lib/libespeak-ng.dylib`.
 - **CUDA OOM** — enable quantization (VibeVoice), lower `vibevoice_variant`, or move the provider lower in `provider_priority` so lighter backends run first.
 - **Voice cloning rejects sample** — ensure duration/sample rate matches provider requirements and send mono audio.

@@ -12,18 +12,29 @@ import { textContainsQuery } from "@/utils/text-highlight"
 
 const Markdown = React.lazy(() => import("@/components/Common/Markdown"))
 
-type DocSource = "extension" | "server"
+export type DocumentationSource = "extension" | "server"
 
 type DocImportMap = Record<string, () => Promise<string>>
 
-type DocEntry = {
+export type DocumentationDocEntry = {
   id: string
   title: string
-  source: DocSource
+  source: DocumentationSource
   relativePath: string
   fullPath: string
-  importPath: string
+  importPath?: string
   inlineContent?: string
+  isFallback?: boolean
+}
+
+export type DocumentationDocsBySource = Record<
+  DocumentationSource,
+  DocumentationDocEntry[]
+>
+
+type DocumentationPageProps = {
+  docsBySource?: Partial<DocumentationDocsBySource>
+  loadDocContent?: (doc: DocumentationDocEntry) => Promise<string>
 }
 
 type DocLoadState = {
@@ -49,7 +60,7 @@ const SERVER_DOC_IMPORTS: DocImportMap =
       )
     : {}
 
-const DOC_IMPORTS_BY_SOURCE: Record<DocSource, DocImportMap> = {
+const DOC_IMPORTS_BY_SOURCE: Record<DocumentationSource, DocImportMap> = {
   extension: EXTENSION_DOC_IMPORTS,
   server: SERVER_DOC_IMPORTS
 }
@@ -82,9 +93,9 @@ const normalizePath = (path: string) => path.replace(/^\/+/, "")
 
 const buildDocs = (
   imports: DocImportMap,
-  source: DocSource,
+  source: DocumentationSource,
   baseDir: string
-): DocEntry[] =>
+): DocumentationDocEntry[] =>
   Object.keys(imports)
     .map((path) => {
       const fullPath = normalizePath(path)
@@ -97,13 +108,14 @@ const buildDocs = (
         source,
         relativePath,
         fullPath,
-        importPath: path
+        importPath: path,
+        isFallback: false
       }
     })
     .sort((a, b) => a.title.localeCompare(b.title))
 
 const resolveSelectedDocSelection = (
-  docs: DocEntry[],
+  docs: DocumentationDocEntry[],
   activeId: string | null
 ) => {
   if (activeId && docs.some((doc) => doc.id === activeId)) {
@@ -125,16 +137,17 @@ const SERVER_DOCS = buildDocs(
 )
 
 const buildFallbackDoc = (
-  source: DocSource,
+  source: DocumentationSource,
   title: string,
   baseDir: string
-): DocEntry => ({
+): DocumentationDocEntry => ({
   id: `${source}:fallback`,
   title,
   source,
   relativePath: `${baseDir}/README.md`,
   fullPath: `${baseDir}/README.md`,
   importPath: `inline:${source}:fallback`,
+  isFallback: true,
   inlineContent: `# ${title}
 
 Documentation files were not auto-discovered for this source.
@@ -145,11 +158,11 @@ Add markdown files under ${baseDir} to populate this section.
 `
 })
 
-const EXTENSION_FALLBACK_DOCS: DocEntry[] = [
+const EXTENSION_FALLBACK_DOCS: DocumentationDocEntry[] = [
   buildFallbackDoc("extension", "Extension Documentation", "Docs/User_Documentation")
 ]
 
-const SERVER_FALLBACK_DOCS: DocEntry[] = [
+const SERVER_FALLBACK_DOCS: DocumentationDocEntry[] = [
   buildFallbackDoc("server", "Server Documentation", "Docs/Published")
 ]
 
@@ -159,32 +172,58 @@ const EXTENSION_DOCS_WITH_FALLBACK =
 const SERVER_DOCS_WITH_FALLBACK =
   SERVER_DOCS.length > 0 ? SERVER_DOCS : SERVER_FALLBACK_DOCS
 
-export const DocumentationPage: React.FC = () => {
+const hasRealDocs = (docs: DocumentationDocEntry[]) =>
+  docs.some((doc) => !doc.isFallback)
+
+const resolveDocsBySource = (
+  docsBySource?: Partial<DocumentationDocsBySource>
+): DocumentationDocsBySource => ({
+  extension:
+    docsBySource?.extension && docsBySource.extension.length > 0
+      ? docsBySource.extension
+      : EXTENSION_DOCS_WITH_FALLBACK,
+  server:
+    docsBySource?.server && docsBySource.server.length > 0
+      ? docsBySource.server
+      : SERVER_DOCS_WITH_FALLBACK
+})
+
+const pickDefaultActiveSource = (
+  docsBySource: DocumentationDocsBySource
+): DocumentationSource => {
+  if (!hasRealDocs(docsBySource.extension) && hasRealDocs(docsBySource.server)) {
+    return "server"
+  }
+  if (hasRealDocs(docsBySource.extension)) return "extension"
+  if (hasRealDocs(docsBySource.server)) return "server"
+  if (docsBySource.extension.length > 0) return "extension"
+  if (docsBySource.server.length > 0) return "server"
+  return "extension"
+}
+
+export const DocumentationPage: React.FC<DocumentationPageProps> = ({
+  docsBySource: docsBySourceOverride,
+  loadDocContent
+}) => {
   const { t } = useTranslation(["option", "common"])
-  const [activeSource, setActiveSource] = React.useState<DocSource>(() => {
-    if (EXTENSION_DOCS_WITH_FALLBACK.length > 0) return "extension"
-    if (SERVER_DOCS_WITH_FALLBACK.length > 0) return "server"
-    return "extension"
-  })
+  const docsBySource = React.useMemo(
+    () => resolveDocsBySource(docsBySourceOverride),
+    [docsBySourceOverride]
+  )
+  const [activeSource, setActiveSource] = React.useState<DocumentationSource>(() =>
+    pickDefaultActiveSource(docsBySource)
+  )
   const [activeDocIds, setActiveDocIds] = React.useState<
-    Record<DocSource, string | null>
+    Record<DocumentationSource, string | null>
   >(() => ({
-    extension: EXTENSION_DOCS_WITH_FALLBACK[0]?.id ?? null,
-    server: SERVER_DOCS_WITH_FALLBACK[0]?.id ?? null
+    extension: docsBySource.extension[0]?.id ?? null,
+    server: docsBySource.server[0]?.id ?? null
   }))
   const [searchQuery, setSearchQuery] = React.useState("")
   const [docStateById, setDocStateById] = React.useState<
     Record<string, DocLoadState>
   >({})
   const loadingDocIds = React.useRef(new Set<string>())
-
-  const docsBySource = React.useMemo(
-    () => ({
-      extension: EXTENSION_DOCS_WITH_FALLBACK,
-      server: SERVER_DOCS_WITH_FALLBACK
-    }),
-    []
-  )
 
   const sourceMeta = React.useMemo(
     () => ({
@@ -203,10 +242,25 @@ export const DocumentationPage: React.FC = () => {
     [t]
   )
 
+  React.useEffect(() => {
+    const preferredSource = pickDefaultActiveSource(docsBySource)
+    setActiveSource((current) => {
+      if (current === preferredSource) return current
+      const currentDocs = docsBySource[current]
+      if (!hasRealDocs(currentDocs) && hasRealDocs(docsBySource[preferredSource])) {
+        return preferredSource
+      }
+      if (currentDocs.length === 0 && docsBySource[preferredSource].length > 0) {
+        return preferredSource
+      }
+      return current
+    })
+  }, [docsBySource])
+
   const trimmedQuery = searchQuery.trim()
 
   const filterDocs = React.useCallback(
-    (docs: DocEntry[]) => {
+    (docs: DocumentationDocEntry[]) => {
       if (!trimmedQuery) return docs
       return docs.filter((doc) => {
         const docState = docStateById[doc.id]
@@ -263,7 +317,7 @@ export const DocumentationPage: React.FC = () => {
   )
 
   React.useEffect(() => {
-    const sources: DocSource[] = ["extension", "server"]
+    const sources: DocumentationSource[] = ["extension", "server"]
     const nextActiveDocIds = { ...activeDocIds }
     let shouldUpdate = false
 
@@ -281,7 +335,7 @@ export const DocumentationPage: React.FC = () => {
   }, [activeDocIds, resolvedSelectionBySource])
 
   const ensureDocLoaded = React.useCallback(
-    async (doc: DocEntry | null) => {
+    async (doc: DocumentationDocEntry | null) => {
       if (!doc) return
       const existingState = docStateById[doc.id]
       if (
@@ -306,8 +360,10 @@ export const DocumentationPage: React.FC = () => {
         return
       }
 
-      const loader = DOC_IMPORTS_BY_SOURCE[doc.source][doc.importPath]
-      if (!loader) {
+      const importLoader = doc.importPath
+        ? DOC_IMPORTS_BY_SOURCE[doc.source][doc.importPath]
+        : undefined
+      if (!loadDocContent && !importLoader) {
         setDocStateById((prev) => ({
           ...prev,
           [doc.id]: {
@@ -325,7 +381,9 @@ export const DocumentationPage: React.FC = () => {
       }))
 
       try {
-        const content = await loader()
+        const content = loadDocContent
+          ? await loadDocContent(doc)
+          : await importLoader!()
         const title = extractTitle(content, doc.title)
         setDocStateById((prev) => ({
           ...prev,
@@ -348,7 +406,7 @@ export const DocumentationPage: React.FC = () => {
         loadingDocIds.current.delete(doc.id)
       }
     },
-    [docStateById]
+    [docStateById, loadDocContent]
   )
 
   const activeSelectedDoc = selectedDocBySource[activeSource]
@@ -357,7 +415,7 @@ export const DocumentationPage: React.FC = () => {
     void ensureDocLoaded(activeSelectedDoc)
   }, [activeSelectedDoc, ensureDocLoaded])
 
-  const renderDocPane = (source: DocSource) => {
+  const renderDocPane = (source: DocumentationSource) => {
     const docs = docsBySource[source]
     const filteredDocs = filteredDocsBySource[source]
     const selectedDocId = selectedDocIdBySource[source]
@@ -566,7 +624,7 @@ export const DocumentationPage: React.FC = () => {
         </div>
         <Tabs
           activeKey={activeSource}
-          onChange={(key) => setActiveSource(key as DocSource)}
+          onChange={(key) => setActiveSource(key as DocumentationSource)}
           items={[
             {
               key: "extension",

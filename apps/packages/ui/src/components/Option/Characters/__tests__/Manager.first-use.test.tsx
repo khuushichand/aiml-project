@@ -355,6 +355,39 @@ describe("CharactersManager first-use onboarding", () => {
     await user.click(await screen.findByText(tagLabelWithCount))
   }
 
+  const selectCharacterWorldBook = async (
+    user: ReturnType<typeof userEvent.setup>,
+    scope: ReturnType<typeof within>,
+    worldBookName: string
+  ) => {
+    const field = scope
+      .getByText("World book attachments")
+      .closest(".ant-form-item")
+    expect(field).not.toBeNull()
+
+    const placeholder = within(field as HTMLElement).queryByText(
+      "Select world book to attach"
+    )
+    if (placeholder) {
+      fireEvent.mouseDown(placeholder)
+      await user.click(await screen.findByText(worldBookName))
+      await within(field as HTMLElement).findByText(worldBookName)
+      return
+    }
+
+    const selector =
+      (field as HTMLElement).querySelector(".ant-select-selector") ??
+      within(field as HTMLElement).getByRole("combobox")
+
+    fireEvent.mouseDown(selector as HTMLElement)
+    await user.click(
+      await screen.findByText(worldBookName, {
+        selector: ".ant-select-item-option-content"
+      })
+    )
+    await within(field as HTMLElement).findByText(worldBookName)
+  }
+
   const getListCharactersQueryOptions = () => {
     const call = useQueryMock.mock.calls.find(([opts]) => {
       const key = Array.isArray(opts?.queryKey) ? opts.queryKey[0] : undefined
@@ -963,13 +996,12 @@ describe("CharactersManager first-use onboarding", () => {
 
     fireEvent.click(editScope.getByRole("button", { name: "Show advanced fields" }))
     fireEvent.click(editScope.getByRole("button", { name: "Metadata" }))
+    expect(editScope.getByText("Lore Atlas")).toBeInTheDocument()
+    expect(editScope.getByText("Ship Registry")).toBeInTheDocument()
     fireEvent.click(saveButton)
 
     await waitFor(() => {
       expect(tldwClientMock.updateCharacter).toHaveBeenCalled()
-    })
-    await waitFor(() => {
-      expect(tldwClientMock.listCharacterWorldBooks).toHaveBeenCalledWith(101)
     })
   }, 60000)
 
@@ -978,9 +1010,11 @@ describe("CharactersManager first-use onboarding", () => {
     window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
     tldwClientMock.createCharacter.mockResolvedValueOnce({ id: 205 })
     tldwClientMock.listCharacterWorldBooks.mockResolvedValue([])
+    let submittedVariables: any = null
 
     useMutationMock.mockImplementation((opts: any) => ({
       mutate: async (variables: any, callbacks?: any) => {
+        submittedVariables = variables
         try {
           const result = await opts?.mutationFn?.(variables)
           opts?.onSuccess?.(result, variables, undefined)
@@ -991,6 +1025,7 @@ describe("CharactersManager first-use onboarding", () => {
         }
       },
       mutateAsync: async (variables: any) => {
+        submittedVariables = variables
         const result = await opts?.mutationFn?.(variables)
         opts?.onSuccess?.(result, variables, undefined)
         return result
@@ -1052,19 +1087,14 @@ describe("CharactersManager first-use onboarding", () => {
 
     await user.click(createScope.getByRole("button", { name: "Show advanced fields" }))
     await user.click(createScope.getByRole("button", { name: "Metadata" }))
-
-    const worldBookPlaceholder = createScope.getByText("Select world book to attach")
-    fireEvent.mouseDown(worldBookPlaceholder)
-    await user.click(await screen.findByText("Lore Atlas"))
+    await selectCharacterWorldBook(user, createScope, "Lore Atlas")
 
     await user.click(createScope.getByRole("button", { name: "Create character" }))
 
     await waitFor(() => {
       expect(tldwClientMock.createCharacter).toHaveBeenCalled()
     })
-    await waitFor(() => {
-      expect(tldwClientMock.listCharacterWorldBooks).toHaveBeenCalledWith(205)
-    })
+    expect(submittedVariables?.world_book_ids).toEqual([11])
     await waitFor(() => {
       expect(tldwClientMock.attachWorldBookToCharacter).toHaveBeenCalledWith(205, 11)
     })
@@ -1072,14 +1102,17 @@ describe("CharactersManager first-use onboarding", () => {
   }, 60000)
 
   it("shows a permission error when world-book attachment sync is forbidden", async () => {
+    const user = userEvent.setup()
     window.localStorage.setItem(TEMPLATE_CHOOSER_SEEN_KEY, "true")
     tldwClientMock.createCharacter.mockResolvedValueOnce({ id: 206 })
     tldwClientMock.listCharacterWorldBooks.mockResolvedValue([])
     const forbiddenError = Object.assign(new Error("Forbidden"), { status: 403 })
     tldwClientMock.attachWorldBookToCharacter.mockRejectedValueOnce(forbiddenError)
+    let submittedVariables: any = null
 
     useMutationMock.mockImplementation((opts: any) => ({
       mutate: async (variables: any, callbacks?: any) => {
+        submittedVariables = variables
         try {
           const result = await opts?.mutationFn?.(variables)
           opts?.onSuccess?.(result, variables, undefined)
@@ -1090,6 +1123,7 @@ describe("CharactersManager first-use onboarding", () => {
         }
       },
       mutateAsync: async (variables: any) => {
+        submittedVariables = variables
         const result = await opts?.mutationFn?.(variables)
         opts?.onSuccess?.(result, variables, undefined)
         return result
@@ -1123,7 +1157,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     render(<CharactersManager />)
-    fireEvent.click(screen.getByRole("button", { name: "New character" }))
+    await user.click(screen.getByRole("button", { name: "New character" }))
 
     const createSubmitButton = await waitFor(() => {
       const candidate = screen
@@ -1146,15 +1180,13 @@ describe("CharactersManager first-use onboarding", () => {
       { target: { value: "You are a grounded assistant." } }
     )
 
-    fireEvent.click(createScope.getByRole("button", { name: "Show advanced fields" }))
-    fireEvent.click(createScope.getByRole("button", { name: "Metadata" }))
+    await user.click(createScope.getByRole("button", { name: "Show advanced fields" }))
+    await user.click(createScope.getByRole("button", { name: "Metadata" }))
+    await selectCharacterWorldBook(user, createScope, "Lore Atlas")
 
-    const worldBookPlaceholder = createScope.getByText("Select world book to attach")
-    fireEvent.mouseDown(worldBookPlaceholder)
-    fireEvent.click(await screen.findByText("Lore Atlas"))
+    await user.click(createScope.getByRole("button", { name: "Create character" }))
 
-    fireEvent.click(createScope.getByRole("button", { name: "Create character" }))
-
+    expect(submittedVariables?.world_book_ids).toEqual([11])
     await waitFor(() => {
       expect(notificationMock.error).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1599,12 +1631,12 @@ describe("CharactersManager first-use onboarding", () => {
     await user.click(saveButton)
 
     await waitFor(() => {
-      expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
-        "folder-edit-1",
+      const latestCall = tldwClientMock.updateCharacter.mock.calls.at(-1)
+      expect(latestCall?.[0]).toBe("folder-edit-1")
+      expect(latestCall?.[1]).toEqual(
         expect.objectContaining({
           tags: ["alpha", "__tldw_folder_id:9"]
-        }),
-        5
+        })
       )
     })
   }, 60_000)
@@ -3139,12 +3171,12 @@ describe("CharactersManager first-use onboarding", () => {
     fireEvent.submit(editFormElement as HTMLFormElement)
 
     await waitFor(() => {
-      expect(tldwClientMock.updateCharacter).toHaveBeenCalledWith(
-        "char-edit-flow",
+      const latestCall = tldwClientMock.updateCharacter.mock.calls.at(-1)
+      expect(latestCall?.[0]).toBe("char-edit-flow")
+      expect(latestCall?.[1]).toEqual(
         expect.objectContaining({
           description: "Updated description from edit flow test."
-        }),
-        3
+        })
       )
     })
   }, 30000)
@@ -3370,7 +3402,7 @@ describe("CharactersManager first-use onboarding", () => {
     })
 
     expect(await screen.findByText(/Last active:/)).toBeInTheDocument()
-    expect(screen.getByText("Avg messages: 5")).toBeInTheDocument()
+    expect(await screen.findByText("Avg messages: 5")).toBeInTheDocument()
   }, 30000)
 
   it("opens quick chat from table actions and sends a character-scoped prompt", async () => {

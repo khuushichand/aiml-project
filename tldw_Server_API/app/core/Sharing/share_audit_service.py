@@ -5,6 +5,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import AuditLogError
 from tldw_Server_API.app.core.AuthNZ.repos.shared_workspace_repo import SharedWorkspaceRepo
 
 # Standard event types
@@ -55,6 +56,7 @@ class ShareAuditService:
             )
         except Exception as exc:
             logger.error(f"ShareAuditService.log failed for {event_type}: {exc}")
+            raise AuditLogError(f"Failed to log share audit event: {event_type}") from exc
 
     async def query(
         self,

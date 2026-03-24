@@ -305,10 +305,22 @@ test.describe("Search Workflow", () => {
 
       if (results.length > 0) {
         // Click first result
+        const urlBefore = authedPage.url()
         await searchPage.clickResult(0)
 
         // Should navigate to detail page or show content
-        await authedPage.waitForTimeout(1000)
+        await expect
+          .poll(
+            async () =>
+              authedPage.url() !== urlBefore ||
+              (await authedPage
+                .getByRole("button", { name: /new search|start new topic/i })
+                .first()
+                .isVisible()
+                .catch(() => false)),
+            { timeout: 10_000 }
+          )
+          .toBe(true)
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -332,11 +344,13 @@ test.describe("Search Workflow", () => {
 
       if (results.length > 0) {
         await searchPage.clickResult(0)
-        await authedPage.waitForTimeout(1000)
+        await expect(
+          authedPage.getByRole("button", { name: /new search|start new topic/i }).first()
+        ).toBeVisible({ timeout: 10_000 }).catch(() => {})
 
         // Try to go back
         await searchPage.backToSearch()
-        await authedPage.waitForTimeout(1000)
+        await expect(await searchPage.getSearchInput()).toBeVisible({ timeout: 10_000 })
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -427,8 +441,6 @@ test.describe("Search Workflow", () => {
       )
 
       // Loading may appear briefly
-      await authedPage.waitForTimeout(500)
-
       // Wait for search to complete
       await searchPage.waitForResults()
 
@@ -470,8 +482,11 @@ test.describe("Search Workflow", () => {
       await authedPage.goto("/knowledge", { waitUntil: "domcontentloaded" })
       await waitForConnection(authedPage)
 
-      // Verify page loaded
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await expect(
+        authedPage.getByText("Ask Your Library").or(
+          authedPage.getByRole("button", { name: /^ask$/i })
+        ).first()
+      ).toBeVisible({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -488,7 +503,11 @@ test.describe("Search Workflow", () => {
         "[data-testid='knowledge-container'], .knowledge-page, .knowledge-base"
       )
 
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await expect(
+        authedPage.getByText("Ask Your Library").or(
+          authedPage.getByRole("button", { name: /^ask$/i })
+        ).first()
+      ).toBeVisible({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -510,9 +529,6 @@ test.describe("Search Workflow", () => {
       const _suggestions = authedPage.locator(
         "[data-testid='search-suggestions'], .autocomplete-dropdown, .suggestions"
       )
-
-      // Suggestions may appear after typing
-      await authedPage.waitForTimeout(1000)
 
       // Suggestions are optional feature
       await assertNoCriticalErrors(diagnostics)

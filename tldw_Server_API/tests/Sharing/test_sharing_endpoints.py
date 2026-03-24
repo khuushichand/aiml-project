@@ -6,17 +6,18 @@ from unittest.mock import patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import Field
 
 from tldw_Server_API.app.api.v1.endpoints.sharing import router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.integration
 
 
 class _TestUser(User):
     """Subclass with team/org membership for testing shared-with-me."""
-    team_ids: list[int] = []
-    org_ids: list[int] = []
+    team_ids: list[int] = Field(default_factory=list)
+    org_ids: list[int] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -40,15 +41,6 @@ def test_app(test_user):
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _fake_user
 
-    # Disable RBAC rate limiting
-    def _no_rate_limit(scope: str):
-        async def _noop():
-            pass
-        return _noop
-    with patch("tldw_Server_API.app.api.v1.endpoints.sharing.rbac_rate_limit", _no_rate_limit):
-        # Re-import with patched rbac
-        pass
-
     return app
 
 
@@ -63,7 +55,13 @@ def mock_repo(repo):
     async def _noop_verify(*args, **kwargs):
         pass
 
+    def _no_rate_limit(scope: str):
+        async def _noop():
+            pass
+        return _noop
+
     with patch("tldw_Server_API.app.api.v1.endpoints.sharing._get_repo", return_value=repo), \
+         patch("tldw_Server_API.app.api.v1.endpoints.sharing.rbac_rate_limit", _no_rate_limit), \
          patch("tldw_Server_API.app.api.v1.endpoints.sharing._verify_workspace_ownership", _noop_verify), \
          patch("tldw_Server_API.app.api.v1.endpoints.sharing._validate_user_has_share_access", _noop_verify), \
          patch("tldw_Server_API.app.api.v1.endpoints.sharing._get_token_service") as mock_ts, \

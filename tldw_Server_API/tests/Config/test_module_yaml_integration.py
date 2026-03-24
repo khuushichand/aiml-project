@@ -186,6 +186,56 @@ def test_tts_config_txt_legacy_key_ignored_when_canonical_present(tmp_path):
     assert any("ignored when 'default_provider' is also set" in msg for msg in warning_messages)
 
 
+def test_tts_config_txt_local_settings_fan_out_to_kitten_tts(tmp_path):
+
+    yaml_path = tmp_path / "tts_providers_config.yaml"
+    yaml_path.write_text(
+        "\n".join(
+            [
+                "providers:",
+                "  kitten_tts:",
+                "    enabled: false",
+                "    auto_download: false",
+                "  kokoro:",
+                "    enabled: false",
+                "    auto_download: false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config_path = tmp_path / "config.txt"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[TTS-Settings]",
+                "local_device = cuda",
+                "auto_download_local_models = true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manager = TTSConfigManager(yaml_path=yaml_path, config_txt_path=config_path)
+    cfg = manager.get_config()
+
+    assert cfg.providers["kitten_tts"].device == "cuda"
+    assert cfg.providers["kitten_tts"].auto_download is True
+
+
+def test_default_tts_yaml_includes_kitten_tts_provider():
+
+    manager = TTSConfigManager()
+    cfg = manager.get_config()
+
+    assert "kitten_tts" in cfg.providers
+    assert cfg.providers["kitten_tts"].model == "KittenML/kitten-tts-nano-0.8"
+    assert cfg.providers["kitten_tts"].model_revision == "8d6d5a1851ffd13c894c40227c888302c2a86ef7"
+    assert cfg.providers["kitten_tts"].auto_download is True
+
+
 def test_embeddings_precedence_env_over_config_over_yaml(tmp_path, monkeypatch):
 
     config_dir = tmp_path

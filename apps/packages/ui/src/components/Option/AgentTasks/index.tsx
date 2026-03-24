@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react"
 import { useTranslation } from "react-i18next"
-import { useStorage } from "@plasmohq/storage/hook"
 import {
   Alert,
   Button,
@@ -29,6 +28,7 @@ import {
   Trash2,
   ChevronRight,
 } from "lucide-react"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 
 // Types matching the backend orchestration API
 type ProjectSummary = {
@@ -70,6 +70,12 @@ type RunItem = {
   completed_at?: string
 }
 
+const AGENT_ORCHESTRATION_UNSUPPORTED_MESSAGE = "Agent orchestration unavailable"
+const AGENT_ORCHESTRATION_UNSUPPORTED_DESCRIPTION =
+  "This server does not expose agent orchestration endpoints."
+const AGENT_ORCHESTRATION_UNSUPPORTED_CODE = "AGENT_ORCHESTRATION_UNSUPPORTED"
+const AGENT_ORCHESTRATION_PROJECTS_PATH = "/api/v1/agent-orchestration/projects"
+
 const STATUS_COLORS: Record<string, string> = {
   todo: "default",
   inprogress: "processing",
@@ -86,13 +92,50 @@ const STATUS_ICONS: Record<string, React.ReactNode> = {
   triage: <XCircle className="h-3.5 w-3.5" />,
 }
 
+const normalizeListPayload = <T,>(payload: unknown, key: string): T[] => {
+  if (Array.isArray(payload)) {
+    return payload as T[]
+  }
+  if (payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>)[key])) {
+    return (payload as Record<string, T[]>)[key]
+  }
+  return []
+}
+
+const createUnsupportedError = (): Error & { code: string } =>
+  Object.assign(new Error(AGENT_ORCHESTRATION_UNSUPPORTED_CODE), {
+    code: AGENT_ORCHESTRATION_UNSUPPORTED_CODE,
+  })
+
+const isUnsupportedError = (error: unknown): boolean =>
+  Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: string }).code === AGENT_ORCHESTRATION_UNSUPPORTED_CODE
+  )
+
+const readApiErrorMessage = async (response: Response): Promise<string> => {
+  const payload = await response.json().catch(() => null)
+  if (payload && typeof payload === "object" && typeof (payload as { detail?: unknown }).detail === "string") {
+    return (payload as { detail: string }).detail
+  }
+  return `HTTP ${response.status}`
+}
+
+const ensureOrchestrationResponse = async (response: Response): Promise<void> => {
+  if (response.ok) {
+    return
+  }
+  if (response.status === 404) {
+    throw createUnsupportedError()
+  }
+  throw new Error(await readApiErrorMessage(response))
+}
+
 export const AgentTasksPage: React.FC = () => {
   const { t } = useTranslation(["option", "common"])
-
-  const [serverUrl] = useStorage("serverUrl", "http://localhost:8000")
-  const [authMode] = useStorage("authMode", "single-user")
-  const [apiKey] = useStorage("apiKey", "")
-  const [accessToken] = useStorage("accessToken", "")
+  const { config: connectionConfig } = useCanonicalConnectionConfig()
 
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
@@ -100,70 +143,139 @@ export const AgentTasksPage: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [tasksLoading, setTasksLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isUnsupported, setIsUnsupported] = useState(false)
 
   // Modal states
   const [showProjectModal, setShowProjectModal] = useState(false)
   const [showTaskModal, setShowTaskModal] = useState(false)
   const [projectForm] = Form.useForm()
   const [taskForm] = Form.useForm()
+  const orchestrationSupportRef = React.useRef<boolean | null>(null)
 
   const getHeaders = useCallback(async () => {
     const headers: Record<string, string> = { "Content-Type": "application/json" }
-    if (authMode === "single-user" && apiKey) {
-      headers["X-API-KEY"] = apiKey
-    } else if (authMode === "multi-user" && accessToken) {
-      headers.Authorization = `Bearer ${accessToken}`
+    if (!connectionConfig) {
+      return headers
+    }
+    if (connectionConfig.authMode === "single-user" && connectionConfig.apiKey) {
+      headers["X-API-KEY"] = connectionConfig.apiKey
+    } else if (connectionConfig.authMode === "multi-user" && connectionConfig.accessToken) {
+      headers.Authorization = `Bearer ${connectionConfig.accessToken}`
+    }
+    if (typeof connectionConfig.orgId === "number") {
+      headers["X-TLDW-Org-Id"] = String(connectionConfig.orgId)
     }
     return headers
-  }, [authMode, apiKey, accessToken])
+  }, [connectionConfig])
 
-  const apiBase = `${serverUrl}/api/v1/agent-orchestration`
+  const apiBase = useMemo(
+    () =>
+      connectionConfig
+        ? `${connectionConfig.serverUrl}/api/v1/agent-orchestration`
+        : null,
+    [connectionConfig]
+  )
+
+  React.useEffect(() => {
+    orchestrationSupportRef.current = null
+  }, [connectionConfig])
+
+  const markUnsupported = useCallback(() => {
+    setIsUnsupported(true)
+    setError(null)
+    setProjects([])
+    setTasks([])
+    setSelectedProjectId(null)
+  }, [])
+
+  const hasOrchestrationSupport = useCallback(async (): Promise<boolean> => {
+    if (!connectionConfig) return true
+    if (orchestrationSupportRef.current != null) {
+      return orchestrationSupportRef.current
+    }
+    try {
+      const res = await fetch(`${connectionConfig.serverUrl}/openapi.json`)
+      if (!res.ok) {
+        return true
+      }
+      const spec = await res.json()
+      const hasProjectsPath = Boolean(
+        spec &&
+          typeof spec === "object" &&
+          spec.paths &&
+          typeof spec.paths === "object" &&
+          AGENT_ORCHESTRATION_PROJECTS_PATH in spec.paths
+      )
+      orchestrationSupportRef.current = hasProjectsPath
+      return hasProjectsPath
+    } catch {
+      return true
+    }
+  }, [connectionConfig])
 
   const fetchProjects = useCallback(async () => {
+    if (!apiBase) return
     setLoading(true)
     setError(null)
     try {
+      const supported = await hasOrchestrationSupport()
+      if (!supported) {
+        markUnsupported()
+        return
+      }
       const headers = await getHeaders()
       const res = await fetch(`${apiBase}/projects`, { headers })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await ensureOrchestrationResponse(res)
       const data = await res.json()
-      setProjects(data.projects ?? [])
+      setIsUnsupported(false)
+      setProjects(normalizeListPayload<ProjectSummary>(data, "projects"))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load projects")
+      if (isUnsupportedError(err)) {
+        markUnsupported()
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load projects")
+      }
     } finally {
       setLoading(false)
     }
-  }, [apiBase, getHeaders])
+  }, [apiBase, getHeaders, hasOrchestrationSupport, markUnsupported])
 
   const fetchTasks = useCallback(
     async (projectId: number) => {
+      if (!apiBase) return
       setTasksLoading(true)
       try {
         const headers = await getHeaders()
         const res = await fetch(`${apiBase}/projects/${projectId}/tasks`, { headers })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        await ensureOrchestrationResponse(res)
         const data = await res.json()
-        setTasks(data.tasks ?? [])
+        setIsUnsupported(false)
+        setTasks(normalizeListPayload<TaskItem>(data, "tasks"))
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load tasks")
+        if (isUnsupportedError(err)) {
+          markUnsupported()
+        } else {
+          setError(err instanceof Error ? err.message : "Failed to load tasks")
+        }
       } finally {
         setTasksLoading(false)
       }
     },
-    [apiBase, getHeaders]
+    [apiBase, getHeaders, markUnsupported]
   )
 
   useEffect(() => {
+    if (!connectionConfig) return
     void fetchProjects()
-  }, [fetchProjects])
+  }, [connectionConfig, fetchProjects])
 
   useEffect(() => {
-    if (selectedProjectId !== null) {
+    if (connectionConfig && selectedProjectId !== null) {
       void fetchTasks(selectedProjectId)
     } else {
       setTasks([])
     }
-  }, [selectedProjectId, fetchTasks])
+  }, [connectionConfig, selectedProjectId, fetchTasks])
 
   const handleCreateProject = async (values: { name: string; description?: string }) => {
     try {
@@ -173,12 +285,16 @@ export const AgentTasksPage: React.FC = () => {
         headers,
         body: JSON.stringify(values),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await ensureOrchestrationResponse(res)
       setShowProjectModal(false)
       projectForm.resetFields()
       void fetchProjects()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create project")
+      if (isUnsupportedError(err)) {
+        markUnsupported()
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to create project")
+      }
     }
   }
 
@@ -202,12 +318,16 @@ export const AgentTasksPage: React.FC = () => {
         headers,
         body: JSON.stringify(body),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await ensureOrchestrationResponse(res)
       setShowTaskModal(false)
       taskForm.resetFields()
       void fetchTasks(selectedProjectId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create task")
+      if (isUnsupportedError(err)) {
+        markUnsupported()
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to create task")
+      }
     }
   }
 
@@ -219,6 +339,9 @@ export const AgentTasksPage: React.FC = () => {
         headers,
         body: JSON.stringify({}),
       })
+      if (res.status === 404) {
+        throw createUnsupportedError()
+      }
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}))
         throw new Error(errData.detail || `HTTP ${res.status}`)
@@ -227,7 +350,11 @@ export const AgentTasksPage: React.FC = () => {
         void fetchTasks(selectedProjectId)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to dispatch run")
+      if (isUnsupportedError(err)) {
+        markUnsupported()
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to dispatch run")
+      }
     }
   }
 
@@ -239,12 +366,16 @@ export const AgentTasksPage: React.FC = () => {
         headers,
         body: JSON.stringify({ approved }),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await ensureOrchestrationResponse(res)
       if (selectedProjectId !== null) {
         void fetchTasks(selectedProjectId)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to submit review")
+      if (isUnsupportedError(err)) {
+        markUnsupported()
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to submit review")
+      }
     }
   }
 
@@ -255,13 +386,17 @@ export const AgentTasksPage: React.FC = () => {
         method: "DELETE",
         headers,
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await ensureOrchestrationResponse(res)
       if (selectedProjectId === projectId) {
         setSelectedProjectId(null)
       }
       void fetchProjects()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete project")
+      if (isUnsupportedError(err)) {
+        markUnsupported()
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to delete project")
+      }
     }
   }
 
@@ -269,8 +404,16 @@ export const AgentTasksPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {isUnsupported && (
+        <Alert
+          type="warning"
+          title={AGENT_ORCHESTRATION_UNSUPPORTED_MESSAGE}
+          description={AGENT_ORCHESTRATION_UNSUPPORTED_DESCRIPTION}
+          showIcon
+        />
+      )}
       {error && (
-        <Alert type="error" message={error} closable onClose={() => setError(null)} />
+        <Alert type="error" title={error} closable onClose={() => setError(null)} />
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

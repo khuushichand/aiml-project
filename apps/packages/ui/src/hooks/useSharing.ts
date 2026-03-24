@@ -2,8 +2,8 @@
  * React Query hooks for the sharing API.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import fetcher from "@/libs/fetcher"
 import { getTldwServerURL } from "@/services/tldw-server"
+import { fetchWithTldwAuth } from "@/services/tldw/auth-fetch"
 import type {
   ShareWorkspaceRequest,
   ShareResponse,
@@ -26,7 +26,7 @@ const sharingUrl = async (path: string) => {
 
 const jsonPost = async <T>(path: string, body: unknown): Promise<T> => {
   const url = await sharingUrl(path)
-  const res = await fetcher(url, {
+  const res = await fetchWithTldwAuth(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -40,7 +40,7 @@ const jsonPost = async <T>(path: string, body: unknown): Promise<T> => {
 
 const jsonPatch = async <T>(path: string, body: unknown): Promise<T> => {
   const url = await sharingUrl(path)
-  const res = await fetcher(url, {
+  const res = await fetchWithTldwAuth(url, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -54,7 +54,7 @@ const jsonPatch = async <T>(path: string, body: unknown): Promise<T> => {
 
 const jsonGet = async <T>(path: string): Promise<T> => {
   const url = await sharingUrl(path)
-  const res = await fetcher(url)
+  const res = await fetchWithTldwAuth(url)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || "Request failed")
@@ -64,7 +64,7 @@ const jsonGet = async <T>(path: string): Promise<T> => {
 
 const jsonDelete = async (path: string): Promise<void> => {
   const url = await sharingUrl(path)
-  const res = await fetcher(url, { method: "DELETE" })
+  const res = await fetchWithTldwAuth(url, { method: "DELETE" })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || "Request failed")

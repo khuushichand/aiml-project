@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Skeleton,
   Table,
@@ -37,99 +37,51 @@ import { ContextualHint } from "./ContextualHint"
 import { useContextualHints } from "./useContextualHints"
 import { useFilterPresets, type FilterPreset } from "./useFilterPresets"
 import type { PromptListQueryState, PromptRowVM, PromptSavedView } from "./prompt-workspace-types"
-import {
-  buildSyncBatchPlan,
-  type SyncBatchTask
-} from "./sync-batch-utils"
+// buildSyncBatchPlan moved to usePromptFilteredData hook
 import { ProjectSelector } from "./ProjectSelector"
 import React, { useMemo, useRef, useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import {
-  deletePromptById,
   getAllPrompts,
-  savePrompt,
-  updatePrompt,
-  exportPrompts,
-  importPromptsV2,
-  getDeletedPrompts,
-  restorePrompt,
-  permanentlyDeletePrompt,
-  emptyTrash,
-  incrementPromptUsage
+  getDeletedPrompts
 } from "@/db/dexie/helpers"
-import {
-  getAllCopilotPrompts,
-  upsertCopilotPrompts
-} from "@/services/application"
+// getAllCopilotPrompts, upsertCopilotPrompts moved to usePromptInteractions hook
 import { tagColors } from "@/utils/color"
-import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
-import { useConfirmDanger } from "@/components/Common/confirm-danger"
+// isFireFoxPrivateMode moved to usePromptUtilities hook
+// useConfirmDanger moved to usePromptUtilities hook
 import { useServerOnline } from "@/hooks/useServerOnline"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
-import { useMessageOption } from "@/hooks/useMessageOption"
+// useMessageOption moved to usePromptInteractions hook
 import { useDebounce } from "@/hooks/useDebounce"
 import {
-  autoSyncPrompt,
-  pushToStudio,
-  pullFromStudio,
-  shouldAutoSyncWorkspacePrompts,
-  unlinkPrompt as unlinkPromptFromServer,
-  getConflictInfo,
-  resolveConflict,
-  getAllPromptsWithSyncStatus,
-  type ConflictInfo,
-  type ConflictResolution
+  pullFromStudio
 } from "@/services/prompt-sync"
 import {
-  exportPromptsServer,
-  searchPromptsServer,
-  listPromptCollectionsServer,
-  createPromptCollectionServer,
-  updatePromptCollectionServer,
   type PromptCollection
 } from "@/services/prompts-api"
-import {
-  hasPromptStudio,
-  getPrompt as getStudioPromptById,
-  getLlmProviders
-} from "@/services/prompt-studio"
+// prompt-studio imports moved to usePromptInteractions hook
 import { StudioTabContainer } from "./Studio/StudioTabContainer"
+// execute-playground-provider-utils, tldwClient, usePromptStudioStore moved to usePromptInteractions hook
 import {
-  getExecuteDefaultModel,
-  getExecuteDefaultProvider,
-  normalizeExecuteProvidersCatalog
-} from "./Studio/Prompts/execute-playground-provider-utils"
-import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { usePromptStudioStore } from "@/store/prompt-studio"
-import {
-  mapServerSearchItemsToLocalPrompts,
-  matchesPromptSearchText,
-  matchesTagFilter,
-  PROMPT_SEARCH_FIELDS,
   type TagMatchMode
 } from "./custom-prompts-utils"
-import { filterCopilotPrompts } from "./copilot-prompts-utils"
-import {
-  getPromptImportNotificationCopy,
-  normalizePromptImportCounts
-} from "./prompt-import-utils"
-import {
-  getPromptImportErrorNotice,
-  parseImportPromptsPayload
-} from "./prompt-import-error-utils"
-import { renderStructuredPromptLegacySnapshot } from "./structured-prompt-utils"
-import { buildBulkCountSummary, collectFailedIds } from "./bulk-result-utils"
+// filterCopilotPrompts moved to usePromptInteractions hook
 import {
   filterTrashPromptsByName,
   getTrashDaysRemaining,
   getTrashRemainingSeverity
 } from "./trash-prompts-utils"
-import {
-  isPromptInCollection,
-  mergePromptIdsForCollection
-} from "./prompt-collections-utils"
+// isPromptInCollection moved to usePromptFilteredData hook
+import { usePromptSync } from "./hooks/usePromptSync"
+import { usePromptEditor } from "./hooks/usePromptEditor"
+import { usePromptBulkActions } from "./hooks/usePromptBulkActions"
+import { usePromptImportExport } from "./hooks/usePromptImportExport"
+import { usePromptCollections } from "./hooks/usePromptCollections"
+import { usePromptUtilities } from "./hooks/usePromptUtilities"
+import { usePromptFilteredData } from "./hooks/usePromptFilteredData"
+import { usePromptInteractions } from "./hooks/usePromptInteractions"
 
 type SegmentType = "custom" | "copilot" | "studio" | "trash"
 
@@ -140,33 +92,6 @@ const getSegmentFromParam = (param: string | null): SegmentType => {
     return param as SegmentType
   }
   return "custom"
-}
-
-type BatchSyncFailure = {
-  task: SyncBatchTask
-  error: string
-}
-
-type BatchSyncState = {
-  running: boolean
-  completed: number
-  total: number
-  succeeded: number
-  failed: BatchSyncFailure[]
-  skippedConflicts: number
-  skippedCopilotPending: number
-  cancelled: boolean
-}
-
-const INITIAL_BATCH_SYNC_STATE: BatchSyncState = {
-  running: false,
-  completed: 0,
-  total: 0,
-  succeeded: 0,
-  failed: [],
-  skippedConflicts: 0,
-  skippedCopilotPending: 0,
-  cancelled: false
 }
 
 type PromptSortKey = "title" | "modifiedAt" | null
@@ -252,44 +177,11 @@ const readPromptGalleryDensity = (): PromptGalleryDensity => {
 export const PromptBody = () => {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create")
-  const [editId, setEditId] = useState("")
-  const [drawerInitialValues, setDrawerInitialValues] = useState<any>(null)
   const { t } = useTranslation(["settings", "common", "option"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
-  const setStudioActiveSubTab = usePromptStudioStore((s) => s.setActiveSubTab)
-  const setStudioSelectedProjectId = usePromptStudioStore(
-    (s) => s.setSelectedProjectId
-  )
-  const setStudioSelectedPromptId = usePromptStudioStore(
-    (s) => s.setSelectedPromptId
-  )
-  const setStudioExecutePlaygroundOpen = usePromptStudioStore(
-    (s) => s.setExecutePlaygroundOpen
-  )
-
   // Get initial segment from URL param
   const initialSegment = getSegmentFromParam(searchParams.get("tab"))
-  const [selectedSegment, setSelectedSegment] = useState<SegmentType>(initialSegment)
-
-  // Sync URL params with selected segment
-  useEffect(() => {
-    const currentTab = searchParams.get("tab")
-    const expectedTab = selectedSegment === "custom" ? null : selectedSegment
-
-    if (currentTab !== expectedTab) {
-      if (expectedTab) {
-        setSearchParams({ tab: expectedTab }, { replace: true })
-      } else {
-        // Remove tab param when on default (custom) tab
-        const newParams = new URLSearchParams(searchParams)
-        newParams.delete("tab")
-        setSearchParams(newParams, { replace: true })
-      }
-    }
-  }, [selectedSegment, searchParams, setSearchParams])
 
   // Track if we've processed the initial prompt deep-link
   const deepLinkProcessedRef = useRef(false)
@@ -304,10 +196,6 @@ export const PromptBody = () => {
   const [usageFilter, setUsageFilter] = useState<"all" | "used" | "unused">(
     "all"
   )
-  const [collectionFilter, setCollectionFilter] = useState<number | "all">("all")
-  const [createCollectionModalOpen, setCreateCollectionModalOpen] = useState(false)
-  const [newCollectionName, setNewCollectionName] = useState("")
-  const [newCollectionDescription, setNewCollectionDescription] = useState("")
   const [tagFilter, setTagFilter] = useState<string[]>([])
   const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>("any")
   const [syncFilter, setSyncFilter] = useState<string>("all")
@@ -325,67 +213,18 @@ export const PromptBody = () => {
   const [promptSort, setPromptSort] = useState<PromptSortState>(() =>
     readPromptSortState()
   )
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const searchInputRef = useRef<InputRef | null>(null)
-  const [importMode, setImportMode] = useState<"merge" | "replace">("merge")
-  const [exportFormat, setExportFormat] = useState<"json" | "csv" | "markdown">("json")
-  const [bulkKeywordModalOpen, setBulkKeywordModalOpen] = useState(false)
-  const [bulkKeywordValue, setBulkKeywordValue] = useState("")
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
-  const [inspectorPromptId, setInspectorPromptId] = useState<string | null>(null)
-  const [inspectorOpen, setInspectorOpen] = useState(false)
   const [isCompactViewport, setIsCompactViewport] = useState(() =>
     typeof window !== "undefined"
       ? window.innerWidth < PROMPTS_MOBILE_BREAKPOINT_PX
       : false
   )
   const [trashSearchText, setTrashSearchText] = useState("")
-  const [trashSelectedRowKeys, setTrashSelectedRowKeys] = useState<React.Key[]>([])
-  const [insertPrompt, setInsertPrompt] = useState<{
-    id: string
-    systemText?: string
-    userText?: string
-  } | null>(null)
-  const [localQuickTestPrompt, setLocalQuickTestPrompt] =
-    useState<LocalQuickTestPrompt | null>(null)
-  const [localQuickTestInput, setLocalQuickTestInput] = useState("")
-  const [localQuickTestOutput, setLocalQuickTestOutput] = useState<string | null>(
-    null
-  )
-  const [isRunningLocalQuickTest, setIsRunningLocalQuickTest] = useState(false)
-  const [localQuickTestRunInfo, setLocalQuickTestRunInfo] = useState<{
-    provider?: string
-    model: string
-  } | null>(null)
-  const confirmDanger = useConfirmDanger()
-
-  // Sync state
-  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false)
-  const [promptToSync, setPromptToSync] = useState<string | null>(null)
-  const [conflictModalOpen, setConflictModalOpen] = useState(false)
-  const [conflictPromptId, setConflictPromptId] = useState<string | null>(null)
-  const [conflictInfo, setConflictInfo] = useState<ConflictInfo | null>(null)
-  const [batchSyncState, setBatchSyncState] = useState<BatchSyncState>(
-    INITIAL_BATCH_SYNC_STATE
-  )
-  const batchSyncCancelRef = useRef(false)
-
-  const [openCopilotEdit, setOpenCopilotEdit] = useState(false)
-  const [editCopilotId, setEditCopilotId] = useState("")
-  const [editCopilotForm] = Form.useForm()
-  const [copilotSearchText, setCopilotSearchText] = useState("")
-  const [copilotKeyFilter, setCopilotKeyFilter] = useState<string>("all")
-  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [savedView, setSavedView] = useState<PromptSavedView>("all")
-  const [fullEditorOpen, setFullEditorOpen] = useState(false)
-  const [fullEditorMode, setFullEditorMode] = useState<"create" | "edit">("create")
-  const [fullEditorInitialValues, setFullEditorInitialValues] = useState<any>(null)
   const { presets: filterPresets, savePreset: saveFilterPreset, deletePreset: deleteFilterPreset } = useFilterPresets()
   const { shouldShow: shouldShowHint, dismiss: dismissHint, markShown: markHintShown } = useContextualHints()
-  const copilotEditPromptValue = Form.useWatch("prompt", editCopilotForm)
 
-  const { setSelectedQuickPrompt, setSelectedSystemPrompt } = useMessageOption()
   const debouncedSearchText = useDebounce(searchText, 300)
   const normalizedSearchText = debouncedSearchText.trim()
   const shouldUseServerSearch = isOnline && normalizedSearchText.length > 0
@@ -395,54 +234,136 @@ export const PromptBody = () => {
     queryFn: getAllPrompts
   })
 
-  const {
-    data: serverSearchData,
-    status: serverSearchStatus
-  } = useQuery({
-    queryKey: [
-      "searchPrompts",
-      normalizedSearchText,
-      currentPage,
-      resultsPerPage
-    ],
-    queryFn: () =>
-      searchPromptsServer({
-        searchQuery: normalizedSearchText,
-        searchFields: PROMPT_SEARCH_FIELDS,
-        page: currentPage,
-        resultsPerPage,
-        includeDeleted: false
-      }),
-    enabled: shouldUseServerSearch
-  })
-
-  const { data: copilotData, status: copilotStatus } = useQuery({
-    queryKey: ["fetchCopilotPrompts"],
-    queryFn: getAllCopilotPrompts,
-    enabled: isOnline
-  })
-
   const { data: trashData, status: trashStatus } = useQuery({
     queryKey: ["fetchDeletedPrompts"],
     queryFn: getDeletedPrompts
   })
 
-  const { data: promptCollectionsData, status: promptCollectionsStatus } = useQuery({
-    queryKey: ["promptCollections"],
-    queryFn: listPromptCollectionsServer,
-    enabled: isOnline
+  // --- Utility Hooks ---
+
+  const utils = usePromptUtilities({ t, data })
+  const {
+    confirmDanger,
+    guardPrivateMode,
+    getPromptKeywords,
+    getPromptTexts,
+    getPromptType,
+    getPromptModifiedAt,
+    getPromptUsageCount,
+    getPromptLastUsedAt,
+    formatRelativePromptTime,
+    getPromptRecordById,
+    isFireFoxPrivateMode
+  } = utils
+
+  // --- Hooks ---
+
+  const sync = usePromptSync({
+    queryClient,
+    isOnline,
+    t
   })
 
-  // Prompt Studio capability check
-  const { data: hasStudio } = useQuery({
-    queryKey: ["prompt-studio", "capability"],
-    queryFn: hasPromptStudio,
-    enabled: isOnline
+  const editor = usePromptEditor({
+    queryClient,
+    isOnline,
+    t,
+    guardPrivateMode,
+    getPromptTexts,
+    getPromptKeywords,
+    getPromptRecordById,
+    confirmDanger,
+    syncPromptAfterLocalSave: sync.syncPromptAfterLocalSave,
+    onEmptyTrashSuccess: () => {
+      bulk.setTrashSelectedRowKeys([])
+    }
   })
+
+  const bulk = usePromptBulkActions({
+    queryClient,
+    data,
+    isOnline,
+    isFireFoxPrivateMode,
+    t,
+    guardPrivateMode,
+    getPromptKeywords,
+    buildPromptUpdatePayload: editor.buildPromptUpdatePayload,
+    confirmDanger
+  })
+
+  const importExport = usePromptImportExport({
+    queryClient,
+    data,
+    isOnline,
+    t,
+    guardPrivateMode,
+    confirmDanger
+  })
+
+  const collections = usePromptCollections({
+    queryClient,
+    isOnline,
+    t,
+    setSelectedRowKeys: bulk.setSelectedRowKeys
+  })
+
+  const interactions = usePromptInteractions({
+    queryClient,
+    isOnline,
+    initialSegment,
+    t,
+    getPromptTexts,
+    getPromptKeywords,
+    getPromptRecordById,
+    getPromptModifiedAt,
+    getPromptUsageCount,
+    getPromptLastUsedAt,
+    editorMarkPromptAsUsed: editor.markPromptAsUsed
+  })
+  const {
+    openCopilotEdit, setOpenCopilotEdit,
+    editCopilotId, setEditCopilotId,
+    editCopilotForm,
+    copilotSearchText, setCopilotSearchText,
+    copilotKeyFilter, setCopilotKeyFilter,
+    copilotData, copilotStatus,
+    copilotEditPromptValue, copilotPromptIncludesTextPlaceholder,
+    copilotPromptKeyOptions, filteredCopilotData,
+    updateCopilotPrompt, isUpdatingCopilotPrompt,
+    copyCopilotPromptToClipboard, copyPromptShareLink,
+    insertPrompt, setInsertPrompt,
+    handleInsertChoice, handleUsePromptInChat,
+    localQuickTestPrompt, localQuickTestInput, setLocalQuickTestInput,
+    localQuickTestOutput, isRunningLocalQuickTest, localQuickTestRunInfo,
+    closeLocalQuickTestModal, handleQuickTest, runLocalQuickTest,
+    inspectorOpen, inspectorPrompt,
+    closeInspector, openPromptInspector,
+    shortcutsHelpOpen, setShortcutsHelpOpen,
+    selectedSegment, setSelectedSegment,
+    hasStudio
+  } = interactions
+
+  // --- Effects ---
+
+  // Sync URL params with selected segment after interactions initialize the tab state.
+  useEffect(() => {
+    const currentTab = searchParams.get("tab")
+    const expectedTab = selectedSegment === "custom" ? null : selectedSegment
+
+    if (currentTab !== expectedTab) {
+      if (expectedTab) {
+        setSearchParams({ tab: expectedTab }, { replace: true })
+      } else {
+        const newParams = new URLSearchParams(searchParams)
+        newParams.delete("tab")
+        setSearchParams(newParams, { replace: true })
+      }
+    }
+  }, [searchParams, selectedSegment, setSearchParams])
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [normalizedSearchText, projectFilter, typeFilter, collectionFilter, tagFilter, tagMatchMode])
+  }, [normalizedSearchText, projectFilter, typeFilter, collections.collectionFilter, tagFilter, tagMatchMode])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -507,19 +428,6 @@ export const PromptBody = () => {
     }
   }, [])
 
-  useEffect(() => {
-    if (!shouldUseServerSearch || serverSearchStatus !== "error") return
-    notification.warning({
-      message: t("managePrompts.searchServerFallback", {
-        defaultValue: "Server search unavailable"
-      }),
-      description: t("managePrompts.searchServerFallbackDesc", {
-        defaultValue:
-          "Falling back to local search results for this query."
-      })
-    })
-  }, [serverSearchStatus, shouldUseServerSearch, t])
-
   // Handle ?prompt= deep-link for opening a specific prompt
   useEffect(() => {
     const promptId = searchParams.get("prompt")
@@ -535,9 +443,9 @@ export const PromptBody = () => {
 
     const openPromptDrawer = (promptRecord: any) => {
       clearPromptParam()
-      setEditId(promptRecord.id)
-      setDrawerMode("edit")
-      setDrawerInitialValues({
+      editor.setEditId(promptRecord.id)
+      editor.setDrawerOpen(true)
+      editor.setDrawerInitialValues({
         id: promptRecord?.id,
         name: promptRecord?.name || promptRecord?.title,
         author: promptRecord?.author,
@@ -563,7 +471,6 @@ export const PromptBody = () => {
         changeDescription: promptRecord?.changeDescription,
         versionNumber: promptRecord?.versionNumber
       })
-      setDrawerOpen(true)
     }
 
     deepLinkProcessedRef.current = true
@@ -689,7 +596,7 @@ export const PromptBody = () => {
         defaultValue: "The requested prompt could not be found. It may have been deleted."
       })
     })
-  }, [searchParams, data, status, setSearchParams, isOnline, queryClient, t])
+  }, [searchParams, data, status, setSearchParams, isOnline, queryClient, t, editor])
 
   const promptLoadFailed = status === "error"
   const copilotLoadFailed = isOnline && copilotStatus === "error"
@@ -697,33 +604,18 @@ export const PromptBody = () => {
     promptLoadFailed
       ? t(
           "managePrompts.loadErrorDetail",
-          "Custom prompts couldn’t be retrieved from local storage."
+          "Custom prompts couldn't be retrieved from local storage."
         )
       : null,
     copilotLoadFailed
       ? t(
           "managePrompts.copilotLoadErrorDetail",
-          "Copilot prompts couldn’t be retrieved."
+          "Copilot prompts couldn't be retrieved."
         )
       : null
   ]
     .filter(Boolean)
     .join(" ")
-
-  const guardPrivateMode = React.useCallback(() => {
-    if (!isFireFoxPrivateMode) return false
-    notification.error({
-      message: t(
-        "common:privateModeSaveErrorTitle",
-        "tldw Assistant can't save data"
-      ),
-      description: t(
-        "settings:prompts.privateModeDescription",
-        "Firefox Private Mode does not support saving data to IndexedDB. Please add prompts from a normal window."
-      )
-    })
-    return true
-  }, [isFireFoxPrivateMode, t])
 
   React.useEffect(() => {
     // Only redirect from copilot/studio tab when offline (trash is local-only so always available)
@@ -732,1460 +624,77 @@ export const PromptBody = () => {
     }
   }, [isOnline, selectedSegment])
 
-  const getPromptKeywords = React.useCallback(
-    (prompt: any) => prompt?.keywords ?? prompt?.tags ?? [],
-    []
-  )
-
-  const getPromptTexts = React.useCallback((prompt: any) => {
-    const systemText =
-      prompt?.system_prompt ||
-      (prompt?.is_system ? prompt?.content : undefined)
-    const userText =
-      prompt?.user_prompt ||
-      (!prompt?.is_system ? prompt?.content : undefined)
-    return { systemText, userText }
-  }, [])
-
-  const getPromptType = React.useCallback((prompt: any) => {
-    const { systemText, userText } = getPromptTexts(prompt)
-    const hasSystem = typeof systemText === "string" && systemText.trim().length > 0
-    const hasUser = typeof userText === "string" && userText.trim().length > 0
-    if (hasSystem && hasUser) return "mixed"
-    if (hasSystem) return "system"
-    if (hasUser) return "quick"
-    return prompt?.is_system ? "system" : "quick"
-  }, []) // getPromptTexts has stable identity (empty deps), safe to omit
-
-  const getPromptModifiedAt = React.useCallback((prompt: any) => {
-    return prompt?.updatedAt || prompt?.createdAt || 0
-  }, [])
-
-  const getPromptUsageCount = React.useCallback((prompt: any) => {
-    const value = prompt?.usageCount
-    if (typeof value !== "number" || Number.isNaN(value)) return 0
-    return Math.max(0, Math.floor(value))
-  }, [])
-
-  const getPromptLastUsedAt = React.useCallback((prompt: any) => {
-    const value = prompt?.lastUsedAt
-    if (typeof value !== "number" || Number.isNaN(value)) return null
-    return value
-  }, [])
-
-  const formatRelativePromptTime = React.useCallback(
-    (timestamp: number | null | undefined) => {
-      if (!timestamp) {
-        return t("common:unknown", { defaultValue: "Unknown" })
+  // Handle ?edit=<id> and ?new=1 URL params for full editor
+  useEffect(() => {
+    if (status !== "success" || !Array.isArray(data)) return
+    const editIdParam = searchParams.get("edit")
+    const isNew = searchParams.get("new")
+    if (editIdParam && !editor.fullEditorOpen) {
+      const prompt = data.find((p: any) => String(p.id) === editIdParam)
+      if (prompt) {
+        editor.openFullEditor(prompt)
       }
-      const now = Date.now()
-      const diffMs = Math.max(0, now - timestamp)
-      const diffMins = Math.floor(diffMs / (1000 * 60))
-      const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-      if (diffMins < 1) {
-        return t("common:justNow", { defaultValue: "Just now" })
-      }
-      if (diffMins < 60) {
-        return t("common:minutesAgo", {
-          defaultValue: "{{count}}m ago",
-          count: diffMins
-        })
-      }
-      if (diffHours < 24) {
-        return t("common:hoursAgo", {
-          defaultValue: "{{count}}h ago",
-          count: diffHours
-        })
-      }
-      if (diffDays < 30) {
-        return t("common:daysAgo", {
-          defaultValue: "{{count}}d ago",
-          count: diffDays
-        })
-      }
-      return new Date(timestamp).toLocaleDateString()
-    },
-    [t]
-  )
-
-  const normalizePromptPayload = React.useCallback((values: any) => {
-    const keywords = values?.keywords ?? values?.tags ?? []
-    const promptName = values?.name || values?.title
-    const promptFormat = values?.promptFormat === "structured" ? "structured" : "legacy"
-    const structuredPromptDefinition =
-      promptFormat === "structured" ? values?.structuredPromptDefinition ?? null : null
-    const structuredSnapshot =
-      promptFormat === "structured"
-        ? renderStructuredPromptLegacySnapshot(structuredPromptDefinition)
-        : null
-    const normalizedSystemPrompt =
-      structuredSnapshot?.systemPrompt ?? values?.system_prompt
-    const normalizedUserPrompt =
-      structuredSnapshot?.userPrompt ?? values?.user_prompt
-    const hasSystemPrompt = !!(normalizedSystemPrompt?.trim())
-    const resolvedContent =
-      values?.content ??
-      structuredSnapshot?.content ??
-      (hasSystemPrompt ? normalizedSystemPrompt : normalizedUserPrompt) ??
-      normalizedSystemPrompt ??
-      normalizedUserPrompt
-
-    return {
-      ...values,
-      title: promptName,
-      name: promptName,
-      tags: keywords,
-      keywords,
-      content: resolvedContent,
-      promptFormat,
-      promptSchemaVersion: promptFormat === "structured" ? values?.promptSchemaVersion ?? 1 : null,
-      structuredPromptDefinition,
-      system_prompt: normalizedSystemPrompt,
-      user_prompt: normalizedUserPrompt,
-      author: values?.author,
-      details: values?.details,
-      is_system: hasSystemPrompt
+    } else if (isNew === "1" && !editor.fullEditorOpen) {
+      editor.openFullEditor()
     }
-  }, [])
+  }, [status, data, searchParams, editor.fullEditorOpen, editor.openFullEditor])
 
-  const markPromptAsUsed = React.useCallback(
-    async (promptId: string) => {
-      if (!promptId) return
-      try {
-        await incrementPromptUsage(promptId)
-        await queryClient.invalidateQueries({
-          queryKey: ["fetchAllPrompts"]
-        })
-      } catch {
-        // Usage tracking should not block prompt insertion into chat.
-      }
-    },
-    [queryClient]
-  )
+  // --- Computed ---
 
-  const buildPromptUpdatePayload = React.useCallback(
-    (prompt: any, overrides: Partial<any> = {}) => {
-      const { systemText, userText } = getPromptTexts(prompt)
-      const promptName = prompt?.name || prompt?.title || "Untitled Prompt"
-      const hasSystemPrompt =
-        typeof systemText === "string" && systemText.trim().length > 0
-      const resolvedContent =
-        prompt?.content ??
-        (hasSystemPrompt ? systemText : userText) ??
-        systemText ??
-        userText ??
-        ""
-
-      const nextKeywords =
-        overrides?.keywords ??
-        overrides?.tags ??
-        getPromptKeywords(prompt) ??
-        []
-
-      return {
-        id: prompt.id,
-        title: promptName,
-        name: promptName,
-        content: resolvedContent,
-        is_system: hasSystemPrompt,
-        keywords: nextKeywords,
-        tags: nextKeywords,
-        favorite:
-          typeof overrides?.favorite === "boolean"
-            ? overrides.favorite
-            : !!prompt?.favorite,
-        author: prompt?.author,
-        details: prompt?.details,
-        system_prompt: systemText,
-        user_prompt: userText,
-        ...overrides
-      }
-    },
-    [getPromptKeywords, getPromptTexts]
-  )
-
-  const syncPromptAfterLocalSave = React.useCallback(async (localId: string) => {
-    try {
-      const autoSyncEnabled = await shouldAutoSyncWorkspacePrompts()
-      if (!autoSyncEnabled) {
-        return {
-          attempted: false,
-          success: true,
-          error: undefined
-        }
-      }
-
-      const result = await autoSyncPrompt(localId)
-      if (!result.success) {
-        notification.warning({
-          message: t("managePrompts.sync.syncFailed", {
-            defaultValue: "Sync failed"
-          }),
-          description: t("managePrompts.sync.syncFailedWithLocalSave", {
-            defaultValue: "{{error}} Your changes are saved locally.",
-            error: result.error || t("managePrompts.sync.pendingTooltip", {
-              defaultValue: "Local changes not yet synced."
-            })
-          })
-        })
-      }
-      return {
-        attempted: true,
-        success: result.success,
-        error: result.error
-      }
-    } catch (error: unknown) {
-      const fallbackError =
-        error instanceof Error
-          ? error.message
-          : t("managePrompts.sync.pendingTooltip", {
-              defaultValue: "Local changes not yet synced"
-            })
-      notification.warning({
-        message: t("managePrompts.sync.syncFailed", {
-          defaultValue: "Sync failed"
-        }),
-        description: t("managePrompts.sync.syncFailedWithLocalSave", {
-          defaultValue: "{{error}} Your changes are saved locally.",
-          error: fallbackError
-        })
-      })
-      return {
-        attempted: true,
-        success: false,
-        error: fallbackError
-      }
-    }
-  }, [t])
-
-  const { mutate: deletePrompt } = useMutation({
-    mutationFn: deletePromptById,
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchAllPrompts"]
-      })
-      queryClient.invalidateQueries({
-        queryKey: ["fetchDeletedPrompts"]
-      })
-      notification.success({
-        message: t("managePrompts.notification.deletedSuccess"),
-        description: t("managePrompts.notification.movedToTrash", {
-          defaultValue: "The prompt has been moved to trash. You can restore it within 30 days."
-        })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
+  const filteredDataHook = usePromptFilteredData({
+    data,
+    isOnline,
+    normalizedSearchText,
+    shouldUseServerSearch,
+    projectFilter,
+    typeFilter,
+    syncFilter,
+    usageFilter,
+    tagFilter,
+    tagMatchMode,
+    savedView,
+    selectedCollection: collections.selectedCollection,
+    currentPage,
+    resultsPerPage,
+    promptSort,
+    getPromptKeywords,
+    getPromptTexts,
+    getPromptType,
+    getPromptModifiedAt,
+    getPromptUsageCount,
+    getPromptLastUsedAt,
+    t
   })
-
-  const { mutate: restorePromptMutation } = useMutation({
-    mutationFn: restorePrompt,
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchAllPrompts"]
-      })
-      queryClient.invalidateQueries({
-        queryKey: ["fetchDeletedPrompts"]
-      })
-      notification.success({
-        message: t("managePrompts.notification.restoredSuccess", { defaultValue: "Prompt restored" }),
-        description: t("managePrompts.notification.restoredSuccessDesc", { defaultValue: "The prompt has been restored from trash." })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: bulkRestorePrompts, isPending: isBulkRestoring } = useMutation({
-    mutationFn: async (ids: string[]) => {
-      const results = await Promise.allSettled(ids.map((id) => restorePrompt(id)))
-      const failedIds = collectFailedIds(ids, results)
-      const counts = buildBulkCountSummary(ids.length, failedIds.length)
-      return {
-        total: counts.total,
-        restored: counts.succeeded,
-        failedIds
-      }
-    },
-    onSuccess: ({ total, restored, failedIds }) => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchAllPrompts"]
-      })
-      queryClient.invalidateQueries({
-        queryKey: ["fetchDeletedPrompts"]
-      })
-
-      if (failedIds.length > 0) {
-        setTrashSelectedRowKeys(failedIds)
-        notification.warning({
-          message: t("managePrompts.trash.bulkRestorePartial", {
-            defaultValue: "Bulk restore completed with issues"
-          }),
-          description: t("managePrompts.trash.bulkRestorePartialDesc", {
-            defaultValue: "Restored {{restored}} of {{total}} prompts. {{failed}} failed.",
-            restored,
-            total,
-            failed: failedIds.length
-          })
-        })
-        return
-      }
-
-      setTrashSelectedRowKeys([])
-      notification.success({
-        message: t("managePrompts.trash.bulkRestoreSuccess", {
-          defaultValue: "Prompts restored"
-        }),
-        description: t("managePrompts.trash.bulkRestoreSuccessDesc", {
-          defaultValue: "Restored {{count}} prompts from trash.",
-          count: restored
-        })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: permanentDeletePromptMutation } = useMutation({
-    mutationFn: permanentlyDeletePrompt,
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchDeletedPrompts"]
-      })
-      notification.success({
-        message: t("managePrompts.notification.permanentDeleteSuccess", { defaultValue: "Prompt permanently deleted" }),
-        description: t("managePrompts.notification.permanentDeleteSuccessDesc", { defaultValue: "The prompt has been permanently removed." })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: emptyTrashMutation, isPending: isEmptyingTrash } = useMutation({
-    mutationFn: emptyTrash,
-    onSuccess: (count) => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchDeletedPrompts"]
-      })
-      setTrashSelectedRowKeys([])
-      notification.success({
-        message: t("managePrompts.notification.trashEmptied", { defaultValue: "Trash emptied" }),
-        description: t("managePrompts.notification.trashEmptiedDesc", {
-          defaultValue: "{{count}} prompts permanently deleted.",
-          count
-        })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  // Sync mutations
-  const { mutate: pushToStudioMutation, isPending: isPushing } = useMutation({
-    mutationFn: async ({ localId, projectId }: { localId: string; projectId: number }) => {
-      return await pushToStudio(localId, projectId)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-      setProjectSelectorOpen(false)
-      setPromptToSync(null)
-      notification.success({
-        message: t("managePrompts.sync.pushSuccess", { defaultValue: "Pushed to server" }),
-        description: t("managePrompts.sync.pushSuccessDesc", { defaultValue: "Prompt has been synced to Prompt Studio." })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.sync.pushError", { defaultValue: "Failed to push" }),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: pullFromStudioMutation, isPending: isPulling } = useMutation({
-    mutationFn: async ({ serverId, localId }: { serverId: number; localId?: string }) => {
-      return await pullFromStudio(serverId, localId)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-      notification.success({
-        message: t("managePrompts.sync.pullSuccess", { defaultValue: "Pulled from server" }),
-        description: t("managePrompts.sync.pullSuccessDesc", { defaultValue: "Prompt has been updated from Prompt Studio." })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.sync.pullError", { defaultValue: "Failed to pull" }),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: unlinkPromptMutation } = useMutation({
-    mutationFn: unlinkPromptFromServer,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-      notification.success({
-        message: t("managePrompts.sync.unlinkSuccess", { defaultValue: "Unlinked from server" }),
-        description: t("managePrompts.sync.unlinkSuccessDesc", { defaultValue: "Prompt is now local-only." })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.sync.unlinkError", { defaultValue: "Failed to unlink" }),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
   const {
-    mutate: loadConflictInfoMutation,
-    isPending: isLoadingConflictInfo
-  } = useMutation({
-    mutationFn: async (localId: string) => {
-      return await getConflictInfo(localId)
-    },
-    onSuccess: (info) => {
-      if (!info) {
-        notification.warning({
-          message: t("managePrompts.sync.conflictUnavailable", {
-            defaultValue: "Conflict details unavailable"
-          }),
-          description: t("managePrompts.sync.conflictUnavailableDesc", {
-            defaultValue:
-              "We couldn't retrieve local and server versions for comparison."
-          })
-        })
-        setConflictModalOpen(false)
-        setConflictPromptId(null)
-        setConflictInfo(null)
-        return
-      }
-      setConflictInfo(info)
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.sync.pullError", {
-          defaultValue: "Failed to load conflict details"
-        }),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-      setConflictModalOpen(false)
-      setConflictPromptId(null)
-      setConflictInfo(null)
-    }
-  })
-
-  const {
-    mutate: resolveConflictMutation,
-    isPending: isResolvingConflict
-  } = useMutation({
-    mutationFn: async ({
-      localId,
-      resolution
-    }: {
-      localId: string
-      resolution: ConflictResolution
-    }) => {
-      return await resolveConflict(localId, resolution)
-    },
-    onSuccess: (result, variables) => {
-      if (!result.success) {
-        notification.error({
-          message: t("managePrompts.sync.resolveError", {
-            defaultValue: "Failed to resolve conflict"
-          }),
-          description: result.error || t("managePrompts.notification.someError")
-        })
-        return
-      }
-
-      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-      setConflictModalOpen(false)
-      setConflictPromptId(null)
-      setConflictInfo(null)
-
-      const description =
-        variables.resolution === "keep_local"
-          ? t("managePrompts.sync.keepMineSuccessDesc", {
-              defaultValue: "Your local prompt has been pushed to the server."
-            })
-          : variables.resolution === "keep_server"
-            ? t("managePrompts.sync.keepServerSuccessDesc", {
-                defaultValue:
-                  "Your local prompt has been replaced with the server version."
-              })
-            : t("managePrompts.sync.keepBothSuccessDesc", {
-                defaultValue:
-                  "The prompt was unlinked and resynced so both versions are preserved."
-              })
-
-      notification.success({
-        message: t("managePrompts.sync.resolveSuccess", {
-          defaultValue: "Conflict resolved"
-        }),
-        description
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.sync.resolveError", {
-          defaultValue: "Failed to resolve conflict"
-        }),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  // Import a server prompt to local (from Studio tab)
-  const { mutate: importFromStudioMutation, isPending: isImporting } = useMutation({
-    mutationFn: async ({ serverId }: { serverId: number }) => {
-      return await pullFromStudio(serverId)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-      notification.success({
-        message: t("managePrompts.studio.importSuccess", { defaultValue: "Prompt imported" }),
-        description: t("managePrompts.studio.importSuccessDesc", { defaultValue: "The prompt has been saved to your local prompts." })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.studio.importError", { defaultValue: "Failed to import" }),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: bulkDeletePrompts, isPending: isBulkDeleting } = useMutation({
-    mutationFn: async (ids: string[]) => {
-      const results = await Promise.allSettled(ids.map((id) => deletePromptById(id)))
-      const failedIds = collectFailedIds(ids, results)
-      const counts = buildBulkCountSummary(ids.length, failedIds.length)
-      return {
-        total: counts.total,
-        deleted: counts.succeeded,
-        failedIds
-      }
-    },
-    onSuccess: ({ total, deleted, failedIds }) => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchAllPrompts"]
-      })
-      queryClient.invalidateQueries({
-        queryKey: ["fetchDeletedPrompts"]
-      })
-      if (failedIds.length > 0) {
-        setSelectedRowKeys(failedIds)
-        notification.warning({
-          message: t("managePrompts.notification.bulkDeletePartial", {
-            defaultValue: "Bulk delete completed with issues"
-          }),
-          description: t("managePrompts.notification.bulkDeletePartialDesc", {
-            defaultValue: "Deleted {{deleted}} of {{total}} prompts. {{failed}} failed.",
-            deleted,
-            total,
-            failed: failedIds.length
-          })
-        })
-      } else {
-        setSelectedRowKeys([])
-        notification.success({
-          message: t("managePrompts.notification.bulkDeletedSuccess", { defaultValue: "Prompts deleted" }),
-          description: t("managePrompts.notification.bulkDeletedSuccessDesc", { defaultValue: "Selected prompts have been deleted." })
-        })
-      }
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: bulkToggleFavorite, isPending: isBulkFavoriting } = useMutation({
-    mutationFn: async ({
-      ids,
-      favorite
-    }: {
-      ids: string[]
-      favorite: boolean
-    }) => {
-      const promptById = new Map(
-        (data || []).map((prompt: any) => [String(prompt.id), prompt])
-      )
-      const results = await Promise.allSettled(
-        ids.map(async (id) => {
-          const prompt = promptById.get(id)
-          if (!prompt) {
-            throw new Error("Prompt not found")
-          }
-          await updatePrompt(
-            buildPromptUpdatePayload(prompt, {
-              favorite
-            })
-          )
-        })
-      )
-      const failedIds: string[] = []
-      for (let index = 0; index < results.length; index += 1) {
-        if (results[index]?.status === "rejected") {
-          failedIds.push(ids[index]!)
-        }
-      }
-      return {
-        total: ids.length,
-        updated: ids.length - failedIds.length,
-        failedIds
-      }
-    },
-    onSuccess: ({ total, updated, failedIds }, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchAllPrompts"]
-      })
-      if (failedIds.length > 0) {
-        setSelectedRowKeys(failedIds)
-        notification.warning({
-          message: t("managePrompts.bulk.favoritePartial", {
-            defaultValue: "Bulk favorite update completed with issues"
-          }),
-          description: t("managePrompts.bulk.favoritePartialDesc", {
-            defaultValue:
-              "Updated {{updated}} of {{total}} prompts. {{failed}} failed.",
-            updated,
-            total,
-            failed: failedIds.length
-          })
-        })
-        return
-      }
-      notification.success({
-        message: variables.favorite
-          ? t("managePrompts.bulk.favoriteSuccess", {
-              defaultValue: "Selected prompts favorited"
-            })
-          : t("managePrompts.bulk.unfavoriteSuccess", {
-              defaultValue: "Selected prompts unfavorited"
-            }),
-        description: t("managePrompts.bulk.favoriteSuccessDesc", {
-          defaultValue: "Updated {{count}} prompts.",
-          count: updated
-        })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: bulkAddKeyword, isPending: isBulkAddingKeyword } = useMutation({
-    mutationFn: async ({
-      ids,
-      keyword
-    }: {
-      ids: string[]
-      keyword: string
-    }) => {
-      const trimmedKeyword = keyword.trim()
-      if (!trimmedKeyword) {
-        throw new Error(
-          t("managePrompts.tags.keywordRequired", {
-            defaultValue: "Keyword is required."
-          })
-        )
-      }
-
-      const promptById = new Map(
-        (data || []).map((prompt: any) => [String(prompt.id), prompt])
-      )
-      const results = await Promise.allSettled(
-        ids.map(async (id) => {
-          const prompt = promptById.get(id)
-          if (!prompt) {
-            throw new Error("Prompt not found")
-          }
-          const existingKeywords = getPromptKeywords(prompt) || []
-          if (existingKeywords.includes(trimmedKeyword)) {
-            return { skipped: true }
-          }
-          const nextKeywords = [...existingKeywords, trimmedKeyword]
-          await updatePrompt(
-            buildPromptUpdatePayload(prompt, {
-              keywords: nextKeywords,
-              tags: nextKeywords
-            })
-          )
-          return { skipped: false }
-        })
-      )
-
-      let updated = 0
-      let skipped = 0
-      const failedIds: string[] = []
-      for (let index = 0; index < results.length; index += 1) {
-        const result = results[index]
-        if (result?.status === "rejected") {
-          failedIds.push(ids[index]!)
-          continue
-        }
-        if (result.value?.skipped) {
-          skipped += 1
-        } else {
-          updated += 1
-        }
-      }
-      return {
-        total: ids.length,
-        updated,
-        skipped,
-        failedIds,
-        keyword: trimmedKeyword
-      }
-    },
-    onSuccess: ({ total, updated, skipped, failedIds, keyword }) => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchAllPrompts"]
-      })
-      setBulkKeywordModalOpen(false)
-      setBulkKeywordValue("")
-
-      if (failedIds.length > 0) {
-        setSelectedRowKeys(failedIds)
-        notification.warning({
-          message: t("managePrompts.bulk.keywordPartial", {
-            defaultValue: "Bulk keyword update completed with issues"
-          }),
-          description: t("managePrompts.bulk.keywordPartialDesc", {
-            defaultValue:
-              "Updated {{updated}}, skipped {{skipped}}, failed {{failed}} of {{total}} prompts.",
-            updated,
-            skipped,
-            failed: failedIds.length,
-            total
-          })
-        })
-        return
-      }
-
-      notification.success({
-        message: t("managePrompts.bulk.keywordSuccess", {
-          defaultValue: "Keyword added to selected prompts"
-        }),
-        description: t("managePrompts.bulk.keywordSuccessDesc", {
-          defaultValue:
-            "Added '{{keyword}}' to {{updated}} prompts ({{skipped}} already had it).",
-          keyword,
-          updated,
-          skipped
-        })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: bulkPushToServer, isPending: isBulkPushing } = useMutation({
-    mutationFn: async (ids: string[]) => {
-      const results = await Promise.allSettled(
-        ids.map(async (id) => {
-          const result = await autoSyncPrompt(id)
-          if (!result.success) {
-            throw new Error(
-              result.error ||
-                t("managePrompts.sync.pendingTooltip", {
-                  defaultValue: "Local changes not yet synced"
-                })
-            )
-          }
-        })
-      )
-
-      const failedIds: string[] = []
-      for (let index = 0; index < results.length; index += 1) {
-        if (results[index]?.status === "rejected") {
-          failedIds.push(ids[index]!)
-        }
-      }
-      return {
-        total: ids.length,
-        synced: ids.length - failedIds.length,
-        failedIds
-      }
-    },
-    onSuccess: ({ total, synced, failedIds }) => {
-      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-      if (failedIds.length > 0) {
-        setSelectedRowKeys(failedIds)
-        notification.warning({
-          message: t("managePrompts.sync.bulkPushPartial", {
-            defaultValue: "Bulk sync completed with issues"
-          }),
-          description: t("managePrompts.sync.bulkPushPartialDesc", {
-            defaultValue:
-              "Synced {{synced}} of {{total}} prompts. {{failed}} failed.",
-            synced,
-            total,
-            failed: failedIds.length
-          })
-        })
-        return
-      }
-      notification.success({
-        message: t("managePrompts.sync.bulkPushSuccess", {
-          defaultValue: "Selected prompts synced"
-        }),
-        description: t("managePrompts.sync.bulkPushSuccessDesc", {
-          defaultValue: "Synced {{count}} prompts to the server.",
-          count: synced
-        })
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const {
-    mutate: createPromptCollectionMutation,
-    isPending: isCreatingPromptCollection
-  } = useMutation({
-    mutationFn: async ({
-      name,
-      description
-    }: {
-      name: string
-      description?: string
-    }) =>
-      createPromptCollectionServer({
-        name: name.trim(),
-        description: description?.trim() || undefined
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["promptCollections"] })
-      setCreateCollectionModalOpen(false)
-      setNewCollectionName("")
-      setNewCollectionDescription("")
-      notification.success({
-        message: t("managePrompts.collections.createSuccess", {
-          defaultValue: "Collection created"
-        }),
-        description: t("managePrompts.collections.createSuccessDesc", {
-          defaultValue: "Prompt collection created successfully."
-        })
-      })
-    },
-    onError: (error: any) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description:
-          error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const {
-    mutate: addPromptsToCollectionMutation,
-    isPending: isAssigningPromptCollection
-  } = useMutation({
-    mutationFn: async ({
-      collection,
-      prompts
-    }: {
-      collection: PromptCollection
-      prompts: any[]
-    }) => {
-      const merged = mergePromptIdsForCollection(
-        collection.prompt_ids || [],
-        prompts
-      )
-      if (merged.added === 0) {
-        return {
-          added: 0,
-          skipped: merged.skipped,
-          updatedCollection: null
-        }
-      }
-      const updatedCollection = await updatePromptCollectionServer(
-        collection.collection_id,
-        { prompt_ids: merged.promptIds }
-      )
-      return {
-        added: merged.added,
-        skipped: merged.skipped,
-        updatedCollection
-      }
-    },
-    onSuccess: ({ added, skipped }, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["promptCollections"] })
-      if (added === 0) {
-        notification.info({
-          message: t("managePrompts.collections.assignNoChanges", {
-            defaultValue: "No prompts were added"
-          }),
-          description:
-            skipped > 0
-              ? t("managePrompts.collections.assignNoChangesSkipped", {
-                  defaultValue:
-                    "Selected prompts are already in this collection or not synced yet."
-                })
-              : t("managePrompts.collections.assignNoChangesDefault", {
-                  defaultValue:
-                    "Selected prompts are already in this collection."
-                })
-        })
-        return
-      }
-      setSelectedRowKeys([])
-      notification.success({
-        message: t("managePrompts.collections.assignSuccess", {
-          defaultValue: "Prompts added to collection"
-        }),
-        description: t("managePrompts.collections.assignSuccessDesc", {
-          defaultValue:
-            "Added {{added}} prompt(s) to {{name}}{{skippedLabel}}.",
-          added,
-          name: variables.collection.name,
-          skippedLabel:
-            skipped > 0
-              ? t("managePrompts.collections.assignSkippedSuffix", {
-                  defaultValue: " ({{count}} skipped)",
-                  count: skipped
-                })
-              : ""
-        })
-      })
-    },
-    onError: (error: any) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description:
-          error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: savePromptMutation, isPending: savePromptLoading } =
-    useMutation({
-      mutationFn: async (payload: any) => {
-        const savedPrompt = await savePrompt(payload)
-        const syncState = await syncPromptAfterLocalSave(savedPrompt.id)
-        return {
-          id: savedPrompt.id,
-          syncState
-        }
-      },
-      onSuccess: ({ syncState }) => {
-        queryClient.invalidateQueries({
-          queryKey: ["fetchAllPrompts"]
-        })
-        setDrawerOpen(false)
-        setDrawerInitialValues(null)
-        notification.success({
-          message: t("managePrompts.notification.addSuccess"),
-          description: t("managePrompts.notification.addSuccessDesc")
-        })
-        void syncState
-      },
-      onError: (error) => {
-        notification.error({
-          message: t("managePrompts.notification.error"),
-          description:
-            error?.message || t("managePrompts.notification.someError")
-        })
-      }
-    })
-
-  const { mutate: updatePromptDirect } = useMutation({
-    mutationFn: async (payload: any) => {
-      const id = await updatePrompt(payload)
-      await syncPromptAfterLocalSave(id)
-      return id
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["fetchAllPrompts"]
-      })
-    },
-    onError: (error) => {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description:
-          error?.message || t("managePrompts.notification.someError")
-      })
-    }
-  })
-
-  const { mutate: updatePromptMutation, isPending: isUpdatingPrompt } =
-    useMutation({
-      mutationFn: async (data: any) => {
-        const id = await updatePrompt({
-          ...data,
-          id: editId
-        })
-        const syncState = await syncPromptAfterLocalSave(id)
-        return {
-          id,
-          syncState
-        }
-      },
-      onSuccess: ({ syncState }) => {
-        queryClient.invalidateQueries({
-          queryKey: ["fetchAllPrompts"]
-        })
-        setDrawerOpen(false)
-        setDrawerInitialValues(null)
-        notification.success({
-          message: t("managePrompts.notification.updatedSuccess"),
-          description: t("managePrompts.notification.updatedSuccessDesc")
-        })
-        void syncState
-      },
-      onError: (error) => {
-        notification.error({
-          message: t("managePrompts.notification.error"),
-          description:
-            error?.message || t("managePrompts.notification.someError")
-        })
-      }
-    })
-
-  const { mutate: updateCopilotPrompt, isPending: isUpdatingCopilotPrompt } =
-    useMutation({
-      mutationFn: async (data: any) => {
-        return await upsertCopilotPrompts([
-          {
-            key: data.key,
-            prompt: data.prompt
-          }
-        ])
-      },
-      onSuccess: () => {
-        queryClient.invalidateQueries({
-          queryKey: ["fetchCopilotPrompts"]
-        })
-        setOpenCopilotEdit(false)
-        editCopilotForm.resetFields()
-        notification.success({
-          message: t("managePrompts.notification.updatedSuccess"),
-          description: t("managePrompts.notification.updatedSuccessDesc")
-        })
-      },
-      onError: (error) => {
-        notification.error({
-          message: t("managePrompts.notification.error"),
-          description:
-            error?.message || t("managePrompts.notification.someError")
-        })
-      }
-    })
-
-  const allTags = useMemo(() => {
-    const set = new Set<string>()
-    ;(data || []).forEach((p: any) =>
-      (getPromptKeywords(p) || []).forEach((t: string) => set.add(t))
-    )
-    return Array.from(set.values())
-  }, [data, getPromptKeywords])
-
-  const promptCollections = useMemo<PromptCollection[]>(() => {
-    if (!Array.isArray(promptCollectionsData)) return []
-    return promptCollectionsData
-  }, [promptCollectionsData])
-
-  const selectedCollection = useMemo(() => {
-    if (collectionFilter === "all") return null
-    return (
-      promptCollections.find((item) => item.collection_id === collectionFilter) ||
-      null
-    )
-  }, [collectionFilter, promptCollections])
+    serverSearchStatus,
+    allTags,
+    pendingSyncCount,
+    localSyncBatchPlan,
+    sidebarCounts,
+    sortedFilteredData,
+    customPromptRows,
+    tableTotal,
+    hiddenServerResultsOnPage,
+    useServerSearchResults
+  } = filteredDataHook
 
   useEffect(() => {
-    if (collectionFilter === "all") return
-    if (!selectedCollection) {
-      setCollectionFilter("all")
-    }
-  }, [collectionFilter, selectedCollection])
-
-  const copilotPromptIncludesTextPlaceholder =
-    typeof copilotEditPromptValue === "string" &&
-    copilotEditPromptValue.includes("{text}")
-
-  const copilotPromptKeyOptions = useMemo(() => {
-    if (!Array.isArray(copilotData)) return []
-    const keys = Array.from(
-      new Set(
-        copilotData
-          .map((item) => (typeof item?.key === "string" ? item.key : ""))
-          .filter((key) => key.length > 0)
-      )
-    )
-    return keys.map((key) => ({
-      value: key,
-      label: t(`common:copilot.${key}`, { defaultValue: key })
-    }))
-  }, [copilotData, t])
-
-  const filteredCopilotData = useMemo(() => {
-    if (!Array.isArray(copilotData)) return []
-    return filterCopilotPrompts(copilotData, {
-      keyFilter: copilotKeyFilter,
-      queryLower: copilotSearchText.trim().toLowerCase(),
-      resolveKeyLabel: (key) => t(`common:copilot.${key}`, { defaultValue: key })
+    if (!shouldUseServerSearch || serverSearchStatus !== "error") return
+    notification.warning({
+      message: t("managePrompts.searchServerFallback", {
+        defaultValue: "Server search unavailable"
+      }),
+      description: t("managePrompts.searchServerFallbackDesc", {
+        defaultValue:
+          "Falling back to local search results for this query."
+      })
     })
-  }, [copilotData, copilotKeyFilter, copilotSearchText, t])
+  }, [serverSearchStatus, shouldUseServerSearch, t])
 
   const filteredTrashData = useMemo(() => {
     if (!Array.isArray(trashData)) return []
     return filterTrashPromptsByName(trashData, trashSearchText)
   }, [trashData, trashSearchText])
-
-  const getPromptRecordById = React.useCallback(
-    (promptId: string) => {
-      const prompts = Array.isArray(data) ? data : []
-      return prompts.find((prompt: any) => String(prompt?.id) === String(promptId))
-    },
-    [data]
-  )
-
-  const inspectorPrompt = useMemo<PromptRowVM | null>(() => {
-    if (!inspectorPromptId) return null
-    const promptRecord = getPromptRecordById(inspectorPromptId)
-    if (!promptRecord) return null
-    const { systemText, userText } = getPromptTexts(promptRecord)
-    return {
-      id: promptRecord.id,
-      title:
-        promptRecord?.name || promptRecord?.title || t("common:untitled", { defaultValue: "Untitled" }),
-      author: promptRecord?.author,
-      details: promptRecord?.details,
-      previewSystem: systemText || undefined,
-      previewUser: userText || undefined,
-      keywords: getPromptKeywords(promptRecord) || [],
-      favorite: !!promptRecord?.favorite,
-      syncStatus: promptRecord?.syncStatus || "local",
-      sourceSystem: promptRecord?.sourceSystem || "workspace",
-      serverId: promptRecord?.serverId,
-      updatedAt: getPromptModifiedAt(promptRecord),
-      createdAt:
-        typeof promptRecord?.createdAt === "number"
-          ? promptRecord.createdAt
-          : Date.now(),
-      usageCount: getPromptUsageCount(promptRecord),
-      lastUsedAt: getPromptLastUsedAt(promptRecord)
-    }
-  }, [
-    inspectorPromptId,
-    getPromptRecordById,
-    getPromptTexts,
-    getPromptKeywords,
-    getPromptModifiedAt,
-    getPromptUsageCount,
-    getPromptLastUsedAt,
-    t
-  ])
-
-  useEffect(() => {
-    if (!inspectorOpen) return
-    if (inspectorPrompt) return
-    setInspectorOpen(false)
-    setInspectorPromptId(null)
-  }, [inspectorOpen, inspectorPrompt])
-
-  const selectedPromptRows = useMemo(() => {
-    const selectedIds = new Set(selectedRowKeys.map((key) => String(key)))
-    return (data || []).filter((prompt: any) => selectedIds.has(prompt.id))
-  }, [data, selectedRowKeys])
-
-  const allSelectedAreFavorite = useMemo(() => {
-    return (
-      selectedPromptRows.length > 0 &&
-      selectedPromptRows.every((prompt: any) => !!prompt?.favorite)
-    )
-  }, [selectedPromptRows])
-
-  const pendingSyncCount = useMemo(() => {
-    const prompts = Array.isArray(data) ? data : []
-    return prompts.filter((prompt: any) => prompt?.syncStatus === "pending").length
-  }, [data])
-
-  const localSyncBatchPlan = useMemo(() => {
-    const prompts = Array.isArray(data) ? data : []
-    return buildSyncBatchPlan(
-      prompts.map((prompt: any) => ({
-        prompt,
-        syncStatus: prompt?.syncStatus
-      }))
-    )
-  }, [data])
-
-  const baseFilteredData = useMemo(() => {
-    let items = (data || []) as any[]
-    // Filter by linked project if ?project= query param is present
-    if (projectFilter) {
-      const projectId = parseInt(projectFilter, 10)
-      if (!isNaN(projectId)) {
-        items = items.filter((p) => p.studioProjectId === projectId)
-      }
-    }
-    if (typeFilter !== "all") {
-      items = items.filter((p) => {
-        const promptType = getPromptType(p)
-        if (typeFilter === "system") return promptType === "system" || promptType === "mixed"
-        if (typeFilter === "quick") return promptType === "quick" || promptType === "mixed"
-        return promptType === typeFilter
-      })
-    }
-    if (syncFilter !== "all") {
-      items = items.filter((p) => (p.syncStatus || "local") === syncFilter)
-    }
-    if (usageFilter !== "all") {
-      items = items.filter((p) =>
-        usageFilter === "used"
-          ? getPromptUsageCount(p) > 0
-          : getPromptUsageCount(p) === 0
-      )
-    }
-    if (selectedCollection) {
-      const selectedPromptIds = new Set(selectedCollection.prompt_ids || [])
-      items = items.filter((prompt) =>
-        isPromptInCollection(prompt, selectedPromptIds)
-      )
-    }
-    if (tagFilter.length > 0) {
-      items = items.filter((p) =>
-        matchesTagFilter(getPromptKeywords(p), tagFilter, tagMatchMode)
-      )
-    }
-    // Apply savedView filter
-    if (savedView === "favorites") {
-      items = items.filter((p) => !!p.favorite)
-    } else if (savedView === "recent") {
-      items = [...items]
-        .filter((p) => typeof p.lastUsedAt === "number" && p.lastUsedAt > 0)
-        .sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0))
-        .slice(0, 20)
-    } else if (savedView === "most_used") {
-      items = [...items]
-        .filter((p) => getPromptUsageCount(p) > 0)
-        .sort((a, b) => getPromptUsageCount(b) - getPromptUsageCount(a))
-        .slice(0, 20)
-    } else if (savedView === "untagged") {
-      items = items.filter((p) => {
-        const kw = getPromptKeywords(p)
-        return !kw || kw.length === 0
-      })
-    }
-    // favorites first, then newest
-    if (savedView === "all" || savedView === "favorites" || savedView === "untagged") {
-      items = items.sort(
-        (a, b) =>
-          Number(!!b.favorite) - Number(!!a.favorite) ||
-          (b.createdAt || 0) - (a.createdAt || 0)
-      )
-    }
-    return items
-  }, [
-    data,
-    projectFilter,
-    typeFilter,
-    syncFilter,
-    usageFilter,
-    selectedCollection,
-    tagFilter,
-    tagMatchMode,
-    savedView,
-    getPromptUsageCount,
-    getPromptKeywords,
-    getPromptType
-  ])
-
-  // Compute sidebar counts from unfiltered data
-  const sidebarCounts = useMemo(() => {
-    const all = (data || []) as any[]
-    const typeCounts: Record<string, number> = { all: all.length }
-    const syncCounts: Record<string, number> = { all: all.length }
-    const tagCounts: Record<string, number> = {}
-    let favCount = 0
-    let recentCount = 0
-    let mostUsedCount = 0
-    let untaggedCount = 0
-
-    for (const p of all) {
-      // Type counts
-      const pt = getPromptType(p)
-      typeCounts[pt] = (typeCounts[pt] || 0) + 1
-      // Sync counts
-      const ss = p.syncStatus || "local"
-      syncCounts[ss] = (syncCounts[ss] || 0) + 1
-      // Tag counts
-      const kw = getPromptKeywords(p)
-      if (!kw || kw.length === 0) {
-        untaggedCount++
-      } else {
-        for (const tag of kw) {
-          tagCounts[tag] = (tagCounts[tag] || 0) + 1
-        }
-      }
-      if (p.favorite) favCount++
-      if (typeof p.lastUsedAt === "number" && p.lastUsedAt > 0) recentCount++
-      if (getPromptUsageCount(p) > 0) mostUsedCount++
-    }
-
-    return {
-      typeCounts,
-      syncCounts,
-      tagCounts,
-      smartCounts: {
-        all: all.length,
-        favorites: favCount,
-        recent: Math.min(recentCount, 20),
-        most_used: Math.min(mostUsedCount, 20),
-        untagged: untaggedCount,
-      } as Partial<Record<PromptSavedView, number>>,
-    }
-  }, [data, getPromptType, getPromptKeywords, getPromptUsageCount])
-
-  const localSearchFilteredData = useMemo(() => {
-    if (normalizedSearchText.length === 0) {
-      return baseFilteredData
-    }
-    const queryLower = normalizedSearchText.toLowerCase()
-    return baseFilteredData.filter((prompt) =>
-      matchesPromptSearchText(prompt, queryLower, getPromptKeywords)
-    )
-  }, [baseFilteredData, normalizedSearchText, getPromptKeywords])
-
-  const serverSearchMappedData = useMemo(() => {
-    if (!shouldUseServerSearch || serverSearchStatus !== "success" || !serverSearchData) {
-      return []
-    }
-    return mapServerSearchItemsToLocalPrompts(serverSearchData.items, baseFilteredData)
-  }, [baseFilteredData, serverSearchData, serverSearchStatus, shouldUseServerSearch])
-
-  const useServerSearchResults =
-    shouldUseServerSearch && serverSearchStatus === "success"
-
-  const filteredData = useMemo(() => {
-    if (useServerSearchResults) {
-      return serverSearchMappedData
-    }
-    return localSearchFilteredData
-  }, [localSearchFilteredData, serverSearchMappedData, useServerSearchResults])
-
-  const sortedFilteredData = useMemo(() => {
-    if (!promptSort.key || !promptSort.order) {
-      return filteredData
-    }
-
-    const direction = promptSort.order === "ascend" ? 1 : -1
-    const items = [...filteredData]
-
-    items.sort((a, b) => {
-      let compare = 0
-      if (promptSort.key === "title") {
-        compare = String(a?.name || a?.title || "").localeCompare(
-          String(b?.name || b?.title || "")
-        )
-      } else if (promptSort.key === "modifiedAt") {
-        compare = getPromptModifiedAt(a) - getPromptModifiedAt(b)
-      }
-      if (compare === 0) {
-        compare = getPromptModifiedAt(a) - getPromptModifiedAt(b)
-      }
-      return compare * direction
-    })
-
-    return items
-  }, [
-    filteredData,
-    getPromptModifiedAt,
-    promptSort.key,
-    promptSort.order
-  ])
-
-  const paginatedData = useMemo(() => {
-    if (useServerSearchResults) {
-      return sortedFilteredData
-    }
-    const start = (currentPage - 1) * resultsPerPage
-    return sortedFilteredData.slice(start, start + resultsPerPage)
-  }, [currentPage, resultsPerPage, sortedFilteredData, useServerSearchResults])
-
-  const tableTotal = useMemo(() => {
-    if (useServerSearchResults) {
-      return serverSearchData?.total_matches ?? sortedFilteredData.length
-    }
-    return sortedFilteredData.length
-  }, [serverSearchData?.total_matches, sortedFilteredData.length, useServerSearchResults])
-
-  const customPromptRows = useMemo<PromptRowVM[]>(() => {
-    return paginatedData.map((prompt: any) => {
-      const { systemText, userText } = getPromptTexts(prompt)
-      return {
-        id: String(prompt?.id || ""),
-        title:
-          prompt?.name ||
-          prompt?.title ||
-          t("common:untitled", { defaultValue: "Untitled" }),
-        author: prompt?.author,
-        details: prompt?.details,
-        previewSystem: systemText || undefined,
-        previewUser: userText || undefined,
-        keywords: getPromptKeywords(prompt) || [],
-        favorite: !!prompt?.favorite,
-        syncStatus: prompt?.syncStatus || "local",
-        sourceSystem: prompt?.sourceSystem || "workspace",
-        serverId: prompt?.serverId,
-        updatedAt: getPromptModifiedAt(prompt),
-        createdAt:
-          typeof prompt?.createdAt === "number" ? prompt.createdAt : Date.now(),
-        usageCount: getPromptUsageCount(prompt),
-        lastUsedAt: getPromptLastUsedAt(prompt)
-      }
-    })
-  }, [
-    paginatedData,
-    getPromptTexts,
-    t,
-    getPromptKeywords,
-    getPromptModifiedAt,
-    getPromptUsageCount,
-    getPromptLastUsedAt
-  ])
 
   const customPromptTableQuery: PromptListQueryState = {
     searchText,
@@ -2203,13 +712,6 @@ export const PromptBody = () => {
     savedView
   }
 
-  const hiddenServerResultsOnPage = useMemo(() => {
-    if (!useServerSearchResults || !serverSearchData) {
-      return 0
-    }
-    return Math.max(0, serverSearchData.items.length - serverSearchMappedData.length)
-  }, [serverSearchData, serverSearchMappedData.length, useServerSearchResults])
-
   const customPromptsLoading =
     status === "pending" ||
     (shouldUseServerSearch && serverSearchStatus === "pending")
@@ -2217,7 +719,7 @@ export const PromptBody = () => {
   React.useEffect(() => {
     // Only clear selection for items that are no longer visible
     const visibleIds = new Set(sortedFilteredData.map((p: any) => p.id))
-    setSelectedRowKeys((prev) => {
+    bulk.setSelectedRowKeys((prev) => {
       const stillVisible = prev.filter((key) => visibleIds.has(key as string))
       if (stillVisible.length !== prev.length) {
         if (stillVisible.length < prev.length && prev.length > 0) {
@@ -2232,645 +734,16 @@ export const PromptBody = () => {
       }
       return prev
     })
-  }, [sortedFilteredData, t])
+  }, [sortedFilteredData, t, bulk])
 
-  const triggerExport = async () => {
-    try {
-      if (guardPrivateMode()) return
-      if (exportFormat === "json") {
-        const items = await exportPrompts()
-        const blob = new Blob([JSON.stringify(items, null, 2)], {
-          type: "application/json"
-        })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        const safeStamp = new Date().toISOString().replace(/[:]/g, "-")
-        a.download = `prompts_${safeStamp}.json`
-        a.click()
-        URL.revokeObjectURL(url)
-        return
-      }
+  // --- Callbacks ---
 
-      if (!isOnline) {
-        notification.warning({
-          message: t("managePrompts.exportOffline", {
-            defaultValue: "Server export unavailable offline"
-          }),
-          description: t("managePrompts.exportOfflineDesc", {
-            defaultValue: "Reconnect to export CSV or Markdown."
-          })
-        })
-        return
-      }
-
-      const response = await exportPromptsServer(exportFormat)
-      if (!response?.file_content_b64) {
-        notification.info({
-          message: t("managePrompts.exportEmpty", {
-            defaultValue: "Nothing to export"
-          }),
-          description:
-            response?.message ||
-            t("managePrompts.exportEmptyDesc", {
-              defaultValue: "No prompts matched the export criteria."
-            })
-        })
-        return
-      }
-
-      const binary = atob(response.file_content_b64)
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-      const fileExtension = exportFormat === "csv" ? "csv" : "md"
-      const mimeType = exportFormat === "csv" ? "text/csv" : "text/markdown"
-      const blob = new Blob([bytes], {
-        type: `${mimeType};charset=utf-8`
-      })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      const safeStamp = new Date().toISOString().replace(/[:]/g, "-")
-      a.download = `prompts_${safeStamp}.${fileExtension}`
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: t("managePrompts.notification.someError")
-      })
-    }
-  }
-
-  const triggerBulkExport = async () => {
-    try {
-      if (guardPrivateMode()) return
-      const selectedItems = (data || []).filter((p: any) => selectedRowKeys.includes(p.id))
-      const blob = new Blob([JSON.stringify(selectedItems, null, 2)], {
-        type: "application/json"
-      })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `prompts_selected_${new Date().toISOString()}.json`
-      a.click()
-      URL.revokeObjectURL(url)
-      setSelectedRowKeys([])
-    } catch (e) {
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: t("managePrompts.notification.someError")
-      })
-    }
-  }
-
-  const handleImportFile = async (file: File) => {
-    try {
-      if (guardPrivateMode()) return
-      const text = await file.text()
-      const prompts = parseImportPromptsPayload(text)
-
-      if (importMode === "replace") {
-        // Get current prompts count for confirmation message
-        const currentPrompts = data || []
-        const currentCount = currentPrompts.length
-
-        const ok = await confirmDanger({
-          title: t("managePrompts.importMode.replaceTitle", { defaultValue: "Replace all prompts?" }),
-          content: t("managePrompts.importMode.replaceConfirmWithCount", {
-            defaultValue:
-              "This will delete {{currentCount}} existing prompts and import {{newCount}} new prompts. A backup will be downloaded automatically before replacing.",
-            currentCount,
-            newCount: prompts.length
-          }),
-          okText: t("managePrompts.importMode.replaceAndBackup", { defaultValue: "Backup & Replace" }),
-          cancelText: t("common:cancel", { defaultValue: "Cancel" })
-        })
-        if (!ok) return
-
-        // Auto-backup current prompts before replacing
-        if (currentCount > 0) {
-          try {
-            const backupItems = await exportPrompts()
-            const blob = new Blob([JSON.stringify(backupItems, null, 2)], {
-              type: "application/json"
-            })
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement("a")
-            a.href = url
-            const safeStamp = new Date().toISOString().replace(/[:]/g, "-")
-            a.download = `prompts_backup_before_replace_${safeStamp}.json`
-            a.click()
-            URL.revokeObjectURL(url)
-            // Small delay to ensure download starts
-            await new Promise(resolve => setTimeout(resolve, 100))
-          } catch (backupError) {
-            // If backup fails, warn user but continue
-            notification.warning({
-              message: t("managePrompts.notification.backupFailed", { defaultValue: "Backup failed" }),
-              description: t("managePrompts.notification.backupFailedDesc", {
-                defaultValue: "Could not create backup, but proceeding with import."
-              })
-            })
-          }
-        }
-      }
-
-      const importResult = await importPromptsV2(prompts, {
-        replaceExisting: importMode === "replace",
-        mergeData: importMode === "merge"
-      })
-      const importCounts = normalizePromptImportCounts(importResult, prompts.length)
-      const importNotificationCopy = getPromptImportNotificationCopy(
-        importMode,
-        importCounts
-      )
-      queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-      queryClient.invalidateQueries({ queryKey: ["fetchDeletedPrompts"] })
-      notification.success({
-        message: t("managePrompts.notification.addSuccess"),
-        description: t(importNotificationCopy.key, {
-          defaultValue: importNotificationCopy.defaultValue,
-          ...importNotificationCopy.values
-        })
-      })
-    } catch (e) {
-      const importErrorNotice = getPromptImportErrorNotice(e)
-      if (importErrorNotice) {
-        notification.error({
-          message: t(importErrorNotice.titleKey, {
-            defaultValue: importErrorNotice.titleDefaultValue
-          }),
-          description: t(importErrorNotice.descriptionKey, {
-            defaultValue: importErrorNotice.descriptionDefaultValue,
-            ...(importErrorNotice.values || {})
-          })
-        })
-        return
-      }
-      notification.error({
-        message: t("managePrompts.notification.error"),
-        description: t("managePrompts.notification.someError")
-      })
-    }
-  }
-
-  const handleInsertChoice = async (choice: "system" | "quick" | "both") => {
-    if (!insertPrompt) return
-    await markPromptAsUsed(insertPrompt.id)
-    if (choice === "system") {
-      setSelectedSystemPrompt(insertPrompt.id)
-      setSelectedQuickPrompt(undefined)
-      setInsertPrompt(null)
-      navigate("/chat")
-      return
-    }
-    if (choice === "both") {
-      // Apply both system instruction and insert user template
-      setSelectedSystemPrompt(insertPrompt.id)
-      if (insertPrompt.userText) {
-        setSelectedQuickPrompt(insertPrompt.userText)
-      }
-      setInsertPrompt(null)
-      navigate("/chat")
-      return
-    }
-    const quickContent = insertPrompt.userText ?? insertPrompt.systemText
-    if (quickContent) {
-      setSelectedQuickPrompt(quickContent)
-      setSelectedSystemPrompt(undefined)
-      setInsertPrompt(null)
-      navigate("/chat")
-    }
-  }
-
-  const openCreateDrawer = React.useCallback(
-    (initialValues: Record<string, unknown> | null = null) => {
-      if (guardPrivateMode()) return
-      setDrawerMode("create")
-      setEditId("")
-      setDrawerInitialValues(initialValues)
-      setDrawerOpen(true)
-    },
-    [guardPrivateMode]
-  )
-
-  const openFullEditor = React.useCallback(
-    (promptRecord?: any) => {
-      if (promptRecord?.id) {
-        const { systemText, userText } = getPromptTexts(promptRecord)
-        setFullEditorMode("edit")
-        setEditId(promptRecord.id)
-        setFullEditorInitialValues({
-          id: promptRecord.id,
-          name: promptRecord?.name || promptRecord?.title,
-          author: promptRecord?.author,
-          details: promptRecord?.details,
-          system_prompt: systemText,
-          user_prompt: userText,
-          promptFormat: promptRecord?.promptFormat ?? "legacy",
-          promptSchemaVersion: promptRecord?.promptSchemaVersion ?? null,
-          structuredPromptDefinition:
-            promptRecord?.structuredPromptDefinition ?? null,
-          keywords: promptRecord?.keywords ?? promptRecord?.tags ?? [],
-          changeDescription: promptRecord?.changeDescription,
-        })
-        setSearchParams({ edit: promptRecord.id }, { replace: true })
-      } else {
-        setFullEditorMode("create")
-        setFullEditorInitialValues(promptRecord || null)
-        setSearchParams({ new: "1" }, { replace: true })
-      }
-      setFullEditorOpen(true)
-    },
-    [getPromptTexts, setSearchParams]
-  )
-
-  const closeFullEditor = React.useCallback(() => {
-    setFullEditorOpen(false)
-    setFullEditorInitialValues(null)
-    const newParams = new URLSearchParams(searchParams)
-    newParams.delete("edit")
-    newParams.delete("new")
-    setSearchParams(newParams, { replace: true })
-  }, [searchParams, setSearchParams])
-
-  // Handle ?edit=<id> and ?new=1 URL params for full editor
-  useEffect(() => {
-    if (status !== "success" || !Array.isArray(data)) return
-    const editId = searchParams.get("edit")
-    const isNew = searchParams.get("new")
-    if (editId && !fullEditorOpen) {
-      const prompt = data.find((p: any) => String(p.id) === editId)
-      if (prompt) {
-        openFullEditor(prompt)
-      }
-    } else if (isNew === "1" && !fullEditorOpen) {
-      openFullEditor()
-    }
-  }, [status, data, searchParams, fullEditorOpen, openFullEditor])
-
-  const copyCopilotToCustom = React.useCallback(
+  const handleCopyCopilotToCustom = React.useCallback(
     (record: { key?: string; prompt?: string }) => {
-      const promptText = typeof record?.prompt === "string" ? record.prompt : ""
-      const labelKey = typeof record?.key === "string" ? record.key : "custom"
-      const label = t(`common:copilot.${labelKey}`, { defaultValue: labelKey })
-      const namePrefix = t("managePrompts.copilot.copyToCustom.namePrefix", {
-        defaultValue: "Copilot"
-      })
-      setSelectedSegment("custom")
-      openCreateDrawer({
-        name: `${namePrefix}: ${label}`,
-        user_prompt: promptText
-      })
+      interactions.copyCopilotToCustom(record, editor.openCreateDrawer)
     },
-    [openCreateDrawer, t]
+    [interactions.copyCopilotToCustom, editor.openCreateDrawer]
   )
-
-  const copyCopilotPromptToClipboard = React.useCallback(
-    async (record: { prompt?: string }) => {
-      const promptText = typeof record?.prompt === "string" ? record.prompt : ""
-      if (!promptText) {
-        notification.warning({
-          message: t("managePrompts.copilot.clipboard.emptyTitle", {
-            defaultValue: "Nothing to copy"
-          }),
-          description: t("managePrompts.copilot.clipboard.emptyDesc", {
-            defaultValue: "This copilot prompt is empty."
-          })
-        })
-        return
-      }
-
-      try {
-        if (
-          typeof navigator === "undefined" ||
-          !navigator.clipboard ||
-          typeof navigator.clipboard.writeText !== "function"
-        ) {
-          throw new Error(
-            t("managePrompts.copilot.clipboard.notSupported", {
-              defaultValue: "Clipboard is not available in this environment."
-            })
-          )
-        }
-        await navigator.clipboard.writeText(promptText)
-        notification.success({
-          message: t("managePrompts.copilot.clipboard.successTitle", {
-            defaultValue: "Copied to clipboard"
-          }),
-          description: t("managePrompts.copilot.clipboard.successDesc", {
-            defaultValue: "Copilot prompt text was copied."
-          })
-        })
-      } catch (error: any) {
-        notification.error({
-          message: t("managePrompts.copilot.clipboard.errorTitle", {
-            defaultValue: "Copy failed"
-          }),
-          description:
-            error?.message ||
-            t("managePrompts.copilot.clipboard.errorDesc", {
-              defaultValue: "Could not copy prompt text to clipboard."
-            })
-        })
-      }
-    },
-    [t]
-  )
-
-  const copyPromptShareLink = React.useCallback(
-    async (record: { serverId?: number | null }) => {
-      const serverId = record?.serverId
-      if (typeof serverId !== "number" || serverId <= 0) {
-        notification.warning({
-          message: t("managePrompts.share.missingServerIdTitle", {
-            defaultValue: "Share link unavailable"
-          }),
-          description: t("managePrompts.share.missingServerIdDesc", {
-            defaultValue:
-              "Only prompts synced to the server can generate a share link."
-          })
-        })
-        return
-      }
-      if (
-        typeof navigator === "undefined" ||
-        !navigator.clipboard ||
-        typeof navigator.clipboard.writeText !== "function"
-      ) {
-        notification.error({
-          message: t("managePrompts.share.copyUnavailableTitle", {
-            defaultValue: "Clipboard unavailable"
-          }),
-          description: t("managePrompts.share.copyUnavailableDesc", {
-            defaultValue:
-              "Your browser does not allow copying links automatically."
-          })
-        })
-        return
-      }
-      const url = new URL(window.location.href)
-      url.searchParams.set("prompt", String(serverId))
-      url.searchParams.set("source", "studio")
-      const shareUrl = `${url.origin}${url.pathname}?${url.searchParams.toString()}`
-      try {
-        await navigator.clipboard.writeText(shareUrl)
-        notification.success({
-          message: t("managePrompts.share.copySuccessTitle", {
-            defaultValue: "Share link copied"
-          }),
-          description: t("managePrompts.share.copySuccessDesc", {
-            defaultValue:
-              "Send this link to another user with access to your prompt server."
-          })
-        })
-      } catch {
-        notification.error({
-          message: t("managePrompts.share.copyFailedTitle", {
-            defaultValue: "Could not copy link"
-          }),
-          description: t("managePrompts.share.copyFailedDesc", {
-            defaultValue:
-              "Copy failed. Please try again."
-          })
-        })
-      }
-    },
-    [t]
-  )
-
-  const closeLocalQuickTestModal = React.useCallback(() => {
-    setLocalQuickTestPrompt(null)
-    setLocalQuickTestInput("")
-    setLocalQuickTestOutput(null)
-    setLocalQuickTestRunInfo(null)
-  }, [])
-
-  const openLocalQuickTestModal = React.useCallback(
-    (record: any) => {
-      const { systemText, userText } = getPromptTexts(record)
-      setLocalQuickTestPrompt({
-        id: String(record?.id || ""),
-        name: record?.name || record?.title || "Prompt",
-        systemText: systemText?.trim() || undefined,
-        userText: userText?.trim() || undefined
-      })
-      setLocalQuickTestInput("")
-      setLocalQuickTestOutput(null)
-      setLocalQuickTestRunInfo(null)
-    },
-    [getPromptTexts]
-  )
-
-  const openStudioQuickTest = React.useCallback(
-    async (record: any) => {
-      const serverPromptId = Number(record?.serverId)
-      if (!Number.isInteger(serverPromptId) || serverPromptId <= 0) {
-        openLocalQuickTestModal(record)
-        return
-      }
-
-      if (!isOnline || hasStudio === false) {
-        notification.warning({
-          message: t("managePrompts.quickTest.studioUnavailableTitle", {
-            defaultValue: "Studio quick test unavailable"
-          }),
-          description: t("managePrompts.quickTest.studioUnavailableDesc", {
-            defaultValue:
-              "Prompt Studio is unavailable right now, so local quick test is opening instead."
-          })
-        })
-        openLocalQuickTestModal(record)
-        return
-      }
-
-      let projectId =
-        typeof record?.studioProjectId === "number" && record.studioProjectId > 0
-          ? record.studioProjectId
-          : null
-
-      if (!projectId) {
-        try {
-          const response = await getStudioPromptById(serverPromptId)
-          const serverPrompt = (response as any)?.data?.data
-          if (
-            typeof serverPrompt?.project_id === "number" &&
-            serverPrompt.project_id > 0
-          ) {
-            projectId = serverPrompt.project_id
-          }
-        } catch {
-          projectId = null
-        }
-      }
-
-      if (!projectId) {
-        notification.warning({
-          message: t("managePrompts.quickTest.missingProjectTitle", {
-            defaultValue: "Quick test unavailable"
-          }),
-          description: t("managePrompts.quickTest.missingProjectDesc", {
-            defaultValue:
-              "This prompt is synced, but its Prompt Studio project could not be resolved."
-          })
-        })
-        return
-      }
-
-      setStudioSelectedProjectId(projectId)
-      setStudioSelectedPromptId(serverPromptId)
-      setStudioActiveSubTab("prompts")
-      setStudioExecutePlaygroundOpen(true)
-      setSelectedSegment("studio")
-    },
-    [
-      hasStudio,
-      isOnline,
-      openLocalQuickTestModal,
-      setStudioActiveSubTab,
-      setStudioExecutePlaygroundOpen,
-      setStudioSelectedProjectId,
-      setStudioSelectedPromptId,
-      t
-    ]
-  )
-
-  const handleQuickTest = React.useCallback(
-    async (record: any) => {
-      const hasServerPromptId =
-        typeof record?.serverId === "number" && record.serverId > 0
-      if (hasServerPromptId) {
-        await openStudioQuickTest(record)
-        return
-      }
-      openLocalQuickTestModal(record)
-    },
-    [openLocalQuickTestModal, openStudioQuickTest]
-  )
-
-  const runLocalQuickTest = React.useCallback(async () => {
-    if (!localQuickTestPrompt || isRunningLocalQuickTest) return
-
-    const userTemplate = localQuickTestPrompt.userText || ""
-    const systemTemplate = localQuickTestPrompt.systemText || ""
-    const normalizedInput = localQuickTestInput.trim()
-    const textTemplateRegex = /\{\{\s*text\s*\}\}/gi
-    const hasTextTemplateVar = textTemplateRegex.test(userTemplate)
-
-    if (hasTextTemplateVar && normalizedInput.length === 0) {
-      notification.warning({
-        message: t("managePrompts.quickTest.inputRequiredTitle", {
-          defaultValue: "Input required"
-        }),
-        description: t("managePrompts.quickTest.inputRequiredDesc", {
-          defaultValue:
-            "This prompt uses {{text}}. Enter sample input before running quick test."
-        })
-      })
-      return
-    }
-
-    let userMessage = userTemplate
-    if (hasTextTemplateVar) {
-      userMessage = userTemplate.replace(/\{\{\s*text\s*\}\}/gi, normalizedInput)
-    } else if (userTemplate && normalizedInput) {
-      userMessage = `${userTemplate}\n\n${normalizedInput}`
-    } else if (!userTemplate) {
-      userMessage = normalizedInput
-    }
-
-    if (!userMessage.trim()) {
-      notification.warning({
-        message: t("managePrompts.quickTest.noMessageTitle", {
-          defaultValue: "Nothing to test"
-        }),
-        description: t("managePrompts.quickTest.noMessageDesc", {
-          defaultValue:
-            "Add prompt content or input text before running quick test."
-        })
-      })
-      return
-    }
-
-    setIsRunningLocalQuickTest(true)
-    setLocalQuickTestOutput(null)
-    setLocalQuickTestRunInfo(null)
-
-    let provider: string | undefined
-    let model = "gpt-4o-mini"
-
-    try {
-      const llmProvidersResponse = await getLlmProviders()
-      const providersPayload =
-        (llmProvidersResponse as any)?.data ?? llmProvidersResponse
-      const providersCatalog = normalizeExecuteProvidersCatalog(providersPayload)
-      const resolvedProvider = getExecuteDefaultProvider(providersCatalog) || undefined
-      const resolvedModel =
-        getExecuteDefaultModel(providersCatalog, resolvedProvider) || null
-      provider = resolvedProvider
-      if (resolvedModel) {
-        model = resolvedModel
-      }
-    } catch {
-      // Keep fallback defaults when provider lookup fails.
-    }
-
-    try {
-      await tldwClient.initialize().catch(() => null)
-      const messages: Array<{ role: "system" | "user"; content: string }> = []
-
-      if (systemTemplate.trim()) {
-        messages.push({
-          role: "system",
-          content: systemTemplate.trim()
-        })
-      }
-
-      messages.push({
-        role: "user",
-        content: userMessage
-      })
-
-      const completionResponse = await tldwClient.createChatCompletion({
-        model,
-        api_provider: provider,
-        messages,
-        temperature: 0.2
-      })
-      const completionPayload = await completionResponse.json()
-      const outputCandidate =
-        completionPayload?.choices?.[0]?.message?.content ??
-        completionPayload?.output ??
-        completionPayload?.content
-      const output =
-        typeof outputCandidate === "string" ? outputCandidate.trim() : ""
-
-      if (!output) {
-        throw new Error(
-          t("managePrompts.quickTest.emptyResultError", {
-            defaultValue: "The model returned an empty result."
-          })
-        )
-      }
-
-      setLocalQuickTestOutput(output)
-      setLocalQuickTestRunInfo({ provider, model })
-    } catch (error: any) {
-      notification.error({
-        message: t("managePrompts.quickTest.runFailedTitle", {
-          defaultValue: "Quick test failed"
-        }),
-        description:
-          error?.message ||
-          t("managePrompts.quickTest.runFailedDesc", {
-            defaultValue:
-              "The quick test request could not be completed."
-          })
-      })
-    } finally {
-      setIsRunningLocalQuickTest(false)
-    }
-  }, [isRunningLocalQuickTest, localQuickTestInput, localQuickTestPrompt, t])
 
   // Keyboard shortcuts: N = new prompt, / = focus search, Esc = close drawer, ? = open shortcut help
   useEffect(() => {
@@ -2882,8 +755,8 @@ export const PromptBody = () => {
           setShortcutsHelpOpen(false)
           return
         }
-        if (drawerOpen) {
-          setDrawerOpen(false)
+        if (editor.drawerOpen) {
+          editor.setDrawerOpen(false)
         }
         return
       }
@@ -2900,7 +773,7 @@ export const PromptBody = () => {
       }
       if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
-        openFullEditor()
+        editor.openFullEditor()
         return
       }
       if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -2910,133 +783,7 @@ export const PromptBody = () => {
     }
     document.addEventListener("keydown", handler)
     return () => document.removeEventListener("keydown", handler)
-  }, [drawerOpen, shortcutsHelpOpen, openFullEditor])
-
-  const openEditDrawer = (record: any) => {
-    if (guardPrivateMode()) return
-    setEditId(record.id)
-    setDrawerMode("edit")
-    const { systemText, userText } = getPromptTexts(record)
-    setDrawerInitialValues({
-      id: record?.id,
-      name: record?.name || record?.title,
-      author: record?.author,
-      details: record?.details,
-      system_prompt: systemText,
-      user_prompt: userText,
-      promptFormat: record?.promptFormat ?? "legacy",
-      promptSchemaVersion: record?.promptSchemaVersion ?? null,
-      structuredPromptDefinition: record?.structuredPromptDefinition ?? null,
-      keywords: getPromptKeywords(record),
-      // Sync fields for progressive disclosure
-      serverId: record?.serverId,
-      syncStatus: record?.syncStatus,
-      sourceSystem: record?.sourceSystem,
-      studioProjectId: record?.studioProjectId,
-      lastSyncedAt: record?.lastSyncedAt,
-      // Advanced fields
-      fewShotExamples: record?.fewShotExamples,
-      modulesConfig: record?.modulesConfig,
-      changeDescription: record?.changeDescription,
-      versionNumber: record?.versionNumber
-    })
-    setDrawerOpen(true)
-  }
-
-  const closeInspector = React.useCallback(() => {
-    setInspectorOpen(false)
-    setInspectorPromptId(null)
-  }, [])
-
-  const openPromptInspector = React.useCallback((promptId: string) => {
-    setInspectorPromptId(promptId)
-    setInspectorOpen(true)
-  }, [])
-
-  const handleUsePromptInChat = React.useCallback(
-    async (record: any) => {
-      const { systemText, userText } = getPromptTexts(record)
-      const hasSystem =
-        typeof systemText === "string" && systemText.trim().length > 0
-      const hasUser =
-        typeof userText === "string" && userText.trim().length > 0
-
-      if (hasSystem) {
-        setInsertPrompt({
-          id: record.id,
-          systemText,
-          userText: hasUser ? userText : undefined
-        })
-        return
-      }
-
-      const quickContent = userText ?? record?.content
-      if (quickContent) {
-        await markPromptAsUsed(record.id)
-        setSelectedQuickPrompt(quickContent)
-        setSelectedSystemPrompt(undefined)
-        navigate("/chat")
-      }
-    },
-    [
-      getPromptTexts,
-      markPromptAsUsed,
-      navigate,
-      setSelectedQuickPrompt,
-      setSelectedSystemPrompt
-    ]
-  )
-
-  const handleDuplicatePrompt = React.useCallback(
-    (record: any) => {
-      savePromptMutation({
-        title: `${record.title || record.name} (Copy)`,
-        name: `${record.name || record.title} (Copy)`,
-        content: record.content,
-        is_system: record.is_system,
-        keywords: getPromptKeywords(record),
-        tags: getPromptKeywords(record),
-        favorite: !!record?.favorite,
-        author: record?.author,
-        details: record?.details,
-        system_prompt: record?.system_prompt,
-        user_prompt: record?.user_prompt
-      })
-    },
-    [getPromptKeywords, savePromptMutation]
-  )
-
-  const handleDeletePrompt = React.useCallback(
-    async (record: any) => {
-      const ok = await confirmDanger({
-        title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
-        content: t("managePrompts.confirm.delete"),
-        okText: t("common:delete", { defaultValue: "Delete" }),
-        cancelText: t("common:cancel", { defaultValue: "Cancel" })
-      })
-      if (!ok) return
-      deletePrompt(record.id)
-    },
-    [confirmDanger, deletePrompt, t]
-  )
-
-  const handleDrawerSubmit = (values: any) => {
-    const payload = normalizePromptPayload(values)
-    if (drawerMode === "create") {
-      savePromptMutation(payload)
-    } else {
-      updatePromptMutation(payload)
-    }
-  }
-
-  const handleFullEditorSubmit = (values: any) => {
-    const payload = normalizePromptPayload(values)
-    if (fullEditorMode === "create") {
-      savePromptMutation(payload)
-    } else {
-      updatePromptMutation(payload)
-    }
-  }
+  }, [editor.drawerOpen, shortcutsHelpOpen, editor.openFullEditor])
 
   // Clear project filter
   const clearProjectFilter = () => {
@@ -3065,202 +812,6 @@ export const PromptBody = () => {
     },
     [typeFilter, syncFilter, tagFilter, tagMatchMode, savedView, saveFilterPreset]
   )
-
-  const openConflictResolution = React.useCallback((localId: string) => {
-    setConflictPromptId(localId)
-    setConflictInfo(null)
-    setConflictModalOpen(true)
-    loadConflictInfoMutation(localId)
-  }, [loadConflictInfoMutation])
-
-  const closeConflictResolution = React.useCallback(() => {
-    setConflictModalOpen(false)
-    setConflictPromptId(null)
-    setConflictInfo(null)
-  }, [])
-
-  const handleResolveConflict = React.useCallback((resolution: ConflictResolution) => {
-    if (!conflictPromptId) return
-    resolveConflictMutation({ localId: conflictPromptId, resolution })
-  }, [conflictPromptId, resolveConflictMutation])
-
-  const cancelBatchSync = React.useCallback(() => {
-    batchSyncCancelRef.current = true
-  }, [])
-
-  const runBatchSync = React.useCallback(
-    async (retryTasks?: SyncBatchTask[]) => {
-      if (!isOnline) return
-
-      const plan = retryTasks
-        ? {
-            tasks: retryTasks,
-            skippedConflicts: 0,
-            skippedCopilotPending: 0
-          }
-        : buildSyncBatchPlan(await getAllPromptsWithSyncStatus())
-
-      if (plan.tasks.length === 0) {
-        const description = plan.skippedConflicts > 0
-          ? t("managePrompts.sync.batchNoActionableWithConflicts", {
-              defaultValue:
-                "No prompts are ready for batch sync. {{count}} prompt(s) require manual conflict resolution.",
-              count: plan.skippedConflicts
-            })
-          : t("managePrompts.sync.batchNoActionable", {
-              defaultValue: "No prompts currently need syncing."
-            })
-        notification.info({
-          message: t("managePrompts.sync.batchNothingToSync", {
-            defaultValue: "Nothing to sync"
-          }),
-          description
-        })
-        return
-      }
-
-      batchSyncCancelRef.current = false
-      setBatchSyncState({
-        running: true,
-        completed: 0,
-        total: plan.tasks.length,
-        succeeded: 0,
-        failed: [],
-        skippedConflicts: plan.skippedConflicts,
-        skippedCopilotPending: plan.skippedCopilotPending,
-        cancelled: false
-      })
-
-      let completed = 0
-      let succeeded = 0
-      const failed: BatchSyncFailure[] = []
-
-      for (const task of plan.tasks) {
-        if (batchSyncCancelRef.current) {
-          setBatchSyncState({
-            running: false,
-            completed,
-            total: plan.tasks.length,
-            succeeded,
-            failed: [...failed],
-            skippedConflicts: plan.skippedConflicts,
-            skippedCopilotPending: plan.skippedCopilotPending,
-            cancelled: true
-          })
-          notification.warning({
-            message: t("managePrompts.sync.batchCancelled", {
-              defaultValue: "Batch sync cancelled"
-            }),
-            description: t("managePrompts.sync.batchCancelledDesc", {
-              defaultValue:
-                "Synced {{completed}} of {{total}} prompts before cancellation.",
-              completed,
-              total: plan.tasks.length
-            })
-          })
-          await queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-          return
-        }
-
-        try {
-          const result =
-            task.direction === "pull"
-              ? await pullFromStudio(task.serverId!, task.promptId)
-              : task.serverId
-                ? await pushToStudio(task.promptId, task.preferredProjectId || 1)
-                : await autoSyncPrompt(task.promptId, task.preferredProjectId)
-
-          if (result.success) {
-            succeeded += 1
-          } else {
-            failed.push({
-              task,
-              error:
-                result.error ||
-                t("managePrompts.notification.someError", {
-                  defaultValue: "Something went wrong."
-                })
-            })
-          }
-        } catch (error: any) {
-          failed.push({
-            task,
-            error:
-              error?.message ||
-              t("managePrompts.notification.someError", {
-                defaultValue: "Something went wrong."
-              })
-          })
-        }
-
-        completed += 1
-        setBatchSyncState((prev) => ({
-          ...prev,
-          completed,
-          succeeded,
-          failed: [...failed]
-        }))
-      }
-
-      await queryClient.invalidateQueries({ queryKey: ["fetchAllPrompts"] })
-
-      setBatchSyncState({
-        running: false,
-        completed,
-        total: plan.tasks.length,
-        succeeded,
-        failed: [...failed],
-        skippedConflicts: plan.skippedConflicts,
-        skippedCopilotPending: plan.skippedCopilotPending,
-        cancelled: false
-      })
-
-      if (failed.length > 0) {
-        notification.warning({
-          message: t("managePrompts.sync.batchPartialFailure", {
-            defaultValue: "Sync completed with issues"
-          }),
-          description: t("managePrompts.sync.batchPartialFailureDesc", {
-            defaultValue:
-              "Synced {{succeeded}} of {{total}} prompts. {{failed}} failed.",
-            succeeded,
-            total: plan.tasks.length,
-            failed: failed.length
-          })
-        })
-      } else {
-        const extra = plan.skippedConflicts > 0
-          ? t("managePrompts.sync.batchConflictReminder", {
-              defaultValue:
-                " {{count}} conflict prompt(s) still need manual resolution.",
-              count: plan.skippedConflicts
-            })
-          : ""
-        notification.success({
-          message: t("managePrompts.sync.batchSuccess", {
-            defaultValue: "Batch sync complete"
-          }),
-          description: `${t("managePrompts.sync.batchSuccessDesc", {
-            defaultValue: "Synced {{count}} prompt(s).",
-            count: succeeded
-          })}${extra}`
-        })
-      }
-    },
-    [isOnline, queryClient, t]
-  )
-
-  const handleBatchSyncAction = React.useCallback(() => {
-    if (batchSyncState.running) {
-      cancelBatchSync()
-      return
-    }
-    if (batchSyncState.failed.length > 0) {
-      void runBatchSync(batchSyncState.failed.map((item) => item.task))
-      return
-    }
-    void runBatchSync()
-  }, [batchSyncState.failed, batchSyncState.running, cancelBatchSync, runBatchSync])
 
   const handleCustomPromptTableQueryChange = React.useCallback(
     (patch: Partial<PromptListQueryState>) => {
@@ -3292,28 +843,6 @@ export const PromptBody = () => {
     [currentPage, resultsPerPage]
   )
 
-  const handleTogglePromptFavorite = React.useCallback(
-    (promptId: string, nextFavorite: boolean) => {
-      const promptRecord = getPromptRecordById(promptId)
-      if (!promptRecord) return
-      updatePromptDirect(
-        buildPromptUpdatePayload(promptRecord, {
-          favorite: nextFavorite
-        })
-      )
-    },
-    [buildPromptUpdatePayload, getPromptRecordById, updatePromptDirect]
-  )
-
-  const handleEditPromptById = React.useCallback(
-    (promptId: string) => {
-      const promptRecord = getPromptRecordById(promptId)
-      if (!promptRecord) return
-      openFullEditor(promptRecord)
-    },
-    [getPromptRecordById, openFullEditor]
-  )
-
   const renderCustomPromptTitleMeta = React.useCallback(
     (row: PromptRowVM) => {
       if (!isCompactViewport) return null
@@ -3340,7 +869,7 @@ export const PromptBody = () => {
                 compact
                 onClick={
                   isOnline && row.syncStatus === "conflict"
-                    ? () => openConflictResolution(row.id)
+                    ? () => sync.openConflictResolution(row.id)
                     : undefined
                 }
               />
@@ -3349,7 +878,7 @@ export const PromptBody = () => {
         </div>
       )
     },
-    [formatRelativePromptTime, isCompactViewport, isOnline, openConflictResolution, t]
+    [formatRelativePromptTime, isCompactViewport, isOnline, sync.openConflictResolution, t]
   )
 
   const renderCustomPromptActions = React.useCallback(
@@ -3365,11 +894,11 @@ export const PromptBody = () => {
           inlineUseInChat={false}
           onEdit={() => {
             if (!promptRecord) return
-            openFullEditor(promptRecord)
+            editor.openFullEditor(promptRecord)
           }}
           onDuplicate={() => {
             if (!promptRecord) return
-            handleDuplicatePrompt(promptRecord)
+            editor.handleDuplicatePrompt(promptRecord)
           }}
           onUseInChat={() => {
             if (!promptRecord) return
@@ -3381,7 +910,7 @@ export const PromptBody = () => {
           }}
           onDelete={() => {
             if (!promptRecord) return
-            void handleDeletePrompt(promptRecord)
+            void editor.handleDeletePrompt(promptRecord)
           }}
           onShareLink={
             row.serverId && promptRecord
@@ -3393,15 +922,15 @@ export const PromptBody = () => {
           onPushToServer={
             isOnline && promptRecord
               ? () => {
-                  setPromptToSync(promptRecord.id)
-                  setProjectSelectorOpen(true)
+                  sync.setPromptToSync(promptRecord.id)
+                  sync.setProjectSelectorOpen(true)
                 }
               : undefined
           }
           onPullFromServer={
             isOnline && row.serverId && promptRecord
               ? () => {
-                  pullFromStudioMutation({
+                  sync.pullFromStudioMutation({
                     serverId: row.serverId as number,
                     localId: promptRecord.id
                   })
@@ -3411,14 +940,14 @@ export const PromptBody = () => {
           onUnlink={
             isOnline && row.serverId && promptRecord
               ? () => {
-                  unlinkPromptMutation(promptRecord.id)
+                  sync.unlinkPromptMutation(promptRecord.id)
                 }
               : undefined
           }
           onResolveConflict={
             isOnline && row.syncStatus === "conflict"
               ? () => {
-                  openConflictResolution(row.id)
+                  sync.openConflictResolution(row.id)
                 }
               : undefined
           }
@@ -3428,15 +957,12 @@ export const PromptBody = () => {
     [
       copyPromptShareLink,
       getPromptRecordById,
-      handleDeletePrompt,
-      handleDuplicatePrompt,
+      editor,
       handleQuickTest,
       handleUsePromptInChat,
       isFireFoxPrivateMode,
       isOnline,
-      openConflictResolution,
-      pullFromStudioMutation,
-      unlinkPromptMutation
+      sync
     ]
   )
 
@@ -3473,43 +999,43 @@ export const PromptBody = () => {
         )}
         <div className="mb-6 space-y-3">
           {/* Bulk action bar - shown when rows are selected (table view only) */}
-          {viewMode === "table" && selectedRowKeys.length > 0 && (
+          {viewMode === "table" && bulk.selectedRowKeys.length > 0 && (
             <PromptBulkActionBar mode="legacy">
               <span className="text-sm text-primary">
                 {t("managePrompts.bulk.selected", {
                   defaultValue: "{{count}} selected",
-                  count: selectedRowKeys.length
+                  count: bulk.selectedRowKeys.length
                 })}
               </span>
               <button
-                onClick={() => triggerBulkExport()}
+                onClick={() => bulk.triggerBulkExport()}
                 data-testid="prompts-bulk-export"
                 className={`inline-flex items-center gap-1 rounded border border-primary/30 text-sm text-primary hover:bg-primary/10 ${bulkActionTouchClass}`}>
                 <Download className="size-3" /> {t("managePrompts.bulk.export", { defaultValue: "Export selected" })}
               </button>
               <button
-                onClick={() => setBulkKeywordModalOpen(true)}
-                disabled={isBulkAddingKeyword}
+                onClick={() => bulk.setBulkKeywordModalOpen(true)}
+                disabled={bulk.isBulkAddingKeyword}
                 data-testid="prompts-bulk-add-keyword"
                 className={`inline-flex items-center gap-1 rounded border border-primary/30 text-sm text-primary hover:bg-primary/10 disabled:opacity-50 ${bulkActionTouchClass}`}>
                 {t("managePrompts.bulk.addKeyword", { defaultValue: "Add keyword" })}
               </button>
               <button
                 onClick={() =>
-                  bulkToggleFavorite({
-                    ids: selectedRowKeys.map((key) => String(key)),
-                    favorite: !allSelectedAreFavorite
+                  bulk.bulkToggleFavorite({
+                    ids: bulk.selectedRowKeys.map((key) => String(key)),
+                    favorite: !bulk.allSelectedAreFavorite
                   })
                 }
-                disabled={isBulkFavoriting}
+                disabled={bulk.isBulkFavoriting}
                 data-testid="prompts-bulk-toggle-favorite"
                 className={`inline-flex items-center gap-1 rounded border border-primary/30 text-sm text-primary hover:bg-primary/10 disabled:opacity-50 ${bulkActionTouchClass}`}>
-                {allSelectedAreFavorite ? (
+                {bulk.allSelectedAreFavorite ? (
                   <StarOff className="size-3" />
                 ) : (
                   <Star className="size-3" />
                 )}
-                {allSelectedAreFavorite
+                {bulk.allSelectedAreFavorite
                   ? t("managePrompts.bulk.unfavorite", {
                       defaultValue: "Unfavorite selected"
                     })
@@ -3520,9 +1046,9 @@ export const PromptBody = () => {
               {isOnline && (
                 <button
                   onClick={() =>
-                    bulkPushToServer(selectedRowKeys.map((key) => String(key)))
+                    bulk.bulkPushToServer(bulk.selectedRowKeys.map((key) => String(key)))
                   }
-                  disabled={isBulkPushing}
+                  disabled={bulk.isBulkPushing}
                   data-testid="prompts-bulk-push-server"
                   className={`inline-flex items-center gap-1 rounded border border-primary/30 text-sm text-primary hover:bg-primary/10 disabled:opacity-50 ${bulkActionTouchClass}`}>
                   <Cloud className="size-3" />
@@ -3538,38 +1064,38 @@ export const PromptBody = () => {
                     title: t("common:confirmTitle", { defaultValue: "Please confirm" }),
                     content: t("managePrompts.bulk.deleteConfirm", {
                       defaultValue: "Are you sure you want to delete {{count}} prompts?",
-                      count: selectedRowKeys.length
+                      count: bulk.selectedRowKeys.length
                     }),
                     okText: t("common:delete", { defaultValue: "Delete" }),
                     cancelText: t("common:cancel", { defaultValue: "Cancel" })
                   })
                   if (!ok) return
-                  bulkDeletePrompts(selectedRowKeys as string[])
+                  bulk.bulkDeletePrompts(bulk.selectedRowKeys as string[])
                 }}
-                disabled={isBulkDeleting}
+                disabled={bulk.isBulkDeleting}
                 data-testid="prompts-bulk-delete"
                 className={`inline-flex items-center gap-1 rounded border border-danger/30 text-sm text-danger hover:bg-danger/10 disabled:opacity-50 ${bulkActionTouchClass}`}>
                 <Trash2 className="size-3" /> {t("managePrompts.bulk.delete", { defaultValue: "Delete selected" })}
               </button>
               <button
-                onClick={() => setSelectedRowKeys([])}
+                onClick={() => bulk.setSelectedRowKeys([])}
                 data-testid="prompts-clear-selection"
                 className={`ml-auto inline-flex items-center rounded text-sm text-text-muted hover:text-text ${isCompactViewport ? "min-h-[44px] px-2" : ""}`}>
                 {t("common:clearSelection", { defaultValue: "Clear selection" })}
               </button>
             </PromptBulkActionBar>
           )}
-          {isOnline && (batchSyncState.running || batchSyncState.failed.length > 0) && (
+          {isOnline && (sync.batchSyncState.running || sync.batchSyncState.failed.length > 0) && (
             <div
               data-testid="prompts-batch-sync-status"
               className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 p-2"
             >
-              {batchSyncState.running ? (
+              {sync.batchSyncState.running ? (
                 <span className="text-sm text-text-muted">
                   {t("managePrompts.sync.batchProgress", {
                     defaultValue: "Syncing {{completed}} of {{total}} prompts...",
-                    completed: batchSyncState.completed,
-                    total: batchSyncState.total
+                    completed: sync.batchSyncState.completed,
+                    total: sync.batchSyncState.total
                   })}
                 </span>
               ) : (
@@ -3577,7 +1103,7 @@ export const PromptBody = () => {
                   {t("managePrompts.sync.batchFailedCount", {
                     defaultValue:
                       "{{count}} prompt(s) failed in the last batch run. Retry to continue.",
-                    count: batchSyncState.failed.length
+                    count: sync.batchSyncState.failed.length
                   })}
                 </span>
               )}
@@ -3589,13 +1115,13 @@ export const PromptBody = () => {
               className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface2 p-2"
             >
               <Select
-                value={collectionFilter}
+                value={collections.collectionFilter}
                 onChange={(value) =>
-                  setCollectionFilter(
+                  collections.setCollectionFilter(
                     value === "all" ? "all" : Number(value)
                   )
                 }
-                loading={promptCollectionsStatus === "pending"}
+                loading={collections.promptCollectionsStatus === "pending"}
                 style={{ minWidth: isCompactViewport ? "100%" : 260 }}
                 data-testid="prompts-collection-filter"
                 options={[
@@ -3605,7 +1131,7 @@ export const PromptBody = () => {
                     }),
                     value: "all"
                   },
-                  ...promptCollections.map((collection) => ({
+                  ...collections.promptCollections.map((collection) => ({
                     label: `${collection.name} (${collection.prompt_ids?.length || 0})`,
                     value: collection.collection_id
                   }))
@@ -3613,7 +1139,7 @@ export const PromptBody = () => {
               />
               <button
                 type="button"
-                onClick={() => setCreateCollectionModalOpen(true)}
+                onClick={() => collections.setCreateCollectionModalOpen(true)}
                 data-testid="prompts-collection-create"
                 className="inline-flex items-center gap-2 rounded-md border border-border px-2 py-2 text-sm font-medium text-text hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
               >
@@ -3622,16 +1148,16 @@ export const PromptBody = () => {
                   defaultValue: "New collection"
                 })}
               </button>
-              {selectedCollection && selectedRowKeys.length > 0 && (
+              {collections.selectedCollection && bulk.selectedRowKeys.length > 0 && (
                 <button
                   type="button"
                   onClick={() =>
-                    addPromptsToCollectionMutation({
-                      collection: selectedCollection,
-                      prompts: selectedPromptRows
+                    collections.addPromptsToCollectionMutation({
+                      collection: collections.selectedCollection!,
+                      prompts: bulk.selectedPromptRows
                     })
                   }
-                  disabled={isAssigningPromptCollection}
+                  disabled={collections.isAssigningPromptCollection}
                   data-testid="prompts-collection-add-selected"
                   className="inline-flex items-center gap-2 rounded-md border border-primary/40 px-2 py-2 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
                 >
@@ -3650,7 +1176,7 @@ export const PromptBody = () => {
             <div className="flex flex-wrap items-center gap-2">
               <Tooltip title={t("managePrompts.newPromptHint", { defaultValue: "New prompt (N)" })}>
               <button
-                onClick={() => openFullEditor()}
+                onClick={() => editor.openFullEditor()}
                 data-testid="prompts-add"
                 className="inline-flex items-center rounded-md border border-transparent bg-primary px-2 py-2 text-md font-medium leading-4 text-white shadow-sm hover:bg-primaryStrong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50">
                 {t("managePrompts.newPromptBtn", { defaultValue: "New prompt" })}
@@ -3658,15 +1184,15 @@ export const PromptBody = () => {
               </Tooltip>
               <div className="inline-flex items-center rounded-md border border-border overflow-hidden">
                 <button
-                  onClick={() => triggerExport()}
+                  onClick={() => importExport.triggerExport()}
                   data-testid="prompts-export"
                   aria-label={t("managePrompts.exportLabel", { defaultValue: "Export prompts" })}
                   className="inline-flex items-center gap-2 px-2 py-2 text-md font-medium leading-4 text-text hover:bg-surface2">
                   <Download className="size-4" /> {t("managePrompts.export", { defaultValue: "Export" })}
                 </button>
                 <Select
-                  value={exportFormat}
-                  onChange={(v) => setExportFormat(v as "json" | "csv" | "markdown")}
+                  value={importExport.exportFormat}
+                  onChange={(v) => importExport.setExportFormat(v as "json" | "csv" | "markdown")}
                   data-testid="prompts-export-format"
                   options={[
                     { label: "JSON", value: "json" },
@@ -3680,8 +1206,8 @@ export const PromptBody = () => {
               </div>
               {isOnline &&
                 (localSyncBatchPlan.tasks.length > 0 ||
-                  batchSyncState.failed.length > 0 ||
-                  batchSyncState.running) && (
+                  sync.batchSyncState.failed.length > 0 ||
+                  sync.batchSyncState.running) && (
                   <Tooltip
                     title={
                       localSyncBatchPlan.skippedConflicts > 0
@@ -3695,19 +1221,19 @@ export const PromptBody = () => {
                   >
                     <button
                       type="button"
-                      onClick={handleBatchSyncAction}
+                      onClick={sync.handleBatchSyncAction}
                       data-testid="prompts-sync-all"
                       className="inline-flex items-center gap-2 rounded-md border border-border px-2 py-2 text-md font-medium leading-4 text-text hover:bg-surface2 disabled:opacity-50"
                     >
                       <Cloud className="size-4" />
-                      {batchSyncState.running
+                      {sync.batchSyncState.running
                         ? t("managePrompts.sync.batchCancel", {
                             defaultValue: "Cancel sync"
                           })
-                        : batchSyncState.failed.length > 0
+                        : sync.batchSyncState.failed.length > 0
                           ? t("managePrompts.sync.batchRetryFailed", {
                               defaultValue: "Retry failed ({{count}})",
-                              count: batchSyncState.failed.length
+                              count: sync.batchSyncState.failed.length
                             })
                           : t("managePrompts.sync.batchSyncAll", {
                               defaultValue: "Sync all"
@@ -3720,15 +1246,15 @@ export const PromptBody = () => {
                 <button
                   onClick={() => {
                     if (guardPrivateMode()) return
-                    fileInputRef.current?.click()
+                    importExport.fileInputRef.current?.click()
                   }}
                   data-testid="prompts-import"
                   className="inline-flex items-center gap-2 px-2 py-2 text-md font-medium leading-4 text-text hover:bg-surface2">
                   <UploadCloud className="size-4" /> {t("managePrompts.import", { defaultValue: "Import" })}
                 </button>
                 <Select
-                  value={importMode}
-                  onChange={(v) => setImportMode(v as any)}
+                  value={importExport.importMode}
+                  onChange={(v) => importExport.setImportMode(v as any)}
                   data-testid="prompts-import-mode"
                   options={[
                     { label: t("managePrompts.importMode.merge", { defaultValue: "Merge" }), value: "merge" },
@@ -3760,7 +1286,7 @@ export const PromptBody = () => {
                 </button>
               </Tooltip>
               <input
-                ref={fileInputRef}
+                ref={importExport.fileInputRef}
                 type="file"
                 accept="application/json"
                 className="hidden"
@@ -3768,7 +1294,7 @@ export const PromptBody = () => {
                 aria-label={t("managePrompts.importFileLabel", { defaultValue: "Import prompts file" })}
                 onChange={(e) => {
                   const file = e.target.files?.[0]
-                  if (file) handleImportFile(file)
+                  if (file) importExport.handleImportFile(file)
                   e.currentTarget.value = ""
                 }}
               />
@@ -4006,14 +1532,14 @@ export const PromptBody = () => {
               primaryActionLabel={t("settings:managePrompts.emptyPrimaryCta", {
                 defaultValue: "Create prompt"
               })}
-              onPrimaryAction={() => openFullEditor()}
+              onPrimaryAction={() => editor.openFullEditor()}
             />
             <div className="mt-6">
               <h3 className="mb-3 text-sm font-medium text-text-muted">
                 Or start with a template
               </h3>
               <PromptStarterCards
-                onUse={(starter) => openFullEditor(starter)}
+                onUse={(starter) => editor.openFullEditor(starter)}
               />
             </div>
           </>
@@ -4037,13 +1563,13 @@ export const PromptBody = () => {
             isOnline={isOnline}
             isCompactViewport={isCompactViewport}
             query={customPromptTableQuery}
-            selectedIds={selectedRowKeys.map((key) => String(key))}
+            selectedIds={bulk.selectedRowKeys.map((key) => String(key))}
             onQueryChange={handleCustomPromptTableQueryChange}
-            onSelectionChange={(ids) => setSelectedRowKeys(ids)}
+            onSelectionChange={(ids) => bulk.setSelectedRowKeys(ids)}
             onRowOpen={openPromptInspector}
-            onEdit={handleEditPromptById}
-            onToggleFavorite={handleTogglePromptFavorite}
-            onOpenConflictResolution={openConflictResolution}
+            onEdit={editor.handleEditPromptById}
+            onToggleFavorite={editor.handleTogglePromptFavorite}
+            onOpenConflictResolution={sync.openConflictResolution}
             renderActions={renderCustomPromptActions}
             renderTitleMeta={renderCustomPromptTitleMeta}
             favoriteButtonTestId={(row) => `prompt-favorite-${row.id}`}
@@ -4106,7 +1632,7 @@ export const PromptBody = () => {
                   prompt={prompt}
                   onClick={() => openPromptInspector(prompt.id)}
                   density={galleryDensity}
-                  onToggleFavorite={(next) => handleTogglePromptFavorite(prompt.id, next)}
+                  onToggleFavorite={(next) => editor.handleTogglePromptFavorite(prompt.id, next)}
                 />
               ))}
             </div>
@@ -4284,7 +1810,7 @@ export const PromptBody = () => {
                             aria-label={t("managePrompts.copilot.copyToCustom.button", {
                               defaultValue: "Copy to Custom"
                             })}
-                            onClick={() => copyCopilotToCustom(record)}
+                            onClick={() => handleCopyCopilotToCustom(record)}
                             data-testid={`copilot-action-copy-custom-${record.key}`}
                             className="inline-flex min-h-8 min-w-8 items-center justify-center rounded p-2 text-text-muted hover:bg-bg-muted/70 focus:outline-none focus:ring-2 focus:ring-primary"
                           >
@@ -4366,9 +1892,9 @@ export const PromptBody = () => {
                       cancelText: t("common:cancel", { defaultValue: "Cancel" })
                     })
                     if (!ok) return
-                    emptyTrashMutation()
+                    editor.emptyTrashMutation()
                   }}
-                  disabled={isEmptyingTrash}
+                  disabled={editor.isEmptyingTrash}
                   className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-danger/30 text-danger hover:bg-danger/10 disabled:opacity-50">
                   <Trash2 className="size-3" />
                   {t("managePrompts.trash.emptyTrash", { defaultValue: "Empty Trash" })}
@@ -4386,23 +1912,23 @@ export const PromptBody = () => {
                 data-testid="prompts-trash-search"
               />
 
-              {trashSelectedRowKeys.length > 0 && (
+              {bulk.trashSelectedRowKeys.length > 0 && (
                 <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-md border border-primary/20 bg-primary/5">
                   <span className="text-sm text-text-muted">
                     {t("managePrompts.bulk.selectedCount", {
                       defaultValue: "{{count}} selected",
-                      count: trashSelectedRowKeys.length
+                      count: bulk.trashSelectedRowKeys.length
                     })}
                   </span>
                   <button
                     type="button"
                     data-testid="prompts-trash-bulk-restore"
                     onClick={() =>
-                      bulkRestorePrompts(
-                        trashSelectedRowKeys.map((key) => String(key))
+                      bulk.bulkRestorePrompts(
+                        bulk.trashSelectedRowKeys.map((key) => String(key))
                       )
                     }
-                    disabled={isBulkRestoring}
+                    disabled={bulk.isBulkRestoring}
                     className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50"
                   >
                     <Undo2 className="size-3" />
@@ -4550,7 +2076,7 @@ export const PromptBody = () => {
                           <button
                             type="button"
                             data-testid={`prompts-trash-restore-${record.id}`}
-                            onClick={() => restorePromptMutation(record.id)}
+                            onClick={() => editor.restorePromptMutation(record.id)}
                             className="inline-flex items-center gap-1 px-2 py-1 text-sm rounded border border-primary/30 text-primary hover:bg-primary/10">
                             <Undo2 className="size-3" />
                             {t("managePrompts.trash.restore", { defaultValue: "Restore" })}
@@ -4569,7 +2095,7 @@ export const PromptBody = () => {
                                 cancelText: t("common:cancel", { defaultValue: "Cancel" })
                               })
                               if (!ok) return
-                              permanentDeletePromptMutation(record.id)
+                              editor.permanentDeletePromptMutation(record.id)
                             }}
                             className="text-text-muted hover:text-danger">
                             <Trash2 className="size-4" />
@@ -4582,8 +2108,8 @@ export const PromptBody = () => {
                 dataSource={filteredTrashData}
                 rowKey={(record) => record.id}
                 rowSelection={{
-                  selectedRowKeys: trashSelectedRowKeys,
-                  onChange: (keys) => setTrashSelectedRowKeys(keys)
+                  selectedRowKeys: bulk.trashSelectedRowKeys,
+                  onChange: (keys) => bulk.setTrashSelectedRowKeys(keys)
                 }}
               />
             )}
@@ -4780,25 +2306,25 @@ export const PromptBody = () => {
       </div>
 
       <PromptDrawer
-        open={drawerOpen}
+        open={editor.drawerOpen}
         onClose={() => {
-          setDrawerOpen(false)
-          setDrawerInitialValues(null)
+          editor.setDrawerOpen(false)
+          editor.setDrawerInitialValues(null)
         }}
-        mode={drawerMode}
-        initialValues={drawerInitialValues}
-        onSubmit={handleDrawerSubmit}
-        isLoading={drawerMode === "create" ? savePromptLoading : isUpdatingPrompt}
+        mode={editor.drawerMode}
+        initialValues={editor.drawerInitialValues}
+        onSubmit={editor.handleDrawerSubmit}
+        isLoading={editor.drawerMode === "create" ? editor.savePromptLoading : editor.isUpdatingPrompt}
         allTags={allTags}
       />
 
       <PromptFullPageEditor
-        open={fullEditorOpen}
-        onClose={closeFullEditor}
-        mode={fullEditorMode}
-        initialValues={fullEditorInitialValues}
-        onSubmit={handleFullEditorSubmit}
-        isLoading={fullEditorMode === "create" ? savePromptLoading : isUpdatingPrompt}
+        open={editor.fullEditorOpen}
+        onClose={editor.closeFullEditor}
+        mode={editor.fullEditorMode}
+        initialValues={editor.fullEditorInitialValues}
+        onSubmit={editor.handleFullEditorSubmit}
+        isLoading={editor.fullEditorMode === "create" ? editor.savePromptLoading : editor.isUpdatingPrompt}
         allTags={allTags}
       />
 
@@ -4810,7 +2336,7 @@ export const PromptBody = () => {
           const promptRecord = getPromptRecordById(promptId)
           if (!promptRecord) return
           closeInspector()
-          openFullEditor(promptRecord)
+          editor.openFullEditor(promptRecord)
         }}
         onUseInChat={(promptId) => {
           const promptRecord = getPromptRecordById(promptId)
@@ -4821,13 +2347,13 @@ export const PromptBody = () => {
         onDuplicate={(promptId) => {
           const promptRecord = getPromptRecordById(promptId)
           if (!promptRecord) return
-          handleDuplicatePrompt(promptRecord)
+          editor.handleDuplicatePrompt(promptRecord)
         }}
         onDelete={(promptId) => {
           const promptRecord = getPromptRecordById(promptId)
           if (!promptRecord) return
           closeInspector()
-          void handleDeletePrompt(promptRecord)
+          void editor.handleDeletePrompt(promptRecord)
         }}
       />
 
@@ -4916,39 +2442,39 @@ export const PromptBody = () => {
 
       <Modal
         title={t("managePrompts.bulk.addKeyword", { defaultValue: "Add keyword" })}
-        open={bulkKeywordModalOpen}
+        open={bulk.bulkKeywordModalOpen}
         onCancel={() => {
-          setBulkKeywordModalOpen(false)
-          setBulkKeywordValue("")
+          bulk.setBulkKeywordModalOpen(false)
+          bulk.setBulkKeywordValue("")
         }}
         onOk={() =>
-          bulkAddKeyword({
-            ids: selectedRowKeys.map((key) => String(key)),
-            keyword: bulkKeywordValue
+          bulk.bulkAddKeyword({
+            ids: bulk.selectedRowKeys.map((key) => String(key)),
+            keyword: bulk.bulkKeywordValue
           })
         }
         okText={t("common:add", { defaultValue: "Add" })}
         cancelText={t("common:cancel", { defaultValue: "Cancel" })}
         okButtonProps={{
           disabled:
-            bulkKeywordValue.trim().length === 0 || isBulkAddingKeyword,
-          loading: isBulkAddingKeyword
+            bulk.bulkKeywordValue.trim().length === 0 || bulk.isBulkAddingKeyword,
+          loading: bulk.isBulkAddingKeyword
         }}
       >
         <Input
           autoFocus
-          value={bulkKeywordValue}
-          onChange={(event) => setBulkKeywordValue(event.target.value)}
+          value={bulk.bulkKeywordValue}
+          onChange={(event) => bulk.setBulkKeywordValue(event.target.value)}
           onPressEnter={() => {
             if (
-              bulkKeywordValue.trim().length === 0 ||
-              isBulkAddingKeyword
+              bulk.bulkKeywordValue.trim().length === 0 ||
+              bulk.isBulkAddingKeyword
             ) {
               return
             }
-            bulkAddKeyword({
-              ids: selectedRowKeys.map((key) => String(key)),
-              keyword: bulkKeywordValue
+            bulk.bulkAddKeyword({
+              ids: bulk.selectedRowKeys.map((key) => String(key)),
+              keyword: bulk.bulkKeywordValue
             })
           }}
           placeholder={t("managePrompts.tags.addPlaceholder", {
@@ -5074,38 +2600,38 @@ export const PromptBody = () => {
         title={t("managePrompts.collections.create", {
           defaultValue: "New collection"
         })}
-        open={createCollectionModalOpen}
+        open={collections.createCollectionModalOpen}
         onCancel={() => {
-          setCreateCollectionModalOpen(false)
-          setNewCollectionName("")
-          setNewCollectionDescription("")
+          collections.setCreateCollectionModalOpen(false)
+          collections.setNewCollectionName("")
+          collections.setNewCollectionDescription("")
         }}
         onOk={() =>
-          createPromptCollectionMutation({
-            name: newCollectionName,
-            description: newCollectionDescription
+          collections.createPromptCollectionMutation({
+            name: collections.newCollectionName,
+            description: collections.newCollectionDescription
           })
         }
         okText={t("common:create", { defaultValue: "Create" })}
         cancelText={t("common:cancel", { defaultValue: "Cancel" })}
         okButtonProps={{
-          loading: isCreatingPromptCollection,
-          disabled: newCollectionName.trim().length === 0
+          loading: collections.isCreatingPromptCollection,
+          disabled: collections.newCollectionName.trim().length === 0
         }}
         data-testid="prompts-collection-create-modal"
       >
         <div className="space-y-3">
           <Input
-            value={newCollectionName}
-            onChange={(event) => setNewCollectionName(event.target.value)}
+            value={collections.newCollectionName}
+            onChange={(event) => collections.setNewCollectionName(event.target.value)}
             placeholder={t("managePrompts.collections.namePlaceholder", {
               defaultValue: "Collection name"
             })}
             data-testid="prompts-collection-name-input"
           />
           <Input.TextArea
-            value={newCollectionDescription}
-            onChange={(event) => setNewCollectionDescription(event.target.value)}
+            value={collections.newCollectionDescription}
+            onChange={(event) => collections.setNewCollectionDescription(event.target.value)}
             placeholder={t("managePrompts.collections.descriptionPlaceholder", {
               defaultValue: "Description (optional)"
             })}
@@ -5260,25 +2786,25 @@ export const PromptBody = () => {
 
       {/* Project Selector for Push to Server */}
       <ProjectSelector
-        open={projectSelectorOpen}
+        open={sync.projectSelectorOpen}
         onClose={() => {
-          setProjectSelectorOpen(false)
-          setPromptToSync(null)
+          sync.setProjectSelectorOpen(false)
+          sync.setPromptToSync(null)
         }}
         onSelect={(projectId) => {
-          if (promptToSync) {
-            pushToStudioMutation({ localId: promptToSync, projectId })
+          if (sync.promptToSync) {
+            sync.pushToStudioMutation({ localId: sync.promptToSync, projectId })
           }
         }}
-        loading={isPushing}
+        loading={sync.isPushing}
       />
 
       <ConflictResolutionModal
-        open={conflictModalOpen}
-        loading={isLoadingConflictInfo || isResolvingConflict}
-        conflictInfo={conflictInfo}
-        onClose={closeConflictResolution}
-        onResolve={handleResolveConflict}
+        open={sync.conflictModalOpen}
+        loading={sync.isLoadingConflictInfo || sync.isResolvingConflict}
+        conflictInfo={sync.conflictInfo}
+        onClose={sync.closeConflictResolution}
+        onResolve={sync.handleResolveConflict}
       />
     </div>
   )

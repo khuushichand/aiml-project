@@ -236,6 +236,8 @@ export function Markdown({
       <div
         className={`${resolvedClassName} ${RICH_TEXT_ELEMENT_STYLE_CLASS} [&_.st-inline-spoiler]:rounded-sm [&_.st-inline-spoiler]:bg-surface2 [&_.st-inline-spoiler]:px-1 [&_.st-inline-spoiler]:py-0.5 [&_.st-inline-spoiler]:font-medium [&_.st-spoiler]:my-2 [&_.st-spoiler]:rounded-md [&_.st-spoiler]:border [&_.st-spoiler]:border-border [&_.st-spoiler]:bg-surface2/70 [&_.st-spoiler]:px-3 [&_.st-spoiler]:py-2 [&_.st-spoiler_>summary]:cursor-pointer [&_.st-spoiler_>summary]:font-medium [&_.st-external-image-blocked]:inline-flex [&_.st-external-image-blocked]:items-center [&_.st-external-image-blocked]:gap-2 [&_.st-external-image-blocked]:rounded-md [&_.st-external-image-blocked]:border [&_.st-external-image-blocked]:border-border [&_.st-external-image-blocked]:bg-surface2 [&_.st-external-image-blocked]:px-2 [&_.st-external-image-blocked]:py-1 [&_.st-external-image-blocked]:text-[11px] [&_.st-external-image-blocked]:text-text-muted`}
         style={richTextStyleVars as React.CSSProperties}
+        role="region"
+        aria-label="Message content"
         dangerouslySetInnerHTML={{ __html: stCompatHtml }}
       />
     )

@@ -5,6 +5,7 @@ import {
   seedAdminFixtureProfile,
   getCriticalIssues
 } from './smoke.setup'
+import { waitForAppShell } from '../utils/helpers'
 import type { Route } from '@playwright/test'
 
 const LOAD_TIMEOUT = 30_000
@@ -48,7 +49,7 @@ test.describe('Stage 3 rendering resilience', () => {
         (url) => url.pathname === targetPath,
         { timeout: LOAD_TIMEOUT }
       )
-      await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {})
+      await waitForAppShell(page, LOAD_TIMEOUT)
 
       const status = response?.status() ?? 0
       expect(status, `Expected ${route.path} to return HTTP 2xx/3xx`).toBeGreaterThanOrEqual(200)

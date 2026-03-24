@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test"
 import http from "node:http"
 import type { AddressInfo } from "node:net"
+import { seedAuth } from "../utils/helpers"
 
 const MODEL_ID = "mock-model"
 const MODEL_KEY = `tldw:${MODEL_ID}`
@@ -190,27 +191,33 @@ const startLoopParityMockServer = async () => {
       const emit = (payload: unknown) =>
         res.write(`data: ${JSON.stringify(payload)}\n\n`)
 
-      emit({ event: "run_started", data: { run_id: "run_parity", seq: 1 } })
+      emit({ event: "run_started", run_id: "run_parity", seq: 1, data: {} })
       setTimeout(() => {
         emit({
           event: "approval_required",
+          run_id: "run_parity",
+          seq: 2,
           data: {
-            run_id: "run_parity",
-            seq: 2,
             approval_id: "approval_1",
             tool_call_id: "tool_1",
           },
         })
       }, 400)
       setTimeout(() => {
-        emit({ choices: [{ delta: { content: "Mock parity response" } }] })
+        emit({
+          event: "llm_chunk",
+          run_id: "run_parity",
+          seq: 3,
+          data: { text: "Mock parity response" },
+          choices: [{ delta: { content: "Mock parity response" } }],
+        })
       }, 650)
       setTimeout(() => {
         emit({
           event: "approval_resolved",
+          run_id: "run_parity",
+          seq: 4,
           data: {
-            run_id: "run_parity",
-            seq: 3,
             approval_id: "approval_1",
           },
         })
@@ -218,17 +225,21 @@ const startLoopParityMockServer = async () => {
       setTimeout(() => {
         emit({
           event: "tool_started",
-          data: { run_id: "run_parity", seq: 4, tool_call_id: "tool_1" },
+          run_id: "run_parity",
+          seq: 5,
+          data: { tool_call_id: "tool_1" },
         })
       }, 3500)
       setTimeout(() => {
         emit({
           event: "tool_finished",
-          data: { run_id: "run_parity", seq: 5, tool_call_id: "tool_1" },
+          run_id: "run_parity",
+          seq: 6,
+          data: { tool_call_id: "tool_1" },
         })
       }, 4200)
       setTimeout(() => {
-        emit({ event: "run_complete", data: { run_id: "run_parity", seq: 6 } })
+        emit({ event: "run_complete", run_id: "run_parity", seq: 7, data: {} })
       }, 5000)
       setTimeout(() => {
         res.write("data: [DONE]\n\n")
@@ -257,19 +268,11 @@ const startLoopParityMockServer = async () => {
 }
 
 const seedChatConfig = async (page: Page, serverUrl: string) => {
+  await seedAuth(page, { serverUrl, apiKey: "test-key" })
   await page.addInitScript(
     ({ url, model }) => {
       try {
-        const cfg = {
-          serverUrl: url,
-          authMode: "single-user",
-          apiKey: "test-key",
-        }
-        localStorage.setItem(
-          "tldwConfig",
-          JSON.stringify(cfg)
-        )
-        localStorage.setItem("plasmo-storage-tldwConfig", JSON.stringify(cfg))
+        localStorage.setItem("tldw-api-host", url)
       } catch {}
       try {
         localStorage.setItem("__tldw_first_run_complete", "true")

@@ -95,6 +95,9 @@ test.describe("KnowledgeQA Workflow", () => {
 
       // One of these should be true
       expect(answer.length > 0 || noResults).toBeTruthy()
+      if (answer.length > 0) {
+        expect(answer).not.toMatch(/chatcmpl|finish_reason|chat\.completion\.chunk/i)
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -171,7 +174,9 @@ test.describe("KnowledgeQA Workflow", () => {
       })
 
       await authedPage.route("**/api/v1/rag/search", async (route) => {
-        await authedPage.waitForTimeout(6500)
+        // Keep the mocked search pending past the 5s AnswerPanel threshold so the
+        // reranking stage renders before the response resolves.
+        await new Promise((resolve) => setTimeout(resolve, 6_500))
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -483,12 +488,14 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.goto()
       await qaPage.waitForReady()
 
-      await qaPage.pressNewSearch()
-      await authedPage.waitForTimeout(500)
-
-      // Search input should be focused/cleared
       const input = await qaPage.getSearchInput()
-      await expect(input).toBeVisible()
+      await input.fill("temporary knowledge query")
+
+      await qaPage.pressNewSearch()
+
+      // Search input should be focused and cleared for the next query
+      await expect(input).toBeFocused({ timeout: 5_000 })
+      await expect(input).toHaveValue("", { timeout: 5_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -533,6 +540,13 @@ test.describe("KnowledgeQA Workflow", () => {
       await qaPage.waitForReady()
 
       // Mock a failing API by intercepting the route
+      await authedPage.route("**/api/v1/rag/search/stream", (route) => {
+        route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Internal server error" })
+        })
+      })
       await authedPage.route("**/api/v1/rag/search", (route) => {
         route.fulfill({
           status: 500,
@@ -541,16 +555,22 @@ test.describe("KnowledgeQA Workflow", () => {
         })
       })
 
-      await qaPage.search("trigger error")
-      await authedPage.waitForTimeout(3000)
+      try {
+        await qaPage.search("trigger error")
+        await qaPage.waitForResults()
 
-      // Should show some kind of error state
-      const errorMsg = await qaPage.getErrorMessage()
+        await expect
+          .poll(async () => await qaPage.getErrorMessage(), { timeout: 10_000 })
+          .not.toBeNull()
 
-      expect(errorMsg).not.toBeNull()
-
-      // Unroute to not affect other tests
-      await authedPage.unroute("**/api/v1/rag/search")
+        // Should show some kind of error state
+        const errorMsg = await qaPage.getErrorMessage()
+        expect(errorMsg).not.toBeNull()
+      } finally {
+        // Unroute to not affect other tests
+        await authedPage.unroute("**/api/v1/rag/search/stream")
+        await authedPage.unroute("**/api/v1/rag/search")
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })

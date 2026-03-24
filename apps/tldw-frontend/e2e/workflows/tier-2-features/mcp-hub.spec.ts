@@ -76,7 +76,18 @@ test.describe("MCP Hub", () => {
         "profiles",
       ] as const) {
         await mcpHub.switchToTab(tab)
-        await authedPage.waitForTimeout(500)
+        const tabLocator = {
+          assignments: mcpHub.assignmentsTab,
+          pathScopes: mcpHub.pathScopesTab,
+          workspaceSets: mcpHub.workspaceSetsTab,
+          sharedWorkspaces: mcpHub.sharedWorkspacesTab,
+          audit: mcpHub.auditTab,
+          approvals: mcpHub.approvalsTab,
+          catalog: mcpHub.catalogTab,
+          credentials: mcpHub.credentialsTab,
+          profiles: mcpHub.profilesTab,
+        }[tab]
+        await expect(tabLocator).toHaveAttribute("aria-selected", "true")
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -105,7 +116,7 @@ test.describe("MCP Hub", () => {
       // Profiles is the default tab, so the API call should already have fired
       // Switch away and back to trigger a fresh call
       await mcpHub.switchToTab("audit")
-      await authedPage.waitForTimeout(500)
+      await expect(mcpHub.auditTab).toHaveAttribute("aria-selected", "true")
 
       const apiCall = expectApiCall(authedPage, {
         url: /\/api\/v1\/mcp\/hub\/permission-profiles/,

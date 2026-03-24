@@ -4,7 +4,8 @@
 # Imports
 import os
 import threading
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -268,6 +269,69 @@ async def get_media_db_for_user(
                 db_instance.release_context_connection()
         except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
             pass
+
+
+def get_media_db_for_owner(owner_user_id: int) -> MediaDbSession:
+    """
+    Return a MediaDatabase for an arbitrary user (the workspace owner).
+
+    Used by the sharing module to read sources from the owner's DB.
+    Constructs a temporary User object for the internal resolver.
+    """
+    if not isinstance(owner_user_id, int):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid owner_user_id.",
+        )
+    fake_user = User(id=owner_user_id, username=f"owner-{owner_user_id}", email="")
+    return _resolve_media_db_for_user(fake_user)
+
+
+@contextmanager
+def managed_media_db_for_owner(owner_user_id: int) -> Iterator[MediaDbSession]:
+    """
+    Yield an owner-scoped Media DB session and always release request context.
+
+    This mirrors the FastAPI dependency teardown path for non-request call
+    sites such as sharing helpers and background tasks.
+    """
+    db_instance = get_media_db_for_owner(owner_user_id)
+    try:
+        yield db_instance
+    finally:
+        try:
+            if hasattr(db_instance, "release_context_connection"):
+                db_instance.release_context_connection()
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
+            pass
+
+
+def get_media_db_path_for_rag(media_db: Any) -> str | None:
+    """
+    Return a filesystem path for RAG callers when one actually exists.
+
+    Shared PostgreSQL-backed Media DB sessions use ``:memory:`` as an internal
+    placeholder path; forwarding that sentinel into path-based RAG entry points
+    can trigger incorrect SQLite fallback behavior, so return ``None`` instead.
+    """
+    raw_path = getattr(media_db, "db_path_str", None)
+    if raw_path is None:
+        raw_path = getattr(media_db, "db_path", None)
+    if raw_path is None:
+        return None
+
+    normalized = str(raw_path).strip()
+    if not normalized:
+        return None
+
+    backend_type = getattr(media_db, "backend_type", None)
+    if backend_type is None:
+        backend = getattr(media_db, "backend", None)
+        backend_type = getattr(backend, "backend_type", None)
+
+    if backend_type == BackendType.POSTGRESQL and normalized in {":memory:", "/:memory:"}:
+        return None
+    return normalized
 
 
 def reset_media_db_cache() -> None:

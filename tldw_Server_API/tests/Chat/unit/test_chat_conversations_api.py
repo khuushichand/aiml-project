@@ -191,6 +191,35 @@ def test_conversation_endpoints_expose_normalized_assistant_identity(tmp_path):
     assert metadata["character_id"] is None
 
 
+def test_get_chat_conversation_returns_metadata_for_knowledge_clients(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    conversation_id = db.add_conversation(
+        {
+            "assistant_kind": "persona",
+            "assistant_id": "knowledge-helper",
+            "persona_memory_mode": "read_only",
+            "title": "Knowledge QA thread",
+            "client_id": "user-1",
+        }
+    )
+    assert conversation_id is not None
+    keyword_id = db.add_keyword("__knowledge_QA__")
+    db.link_conversation_to_keyword(conversation_id, keyword_id)
+
+    response = app.get(f"/api/v1/chat/conversations/{conversation_id}")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["id"] == conversation_id
+    assert payload["assistant_kind"] == "persona"
+    assert payload["assistant_id"] == "knowledge-helper"
+    assert payload["persona_memory_mode"] == "read_only"
+    assert payload["keywords"] == ["__knowledge_QA__"]
+
+
 def test_conversation_alias_filters_character_scope(tmp_path):
     db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
@@ -234,6 +263,94 @@ def test_conversation_alias_filters_character_scope(tmp_path):
     payload = resp.json()
     assert [item["id"] for item in payload["items"]] == ["plain-conv"]
     assert payload["pagination"]["total"] == 1
+
+
+def test_conversation_list_defaults_omitted_scope_to_global(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    char_id = db.add_character_card(
+        {
+            "name": "Scope Character",
+            "description": "desc",
+            "personality": "helpful",
+            "system_prompt": "You are helpful.",
+            "client_id": "user-1",
+        }
+    )
+    db.upsert_workspace("ws-1", "Workspace One")
+    db.add_conversation(
+        {
+            "id": "global-conv",
+            "character_id": char_id,
+            "title": "Global conversation",
+            "client_id": "user-1",
+        }
+    )
+    db.add_conversation(
+        {
+            "id": "workspace-conv",
+            "character_id": char_id,
+            "title": "Workspace conversation",
+            "client_id": "user-1",
+            "scope_type": "workspace",
+            "workspace_id": "ws-1",
+        }
+    )
+
+    response = app.get("/api/v1/chat/conversations")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [item["id"] for item in payload["items"]] == ["global-conv"]
+    assert payload["pagination"]["total"] == 1
+
+
+def test_conversation_tree_requires_exact_scope_match(tmp_path):
+    db_path = tmp_path / "chacha.db"
+    db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
+    app = _build_app(db)
+
+    char_id = db.add_character_card(
+        {
+            "name": "Scope Tree Character",
+            "description": "desc",
+            "personality": "helpful",
+            "system_prompt": "You are helpful.",
+            "client_id": "user-1",
+        }
+    )
+    db.upsert_workspace("ws-1", "Workspace One")
+    conversation_id = db.add_conversation(
+        {
+            "id": "workspace-tree",
+            "character_id": char_id,
+            "title": "Workspace tree",
+            "client_id": "user-1",
+            "scope_type": "workspace",
+            "workspace_id": "ws-1",
+        }
+    )
+    assert conversation_id == "workspace-tree"
+
+    missing_scope = app.get(f"/api/v1/chat/conversations/{conversation_id}/tree")
+    assert missing_scope.status_code == 404
+
+    wrong_scope = app.get(
+        f"/api/v1/chat/conversations/{conversation_id}/tree",
+        params={"scope_type": "workspace", "workspace_id": "ws-2"},
+    )
+    assert wrong_scope.status_code == 404
+
+    correct_scope = app.get(
+        f"/api/v1/chat/conversations/{conversation_id}/tree",
+        params={"scope_type": "workspace", "workspace_id": "ws-1"},
+    )
+    assert correct_scope.status_code == 200, correct_scope.text
+    payload = correct_scope.json()
+    assert payload["conversation"]["scope_type"] == "workspace"
+    assert payload["conversation"]["workspace_id"] == "ws-1"
 
 
 def test_conversation_alias_rejects_incompatible_character_scope_and_character_id(tmp_path):

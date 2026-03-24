@@ -1,0 +1,67 @@
+// @vitest-environment jsdom
+
+import React from "react"
+import { render, screen } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const mocks = vi.hoisted(() => ({
+  useCanonicalConnectionConfig: vi.fn(),
+  getBillingOverview: vi.fn(),
+  getStorageQuotaSummary: vi.fn(),
+  listAllSubscriptions: vi.fn(),
+  listBillingEvents: vi.fn()
+}))
+
+vi.mock("@/hooks/useCanonicalConnectionConfig", () => ({
+  useCanonicalConnectionConfig: (...args: unknown[]) =>
+    mocks.useCanonicalConnectionConfig(...args)
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    getBillingOverview: (...args: unknown[]) => mocks.getBillingOverview(...args),
+    getStorageQuotaSummary: (...args: unknown[]) =>
+      mocks.getStorageQuotaSummary(...args),
+    listAllSubscriptions: (...args: unknown[]) =>
+      mocks.listAllSubscriptions(...args),
+    listBillingEvents: (...args: unknown[]) => mocks.listBillingEvents(...args)
+  }
+}))
+
+import BillingDashboardPage from "../BillingDashboardPage"
+
+const fetchMock = vi.fn()
+vi.stubGlobal("fetch", fetchMock)
+
+describe("BillingDashboardPage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+
+    mocks.useCanonicalConnectionConfig.mockReturnValue({
+      config: {
+        serverUrl: "http://127.0.0.1:8000",
+        authMode: "single-user",
+        apiKey: "test-key"
+      },
+      loading: false
+    })
+  })
+
+  it("shows an unsupported-state message without calling billing endpoints when the route is absent", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        paths: {}
+      })
+    })
+
+    render(<BillingDashboardPage />)
+
+    expect(
+      await screen.findByText("Billing endpoints are not available on this server.")
+    ).toBeInTheDocument()
+    expect(mocks.getBillingOverview).not.toHaveBeenCalled()
+    expect(mocks.listAllSubscriptions).not.toHaveBeenCalled()
+    expect(mocks.listBillingEvents).not.toHaveBeenCalled()
+  })
+})

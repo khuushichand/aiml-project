@@ -263,6 +263,37 @@ describe("ExportDialog accessibility", () => {
     )
   })
 
+  it("ignores stale chatbook export completions after reopening the same thread", async () => {
+    let resolveExport: ((value: Record<string, unknown>) => void) | null = null
+    exportChatbookMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveExport = resolve
+        })
+    )
+    const onClose = vi.fn()
+    const { rerender } = render(<ExportDialog open onClose={onClose} />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Chatbook/i }))
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+
+    rerender(<ExportDialog open={false} onClose={onClose} />)
+    rerender(<ExportDialog open onClose={onClose} />)
+
+    resolveExport?.({
+      success: true,
+      job_id: "job-reopened",
+      download_url: "/api/v1/chatbooks/download/job-reopened",
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(downloadChatbookExportMock).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it("uses browser print fallback for PDF exports", async () => {
     vi.useFakeTimers()
     const printSpy = vi.spyOn(window, "print").mockImplementation(() => {})
@@ -450,6 +481,19 @@ describe("ExportDialog accessibility", () => {
     expect(screen.queryByText(/Active link expires/i)).not.toBeInTheDocument()
   })
 
+  it("clears export preview state when the active thread changes", async () => {
+    const { rerender } = render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+    await waitFor(() => expect(screen.getByText("Preview")).toBeInTheDocument())
+
+    state.currentThreadId = "thread-2"
+    rerender(<ExportDialog open onClose={vi.fn()} />)
+
+    expect(screen.queryByText("Preview")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /^Copy$/ })).not.toBeInTheDocument()
+  })
+
   it("ignores stale share-link completions after the active thread changes", async () => {
     let resolveShareLink: ((value: Record<string, unknown>) => void) | null = null
     createShareLinkMock.mockImplementation(
@@ -488,6 +532,29 @@ describe("ExportDialog accessibility", () => {
     expect(screen.getByRole("button", { name: "Create share link" })).toBeEnabled()
     expect(screen.getByRole("button", { name: "Revoke link" })).toBeDisabled()
     expect(screen.queryByText(/Active link expires/i)).not.toBeInTheDocument()
+  })
+
+  it("keeps the revoke handle when clipboard copy fails after share-link creation", async () => {
+    const writeTextMock = vi.fn().mockRejectedValue(new Error("clipboard denied"))
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      configurable: true,
+    })
+
+    render(<ExportDialog open onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create share link" }))
+
+    await waitFor(() =>
+      expect(messageOpenMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "warning",
+        })
+      )
+    )
+
+    expect(screen.getByText(/Active link expires/i)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Revoke link" })).toBeEnabled()
   })
 
   it("preserves format defaults and preview copy feedback behavior", async () => {

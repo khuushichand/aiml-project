@@ -12,8 +12,14 @@ const normalizeErrorMessage = (error: unknown): string => {
 
 export const deriveAdminGuardFromError = (error: unknown): AdminGuardState => {
   const rawMessage = normalizeErrorMessage(error)
-  const statusMatch = rawMessage.match(/Request failed:\s*(\d{3})/i)
-  const statusCode = statusMatch?.[1]
+  const statusFromField =
+    error && typeof error === "object" && "status" in error
+      ? String((error as { status?: unknown }).status ?? "")
+      : ""
+  const statusMatch =
+    rawMessage.match(/Request failed:\s*(\d{3})/i) ||
+    rawMessage.match(/\b(403|404|405|410|501|503)\b/)
+  const statusCode = statusFromField || statusMatch?.[1] || ""
 
   if (statusCode === "403") {
     return "forbidden"
@@ -61,4 +67,3 @@ export const sanitizeAdminErrorMessage = (
 
   return cleaned || fallbackMessage
 }
-

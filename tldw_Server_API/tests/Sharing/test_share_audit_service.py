@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from tldw_Server_API.app.core.exceptions import AuditLogError
 from tldw_Server_API.app.core.Sharing.share_audit_service import (
     SHARE_CREATED,
     SHARE_REVOKED,
@@ -96,14 +97,15 @@ async def test_log_with_ip_and_user_agent(audit_service):
 
 
 @pytest.mark.asyncio
-async def test_log_swallows_errors(audit_service, monkeypatch):
-    """Audit logging should not raise even if DB fails."""
+async def test_log_raises_audit_log_error_when_repo_write_fails(audit_service, monkeypatch):
+    """Audit logging failures should propagate as AuditLogError."""
     async def _fail(*args, **kwargs):
         raise RuntimeError("DB is down")
 
     monkeypatch.setattr(audit_service._repo, "log_audit_event", _fail)
-    # Should not raise
-    await audit_service.log(
-        SHARE_CREATED, resource_type="workspace", resource_id="ws-1",
-        owner_user_id=1,
-    )
+    with pytest.raises(AuditLogError) as excinfo:
+        await audit_service.log(
+            SHARE_CREATED, resource_type="workspace", resource_id="ws-1",
+            owner_user_id=1,
+        )
+    assert "Failed to log share audit event" in str(excinfo.value)

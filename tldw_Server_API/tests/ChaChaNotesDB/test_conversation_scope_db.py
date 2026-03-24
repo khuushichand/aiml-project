@@ -111,6 +111,24 @@ class TestConversationScope:
         assert len(ws_results) == 1
         assert ws_results[0]["workspace_id"] == "ws-1"
 
+    def test_omitted_scope_defaults_list_queries_to_global(self, db):
+        db.upsert_workspace("ws-1", "WS1")
+        db.add_conversation({"character_id": 1, "title": "Global"})
+        db.add_conversation(
+            {
+                "character_id": 1,
+                "title": "Scoped",
+                "scope_type": "workspace",
+                "workspace_id": "ws-1",
+            }
+        )
+
+        conversations = db.get_conversations_for_user("test-client")
+        total = db.count_conversations_for_user("test-client")
+
+        assert [conv["scope_type"] for conv in conversations] == ["global"]
+        assert total == 1
+
 
 # ── workspace delete cascade ──────────────────────────────────────────────
 
@@ -138,6 +156,47 @@ class TestWorkspaceDeleteCascade:
         db.delete_workspace("ws-1", expected_version=1)
         conv = db.get_conversation_by_id(global_id)
         assert conv is not None
+
+    def test_delete_soft_deletes_messages_and_hides_message_lookup(self, db):
+        db.upsert_workspace("ws-1", "WS1")
+        conv_id = db.add_conversation(
+            {
+                "character_id": 1,
+                "title": "Scoped",
+                "scope_type": "workspace",
+                "workspace_id": "ws-1",
+            }
+        )
+        message_id = db.add_message(
+            {
+                "conversation_id": conv_id,
+                "sender": "user",
+                "content": "hello",
+                "client_id": "test-client",
+            }
+        )
+
+        db.delete_workspace("ws-1", expected_version=1)
+
+        assert db.get_conversation_by_id(conv_id) is None
+        assert db.get_message_by_id(message_id) is None
+
+    def test_message_lookup_excludes_messages_from_deleted_conversations(self, db):
+        conv_id = db.add_conversation({"character_id": 1, "title": "Global"})
+        message_id = db.add_message(
+            {
+                "conversation_id": conv_id,
+                "sender": "user",
+                "content": "hello",
+                "client_id": "test-client",
+            }
+        )
+        conversation = db.get_conversation_by_id(conv_id)
+        assert conversation is not None
+
+        db.soft_delete_conversation(conv_id, conversation["version"])
+
+        assert db.get_message_by_id(message_id) is None
 
 
 # ── workspace optimistic locking ───────────────────────────────────────────

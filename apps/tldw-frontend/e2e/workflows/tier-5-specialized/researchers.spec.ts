@@ -1,9 +1,9 @@
 /**
  * Researchers E2E Tests (Tier 5)
  *
- * The /researchers route does not exist in the current codebase.
- * This spec is a placeholder that verifies navigating to the route
- * gracefully shows a 404 or redirects.
+ * Tests the public /for/researchers landing page:
+ * - Page loads with the self-hosted hero
+ * - Primary CTA remains on the self-host path
  *
  * Run: npx playwright test e2e/workflows/tier-5-specialized/researchers.spec.ts
  */
@@ -19,23 +19,25 @@ test.describe("Researchers", () => {
     skipIfServerUnavailable(serverInfo)
   })
 
-  test("route shows 404 or redirects gracefully", async ({
+  test("public landing page loads with self-hosted CTA", async ({
     authedPage,
     diagnostics,
   }) => {
-    await authedPage.goto("/researchers", { waitUntil: "domcontentloaded" })
-    await authedPage.waitForLoadState("networkidle").catch(() => {})
+    await authedPage.goto("/for/researchers", {
+      waitUntil: "domcontentloaded",
+    })
 
-    const url = authedPage.url()
-    const has404 = await authedPage
-      .getByText(/404|not found|page not found/i)
-      .first()
-      .isVisible()
-      .catch(() => false)
+    await expect(
+      authedPage.getByRole("heading", {
+        name: /your research data deserves better than/i,
+      })
+    ).toBeVisible({ timeout: 15_000 })
 
-    // Either shows 404, redirects away, or the page simply does not exist
-    const redirectedAway = !url.includes("/researchers")
-    expect(has404 || redirectedAway || true).toBe(true)
+    const primaryCta = authedPage.getByRole("link", {
+      name: /start self-hosting free/i,
+    })
+    await expect(primaryCta).toBeVisible()
+    await expect(primaryCta).toHaveAttribute("href", "/docs/self-hosting")
 
     await assertNoCriticalErrors(diagnostics)
   })

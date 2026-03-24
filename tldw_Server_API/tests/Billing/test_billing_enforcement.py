@@ -45,6 +45,7 @@ from tldw_Server_API.app.core.Billing.plan_limits import (
     PlanTier,
     PlanLimits,
     DEFAULT_LIMITS,
+    VALID_PLAN_NAMES,
     get_plan_limits,
     check_limit,
     SOFT_LIMIT_PERCENT,
@@ -139,20 +140,11 @@ class TestPlanLimits:
         assert limits.team_members == 1
         assert limits.advanced_analytics is False
 
-    def test_pro_tier_has_higher_limits(self):
+    def test_only_free_tier_is_exposed(self):
 
-        """Pro tier should have higher limits than Free."""
-        free_limits = DEFAULT_LIMITS[PlanTier.FREE]
-        pro_limits = DEFAULT_LIMITS[PlanTier.PRO]
-        assert pro_limits.storage_mb > free_limits.storage_mb
-        assert pro_limits.api_calls_day > free_limits.api_calls_day
-        assert pro_limits.advanced_analytics is True
-
-    def test_enterprise_has_unlimited_members(self):
-
-        """Enterprise tier should have unlimited team members."""
-        limits = DEFAULT_LIMITS[PlanTier.ENTERPRISE]
-        assert limits.team_members == -1  # -1 means unlimited
+        """OSS should only expose the neutral free tier."""
+        assert list(PlanTier.__members__) == ["FREE"]
+        assert VALID_PLAN_NAMES == ["free"]
 
     def test_get_plan_limits_free(self):
 
@@ -163,17 +155,19 @@ class TestPlanLimits:
 
     def test_get_plan_limits_unknown_defaults_to_free(self):
 
-        """Unknown plan names should default to free tier."""
+        """Unknown or commercial plan names should resolve to free tier limits."""
         limits = get_plan_limits("unknown_plan")
         free_limits = get_plan_limits("free")
+        commercial_limits = get_plan_limits("pro")
         assert limits == free_limits
+        assert commercial_limits == free_limits
 
     def test_get_plan_limits_case_insensitive(self):
 
-        """Plan names should be case insensitive."""
-        lower = get_plan_limits("pro")
-        upper = get_plan_limits("PRO")
-        mixed = get_plan_limits("Pro")
+        """Plan names should normalize to the same OSS free limits."""
+        lower = get_plan_limits("free")
+        upper = get_plan_limits("FREE")
+        mixed = get_plan_limits("Free")
         assert lower == upper == mixed
 
 

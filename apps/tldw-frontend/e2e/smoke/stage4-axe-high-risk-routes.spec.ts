@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright"
 import { test, expect, seedAuth, getCriticalIssues } from "./smoke.setup"
+import { waitForAppShell } from "../utils/helpers"
 
 const LOAD_TIMEOUT = 30_000
 
@@ -25,7 +26,12 @@ const HIGH_RISK_ROUTES: HighRiskRoute[] = [
   { path: "/data-tables", name: "Data Tables" },
   { path: "/watchlists", name: "Watchlists" },
   { path: "/evaluations", name: "Evaluations" },
-  { path: "/knowledge", name: "Knowledge QA" }
+  { path: "/knowledge", name: "Knowledge QA" },
+  { path: "/companion", name: "Companion" },
+  { path: "/admin/mlx", name: "Admin MLX" },
+  { path: "/quick-chat-popout", name: "Quick Chat Popout" },
+  { path: "/workspace-playground", name: "Workspace Playground" },
+  { path: "/settings/image-generation", name: "Image Generation Settings" }
 ]
 
 const STAGE4_A11Y_RULES = [
@@ -79,7 +85,7 @@ test.describe("Stage 4 Axe high-risk routes", () => {
         waitUntil: "domcontentloaded",
         timeout: LOAD_TIMEOUT
       })
-      await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+      await waitForAppShell(page, LOAD_TIMEOUT)
 
       const status = response?.status() ?? 0
       test.skip(status >= 400, `Route unavailable in smoke runtime (status ${status})`)

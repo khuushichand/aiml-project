@@ -38,6 +38,7 @@ export type ComposerToolbarProps = {
   mcpControl: React.ReactNode
   // Row action controls (pre-rendered by parent)
   sendControl: React.ReactNode
+  researchLaunchButton?: React.ReactNode
   attachmentButton: React.ReactNode
   toolsButton: React.ReactNode
   voiceChatButton: React.ReactNode
@@ -115,6 +116,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     modelSelectButton,
     mcpControl,
     sendControl,
+    researchLaunchButton,
     attachmentButton,
     toolsButton,
     voiceChatButton,
@@ -750,6 +752,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
             temporaryChat={temporaryChat}
             onFocusConnectionCard={onFocusConnectionCard}
           />
+          {researchLaunchButton}
           {voiceChatButton}
           {attachmentButton}
           {toolsButton}
@@ -774,6 +777,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
         <div className="ml-auto flex flex-nowrap items-center gap-2">
           {compareControl}
           {dictationButton}
+          {researchLaunchButton}
           {voiceChatButton}
           {attachmentButton}
           {toolsButton}
@@ -848,6 +852,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
               {chatSettingsButton}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {researchLaunchButton}
               {voiceChatButton}
               {attachmentButton}
               {toolsButton}

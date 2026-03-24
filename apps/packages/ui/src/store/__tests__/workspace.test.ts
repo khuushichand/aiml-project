@@ -11,6 +11,7 @@ import {
 import {
   createWorkspaceStorage,
   estimateWorkspacePersistenceMetrics,
+  generateWorkspaceId,
   WORKSPACE_STORAGE_INDEXEDDB_FLAG_STORAGE_KEY,
   WORKSPACE_STORAGE_SPLIT_KEY_FLAG_STORAGE_KEY,
   useWorkspaceStore
@@ -78,6 +79,37 @@ describe("workspace store snapshot persistence", () => {
     resetWorkspaceStore()
     if (useWorkspaceStore.persist?.clearStorage) {
       await useWorkspaceStore.persist.clearStorage()
+    }
+  })
+
+  it("falls back to crypto.getRandomValues without using Math.random", () => {
+    const originalCrypto = globalThis.crypto
+    const mathRandomSpy = vi.spyOn(Math, "random")
+
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: {
+        getRandomValues: (bytes: Uint8Array) => {
+          bytes.forEach((_value, index) => {
+            bytes[index] = index + 1
+          })
+          return bytes
+        },
+      },
+    })
+
+    try {
+      const id = generateWorkspaceId()
+      expect(id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      )
+      expect(mathRandomSpy).not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(globalThis, "crypto", {
+        configurable: true,
+        value: originalCrypto,
+      })
+      mathRandomSpy.mockRestore()
     }
   })
 
@@ -1820,6 +1852,7 @@ describe("workspace store snapshot persistence", () => {
       .getWorkspaceChatSession(importedWorkspaceId as string)
     expect(importedSession?.historyId).toBe("history-export")
     expect(importedSession?.messages[0]?.message).toBe("Export this workspace")
+    expect(importedSession?.serverChatId).toBeNull()
   })
 
   it("imports workspace bundles as unassigned even when bundle metadata includes a collection id", () => {

@@ -14,20 +14,20 @@ import {
   LandingProblem,
   LandingFeatures,
   LandingTestimonials,
-  LandingPricing,
   LandingCTA,
 } from "@web/components/landing"
 
 export default function OSINTPage() {
+  const description = "Self-hosted transcription, search, and analysis for OSINT professionals. Process Telegram videos, social media, and open source content—air-gapped."
   return (
     <LandingLayout
       title="tldw for OSINT & Threat Intelligence"
-      description="Self-hosted transcription, search, and analysis for OSINT professionals. Process Telegram videos, social media, and open source content—air-gapped."
+      description={description}
       segment="osint"
     >
       <LandingHero
         headline="Media Intelligence Without the Exposure"
-        subheadline="Self-hosted transcription, search, and analysis for OSINT professionals. Process Telegram videos, social media, and open source content—air-gapped."
+        subheadline={description}
         primaryCTA={{ text: "Deploy Self-Hosted", href: "/docs/self-hosting" }}
         secondaryCTA={{ text: "View on GitHub", href: "https://github.com/rmusser01/tldw" }}
         badges={["Air-Gap Compatible", "Open Source", "No Telemetry"]}
@@ -132,52 +132,6 @@ export default function OSINTPage() {
           </div>
         </div>
       </section>
-
-      <LandingPricing
-        headline="Pricing"
-        tiers={[
-          {
-            name: "Self-Hosted",
-            price: "Free",
-            period: "forever",
-            description: "Full functionality, no restrictions",
-            features: [
-              "Unlimited transcription",
-              "99 language support",
-              "Full search and RAG",
-              "Air-gap compatible",
-              "Community support",
-            ],
-            cta: { text: "Clone from GitHub", href: "https://github.com/rmusser01/tldw" },
-          },
-          {
-            name: "Professional",
-            price: "$99",
-            period: "month",
-            description: "For consultancies and teams",
-            features: [
-              "Priority support",
-              "Deployment assistance",
-              "Custom integrations",
-              "Training sessions",
-            ],
-            cta: { text: "Contact Us", href: "/contact" },
-            highlighted: true,
-          },
-          {
-            name: "Enterprise",
-            price: "Custom",
-            description: "For organizations with specific requirements",
-            features: [
-              "On-site deployment",
-              "Security review support",
-              "Custom development",
-              "SLA available",
-            ],
-            cta: { text: "Contact Us", href: "/contact" },
-          },
-        ]}
-      />
 
       <LandingCTA
         headline="Your Collection Deserves Better Tooling"

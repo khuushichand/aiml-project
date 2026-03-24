@@ -14,9 +14,9 @@ export class SettingsPage {
   constructor(page: Page) {
     this.page = page
     this.sidebar = page.getByRole("navigation", { name: /settings/i })
-    this.saveButton = page.getByRole("button", { name: /save/i })
-    this.serverUrlInput = page.getByLabel(/server url/i)
-    this.apiKeyInput = page.getByLabel(/api key/i)
+    this.saveButton = page.locator("main").getByRole("button", { name: /^save$/i }).last()
+    this.serverUrlInput = page.getByRole("textbox", { name: /server url/i }).last()
+    this.apiKeyInput = page.locator("#apiKey")
   }
 
   /**
@@ -73,12 +73,9 @@ export class SettingsPage {
     await this.gotoSection("tldw")
     await this.waitForReady()
 
-    const serverInput = this.page.getByLabel(/server url/i)
-    await serverInput.waitFor({ state: "visible" })
-    await serverInput.fill(serverUrl)
-
-    const apiKeyInput = this.page.getByLabel(/api key/i)
-    await apiKeyInput.fill(apiKey)
+    await this.serverUrlInput.waitFor({ state: "visible" })
+    await this.serverUrlInput.fill(serverUrl)
+    await this.apiKeyInput.fill(apiKey)
 
     await this.save()
   }
@@ -87,8 +84,7 @@ export class SettingsPage {
    * Save settings
    */
   async save(): Promise<void> {
-    const saveBtn = this.page.getByRole("button", { name: /save/i })
-    await saveBtn.click()
+    await this.saveButton.click()
 
     // Wait for save to complete
     await this.page.waitForFunction(
@@ -103,7 +99,7 @@ export class SettingsPage {
    */
   async testConnection(): Promise<boolean> {
     const testBtn = this.page.getByRole("button", {
-      name: /test|check|verify/i
+      name: /^test connection$/i
     })
 
     if ((await testBtn.count()) === 0) {

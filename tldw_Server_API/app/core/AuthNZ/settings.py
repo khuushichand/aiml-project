@@ -159,6 +159,26 @@ class Settings(BaseSettings):
         description="Magic link token expiration time in minutes"
     )
 
+    PUBLIC_WEB_BASE_URL: Optional[str] = Field(
+        default=None,
+        description="Public web application base URL used for hosted auth and billing links"
+    )
+
+    PUBLIC_PASSWORD_RESET_PATH: str = Field(
+        default="/auth/reset-password",
+        description="Public hosted path for password reset completion"
+    )
+
+    PUBLIC_EMAIL_VERIFICATION_PATH: str = Field(
+        default="/auth/verify-email",
+        description="Public hosted path for email verification completion"
+    )
+
+    PUBLIC_MAGIC_LINK_PATH: str = Field(
+        default="/auth/magic-link",
+        description="Public hosted path for magic-link verification"
+    )
+
     JWT_ALGORITHM: str = Field(
         default="HS256",
         description="JWT signing algorithm"
@@ -1299,6 +1319,22 @@ def _load_overrides_from_config() -> dict:
         maybe_set("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes", lambda v: int(v))
         maybe_set("REFRESH_TOKEN_EXPIRE_DAYS", "refresh_token_expire_days", lambda v: int(v))
         maybe_set("MAGIC_LINK_EXPIRE_MINUTES", "magic_link_expire_minutes", lambda v: int(v))
+        maybe_set("PUBLIC_WEB_BASE_URL", "public_web_base_url", lambda v: v.strip())
+        maybe_set(
+            "PUBLIC_PASSWORD_RESET_PATH",
+            "public_password_reset_path",
+            lambda v: v.strip(),
+        )
+        maybe_set(
+            "PUBLIC_EMAIL_VERIFICATION_PATH",
+            "public_email_verification_path",
+            lambda v: v.strip(),
+        )
+        maybe_set(
+            "PUBLIC_MAGIC_LINK_PATH",
+            "public_magic_link_path",
+            lambda v: v.strip(),
+        )
         maybe_set("REDIS_URL", "redis_url", lambda v: v.strip())
         maybe_set("SECURITY_ALERTS_ENABLED", "security_alerts_enabled", _bool_from_str)
         maybe_set("SECURITY_ALERT_MIN_SEVERITY", "security_alert_min_severity", lambda v: v.strip())

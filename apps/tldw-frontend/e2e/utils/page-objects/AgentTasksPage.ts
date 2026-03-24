@@ -3,7 +3,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection } from "../helpers"
+import { waitForAppShell, waitForConnection } from "../helpers"
 
 export class AgentTasksPage extends BasePage {
   constructor(page: Page) {
@@ -18,7 +18,7 @@ export class AgentTasksPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Wait for Projects card or error alert
     const projectsCard = this.page.getByText("Projects")
     const errorAlert = this.page.locator(".ant-alert-error")

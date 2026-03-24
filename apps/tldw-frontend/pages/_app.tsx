@@ -10,6 +10,7 @@ import dynamic from "next/dynamic"
 import { useRouter } from "next/router"
 import React from "react"
 import { AppProviders } from "@web/components/AppProviders"
+import { loadTldwAuth, loadTldwClient } from "@web/lib/configured-auth-state"
 
 const OptionLayout = dynamic(
   () => import("@web/components/layout/WebLayout"),
@@ -17,13 +18,13 @@ const OptionLayout = dynamic(
 )
 
 // Ordered to match high-traffic navigation:
-// - Route-registry eager imports (chat/media/media-multi/workspace-playground)
+// - Route-registry eager imports (chat/media/media-multi/research)
 // - Default sidebar shortcut selections (prompts/characters/dictionaries/world-books/knowledge)
 const PRIMARY_WARM_PREFETCH_ROUTES = [
   "/chat",
   "/media",
   "/media-multi",
-  "/workspace-playground",
+  "/research",
   "/knowledge",
   "/prompts",
   "/characters",
@@ -56,7 +57,7 @@ type ConfiguredAuthState = {
 
 const getConfiguredAuthState = async (): Promise<ConfiguredAuthState> => {
   try {
-    const { tldwClient } = await import("@/services/tldw/TldwApiClient")
+    const tldwClient = await loadTldwClient()
     const config = await tldwClient.getConfig()
     if (!config) {
       return {
@@ -78,7 +79,7 @@ const getConfiguredAuthState = async (): Promise<ConfiguredAuthState> => {
       }
 
       try {
-        const { tldwAuth } = await import("@/services/tldw/TldwAuth")
+        const tldwAuth = await loadTldwAuth()
         await tldwAuth.getCurrentUser()
         return {
           hasConfig: true,
@@ -115,8 +116,7 @@ export default function App({ Component, pageProps }: AppProps) {
     pathname.length > 1 && pathname.endsWith("/")
       ? pathname.slice(0, -1)
       : pathname
-
-  const isLoginRoute = routePath === "/login"
+  const isPublicAuthRoute = routePath === "/login"
   const isSettingsRoute =
     routePath === "/settings" || routePath.startsWith("/settings/")
   const [isAuthenticated, setIsAuthenticated] = React.useState(false)
@@ -167,7 +167,7 @@ export default function App({ Component, pageProps }: AppProps) {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    if (!authResolved || !isAuthenticated || isLoginRoute) return
+    if (!authResolved || !isAuthenticated || isPublicAuthRoute) return
     if (didWarmRoutePrefetch.current) return
 
     const prefetchRoute = router.prefetch?.bind(router)
@@ -248,13 +248,13 @@ export default function App({ Component, pageProps }: AppProps) {
         windowWithIdle.cancelIdleCallback(idleHandle)
       }
     }
-  }, [authResolved, isAuthenticated, isLoginRoute, routePath, router])
+  }, [authResolved, isAuthenticated, isPublicAuthRoute, routePath, router])
 
   const hideShellNav = !authResolved || !isAuthenticated
 
   return (
     <AppProviders>
-      {isLoginRoute ? (
+      {isPublicAuthRoute ? (
         <Component {...pageProps} />
       ) : (
         <OptionLayout

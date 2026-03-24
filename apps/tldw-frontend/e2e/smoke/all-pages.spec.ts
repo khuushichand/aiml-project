@@ -19,6 +19,7 @@ import {
   getCriticalIssues,
   classifySmokeIssues,
 } from './smoke.setup';
+import { waitForAppShell } from '../utils/helpers';
 import { PAGES, PageEntry, getActivePages, PAGE_COUNT, ACTIVE_PAGE_COUNT } from './page-inventory';
 
 // Test configuration
@@ -243,6 +244,27 @@ function resetDiagnostics(diagnostics: DiagnosticsData): void {
   diagnostics.requestFailures.length = 0;
 }
 
+async function waitForTransientRetryReady(page: Page): Promise<void> {
+  const retryWindowMs = Math.max(1_000, TRANSIENT_RUNTIME_RETRY_DELAY_MS);
+  await expect
+    .poll(
+      async () => {
+        const bodyText = await page
+          .evaluate(() => document.body?.innerText ?? '')
+          .catch(() => '');
+        const shellVisible = await page
+          .locator('#root, #__next')
+          .first()
+          .isVisible()
+          .catch(() => false);
+        return shellVisible && !hasTransientRuntimeOverlaySignal(bodyText);
+      },
+      { timeout: retryWindowMs }
+    )
+    .toBe(true)
+    .catch(() => {});
+}
+
 type RouteVisitResult = {
   response: Awaited<ReturnType<Page['goto']>>;
   issues: ReturnType<typeof getCriticalIssues>;
@@ -277,7 +299,7 @@ async function visitRouteWithTransientRetry(
         waitUntil: 'domcontentloaded',
         timeout: LOAD_TIMEOUT,
       });
-      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
+      await waitForAppShell(page, NETWORK_IDLE_TIMEOUT);
     } catch (error) {
       const errorMessage = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
       const isNavigationTimeout = TRANSIENT_NAVIGATION_TIMEOUT_PATTERN.test(errorMessage);
@@ -291,9 +313,7 @@ async function visitRouteWithTransientRetry(
       console.warn(
         `[smoke-transient-navigation-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_NAVIGATION_RETRY_ATTEMPTS} after navigation timeout`
       );
-      if (TRANSIENT_RUNTIME_RETRY_DELAY_MS > 0) {
-        await page.waitForTimeout(TRANSIENT_RUNTIME_RETRY_DELAY_MS);
-      }
+      await waitForTransientRetryReady(page);
       continue;
     }
 
@@ -319,9 +339,7 @@ async function visitRouteWithTransientRetry(
     console.warn(
       `[smoke-transient-runtime-retry] ${routePath} retry ${retriesUsed}/${TRANSIENT_RUNTIME_RETRY_ATTEMPTS} after transient runtime overlay signal: ${transientSignals[0]}`
     );
-    if (TRANSIENT_RUNTIME_RETRY_DELAY_MS > 0) {
-      await page.waitForTimeout(TRANSIENT_RUNTIME_RETRY_DELAY_MS);
-    }
+    await waitForTransientRetryReady(page);
   }
 
   return {
@@ -571,7 +589,7 @@ test.describe('Smoke Tests - Key Navigation Targets', () => {
         waitUntil: 'domcontentloaded',
         timeout: LOAD_TIMEOUT,
       });
-      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
+      await waitForAppShell(page, NETWORK_IDLE_TIMEOUT);
 
       const issues = getCriticalIssues(diagnostics);
       const classifiedIssues = classifySmokeIssues(entry.path, issues);
@@ -602,7 +620,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
       waitUntil: 'domcontentloaded',
       timeout: LOAD_TIMEOUT,
     });
-    await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
+    await waitForAppShell(page, NETWORK_IDLE_TIMEOUT);
 
     const status = response?.status() ?? 0;
     test.skip(
@@ -643,7 +661,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
     await page.waitForURL(/\/knowledge\?q=wayfinding-smoke/, {
       timeout: LOAD_TIMEOUT,
     });
-    await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
+    await waitForAppShell(page, NETWORK_IDLE_TIMEOUT);
 
     const issues = getCriticalIssues(diagnostics);
     const classifiedIssues = classifySmokeIssues('/knowledge', issues);
@@ -661,7 +679,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
       waitUntil: 'domcontentloaded',
       timeout: LOAD_TIMEOUT,
     });
-    await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
+    await waitForAppShell(page, NETWORK_IDLE_TIMEOUT);
 
     const hasWayfindingPanel = (await page.getByTestId('not-found-recovery-panel').count()) > 0;
     test.skip(
@@ -678,7 +696,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
 
     expect(controlOrder).toEqual([
       'not-found-go-chat',
-      'not-found-open-knowledge',
+      'not-found-open-research',
       'not-found-open-media',
       'not-found-open-settings',
       'not-found-go-back',
@@ -688,7 +706,7 @@ test.describe('Smoke Tests - Wayfinding', () => {
     await goChatButton.focus();
     await expect(goChatButton).toBeFocused();
     await page.keyboard.press('Tab');
-    await expect(page.getByTestId('not-found-open-knowledge')).toBeFocused();
+    await expect(page.getByTestId('not-found-open-research')).toBeFocused();
 
     const issues = getCriticalIssues(diagnostics);
     const classifiedIssues = classifySmokeIssues(WAYFINDING_404_PATH, issues);
@@ -723,7 +741,7 @@ test.describe('Smoke Tests - Route Error Boundaries', () => {
         `Route boundary fixture unavailable for ${target.path} in this runtime (status: ${status})`
       );
 
-      await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_TIMEOUT }).catch(() => {});
+      await waitForAppShell(page, NETWORK_IDLE_TIMEOUT);
       await expect(page.getByTestId('error-boundary')).toBeVisible();
       await expect(page.getByTestId(`route-error-boundary-${target.routeId}`)).toBeVisible();
       await expect(page.getByTestId('route-error-retry')).toBeVisible();

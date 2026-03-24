@@ -266,10 +266,12 @@ export const SidepanelHeaderSimple = ({
           </Link>
         </Tooltip>
       </div>
-      <TtsClipsDrawer
-        open={ttsClipsOpen}
-        onClose={() => setTtsClipsOpen(false)}
-      />
+      {ttsClipsOpen ? (
+        <TtsClipsDrawer
+          open={ttsClipsOpen}
+          onClose={() => setTtsClipsOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }

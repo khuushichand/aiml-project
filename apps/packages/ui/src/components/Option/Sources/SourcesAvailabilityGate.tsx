@@ -5,18 +5,25 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { PageShell } from "@/components/Common/PageShell"
 import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
+import type { ServerCapabilities } from "@/services/tldw/server-capabilities"
 
 type SourcesAvailabilityGateProps = {
   children: React.ReactNode
+  capabilityState?: {
+    capabilities: ServerCapabilities | null
+    loading: boolean
+  }
   maxWidthClassName?: string
 }
 
 export const SourcesAvailabilityGate: React.FC<SourcesAvailabilityGateProps> = ({
   children,
+  capabilityState,
   maxWidthClassName = "max-w-6xl"
 }) => {
   const { t } = useTranslation(["sources"])
-  const { capabilities, loading } = useServerCapabilities()
+  const defaultCapabilityState = useServerCapabilities()
+  const { capabilities, loading } = capabilityState ?? defaultCapabilityState
 
   return (
     <WorkspaceConnectionGate

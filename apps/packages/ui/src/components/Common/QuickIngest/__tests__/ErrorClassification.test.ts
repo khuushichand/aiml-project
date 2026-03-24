@@ -18,6 +18,22 @@ describe("classifyError", () => {
   })
 
   // -------------------------------------------------------------------------
+  // Queue-full category
+  // -------------------------------------------------------------------------
+  describe("queue-full category", () => {
+    it.each([
+      "HTTP 429 Too Many Requests",
+      "User 1 has reached the maximum concurrent job limit (5)",
+    ])('returns queue-full guidance for "%s"', (msg) => {
+      const result = classifyError(msg)
+      expect(result.classification).toBe("server")
+      expect(result.retryable).toBe(false)
+      expect(result.badgeLabel).toContain("Queue Full")
+      expect(result.userMessage).toContain("maximum number of ingest jobs")
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // Auth category
   // -------------------------------------------------------------------------
   describe("auth category", () => {

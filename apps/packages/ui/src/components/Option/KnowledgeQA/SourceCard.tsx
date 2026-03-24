@@ -121,6 +121,7 @@ export function SourceCard({
   const [askTemplate, setAskTemplate] = React.useState<SourceAskTemplate>("detail")
   const copiedStateTimeoutRef = React.useRef<number | null>(null)
   const latestCopyRequestIdRef = React.useRef(0)
+  const isMountedRef = React.useRef(true)
 
   const title = result.metadata?.title || result.metadata?.source || `Source ${index}`
   const content = result.content || result.text || result.chunk || ""
@@ -143,6 +144,8 @@ export function SourceCard({
 
   React.useEffect(
     () => () => {
+      isMountedRef.current = false
+      latestCopyRequestIdRef.current += 1
       if (copiedStateTimeoutRef.current != null) {
         window.clearTimeout(copiedStateTimeoutRef.current)
         copiedStateTimeoutRef.current = null
@@ -156,7 +159,7 @@ export function SourceCard({
       window.clearTimeout(copiedStateTimeoutRef.current)
     }
     copiedStateTimeoutRef.current = window.setTimeout(() => {
-      if (latestCopyRequestIdRef.current !== requestId) {
+      if (!isMountedRef.current || latestCopyRequestIdRef.current !== requestId) {
         return
       }
       copiedStateTimeoutRef.current = null
@@ -169,7 +172,7 @@ export function SourceCard({
     latestCopyRequestIdRef.current = requestId
     try {
       await navigator.clipboard.writeText(content)
-      if (latestCopyRequestIdRef.current !== requestId) {
+      if (!isMountedRef.current || latestCopyRequestIdRef.current !== requestId) {
         return
       }
       setCopiedState("text")
@@ -184,7 +187,7 @@ export function SourceCard({
     latestCopyRequestIdRef.current = requestId
     try {
       await navigator.clipboard.writeText(buildCitationText(result, index))
-      if (latestCopyRequestIdRef.current !== requestId) {
+      if (!isMountedRef.current || latestCopyRequestIdRef.current !== requestId) {
         return
       }
       setCopiedState("citation")

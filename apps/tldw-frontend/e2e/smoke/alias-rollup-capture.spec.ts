@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import { seedAuth } from './smoke.setup';
+import { waitForAppShell, waitForVisualSettle } from '../utils/helpers';
 
 const TELEMETRY_KEY = 'tldw:route:alias:telemetry';
 const LOAD_TIMEOUT = 30_000;
@@ -74,7 +75,7 @@ test('captures controlled week-2 alias telemetry rollup', async ({ page }, testI
   await seedAuth(page);
 
   await page.goto('/', { waitUntil: 'domcontentloaded', timeout: LOAD_TIMEOUT });
-  await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+  await waitForVisualSettle(page, LOAD_TIMEOUT);
 
   await page.evaluate((key) => {
     localStorage.removeItem(key);
@@ -93,8 +94,7 @@ test('captures controlled week-2 alias telemetry rollup', async ({ page }, testI
       { timeout: LOAD_TIMEOUT }
     );
 
-    await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
-    await page.waitForTimeout(75);
+    await waitForAppShell(page, LOAD_TIMEOUT);
   }
 
   const telemetryState = await page.evaluate((key) => {

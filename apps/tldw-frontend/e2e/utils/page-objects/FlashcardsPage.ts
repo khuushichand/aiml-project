@@ -11,7 +11,7 @@
  */
 import { type Page, type Locator, expect } from "@playwright/test"
 import { BasePage, type InteractiveElement } from "./BasePage"
-import { waitForConnection, dismissConnectionModals } from "../helpers"
+import { waitForAppShell, waitForConnection, dismissConnectionModals } from "../helpers"
 
 export class FlashcardsPage extends BasePage {
   constructor(page: Page) {
@@ -26,7 +26,7 @@ export class FlashcardsPage extends BasePage {
   }
 
   async assertPageReady(): Promise<void> {
-    await this.page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+    await waitForAppShell(this.page, 30_000)
     // Either the tabs container is visible (online) or a connection banner
     const tabs = this.page.locator('[data-testid="flashcards-tabs"]')
     const offline = this.page.getByText("Connect to use Flashcards")
@@ -207,7 +207,7 @@ export class FlashcardsPage extends BasePage {
         },
         setup: async () => {
           await this.switchToTab("transfer")
-          await this.page.waitForTimeout(500)
+          await expect(this.importTextarea.or(this.exportDeckSelect)).toBeVisible({ timeout: 5_000 })
         },
       },
       {
@@ -220,7 +220,7 @@ export class FlashcardsPage extends BasePage {
         },
         setup: async () => {
           await this.switchToTab("transfer")
-          await this.page.waitForTimeout(500)
+          await expect(this.importTextarea.or(this.exportDeckSelect)).toBeVisible({ timeout: 5_000 })
         },
       },
     ]

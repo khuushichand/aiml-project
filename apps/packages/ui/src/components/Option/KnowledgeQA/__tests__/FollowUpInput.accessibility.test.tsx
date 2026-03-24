@@ -114,7 +114,9 @@ describe("FollowUpInput accessibility", () => {
     const input = screen.getByRole("textbox", { name: "Ask a follow-up question" })
     fireEvent.change(input, { target: { value: "Compare the findings" } })
 
-    const submitButton = screen.getAllByRole("button")[1]
+    const submitButton = screen.getByRole("button", {
+      name: "Submit follow-up question",
+    })
     fireEvent.click(submitButton)
     fireEvent.click(submitButton)
 
