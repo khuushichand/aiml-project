@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter } from "react-router-dom"
 import { HeaderShortcuts } from "../HeaderShortcuts"
-import { HEADER_SHORTCUT_ITEMS } from "../header-shortcut-items"
+import { getHeaderShortcutItems } from "../header-shortcut-items"
 
 const mockState = vi.hoisted(() => ({
   expanded: false,
@@ -96,13 +96,13 @@ describe("HeaderShortcuts launcher modal", () => {
   })
 
   it("routes the chat shortcut directly to /chat", () => {
-    const chatShortcut = HEADER_SHORTCUT_ITEMS.find((item) => item.id === "chat")
+    const chatShortcut = getHeaderShortcutItems().find((item) => item.id === "chat")
 
     expect(chatShortcut?.to).toBe("/chat")
   })
 
   it("includes launcher shortcuts for integrations and scheduled tasks", () => {
-    expect(HEADER_SHORTCUT_ITEMS).toEqual(
+    expect(getHeaderShortcutItems()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           to: "/integrations",

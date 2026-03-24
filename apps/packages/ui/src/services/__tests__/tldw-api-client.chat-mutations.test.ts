@@ -124,4 +124,30 @@ describe("TldwApiClient chat mutations", () => {
       cross_provider: false
     })
   })
+
+  it("sanitizes leaky background payload fields when creating a chat completion", async () => {
+    mocks.bgRequest.mockResolvedValue({
+      id: "resp-1",
+      object: "chat.completion",
+      error: "trace=/Users/private/stack.txt",
+      details: "/Users/private/stack.txt",
+      nested: {
+        traceback: "Traceback: /Users/private/stack.txt",
+        items: [{ exception: "boom" }]
+      }
+    })
+
+    const client = new TldwApiClient()
+    const response = await client.createChatCompletion({
+      model: "auto",
+      messages: [{ role: "user", content: "hello" }]
+    })
+
+    const payload = await response.json()
+
+    expect(payload.error).not.toContain("/Users/private")
+    expect(payload.details).toBeUndefined()
+    expect(payload.nested.traceback).toBeUndefined()
+    expect(payload.nested.items[0].exception).toBeUndefined()
+  })
 })

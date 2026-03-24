@@ -37,6 +37,10 @@ from tldw_Server_API.app.services.auth_service import mark_user_verified
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
 
+INVALID_AUDIO_BUNDLE_REQUEST_DETAIL = "Invalid audio bundle request"
+INVALID_AUDIO_PACK_EXPORT_REQUEST_DETAIL = "Invalid audio pack export request"
+AUDIO_BUNDLE_NOT_FOUND_DETAIL = "Audio bundle not found"
+
 
 class ConfigUpdates(BaseModel):
     updates: dict[str, dict[str, Any]] = Field(
@@ -297,10 +301,16 @@ def _execute_audio_bundle_provision(
             tts_choice=payload.tts_choice,
             safe_rerun=payload.safe_rerun,
         )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_AUDIO_BUNDLE_REQUEST_DETAIL,
+        ) from None
+    except KeyError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=AUDIO_BUNDLE_NOT_FOUND_DETAIL,
+        ) from None
 
 
 @router.post("/audio/verify", openapi_extra={"security": []})
@@ -327,10 +337,16 @@ async def _execute_audio_bundle_verification(
             resource_profile=payload.resource_profile,
             tts_choice=payload.tts_choice,
         )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_AUDIO_BUNDLE_REQUEST_DETAIL,
+        ) from None
+    except KeyError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=AUDIO_BUNDLE_NOT_FOUND_DETAIL,
+        ) from None
 
 
 @router.get("/admin/install-status")
@@ -414,10 +430,16 @@ async def export_audio_pack(
                 installed_assets=readiness.get("installed_asset_manifests"),
                 compatibility=compatibility,
             )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_AUDIO_PACK_EXPORT_REQUEST_DETAIL,
+        ) from None
+    except KeyError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=AUDIO_BUNDLE_NOT_FOUND_DETAIL,
+        ) from None
 
     return {
         "success": True,

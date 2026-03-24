@@ -8,7 +8,11 @@ and this project adheres to Some kind of Versioning
 
 ## [Unreleased]
 
-> Backfill note: every item in this section documents scope that is already merged on `main` via PR #910. These bullets are changelog backfill only and do not mean the same code has already been forward-ported into `dev`.
+- No unreleased changes yet.
+
+## Backfill: merged on `main` before `dev` sync
+
+> Changelog sync note: these entries document scope already merged on `main` via PR #910. They are retained here for history until `dev` is synced, but they are not unreleased work.
 
 ### Changed
 

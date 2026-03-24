@@ -32,6 +32,7 @@ interface AnalysisModalProps {
 
 const MIN_ANALYSIS_TIMEOUT_MS = 120_000
 const MIN_ANALYSIS_STREAM_IDLE_TIMEOUT_MS = 120_000
+const LOCAL_TIMEOUT_STORAGE = createSafeStorage({ area: 'local' })
 
 const toPositiveNumber = (value: unknown): number => {
   const num = Number(value)
@@ -183,8 +184,9 @@ export function AnalysisModal({
 
   const getAnalysisTimeouts = async () => {
     try {
-      const storage = createSafeStorage({ area: 'local' })
-      const cfg = await storage.get<AnalysisTimeoutConfig>('tldwConfig').catch(() => null)
+      const cfg = await LOCAL_TIMEOUT_STORAGE
+        .get<AnalysisTimeoutConfig>('tldwConfig')
+        .catch(() => null)
       const configuredRequest =
         toPositiveNumber(cfg?.chatRequestTimeoutMs) ||
         toPositiveNumber(cfg?.requestTimeoutMs)

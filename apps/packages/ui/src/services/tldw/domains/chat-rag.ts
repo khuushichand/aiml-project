@@ -21,6 +21,86 @@ import type {
 
 const CHAT_MESSAGES_CACHE_TTL_MS = 60 * 1000
 
+const isConnectionErrorMessage = (message: string): boolean =>
+  /network|offline|failed to fetch|connection|unreachable/i.test(message)
+
+const isTimeoutErrorMessage = (message: string): boolean =>
+  /timeout|timed out|etimedout/i.test(message)
+
+const buildSanitizedRagSearchError = (
+  error: unknown
+): Error & { status?: number; code?: string } => {
+  const status =
+    (error as { status?: number; response?: { status?: number }; statusCode?: number } | null)
+      ?.status ??
+    (error as { response?: { status?: number } } | null)?.response?.status ??
+    (error as { statusCode?: number } | null)?.statusCode
+  const rawMessage = error instanceof Error ? error.message : String(error ?? "")
+
+  let message = "RAG search failed."
+  if (isConnectionErrorMessage(rawMessage)) {
+    message = "Cannot reach server. Check your connection and try again."
+  } else if (isTimeoutErrorMessage(rawMessage) || status === 408) {
+    message = "RAG search timed out. Try again."
+  } else if (status === 400 || status === 422) {
+    message = "RAG search request is invalid."
+  } else if (status === 401) {
+    message = "RAG search failed. Authentication is required."
+  } else if (status === 403) {
+    message = "RAG search failed. Access was denied."
+  } else if (status === 404) {
+    message = "RAG search endpoint is unavailable."
+  } else if (status === 429) {
+    message = "RAG search is rate limited. Please wait and try again."
+  } else if (typeof status === "number" && status >= 500) {
+    message = "RAG search failed due to a server error."
+  }
+
+  const sanitizedError = new Error(message) as Error & {
+    status?: number
+    code?: string
+  }
+  if (typeof status === "number") {
+    sanitizedError.status = status
+  }
+  return sanitizedError
+}
+
+const CHAT_COMPLETION_ERROR_MESSAGE = "Chat completion failed."
+const CHAT_COMPLETION_ERRORS_MESSAGE =
+  "One or more internal errors were suppressed."
+
+const sanitizeChatCompletionPayload = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeChatCompletionPayload(item))
+  }
+  if (value && typeof value === "object") {
+    const sanitized: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (
+        key === "details" ||
+        key === "exception" ||
+        key === "traceback" ||
+        key === "stack" ||
+        key === "stack_trace"
+      ) {
+        continue
+      }
+      if (key === "error" && item) {
+        sanitized[key] = CHAT_COMPLETION_ERROR_MESSAGE
+        continue
+      }
+      if (key === "errors" && item) {
+        sanitized[key] = [CHAT_COMPLETION_ERRORS_MESSAGE]
+        continue
+      }
+      sanitized[key] = sanitizeChatCompletionPayload(item)
+    }
+    return sanitized
+  }
+  return value
+}
+
 export const chatRagMethods = {
   normalizeChatSummary(input: any): ServerChatSummary {
     const created_at = String(input?.created_at || input?.createdAt || "")
@@ -143,7 +223,18 @@ export const chatRagMethods = {
     // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
     // For simplicity, return a minimal object with json() and text()
     const data = res as any
-    return new Response(typeof data === 'string' ? data : JSON.stringify(data), { status: 200, headers: { 'content-type': typeof data === 'string' ? 'text/plain' : 'application/json' } })
+    const safeData =
+      typeof data === "string" ? data : sanitizeChatCompletionPayload(data)
+    return new Response(
+      typeof safeData === "string" ? safeData : JSON.stringify(safeData),
+      {
+        status: 200,
+        headers: {
+          'content-type':
+            typeof safeData === 'string' ? 'text/plain' : 'application/json'
+        }
+      }
+    )
   },
 
   async *streamChatCompletion(this: TldwApiClientCore, request: ChatCompletionRequest, options?: { signal?: AbortSignal; streamIdleTimeoutMs?: number }): AsyncGenerator<any, void, unknown> {
@@ -200,28 +291,32 @@ export const chatRagMethods = {
         rest?.reranking_strategy !== 'none'
 
       if (!shouldRetryWithoutRerank) {
-        throw error
+        throw buildSanitizedRagSearchError(error)
       }
 
       // Some local/dev servers fail hard when FlashRank assets are missing.
       // Retry once with reranking disabled so retrieval still works.
       console.warn(
         '[tldw:rag] /api/v1/rag/search failed; retrying once without reranking',
-        { status, message }
+        { status }
       )
-      return await bgRequest<any>({
-        path: '/api/v1/rag/search',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: {
-          query: normalizedQuery,
-          ...rest,
-          enable_reranking: false,
-          reranking_strategy: 'none'
-        },
-        timeoutMs,
-        abortSignal: signal
-      })
+      try {
+        return await bgRequest<any>({
+          path: '/api/v1/rag/search',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: {
+            query: normalizedQuery,
+            ...rest,
+            enable_reranking: false,
+            reranking_strategy: 'none'
+          },
+          timeoutMs,
+          abortSignal: signal
+        })
+      } catch (retryError) {
+        throw buildSanitizedRagSearchError(retryError)
+      }
     }
   },
 

@@ -429,14 +429,14 @@ const getHostedHeaderShortcutGroups = (): HeaderShortcutGroup[] => {
     titleDefault: "Account & Billing",
     items: [
       {
-        id: "settings",
+        id: "account",
         to: "/account",
         icon: UserCircle2,
         labelKey: "option:header.account",
         labelDefault: "Account"
       },
       {
-        id: "documentation",
+        id: "billing",
         to: "/billing",
         icon: ClipboardList,
         labelKey: "option:header.billing",
@@ -448,17 +448,17 @@ const getHostedHeaderShortcutGroups = (): HeaderShortcutGroup[] => {
   return filteredGroups
 }
 
-export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] =
+export const getHeaderShortcutGroups = (): HeaderShortcutGroup[] =>
   isHostedTldwDeployment()
     ? getHostedHeaderShortcutGroups()
     : BASE_HEADER_SHORTCUT_GROUPS
 
-export const HEADER_SHORTCUT_ITEMS: HeaderShortcutItem[] =
-  HEADER_SHORTCUT_GROUPS.flatMap((group) => group.items)
+export const getHeaderShortcutItems = (): HeaderShortcutItem[] =>
+  getHeaderShortcutGroups().flatMap((group) => group.items)
 
 export const normalizeHeaderShortcutSelection = (
   selection: HeaderShortcutId[]
 ): HeaderShortcutItem[] => {
   const selected = new Set(selection)
-  return HEADER_SHORTCUT_ITEMS.filter((item) => selected.has(item.id))
+  return getHeaderShortcutItems().filter((item) => selected.has(item.id))
 }

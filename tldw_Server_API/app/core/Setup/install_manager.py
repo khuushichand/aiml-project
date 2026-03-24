@@ -856,6 +856,20 @@ def _remediation_item(code: str, message: str, *, action: str = "safe_rerun") ->
     }
 
 
+def _sanitize_health_payload(value: Any) -> Any:
+    """Drop nested debug-only exception details from user-visible health payloads."""
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            if key in {"details", "exception", "traceback", "stack", "stack_trace"}:
+                continue
+            sanitized[key] = _sanitize_health_payload(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_health_payload(item) for item in value]
+    return value
+
+
 async def verify_audio_bundle_async_for_profile(
     bundle: Any,
     selected_profile: Any,
@@ -875,8 +889,12 @@ async def verify_audio_bundle_async_for_profile(
         tts_choice=canonical_tts_choice,
     )
     primary_stt_engine, primary_stt_target = _resolve_primary_stt_target(selected_profile)
-    stt_health = await _resolve_health_call(audio_health.collect_setup_stt_health(model=primary_stt_target))
-    tts_health = await _resolve_health_call(audio_health.collect_setup_tts_health())
+    stt_health = _sanitize_health_payload(
+        await _resolve_health_call(audio_health.collect_setup_stt_health(model=primary_stt_target))
+    )
+    tts_health = _sanitize_health_payload(
+        await _resolve_health_call(audio_health.collect_setup_tts_health())
+    )
 
     primary_tts_plan = selected_profile.tts_plan_for_choice(canonical_tts_choice)
     primary_tts_engine = primary_tts_plan[0]["engine"] if primary_tts_plan else None

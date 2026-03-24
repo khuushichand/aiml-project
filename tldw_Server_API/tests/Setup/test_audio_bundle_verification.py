@@ -194,6 +194,65 @@ def test_verify_audio_bundle_uses_selected_kitten_tts_choice(mocker, tmp_path):
     assert readiness["selection_key"] == "v2:cpu_local:balanced:kitten_tts"
 
 
+def test_verify_audio_bundle_redacts_nested_health_debug_details(mocker, tmp_path):
+    store = AudioReadinessStore(tmp_path / "audio_readiness.json")
+
+    mocker.patch.object(
+        install_manager.audio_health,
+        "collect_setup_stt_health",
+        return_value={
+            "usable": False,
+            "message": "Initialization failed.",
+            "details": "/Users/private/model.bin",
+            "traceback": "Traceback: /Users/private/model.bin",
+            "nested": {"exception": "boom"},
+        },
+    )
+    mocker.patch.object(
+        install_manager.audio_health,
+        "collect_setup_tts_health",
+        return_value={
+            "status": "error",
+            "providers": {
+                "kokoro": {
+                    "status": "failed",
+                    "details": "/Users/private/voices.json",
+                }
+            },
+        },
+    )
+    mocker.patch.object(
+        install_manager.audio_profile_service,
+        "detect_machine_profile",
+        return_value=MachineProfile(
+            platform="linux",
+            arch="x86_64",
+            apple_silicon=False,
+            cuda_available=False,
+            ffmpeg_available=True,
+            espeak_available=True,
+            free_disk_gb=64.0,
+            network_available_for_downloads=True,
+        ),
+    )
+    mocker.patch.object(
+        install_manager.audio_readiness_store,
+        "get_audio_readiness_store",
+        return_value=store,
+    )
+
+    result = install_manager.verify_audio_bundle("cpu_local", resource_profile="balanced")
+
+    assert "details" not in result["stt_health"]
+    assert "traceback" not in result["stt_health"]
+    assert "exception" not in result["stt_health"]["nested"]
+    assert "details" not in result["tts_health"]["providers"]["kokoro"]
+
+    readiness = store.load()
+    assert "details" not in readiness["last_verification"]["stt_health"]
+    assert "details" not in readiness["last_verification"]["tts_health"]["providers"]["kokoro"]
+
+
 def test_verify_audio_bundle_rejects_invalid_curated_tts_choice_with_value_error():
     with pytest.raises(ValueError, match="Unknown curated TTS choice"):
         install_manager.verify_audio_bundle(

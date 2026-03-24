@@ -90,4 +90,54 @@ describe("TldwApiClient RAG query length guard", () => {
     const body = mocks.bgRequest.mock.calls[0][0]?.body as Record<string, unknown>
     expect((body.query as string).length).toBeLessThanOrEqual(20000)
   })
+
+  it("sanitizes non-retryable ragSearch failures before surfacing them", async () => {
+    mocks.bgRequest.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "Request failed: 403 (POST /api/v1/rag/search) trace=/Users/private/dev.log"
+        ),
+        { status: 403 }
+      )
+    )
+
+    const client = new TldwApiClient()
+
+    await expect(client.ragSearch("blocked", { top_k: 5 })).rejects.toMatchObject({
+      message: "RAG search failed. Access was denied.",
+      status: 403,
+    })
+  })
+
+  it("sanitizes retry failures after reranking fallback", async () => {
+    mocks.bgRequest
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Request failed: 500"), { status: 500 })
+      )
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error("Request failed: 503 (POST /api/v1/rag/search) stacktrace"),
+          { status: 503 }
+        )
+      )
+
+    const client = new TldwApiClient()
+
+    await expect(
+      client.ragSearch("retry me", { top_k: 5, enable_reranking: true })
+    ).rejects.toMatchObject({
+      message: "RAG search failed due to a server error.",
+      status: 503,
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledTimes(2)
+    expect(mocks.bgRequest.mock.calls[1][0]).toMatchObject({
+      path: "/api/v1/rag/search",
+      body: expect.objectContaining({
+        query: "retry me",
+        enable_reranking: false,
+        reranking_strategy: "none",
+      }),
+    })
+  })
 })

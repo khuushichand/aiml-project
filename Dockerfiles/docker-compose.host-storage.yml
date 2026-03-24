@@ -4,6 +4,9 @@
 # want Docker-managed data to live under ../docker-data instead of named volumes.
 # It intentionally preserves the same service names and mount targets so the
 # runtime behavior stays aligned with the default quickstart.
+# WARNING: Default credentials in this file are for local development only.
+# Override SINGLE_USER_API_KEY and POSTGRES_PASSWORD in your .env or secret
+# manager before using this compose stack anywhere beyond local testing.
 
 services:
   app:
@@ -41,6 +44,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-tldw_users}
       POSTGRES_USER: ${POSTGRES_USER:-tldw_user}
+      # Local-only fallback; always override this outside disposable development.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-TestPassword123!}
     ports:
       - "5432:5432"

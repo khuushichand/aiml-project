@@ -88,6 +88,9 @@ const UUID_LIKE_CONVERSATION_ID =
 const shouldAutoResolveConversationLabel = (conversationId: string): boolean =>
   !UUID_LIKE_CONVERSATION_ID.test(conversationId)
 
+const CONVERSATION_LABEL_MAX_RETRIES = 3
+const CONVERSATION_LABEL_RETRY_DELAY_MS = 1500
+
 const NotesManagerPage: React.FC = () => {
   const { t } = useTranslation(['option', 'common'])
   const isOnline = useServerOnline()
@@ -136,6 +139,9 @@ const NotesManagerPage: React.FC = () => {
   conversationLabelByIdRef.current = conversationLabelById
   const pendingConversationLabelRequestsRef = React.useRef<Set<string>>(new Set())
   const missingConversationLabelIdsRef = React.useRef<Set<string>>(new Set())
+  const conversationLabelRetryAttemptsRef = React.useRef<Record<string, number>>({})
+  const conversationLabelRetryTimeoutRef = React.useRef<number | null>(null)
+  const [conversationLabelRetryTick, setConversationLabelRetryTick] = React.useState(0)
 
   // ---- Notebook keyword tokens (needed before list hook) ----
   // We compute this after list hook provides selectedNotebook
@@ -527,13 +533,35 @@ const NotesManagerPage: React.FC = () => {
           }
           return next ?? current
         })
+        const retryableFailures: string[] = []
         settled.forEach((result, index) => {
-          if (result.status !== 'rejected') return
           const conversationId = pending[index]
           if (!conversationId) return
-          if (!isMissingConversationLookupError(result.reason)) return
-          missingConversationLabelIdsRef.current.add(conversationId)
+          if (result.status === 'fulfilled') {
+            delete conversationLabelRetryAttemptsRef.current[conversationId]
+            return
+          }
+          if (isMissingConversationLookupError(result.reason)) {
+            missingConversationLabelIdsRef.current.add(conversationId)
+            delete conversationLabelRetryAttemptsRef.current[conversationId]
+            return
+          }
+          const nextAttempt =
+            (conversationLabelRetryAttemptsRef.current[conversationId] ?? 0) + 1
+          conversationLabelRetryAttemptsRef.current[conversationId] = nextAttempt
+          if (nextAttempt <= CONVERSATION_LABEL_MAX_RETRIES) {
+            retryableFailures.push(conversationId)
+          }
         })
+        if (retryableFailures.length > 0) {
+          if (conversationLabelRetryTimeoutRef.current != null) {
+            window.clearTimeout(conversationLabelRetryTimeoutRef.current)
+          }
+          conversationLabelRetryTimeoutRef.current = window.setTimeout(() => {
+            conversationLabelRetryTimeoutRef.current = null
+            setConversationLabelRetryTick((current) => current + 1)
+          }, CONVERSATION_LABEL_RETRY_DELAY_MS)
+        }
       } finally {
         pending.forEach((conversationId) =>
           pendingConversationLabelRequestsRef.current.delete(conversationId)
@@ -543,11 +571,36 @@ const NotesManagerPage: React.FC = () => {
     []
   )
 
+  React.useEffect(
+    () => () => {
+      if (conversationLabelRetryTimeoutRef.current != null) {
+        window.clearTimeout(conversationLabelRetryTimeoutRef.current)
+      }
+    },
+    []
+  )
+
+  React.useEffect(() => {
+    const activeConversationIds = new Set(conversationIdsToResolve)
+    for (const conversationId of Object.keys(conversationLabelRetryAttemptsRef.current)) {
+      if (!activeConversationIds.has(conversationId)) {
+        delete conversationLabelRetryAttemptsRef.current[conversationId]
+      }
+    }
+    if (
+      activeConversationIds.size === 0 &&
+      conversationLabelRetryTimeoutRef.current != null
+    ) {
+      window.clearTimeout(conversationLabelRetryTimeoutRef.current)
+      conversationLabelRetryTimeoutRef.current = null
+    }
+  }, [conversationIdsToResolve])
+
   React.useEffect(() => {
     if (!isOnline) return
     if (conversationIdsToResolve.length === 0) return
     void resolveConversationLabels(conversationIdsToResolve)
-  }, [conversationIdsToResolve, isOnline, resolveConversationLabels])
+  }, [conversationIdsToResolve, conversationLabelRetryTick, isOnline, resolveConversationLabels])
 
   // ---- Handlers remaining in component ----
 
@@ -1529,8 +1582,9 @@ const NotesManagerPage: React.FC = () => {
     if (!isOnline || list.listMode !== 'active' || !pendingNoteId || !Array.isArray(list.data) || ed.selectedId != null) return
     let cancelled = false
     ;(async () => {
-      await ed.handleSelectNote(pendingNoteId)
+      const opened = await ed.handleSelectNote(pendingNoteId)
       if (cancelled) return
+      if (!opened) return
       setPendingNoteId(null)
       void clearSetting(LAST_NOTE_ID_SETTING)
     })()

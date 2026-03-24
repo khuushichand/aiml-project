@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { SourceList } from "../SourceList"
 
@@ -157,7 +157,10 @@ describe("SourceList source feedback", () => {
     state.messages = [{ id: "assistant-3", role: "assistant" }]
     rerender(<SourceList />)
 
-    resolveFeedback?.({ ok: true })
+    await act(async () => {
+      resolveFeedback?.({ ok: true })
+      await Promise.resolve()
+    })
 
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Yes" })).toHaveAttribute(
