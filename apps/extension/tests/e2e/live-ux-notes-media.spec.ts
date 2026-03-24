@@ -91,7 +91,7 @@ describeLive('Live server media + notes UX (no mocks)', () => {
       await logConnectionSnapshot(page, 'live-notes-initial')
 
       // Create a new note and type some content.
-      await page.getByTestId('notes-new-button').click()
+      await page.getByRole('button', { name: /New note/i }).click()
 
       await page
         .getByPlaceholder('Title', { exact: true })

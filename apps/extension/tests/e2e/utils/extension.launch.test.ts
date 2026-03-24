@@ -200,4 +200,65 @@ describe("launchWithExtension", () => {
       fs.rmSync(tempRoot, { recursive: true, force: true })
     }
   })
+
+  it("opens an explicit sidepanel target when requested", async () => {
+    process.env.TLDW_E2E_EXTENSION_TARGET_WAIT_MS = "1"
+
+    const resolveExtensionId = vi.fn().mockResolvedValue("d".repeat(32))
+    const page = {
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue(undefined),
+      waitForFunction: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn(() => ({
+        waitFor: vi.fn().mockResolvedValue(undefined),
+      })),
+      bringToFront: vi.fn().mockResolvedValue(undefined),
+    }
+    const context = {
+      serviceWorkers: vi.fn(() => []),
+      backgroundPages: vi.fn(() => []),
+      waitForEvent: vi.fn(() => new Promise(() => {})),
+      addInitScript: vi.fn().mockResolvedValue(undefined),
+      newPage: vi.fn().mockResolvedValue(page),
+    }
+    const launchPersistentContext = vi.fn().mockResolvedValue(context)
+
+    vi.doMock("@playwright/test", () => ({
+      BrowserContext: class BrowserContext {},
+      Page: class Page {},
+      chromium: {
+        launchPersistentContext,
+      },
+    }))
+
+    vi.doMock("./extension-id", () => ({
+      resolveExtensionId,
+    }))
+
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tldw-extension-launch-"))
+    const extensionDir = path.join(tempRoot, "chrome-mv3")
+    fs.mkdirSync(extensionDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(extensionDir, "manifest.json"),
+      JSON.stringify({ manifest_version: 3, name: "Test Extension", version: "1.0.0" }),
+      "utf8",
+    )
+    fs.writeFileSync(path.join(extensionDir, "background.js"), "// background", "utf8")
+    fs.writeFileSync(path.join(extensionDir, "options.html"), "<html></html>", "utf8")
+    fs.writeFileSync(path.join(extensionDir, "sidepanel.html"), "<html></html>", "utf8")
+
+    try {
+      const { launchWithExtension } = await import("./extension")
+
+      const result = await launchWithExtension(extensionDir)
+      await result.openSidepanel("?view=chat")
+
+      expect(page.goto).toHaveBeenCalledWith(
+        `chrome-extension://${"d".repeat(32)}/sidepanel.html?view=chat`,
+        { waitUntil: "domcontentloaded" }
+      )
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
 })

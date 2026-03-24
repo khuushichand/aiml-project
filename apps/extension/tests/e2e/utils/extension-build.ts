@@ -3,12 +3,99 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { resolveExtensionId } from './extension-id'
+import { prioritizeExtensionBuildCandidates } from './extension-paths'
 
 type LaunchOptions = {
   seedConfig?: Record<string, any>
   allowOffline?: boolean
   seedLocalStorage?: Record<string, any>
   launchTimeoutMs?: number
+}
+
+const BASE_EXTENSION_STORAGE_SEED = {
+  __tldw_first_run_complete: true,
+  tldw_skip_landing_hub: true,
+  quickIngestInspectorIntroDismissed: true,
+  quickIngestOnboardingDismissed: true,
+  "tldw:workflow:landing-config": {
+    showOnFirstRun: true,
+    dismissedAt: Date.now(),
+    completedWorkflows: []
+  }
+}
+
+const CONNECTION_CONFIG_KEYS = [
+  "serverUrl",
+  "authMode",
+  "apiKey",
+  "accessToken",
+  "refreshToken",
+  "orgId"
+] as const
+
+const isRecord = (value: unknown): value is Record<string, any> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+
+const extractConnectionConfig = (
+  value: unknown
+): Record<string, any> | null => {
+  if (!isRecord(value)) return null
+
+  const config: Record<string, any> = {}
+  for (const key of CONNECTION_CONFIG_KEYS) {
+    if (typeof value[key] !== "undefined") {
+      config[key] = value[key]
+    }
+  }
+
+  return Object.keys(config).length > 0 ? config : null
+}
+
+export const normalizeBuiltExtensionSeedConfig = (
+  seedConfig?: Record<string, any> | null
+): {
+  storagePayload: Record<string, any>
+  connectionConfig: Record<string, any> | null
+} => {
+  if (!isRecord(seedConfig)) {
+    return {
+      storagePayload: { ...BASE_EXTENSION_STORAGE_SEED },
+      connectionConfig: null
+    }
+  }
+
+  const nestedConnectionConfig = extractConnectionConfig(seedConfig.tldwConfig)
+  const rootConnectionConfig = extractConnectionConfig(seedConfig)
+  const connectionConfig = nestedConnectionConfig || rootConnectionConfig
+
+  if (nestedConnectionConfig) {
+    return {
+      storagePayload: {
+        ...BASE_EXTENSION_STORAGE_SEED,
+        ...seedConfig
+      },
+      connectionConfig
+    }
+  }
+
+  if (rootConnectionConfig) {
+    return {
+      storagePayload: {
+        ...BASE_EXTENSION_STORAGE_SEED,
+        tldwConfig: rootConnectionConfig,
+        ...seedConfig
+      },
+      connectionConfig
+    }
+  }
+
+  return {
+    storagePayload: {
+      ...BASE_EXTENSION_STORAGE_SEED,
+      ...seedConfig
+    },
+    connectionConfig: null
+  }
 }
 
 async function waitForStorageSeed(page: any) {
@@ -117,13 +204,25 @@ function resolvePlaywrightChannel(): string | undefined {
 
 const projectRoot = path.resolve(__dirname, '..', '..', '..')
 
+const resolveSidepanelUrl = (baseUrl: string, target?: string): string => {
+  const normalized = String(target || "").trim()
+  if (!normalized) return baseUrl
+  if (normalized.startsWith("?") || normalized.startsWith("#")) {
+    return `${baseUrl}${normalized}`
+  }
+  return `${baseUrl}#${normalized.startsWith("/") ? normalized : `/${normalized}`}`
+}
+
 export async function launchWithBuiltExtension(
   { seedConfig, allowOffline, seedLocalStorage, launchTimeoutMs }: LaunchOptions = {}
 ) {
-  const rawCandidates = [
+  const normalizedSeed = normalizeBuiltExtensionSeedConfig(seedConfig)
+  const seedStoragePayload = seedConfig ? normalizedSeed.storagePayload : null
+  const seedConnectionConfig = normalizedSeed.connectionConfig
+  const rawCandidates = prioritizeExtensionBuildCandidates([
     path.resolve(projectRoot, 'build/chrome-mv3'),
     path.resolve(projectRoot, '.output/chrome-mv3')
-  ]
+  ])
   const candidates = rawCandidates.filter(isExtensionBuildDir)
   const extensionPath = candidates[0]
   if (!extensionPath) {
@@ -216,21 +315,6 @@ export async function launchWithBuiltExtension(
     (cfg, allowOfflineFlag) => {
       try {
         if (typeof chrome === 'undefined' || !chrome.storage?.local) return
-        const baseSeed = {
-          __tldw_first_run_complete: true,
-          tldw_skip_landing_hub: true,
-          quickIngestInspectorIntroDismissed: true,
-          quickIngestOnboardingDismissed: true,
-          "tldw:workflow:landing-config": {
-            showOnFirstRun: true,
-            dismissedAt: Date.now(),
-            completedWorkflows: [],
-          },
-        }
-        const seededConfig =
-          cfg && typeof cfg === "object"
-            ? { ...baseSeed, tldwConfig: cfg, ...cfg }
-            : baseSeed
         const setLocal = (data: Record<string, any>, done?: () => void) => {
           // @ts-ignore
           const setter = chrome?.storage?.local?.set
@@ -267,11 +351,11 @@ export async function launchWithBuiltExtension(
             setLocal({ __tldw_allow_offline: true }, done)
           }
 
-          if (seededConfig) {
+          if (cfg && typeof cfg === "object") {
             pending += 1
-            setLocal(seededConfig, done)
+            setLocal(cfg, done)
             pending += 1
-            setSync(seededConfig, done)
+            setSync(cfg, done)
           }
 
           if (pending === 0) finalize()
@@ -280,7 +364,7 @@ export async function launchWithBuiltExtension(
         // ignore storage write failures in isolated contexts
       }
     },
-    seedConfig || null,
+    seedStoragePayload,
     allowOffline || false
   )
 
@@ -326,21 +410,6 @@ export async function launchWithBuiltExtension(
     if (seedConfig) {
       await sw.evaluate(({ cfg, allowOfflineFlag }) => {
         return new Promise<void>((resolve) => {
-          const baseSeed = {
-            __tldw_first_run_complete: true,
-            tldw_skip_landing_hub: true,
-            quickIngestInspectorIntroDismissed: true,
-            quickIngestOnboardingDismissed: true,
-            "tldw:workflow:landing-config": {
-              showOnFirstRun: true,
-              dismissedAt: Date.now(),
-              completedWorkflows: [],
-            },
-          }
-          const seededConfig =
-            cfg && typeof cfg === "object"
-              ? { ...baseSeed, tldwConfig: cfg, ...cfg }
-              : baseSeed
           const setLocal = (data: Record<string, any>, done?: () => void) => {
             try {
               chrome.storage.local.set(data, () => done?.())
@@ -367,9 +436,9 @@ export async function launchWithBuiltExtension(
                 setLocal({ __tldw_allow_offline: true }, done)
               }
               pending += 1
-              setSync(seededConfig, done)
+              setSync(cfg, done)
               pending += 1
-              setLocal(seededConfig, done)
+              setLocal(cfg, done)
               pending += 1
               setSync({ __e2eSeeded: true }, done)
               pending += 1
@@ -377,7 +446,7 @@ export async function launchWithBuiltExtension(
             })
           })
         })
-      }, { cfg: seedConfig, allowOfflineFlag: allowOffline || false })
+      }, { cfg: seedStoragePayload, allowOfflineFlag: allowOffline || false })
     } else {
       await sw.evaluate(() => {
         return new Promise<void>((resolve) => {
@@ -455,13 +524,13 @@ export async function launchWithBuiltExtension(
         } catch {
           // ignore connection check failures in test contexts
         }
-      }, seedConfig)
+      }, seedConnectionConfig)
       .catch(() => undefined)
   }
 
-  async function openSidepanel() {
+  async function openSidepanel(target?: string) {
     const p = await context.newPage()
-    await p.goto(sidepanelUrl)
+    await p.goto(resolveSidepanelUrl(sidepanelUrl, target))
     return p
   }
 

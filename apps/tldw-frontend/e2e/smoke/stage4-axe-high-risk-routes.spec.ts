@@ -26,7 +26,12 @@ const HIGH_RISK_ROUTES: HighRiskRoute[] = [
   { path: "/data-tables", name: "Data Tables" },
   { path: "/watchlists", name: "Watchlists" },
   { path: "/evaluations", name: "Evaluations" },
-  { path: "/knowledge", name: "Knowledge QA" }
+  { path: "/knowledge", name: "Knowledge QA" },
+  { path: "/companion", name: "Companion" },
+  { path: "/admin/mlx", name: "Admin MLX" },
+  { path: "/quick-chat-popout", name: "Quick Chat Popout" },
+  { path: "/workspace-playground", name: "Workspace Playground" },
+  { path: "/settings/image-generation", name: "Image Generation Settings" }
 ]
 
 const STAGE4_A11Y_RULES = [

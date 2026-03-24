@@ -108,6 +108,7 @@ const OptionChatbooks = createSettingsRoute(
   () => import("~/components/Option/Settings/chatbooks"),
   "ChatbooksSettings"
 )
+const SidepanelChat = lazy(() => import("./sidepanel-chat"))
 const SidepanelHomeResolver = lazy(() => import("./sidepanel-home-resolver"))
 const SidepanelSettings = lazy(() => import("./sidepanel-settings"))
 const SidepanelAgent = lazy(() => import("./sidepanel-agent"))
@@ -967,6 +968,12 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
     targets: ALL_TARGETS
   },
   { kind: "sidepanel", path: "/", element: <SidepanelHomeResolver /> },
+  {
+    kind: "sidepanel",
+    path: "/chat",
+    element: <SidepanelChat />,
+    targets: ALL_TARGETS
+  },
   {
     kind: "sidepanel",
     path: "/agent",

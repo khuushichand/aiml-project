@@ -87,6 +87,8 @@ export type QuickIngestCancelResponse = {
 }
 
 const EXTENSION_TIMEOUT_MS = 10_000
+const QUICK_INGEST_RUNTIME_PING_TIMEOUT_MS = 400
+const QUICK_INGEST_RUNTIME_HEALTH_TTL_MS = 30_000
 const DIRECT_INGEST_TIMEOUT_MS = 5 * 60 * 1000
 const DIRECT_REMOTE_POLL_INTERVAL_MS = 1_200
 type DirectQuickIngestTracker = ReturnType<
@@ -95,6 +97,8 @@ type DirectQuickIngestTracker = ReturnType<
 
 const directQuickIngestSessionTrackers = new Map<string, DirectQuickIngestTracker>()
 const directQuickIngestCancelledSessions = new Set<string>()
+let lastQuickIngestRuntimeHealthCheckAt = 0
+let quickIngestRuntimeMessagingUsable: boolean | null = null
 
 const buildDirectSessionSuffix = (): string => {
   try {
@@ -163,6 +167,38 @@ const cancelDirectSessionBatches = async (
 const hasExtensionMessagingRuntime = (): boolean =>
   Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
 
+const invalidateQuickIngestRuntimeHealth = (): void => {
+  quickIngestRuntimeMessagingUsable = false
+  lastQuickIngestRuntimeHealthCheckAt = Date.now()
+}
+
+const canUseExtensionMessagingRuntime = async (): Promise<boolean> => {
+  if (!hasExtensionMessagingRuntime()) return false
+
+  const now = Date.now()
+  if (
+    quickIngestRuntimeMessagingUsable !== null &&
+    now - lastQuickIngestRuntimeHealthCheckAt < QUICK_INGEST_RUNTIME_HEALTH_TTL_MS
+  ) {
+    return quickIngestRuntimeMessagingUsable
+  }
+
+  try {
+    const pingResult = await Promise.race([
+      browser.runtime.sendMessage({ type: "tldw:ping" }),
+      new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), QUICK_INGEST_RUNTIME_PING_TIMEOUT_MS)
+      )
+    ])
+    quickIngestRuntimeMessagingUsable =
+      Boolean(pingResult) && Boolean((pingResult as { ok?: unknown }).ok)
+  } catch {
+    quickIngestRuntimeMessagingUsable = false
+  }
+  lastQuickIngestRuntimeHealthCheckAt = now
+  return Boolean(quickIngestRuntimeMessagingUsable)
+}
+
 const sendExtensionMessageWithTimeout = async <T>(
   message: Record<string, unknown>,
   timeoutMs: number = EXTENSION_TIMEOUT_MS
@@ -173,9 +209,15 @@ const sendExtensionMessageWithTimeout = async <T>(
   })
   const result = await Promise.race([extensionPromise, timeoutPromise])
   if (result === null) {
+    invalidateQuickIngestRuntimeHealth()
     throw new Error("Extension messaging timed out. Please try again or reload the page.")
   }
-  return result as T
+  try {
+    return result as T
+  } catch (error) {
+    invalidateQuickIngestRuntimeHealth()
+    throw error
+  }
 }
 
 const assignPath = (obj: Record<string, any>, path: string[], val: any) => {
@@ -606,12 +648,17 @@ const runDirectQuickIngestBatch = async (
 export const submitQuickIngestBatch = async (
   input: QuickIngestBatchInput
 ): Promise<QuickIngestBatchResponse> => {
-  if (hasExtensionMessagingRuntime()) {
-    const result = await sendExtensionMessageWithTimeout<QuickIngestBatchResponse>({
-      type: "tldw:quick-ingest-batch",
-      payload: input
-    })
-    return result
+  if (await canUseExtensionMessagingRuntime()) {
+    try {
+      const result = await sendExtensionMessageWithTimeout<QuickIngestBatchResponse>({
+        type: "tldw:quick-ingest-batch",
+        payload: input
+      })
+      return result
+    } catch {
+      // Fall through to the direct path when runtime messaging is unavailable
+      // even though the extension context still exists.
+    }
   }
 
   return await runDirectQuickIngestBatch(input)
@@ -620,11 +667,16 @@ export const submitQuickIngestBatch = async (
 export const startQuickIngestSession = async (
   input: QuickIngestBatchInput
 ): Promise<QuickIngestStartAck> => {
-  if (hasExtensionMessagingRuntime()) {
-    return await sendExtensionMessageWithTimeout<QuickIngestStartAck>({
-      type: "tldw:quick-ingest/start",
-      payload: input
-    })
+  if (await canUseExtensionMessagingRuntime()) {
+    try {
+      return await sendExtensionMessageWithTimeout<QuickIngestStartAck>({
+        type: "tldw:quick-ingest/start",
+        payload: input
+      })
+    } catch {
+      // Fall through to the direct session ack when the runtime exists
+      // but message delivery is unhealthy.
+    }
   }
 
   // Direct runtimes currently run ingest synchronously. Return a local ack
@@ -643,17 +695,27 @@ export const cancelQuickIngestSession = async (
     return { ok: false, error: "Missing session id." }
   }
 
-  if (hasExtensionMessagingRuntime()) {
-    return await sendExtensionMessageWithTimeout<QuickIngestCancelResponse>({
-      type: "tldw:quick-ingest/cancel",
-      payload: {
-        sessionId,
-        reason: input?.reason
-      }
-    })
+  if (await canUseExtensionMessagingRuntime()) {
+    try {
+      return await sendExtensionMessageWithTimeout<QuickIngestCancelResponse>({
+        type: "tldw:quick-ingest/cancel",
+        payload: {
+          sessionId,
+          reason: input?.reason
+        }
+      })
+    } catch {
+      // Fall through to the direct cancellation path when runtime messaging
+      // stops responding in packaged extension contexts.
+    }
   }
 
   directQuickIngestCancelledSessions.add(sessionId)
   await cancelDirectSessionBatches(sessionId, input?.reason || "user_cancelled")
   return { ok: true }
+}
+
+export const __resetQuickIngestRuntimeHealthForTests = (): void => {
+  quickIngestRuntimeMessagingUsable = null
+  lastQuickIngestRuntimeHealthCheckAt = 0
 }

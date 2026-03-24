@@ -24,6 +24,7 @@ vi.mock("@/services/background-proxy", () => ({
 }))
 
 import {
+  __resetQuickIngestRuntimeHealthForTests,
   cancelQuickIngestSession,
   startQuickIngestSession,
   submitQuickIngestBatch
@@ -31,6 +32,8 @@ import {
 
 describe("submitQuickIngestBatch", () => {
   beforeEach(() => {
+    __resetQuickIngestRuntimeHealthForTests()
+    vi.useRealTimers()
     mocks.runtimeId = undefined
     mocks.sendMessage.mockReset()
     mocks.bgRequest.mockReset()
@@ -164,10 +167,12 @@ describe("submitQuickIngestBatch", () => {
 
   it("uses extension message transport when extension runtime is available", async () => {
     mocks.runtimeId = "ext-1"
-    mocks.sendMessage.mockResolvedValue({
+    mocks.sendMessage
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
       ok: true,
       results: [{ id: "entry-1", status: "ok", type: "document" }]
-    })
+      })
 
     const result = await submitQuickIngestBatch({
       entries: [
@@ -188,7 +193,14 @@ describe("submitQuickIngestBatch", () => {
       advancedValues: {}
     })
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
+    expect(mocks.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "tldw:ping"
+      })
+    )
+    expect(mocks.sendMessage).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         type: "tldw:quick-ingest-batch",
         payload: expect.objectContaining({
@@ -199,6 +211,61 @@ describe("submitQuickIngestBatch", () => {
     expect(mocks.bgUpload).not.toHaveBeenCalled()
     expect(mocks.bgRequest).not.toHaveBeenCalled()
     expect(result.ok).toBe(true)
+  })
+
+  it("falls back to direct mode when runtime ping preflight times out", async () => {
+    vi.useFakeTimers()
+    mocks.runtimeId = "ext-1"
+    mocks.sendMessage.mockImplementation(() => new Promise(() => undefined))
+    mocks.bgUpload.mockResolvedValue({
+      batch_id: "batch-direct-fallback",
+      jobs: [{ id: 808 }]
+    })
+    mocks.bgRequest.mockResolvedValue({
+      ok: true,
+      data: {
+        status: "completed",
+        result: { media_id: "m-fallback" }
+      }
+    })
+
+    const resultPromise = submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-fallback",
+          url: "https://example.com/runtime-fallback",
+          type: "document"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false,
+      common: {
+        perform_analysis: true,
+        perform_chunking: false,
+        overwrite_existing: false
+      },
+      advancedValues: {}
+    })
+
+    await vi.advanceTimersByTimeAsync(401)
+    const result = await resultPromise
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "tldw:ping"
+      })
+    )
+    expect(mocks.bgUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/media/ingest/jobs",
+        method: "POST"
+      })
+    )
+    expect(result.results?.[0]).toMatchObject({
+      id: "entry-fallback",
+      status: "ok"
+    })
   })
 
   it("routes html process-only entries through process-web-scraping", async () => {
@@ -282,10 +349,12 @@ describe("submitQuickIngestBatch", () => {
 
   it("starts a quick ingest session via extension transport and returns session id ack", async () => {
     mocks.runtimeId = "ext-1"
-    mocks.sendMessage.mockResolvedValue({
+    mocks.sendMessage
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({
       ok: true,
       sessionId: "qi-session-123"
-    })
+      })
 
     const ack = await startQuickIngestSession({
       entries: [
@@ -306,7 +375,14 @@ describe("submitQuickIngestBatch", () => {
       advancedValues: {}
     })
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
+    expect(mocks.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "tldw:ping"
+      })
+    )
+    expect(mocks.sendMessage).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         type: "tldw:quick-ingest/start",
         payload: expect.objectContaining({
@@ -320,9 +396,45 @@ describe("submitQuickIngestBatch", () => {
     })
   })
 
+  it("returns a direct session ack when runtime ping preflight times out", async () => {
+    vi.useFakeTimers()
+    mocks.runtimeId = "ext-1"
+    mocks.sendMessage.mockImplementation(() => new Promise(() => undefined))
+
+    const ackPromise = startQuickIngestSession({
+      entries: [
+        {
+          id: "entry-1",
+          url: "https://example.com/article",
+          type: "document"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false,
+      common: {
+        perform_analysis: true,
+        perform_chunking: false,
+        overwrite_existing: false
+      },
+      advancedValues: {}
+    })
+
+    await vi.advanceTimersByTimeAsync(401)
+    const ack = await ackPromise
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "tldw:ping"
+      })
+    )
+    expect(ack.ok).toBe(true)
+    expect(ack.sessionId).toMatch(/^qi-direct-/)
+  })
+
   it("sends explicit cancel message with session id", async () => {
     mocks.runtimeId = "ext-1"
-    mocks.sendMessage.mockResolvedValue({
+    mocks.sendMessage.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({
       ok: true
     })
 
@@ -331,7 +443,14 @@ describe("submitQuickIngestBatch", () => {
       reason: "user_cancelled"
     })
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
+    expect(mocks.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "tldw:ping"
+      })
+    )
+    expect(mocks.sendMessage).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         type: "tldw:quick-ingest/cancel",
         payload: {

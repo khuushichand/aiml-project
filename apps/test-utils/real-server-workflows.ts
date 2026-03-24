@@ -14,7 +14,7 @@ export type WorkflowDriver = {
   page: Page
   optionsUrl: string
   sidepanelUrl: string
-  openSidepanel: () => Promise<Page>
+  openSidepanel: (target?: string) => Promise<Page>
   goto: (
     page: Page,
     route: string,
@@ -949,9 +949,9 @@ const waitForChatLanding = async (
     (kind) => {
       const hash = window.location.hash || ""
       const path = window.location.pathname || ""
+      const search = window.location.search || ""
       if (kind === "extension") {
-        // More permissive check: allow empty, root hash, or chat-related hashes
-        return !hash || hash === "#/" || hash === "#" || hash.startsWith("#/chat")
+        return hash.startsWith("#/chat") || search.includes("view=chat")
       }
       return (
         path === "/chat" ||
@@ -964,6 +964,31 @@ const waitForChatLanding = async (
     driver.kind,
     { timeout: timeoutMs }
   )
+}
+
+const openChatSidepanel = async (driver: WorkflowDriver): Promise<Page> => {
+  if (driver.kind === "extension") {
+    return driver.openSidepanel("/chat")
+  }
+  return driver.openSidepanel()
+}
+
+const ensureFreshNoteEditor = async (page: Page) => {
+  const titleInput = page.getByPlaceholder("Title", { exact: true })
+  const contentInput = page.getByPlaceholder(/Write your note here/i)
+  const titleVisible = await titleInput.isVisible().catch(() => false)
+  const contentVisible = await contentInput.isVisible().catch(() => false)
+  if (titleVisible && contentVisible) {
+    const titleValue = await titleInput.inputValue().catch(() => "")
+    const contentValue = await contentInput.inputValue().catch(() => "")
+    if (!titleValue.trim() && !contentValue.trim()) {
+      return
+    }
+  }
+
+  const newNoteButton = page.getByRole("button", { name: /New note/i })
+  await expect(newNoteButton).toBeVisible({ timeout: 15000 })
+  await newNoteButton.click()
 }
 
 const ensureServerPersistence = async (page: Page) => {
@@ -2073,38 +2098,70 @@ type AssistantSnapshot = {
 const waitForAssistantSnapshot = async (
   page: Page,
   timeoutMs = 90000
-): Promise<AssistantSnapshot | null> =>
-  page
-    .waitForFunction(
-      () => {
+): Promise<AssistantSnapshot | null> => {
+  const storeTimeoutMs = Math.min(timeoutMs, 30000)
+  try {
+    return await page
+      .waitForFunction(
+        () => {
+          const store = (window as any).__tldw_useStoreMessageOption
+          const state = store?.getState?.()
+          if (!state?.serverChatId) return null
+          const messages = Array.isArray(state?.messages) ? state.messages : []
+          for (let i = messages.length - 1; i >= 0; i -= 1) {
+            const msg = messages[i]
+            if (!msg?.isBot) continue
+            if (msg?.messageType === "character:greeting") continue
+            const content =
+              typeof msg?.message === "string" ? msg.message : ""
+            const trimmed = content.replace(/\s+/g, " ").trim()
+            if (!trimmed || trimmed.includes("▋")) return null
+            return {
+              text: trimmed,
+              localId: msg?.id != null ? String(msg.id) : null,
+              serverMessageId:
+                msg?.serverMessageId != null
+                  ? String(msg.serverMessageId)
+                  : null,
+              serverChatId: String(state.serverChatId)
+            }
+          }
+          return null
+        },
+        undefined,
+        { timeout: storeTimeoutMs }
+      )
+      .then((handle) => handle.jsonValue())
+  } catch {
+    // Some packaged extension flows render the assistant message before the
+    // debug store snapshot settles. Fall back to the visible DOM message so
+    // the workflow can continue, then let later helpers recover server IDs.
+  }
+
+  const assistant = await waitForAssistantMessage(page)
+  const text = normalizeMessageContent(await getAssistantText(assistant))
+  if (!text) return null
+
+  const [localId, serverMessageId, serverChatId] = await Promise.all([
+    assistant.getAttribute("data-message-id").catch(() => null),
+    assistant.getAttribute("data-server-message-id").catch(() => null),
+    page
+      .evaluate(() => {
         const store = (window as any).__tldw_useStoreMessageOption
         const state = store?.getState?.()
         if (!state?.serverChatId) return null
-        const messages = Array.isArray(state?.messages) ? state.messages : []
-        for (let i = messages.length - 1; i >= 0; i -= 1) {
-          const msg = messages[i]
-          if (!msg?.isBot) continue
-          if (msg?.messageType === "character:greeting") continue
-          const content =
-            typeof msg?.message === "string" ? msg.message : ""
-          const trimmed = content.replace(/\s+/g, " ").trim()
-          if (!trimmed || trimmed.includes("▋")) return null
-          return {
-            text: trimmed,
-            localId: msg?.id != null ? String(msg.id) : null,
-            serverMessageId:
-              msg?.serverMessageId != null
-                ? String(msg.serverMessageId)
-                : null,
-            serverChatId: String(state.serverChatId)
-          }
-        }
-        return null
-      },
-      undefined,
-      { timeout: timeoutMs }
-    )
-    .then((handle) => handle.jsonValue())
+        return String(state.serverChatId)
+      })
+      .catch(() => null)
+  ])
+
+  return {
+    text,
+    localId,
+    serverMessageId,
+    serverChatId: serverChatId || ""
+  }
+}
 
 const waitForAssistantServerMessageIdInStore = async (
   page: Page,
@@ -3168,7 +3225,7 @@ test.describe("Real server end-to-end workflows", () => {
         })
   
         const chatPage = await step("open sidepanel", async () => {
-          const panel = await openSidepanel()
+          const panel = await openChatSidepanel(driver)
           logStep("sidepanel opened", { url: panel.url() })
           return panel
         })
@@ -3450,7 +3507,7 @@ test.describe("Real server end-to-end workflows", () => {
       const content = `# Note ${unique}\n\nThis is a real-server notes workflow.`
       const keyword = `e2e-${unique}`
 
-      await page.getByTestId("notes-new-button").click()
+      await ensureFreshNoteEditor(page)
       const titleInput = page.getByPlaceholder("Title", { exact: true })
       await titleInput.waitFor({ state: "visible", timeout: 15000 })
       const titleEditable = await titleInput.isEditable().catch(() => false)
@@ -3781,7 +3838,7 @@ test.describe("Real server end-to-end workflows", () => {
         normalizeCharacterForStorage(characterRecord)
       )
 
-      const chatPage = await openSidepanel()
+      const chatPage = await openChatSidepanel(driver)
       await waitForConnected(chatPage, "workflow-chat-flashcards")
       await ensureServerPersistence(chatPage)
 
@@ -4511,7 +4568,7 @@ test.describe("Real server end-to-end workflows", () => {
         }
       }
       if (page.isClosed()) {
-        chatPage = await driver.openSidepanel()
+        chatPage = await openChatSidepanel(driver)
         await waitForConnected(chatPage, "workflow-knowledge-chat")
       }
       await expect(await resolveChatInput(chatPage)).toBeVisible({
