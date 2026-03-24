@@ -10,8 +10,6 @@
 
 ## Findings
 
-## Open Questions and Assumptions
-
 ## Coverage Gaps
 
 ## Improvements
