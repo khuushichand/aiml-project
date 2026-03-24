@@ -7,13 +7,20 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def test_get_sync_log_entries_decodes_payloads_and_preserves_limit_params() -> None:
+def test_get_sync_log_entries_decodes_payloads_and_preserves_limit_params(monkeypatch) -> None:
     from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
         sync_log_ops as sync_log_ops_module,
     )
 
     conn = object()
     fetch_calls: list[tuple[object, str, tuple[object, ...]]] = []
+    warning_calls = []
+
+    monkeypatch.setattr(
+        sync_log_ops_module.logger,
+        "warning",
+        lambda message, *args: warning_calls.append((message, args)),
+    )
 
     def get_connection():
         return conn
@@ -50,6 +57,9 @@ def test_get_sync_log_entries_decodes_payloads_and_preserves_limit_params() -> N
         {"change_id": 1, "payload": {"title": "one"}},
         {"change_id": 2, "payload": None},
         {"change_id": 3, "payload": None},
+    ]
+    assert warning_calls == [
+        ("Failed to decode JSON payload for sync log change_id {}", (2,))
     ]
 
 

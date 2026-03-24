@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
 from datetime import datetime, timezone
 import json
 from typing import Any
 import uuid
 
+from loguru import logger
+
 from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
+
+
+def _safe_log_visual_document_sync_event(
+    self,
+    conn: Any,
+    *,
+    media_id: int,
+    entity_uuid: str,
+    operation: str,
+    version: int,
+    payload: str,
+) -> None:
+    try:
+        self._log_sync_event(
+            conn,
+            "VisualDocuments",
+            entity_uuid,
+            operation,
+            version,
+            payload,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to record VisualDocuments sync event for media_id={} operation={} entity_uuid={}: {}",
+            media_id,
+            operation,
+            entity_uuid,
+            exc,
+        )
 
 
 def insert_visual_document(
@@ -25,6 +55,7 @@ def insert_visual_document(
     thumbnail_path: str | None = None,
     extra_metadata: str | None = None,
 ) -> str:
+    """Insert a visual-document row and emit a best-effort sync-log entry."""
     conn = self.get_connection()
     new_uuid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -53,21 +84,21 @@ def insert_visual_document(
     sql = f"INSERT INTO VisualDocuments ({columns}) VALUES ({placeholders})"  # nosec B608
     try:
         self._execute_with_connection(conn, sql, data)
-        with suppress(Exception):
-            self._log_sync_event(
-                conn,
-                "VisualDocuments",
-                new_uuid,
-                "create",
-                1,
-                json.dumps(
-                    {
-                        "media_id": media_id,
-                        "caption": caption or "",
-                        "ocr_text": ocr_text or "",
-                    }
-                ),
-            )
+        _safe_log_visual_document_sync_event(
+            self,
+            conn,
+            media_id=media_id,
+            entity_uuid=new_uuid,
+            operation="create",
+            version=1,
+            payload=json.dumps(
+                {
+                    "media_id": media_id,
+                    "caption": caption or "",
+                    "ocr_text": ocr_text or "",
+                }
+            ),
+        )
     except Exception as exc:
         raise DatabaseError(f"Failed to insert VisualDocument: {exc}") from exc  # noqa: TRY003
     return new_uuid
@@ -79,6 +110,7 @@ def list_visual_documents_for_media(
     *,
     include_deleted: bool = False,
 ) -> list[dict[str, Any]]:
+    """Return visual-document rows for a media item ordered by document position."""
     conn = self.get_connection()
     clauses: list[str] = ["media_id = :media_id"]
     params: dict[str, Any] = {"media_id": media_id}
@@ -106,6 +138,7 @@ def soft_delete_visual_documents_for_media(
     *,
     hard_delete: bool = False,
 ) -> None:
+    """Delete or soft-delete visual-document rows for a media item."""
     conn = self.get_connection()
     try:
         if hard_delete:
@@ -114,15 +147,15 @@ def soft_delete_visual_documents_for_media(
                 "DELETE FROM VisualDocuments WHERE media_id = :media_id",
                 {"media_id": media_id},
             )
-            with suppress(Exception):
-                self._log_sync_event(
-                    conn,
-                    "VisualDocuments",
-                    f"media:{media_id}",
-                    "delete",
-                    1,
-                    json.dumps({"media_id": media_id, "mode": "hard"}),
-                )
+            _safe_log_visual_document_sync_event(
+                self,
+                conn,
+                media_id=media_id,
+                entity_uuid=f"media:{media_id}",
+                operation="delete",
+                version=1,
+                payload=json.dumps({"media_id": media_id, "mode": "hard"}),
+            )
             return
 
         rows = self._fetchall_with_connection(
@@ -139,14 +172,14 @@ def soft_delete_visual_documents_for_media(
                 "UPDATE VisualDocuments SET deleted = 1, version = :version WHERE uuid = :uuid",
                 {"uuid": v_uuid, "version": new_version},
             )
-            with suppress(Exception):
-                self._log_sync_event(
-                    conn,
-                    "VisualDocuments",
-                    v_uuid,
-                    "delete",
-                    new_version,
-                    json.dumps({"media_id": media_id}),
-                )
+            _safe_log_visual_document_sync_event(
+                self,
+                conn,
+                media_id=media_id,
+                entity_uuid=v_uuid,
+                operation="delete",
+                version=new_version,
+                payload=json.dumps({"media_id": media_id}),
+            )
     except Exception as exc:
         raise DatabaseError(f"Failed to delete VisualDocuments for media_id={media_id}: {exc}") from exc  # noqa: TRY003

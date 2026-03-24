@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from contextlib import suppress
 from typing import Any
+
+from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
@@ -269,12 +270,18 @@ def soft_delete_claims_for_media(self, media_id: int) -> int:
             affected = cur.rowcount or 0
 
             if self.backend_type == BackendType.SQLITE:
-                with suppress(sqlite3.Error):
+                try:
                     self._execute_with_connection(
                         conn,
                         "INSERT INTO claims_fts(claims_fts, rowid, claim_text) "
                         "SELECT 'delete', id, claim_text FROM Claims WHERE media_id = ?",
                         (int(media_id),),
+                    )
+                except sqlite3.Error as exc:
+                    logger.warning(
+                        "Failed to update SQLite claims_fts delete markers for media_id={}: {}",
+                        media_id,
+                        exc,
                     )
 
             return affected

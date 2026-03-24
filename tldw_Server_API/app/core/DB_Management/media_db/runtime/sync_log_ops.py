@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 from loguru import logger
@@ -39,8 +38,8 @@ def get_sync_log_entries(
                 try:
                     row_dict["payload"] = json.loads(row_dict["payload"])
                 except json.JSONDecodeError:
-                    logging.warning(
-                        "Failed to decode JSON payload for sync log change_id %s",
+                    logger.warning(
+                        "Failed to decode JSON payload for sync log change_id {}",
                         row_dict.get("change_id"),
                     )
                     row_dict["payload"] = None

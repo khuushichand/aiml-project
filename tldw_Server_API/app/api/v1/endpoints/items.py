@@ -262,7 +262,7 @@ def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
             fetch_keywords_for_media,
             get_document_version,
         )
-        tag_list = fetch_keywords_for_media(media_id=int(row.get("id")), db_instance=db)
+        tag_list = fetch_keywords_for_media(db=db, media_id=int(row.get("id")))
     except _ITEMS_NONCRITICAL_EXCEPTIONS:
         tag_list = []
 

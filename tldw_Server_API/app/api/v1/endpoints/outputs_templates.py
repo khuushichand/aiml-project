@@ -205,7 +205,7 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
                 get_document_version,
             )
             latest = get_document_version(media_db, media_id=mid, version_number=None, include_content=False)
-            tags = fetch_keywords_for_media(media_id=mid, db_instance=media_db) or []
+            tags = fetch_keywords_for_media(db=media_db, media_id=mid) or []
         except (ImportError, AttributeError, ValueError, TypeError, KeyError, RuntimeError):
             tags = []
         published_at = None

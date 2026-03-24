@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from contextlib import contextmanager
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -389,3 +390,52 @@ def test_soft_delete_claims_for_media_respects_backend_specific_cleanup(
         assert any("claims_fts(claims_fts, rowid, claim_text)" in query for query in execute_calls)
     else:
         assert not any("claims_fts(claims_fts, rowid, claim_text)" in query for query in execute_calls)
+
+
+def test_soft_delete_claims_for_media_logs_warning_when_sqlite_cleanup_fails(
+    monkeypatch,
+) -> None:
+    runtime_module = _load_runtime_module()
+    assert runtime_module is not None
+
+    warning_calls = []
+    monkeypatch.setattr(
+        runtime_module.logger,
+        "warning",
+        lambda message, *args: warning_calls.append((message, args)),
+    )
+
+    conn = object()
+    execute_calls: list[str] = []
+
+    class _Cursor:
+        rowcount = 2
+
+    @contextmanager
+    def transaction():
+        yield conn
+
+    def _execute_with_connection(_conn, query: str, params: tuple[object, ...]):
+        assert _conn is conn
+        execute_calls.append(" ".join(query.split()))
+        if "claims_fts(claims_fts, rowid, claim_text)" in query:
+            raise sqlite3.Error("fts delete marker failed")
+        return _Cursor()
+
+    db = SimpleNamespace(
+        backend_type=BackendType.SQLITE,
+        client_id="client-1",
+        transaction=transaction,
+        _get_current_utc_timestamp_str=lambda: "2026-03-22T00:00:00.000Z",
+        _execute_with_connection=_execute_with_connection,
+    )
+
+    deleted = runtime_module.soft_delete_claims_for_media(db, 37)
+
+    assert deleted == 2
+    assert any("UPDATE Claims SET deleted = 1" in query for query in execute_calls)
+    assert any("claims_fts(claims_fts, rowid, claim_text)" in query for query in execute_calls)
+    assert len(warning_calls) == 1
+    message, args = warning_calls[0]
+    assert "Failed to update SQLite claims_fts delete markers" in message
+    assert args[0] == 37
