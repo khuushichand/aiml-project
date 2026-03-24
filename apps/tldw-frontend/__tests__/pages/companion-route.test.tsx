@@ -10,9 +10,15 @@ const loadSource = (...candidates: string[]) => {
 }
 
 describe("companion Next.js page shim", () => {
-  it("loads the shared companion route module instead of redirecting to itself", () => {
-    const source = loadSource("pages/companion.tsx", "tldw-frontend/pages/companion.tsx", "apps/tldw-frontend/pages/companion.tsx")
-    expect(source).toContain('dynamic(() => import("@/routes/option-companion"), { ssr: false })')
+  it("loads the shared companion route module with a visible loading fallback", () => {
+    const source = loadSource(
+      "pages/companion.tsx",
+      "tldw-frontend/pages/companion.tsx",
+      "apps/tldw-frontend/pages/companion.tsx"
+    )
+    expect(source).toContain('dynamic(() => import("@/routes/option-companion"), {')
+    expect(source).toContain("loading: () => (")
+    expect(source).toContain('testId="companion-route-loading"')
     expect(source).not.toContain('RouteRedirect to="/companion"')
   })
 })

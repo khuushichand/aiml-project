@@ -26,10 +26,6 @@ import {
 } from "../utils/helpers"
 
 const MIN_MEDIA_ITEMS_FOR_CROSS_PAGE_SELECTION = 22
-const MAX_MEDIA_COUNT_POLL_ATTEMPTS = 24
-const MEDIA_COUNT_POLL_INTERVAL_MS = 500
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const waitForViewerItems = async (
   reviewPage: MediaReviewPage,
@@ -223,7 +219,6 @@ const seedMediaAuditDocuments = async (
       title,
       content: `${title}\n\nAudit payload ${idx + 1}`
     })
-    await sleep(35)
   }
   return { query: prefix }
 }
@@ -239,15 +234,15 @@ const ensureMediaCountForCrossPageReview = async (
     await seedMediaDocument(generateTestId(`media-review-cross-page-${idx}`))
   }
 
-  for (let attempt = 0; attempt < MAX_MEDIA_COUNT_POLL_ATTEMPTS; attempt += 1) {
-    currentCount = await getMediaTotalCount()
-    if (currentCount >= minimumCount) return currentCount
-    await sleep(MEDIA_COUNT_POLL_INTERVAL_MS)
-  }
+  await expect
+    .poll(async () => await getMediaTotalCount(), {
+      timeout: 12_000,
+      message: `Timed out waiting for media count >= ${minimumCount}`,
+    })
+    .toBeGreaterThanOrEqual(minimumCount)
 
-  throw new Error(
-    `Timed out waiting for media count >= ${minimumCount}; current count=${currentCount}`
-  )
+  currentCount = await getMediaTotalCount()
+  return currentCount
 }
 
 test.describe("Multi-Item Media Review Workflow", () => {
@@ -682,8 +677,14 @@ test.describe("Multi-Item Media Review Workflow", () => {
       await reviewPage.waitForReady()
 
       const slowRoutePattern = "**/api/v1/media/*?include_content=true&include_versions=false"
+      let sawSlowContentRequest = false
+      let releaseSlowContentRequest: (() => void) | null = null
+      const slowContentRequestPending = new Promise<void>((resolve) => {
+        releaseSlowContentRequest = resolve
+      })
       await authedPage.route(slowRoutePattern, async (route) => {
-        await sleep(150)
+        sawSlowContentRequest = true
+        await slowContentRequestPending
         await route.continue()
       })
 
@@ -692,13 +693,19 @@ test.describe("Multi-Item Media Review Workflow", () => {
         await reviewPage.toggleContentSearch(true)
         await authedPage.getByRole("button", { name: /^search$/i }).click()
 
+        await expect.poll(() => sawSlowContentRequest, {
+          timeout: 10_000,
+          message: "Timed out waiting for media review content-search requests",
+        }).toBe(true)
         await expect(
           authedPage.getByText(/scans current page results/i)
         ).toBeVisible({ timeout: 10_000 })
         await expect(
           authedPage.getByRole("status", { name: /content filtering progress/i })
         ).toBeVisible({ timeout: 10_000 })
+        releaseSlowContentRequest?.()
       } finally {
+        releaseSlowContentRequest?.()
         await authedPage.unroute(slowRoutePattern)
       }
 
@@ -1031,25 +1038,19 @@ test.describe("Multi-Item Media Review Workflow", () => {
       // Select first item to start
       await reviewPage.clickItem(0)
       await waitForViewerItems(reviewPage)
-      const startingPosition = await reviewPage.getItemPosition()
-
-      // Focus the viewer panel first
-      const viewer = authedPage.locator("[tabindex='-1']").first()
-      if (await viewer.isVisible().catch(() => false)) {
-        await viewer.focus()
-      }
+      const startingPosition = await reviewPage.getPreviewPosition()
 
       // Press j to go next
       await reviewPage.pressNextItemShortcut()
       await expect
-        .poll(async () => await reviewPage.getItemPosition(), { timeout: 10_000 })
+        .poll(async () => await reviewPage.getPreviewPosition(), { timeout: 10_000 })
         .not.toBe(startingPosition)
-      const advancedPosition = await reviewPage.getItemPosition()
+      const advancedPosition = await reviewPage.getPreviewPosition()
 
       // Press k to go back
       await reviewPage.pressPrevItemShortcut()
       await expect
-        .poll(async () => await reviewPage.getItemPosition(), { timeout: 10_000 })
+        .poll(async () => await reviewPage.getPreviewPosition(), { timeout: 10_000 })
         .toBe(startingPosition)
       expect(advancedPosition).not.toBe(startingPosition)
 

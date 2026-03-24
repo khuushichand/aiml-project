@@ -31,6 +31,33 @@ export class ChatPage {
     )
   }
 
+  private normalizeMessageText(text: string): string {
+    return text.replace(/▋/g, "").replace(/\s+/g, " ").trim()
+  }
+
+  private isMessageChrome(text: string): boolean {
+    return /^(Mood:|Response complete$|Loading content(?:\.{3}|…)?$)/i.test(text)
+  }
+
+  private async getMessageBodyText(message: Locator): Promise<string> {
+    const contentCandidates = message.locator(
+      "p, pre, li, blockquote, h1, h2, h3, h4, h5, h6"
+    )
+    const candidateTexts = (await contentCandidates.allTextContents().catch(() => []))
+      .map((text) => this.normalizeMessageText(text))
+      .filter((text) => Boolean(text) && !this.isMessageChrome(text))
+
+    if (candidateTexts.length > 0) {
+      return candidateTexts.join("\n")
+    }
+
+    return (((await message.textContent().catch(() => "")) || "")
+      .split(/\n+/)
+      .map((text) => this.normalizeMessageText(text))
+      .filter((text) => Boolean(text) && !this.isMessageChrome(text))
+      .join(" "))
+  }
+
   private async getLastAssistantText(
     assistantMessages: Locator,
     assistantCount: number
@@ -39,9 +66,7 @@ export class ChatPage {
       return ""
     }
 
-    return ((await assistantMessages.last().textContent().catch(() => "")) || "")
-      .replace(/▋/g, "")
-      .trim()
+    return this.getMessageBodyText(assistantMessages.last())
   }
 
   private async captureResponseBaseline(): Promise<void> {
@@ -261,9 +286,7 @@ export class ChatPage {
           const totalMessages = await allMessages.count()
           const assistantCount = await assistantMessages.count()
           const lastAssistant = assistantMessages.last()
-          const text = ((await lastAssistant.textContent().catch(() => "")) || "")
-            .replace(/▋/g, "")
-            .trim()
+          const text = await this.getMessageBodyText(lastAssistant)
           const assistantAdvanced =
             assistantCount > baseline.assistantCount || text !== baseline.lastAssistantText
           if (
@@ -332,7 +355,7 @@ export class ChatPage {
               (await el.getAttribute("data-message-role")) ||
         "unknown"
             )
-      const content = (await el.textContent()) || ""
+      const content = await this.getMessageBodyText(el)
       messages.push({ role, content })
     }
 

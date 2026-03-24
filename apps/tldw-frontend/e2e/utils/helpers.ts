@@ -320,6 +320,34 @@ export async function waitForAppShell(page: Page, timeoutMs = 15000): Promise<vo
 }
 
 /**
+ * Wait for the app shell plus a couple of paint cycles so screenshots and
+ * post-navigation assertions don't depend on fixed sleeps.
+ */
+export async function waitForVisualSettle(page: Page, timeoutMs = 5000): Promise<void> {
+  await waitForAppShell(page, timeoutMs);
+
+  await page
+    .evaluate(async () => {
+      const docWithFonts = document as Document & {
+        fonts?: {
+          ready?: Promise<unknown>;
+        };
+      };
+
+      try {
+        await docWithFonts.fonts?.ready;
+      } catch {}
+
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+    })
+    .catch(() => {});
+}
+
+/**
  * Dismiss any connection/server error modals (Ant Design modals).
  * Also removes the modal backdrop via DOM manipulation to prevent
  * modals from re-blocking interaction.

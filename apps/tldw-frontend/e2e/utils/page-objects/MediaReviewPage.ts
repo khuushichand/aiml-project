@@ -271,6 +271,14 @@ export class MediaReviewPage {
     return ""
   }
 
+  async getPreviewPosition(): Promise<string> {
+    const statusPreview = this.page.getByText(/^Previewing \d+ of \d+$/).first()
+    if (await statusPreview.isVisible().catch(() => false)) {
+      return (await statusPreview.textContent()) ?? ""
+    }
+    return await this.getItemPosition()
+  }
+
   // ── Filtering & Search ──────────────────────────────────────────────
 
   async fillSearchQuery(query: string): Promise<void> {
@@ -576,14 +584,27 @@ export class MediaReviewPage {
   async openOptionsMenu(): Promise<void> {
     const optionsBtn = this.page.getByRole("button", { name: /options/i })
     await optionsBtn.click()
+    await this.page
+      .locator(".ant-dropdown:visible, .ant-dropdown-menu:visible")
+      .last()
+      .waitFor({ state: "visible", timeout: 5_000 })
+      .catch(() => {})
+  }
+
+  private async getVisibleOptionsMenuItem(label: RegExp): Promise<Locator> {
+    const dropdown = this.page
+      .locator(".ant-dropdown:visible, .ant-dropdown-menu:visible")
+      .last()
+    await dropdown.waitFor({ state: "visible", timeout: 5_000 }).catch(() => {})
+    return dropdown
+      .locator(".ant-dropdown-menu-item")
+      .filter({ hasText: label })
+      .first()
   }
 
   async clickOpenAllOnPage(): Promise<void> {
     await this.openOptionsMenu()
-    const menuItem = this.page
-      .locator(".ant-dropdown-menu-item")
-      .filter({ hasText: /Add visible to selection|Review all/i })
-      .first()
+    const menuItem = await this.getVisibleOptionsMenuItem(/Add visible to selection|Review all/i)
     await menuItem.click()
   }
 
@@ -593,16 +614,13 @@ export class MediaReviewPage {
 
   async clickReplaceSelectionWithVisible(): Promise<void> {
     await this.openOptionsMenu()
-    const menuItem = this.page
-      .locator(".ant-dropdown-menu-item")
-      .filter({ hasText: /Replace selection with visible/i })
-      .first()
+    const menuItem = await this.getVisibleOptionsMenuItem(/Replace selection with visible/i)
     await menuItem.click()
   }
 
   async clickClearSession(): Promise<void> {
     await this.openOptionsMenu()
-    const menuItem = this.page.locator(".ant-dropdown-menu-item:has-text('Clear review session')")
+    const menuItem = await this.getVisibleOptionsMenuItem(/Clear review session/i)
     await menuItem.click()
   }
 }

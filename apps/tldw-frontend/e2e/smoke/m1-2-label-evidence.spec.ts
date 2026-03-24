@@ -1,12 +1,12 @@
 import type { Page } from '@playwright/test';
 import { test, expect, seedAuth } from './smoke.setup';
+import { waitForVisualSettle } from '../utils/helpers';
 
 const EVIDENCE_DIR = '../../Docs/Product/WebUI/evidence/m1_2_label_alignment_2026_02_13';
 
 async function captureDesktopPage(page: Page, slug: string, route: string): Promise<void> {
   await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
-  await page.waitForTimeout(750);
+  await waitForVisualSettle(page, 30_000);
   await page.screenshot({
     path: `${EVIDENCE_DIR}/desktop-${slug}.png`,
     fullPage: true,
@@ -16,8 +16,7 @@ async function captureDesktopPage(page: Page, slug: string, route: string): Prom
 async function captureMobilePage(page: Page, slug: string, route: string): Promise<void> {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
-  await page.waitForTimeout(750);
+  await waitForVisualSettle(page, 30_000);
   await page.screenshot({
     path: `${EVIDENCE_DIR}/mobile-${slug}.png`,
     fullPage: true,

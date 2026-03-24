@@ -36,7 +36,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
     t, navigate, message,
     query, page, pageSize, types, keywordTokens, includeContent, sortBy, dateRange,
     selectedIds, setSelectedIds, focusedId, setFocusedId,
-    previewedId, setPreviewedId,
+    previewedId, previewIndex, setPreviewedId,
     details, setDetails, setTotal, setAvailableTypes, availableTypes,
     setContentLoading, setContentFilterProgress, contentFilterRunRef,
     setDetailLoading, setFailedIds, detailLoading,
@@ -258,12 +258,24 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
     )
   }, [selectedIds, focusedId, t, message, setSelectedIds, setFocusedId, listParentRef, pendingRestoreFocusIdRef])
 
+  const focusViewerSoon = React.useCallback(() => {
+    if (typeof window === "undefined") {
+      viewerRef.current?.focus()
+      return
+    }
+
+    // Browsers can re-focus the clicked result row after the click handler runs.
+    window.setTimeout(() => {
+      viewerRef.current?.focus()
+    }, 0)
+  }, [viewerRef])
+
   const previewItem = React.useCallback((id: string | number) => {
     setPreviewedId(id)
     setFocusedId(id)
-    viewerRef.current?.focus()
+    focusViewerSoon()
     void ensureDetail(id)
-  }, [setPreviewedId, setFocusedId, viewerRef, ensureDetail])
+  }, [setPreviewedId, setFocusedId, focusViewerSoon, ensureDetail])
 
   const toggleSelect = React.useCallback(async (id: string | number, event?: React.MouseEvent) => {
     if (event?.shiftKey && lastClickedRef.current != null && Array.isArray(data)) {
@@ -439,7 +451,12 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
   const goRelative = React.useCallback(
     (delta: number) => {
       if (allResults.length === 0) return
-      const currentIdx = focusIndex >= 0 ? focusIndex : 0
+      const currentIdx =
+        selectedIds.length === 0 && previewedId != null && previewIndex >= 0
+          ? previewIndex
+          : focusIndex >= 0
+            ? focusIndex
+            : 0
       let next = currentIdx + delta
       if (next < 0) next = 0
       if (next >= allResults.length) next = allResults.length - 1
@@ -450,7 +467,7 @@ export function useMediaReviewActions(s: MediaReviewState): MediaReviewActions &
         void ensureDetail(nextId)
       }
     },
-    [allResults, ensureDetail, focusIndex, setFocusedId, setPreviewedId]
+    [allResults, ensureDetail, focusIndex, previewIndex, previewedId, selectedIds.length, setFocusedId, setPreviewedId]
   )
 
   // Pending initial media restoration

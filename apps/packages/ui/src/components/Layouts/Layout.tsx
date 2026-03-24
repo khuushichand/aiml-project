@@ -41,17 +41,11 @@ import { useSetting } from "@/hooks/useSetting"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { useStoreMessageOption } from "@/store/option"
 import { usePromptPaletteCommands } from "@/components/Option/Prompt/usePromptPaletteCommands"
+import { CommandPalette } from "@/components/Common/CommandPalette"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
   import("@/components/Timeline").then((m) => ({ default: m.TimelineModal }))
-)
-
-// Lazy-load Command Palette and Keyboard Shortcuts modal to reduce bundle size
-const CommandPalette = lazy(() =>
-  import("@/components/Common/CommandPalette").then((m) => ({
-    default: m.CommandPalette
-  }))
 )
 
 const PageHelpModal = lazy(() =>
@@ -520,11 +514,9 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
         {/* Command Palette - global keyboard shortcut ⌘K */}
         {!hideHeader && (
-          <Suspense fallback={null}>
-            <CommandPalette
-              {...commandPaletteProps}
-            />
-          </Suspense>
+          <CommandPalette
+            {...commandPaletteProps}
+          />
         )}
 
         {/* Page Help Modal (Tutorials + Shortcuts) - triggered by ? */}

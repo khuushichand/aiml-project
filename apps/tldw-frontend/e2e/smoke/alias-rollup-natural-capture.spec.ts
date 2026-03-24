@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import { seedAuth } from './smoke.setup';
+import { waitForVisualSettle } from '../utils/helpers';
 
 const TELEMETRY_KEY = 'tldw:route:alias:telemetry';
 const LOAD_TIMEOUT = 30_000;
@@ -50,7 +51,7 @@ test('captures week-3 natural alias telemetry rollup', async ({ page }, testInfo
 
   // Passive capture only: do not clear storage and do not trigger synthetic alias flows.
   await page.goto('/', { waitUntil: 'domcontentloaded', timeout: LOAD_TIMEOUT });
-  await page.waitForLoadState('networkidle', { timeout: LOAD_TIMEOUT }).catch(() => {});
+  await waitForVisualSettle(page, LOAD_TIMEOUT);
 
   const telemetryState = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);

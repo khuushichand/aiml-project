@@ -6,6 +6,7 @@ import {
   classifySmokeIssues,
   SMOKE_LOAD_TIMEOUT
 } from "./smoke.setup"
+import { waitForAppShell } from "../utils/helpers"
 import type { Route } from "@playwright/test"
 
 const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
@@ -65,7 +66,7 @@ test.describe("Stage 7 audio regression gate", () => {
       await page.waitForURL((url) => url.pathname === expectedPath, {
         timeout: LOAD_TIMEOUT
       })
-      await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+      await waitForAppShell(page, LOAD_TIMEOUT)
 
       const issues = getCriticalIssues(diagnostics)
       const classified = classifySmokeIssues(route.path, issues)

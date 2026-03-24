@@ -12,6 +12,11 @@ export class MediaPage {
   readonly processButton: Locator
   readonly mediaList: Locator
   readonly searchInput: Locator
+  readonly reviewStatusBar: Locator
+  readonly reviewResultsList: Locator
+  readonly reviewResultsHeading: Locator
+  readonly reviewResultItems: Locator
+  readonly reviewEmptyState: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -26,6 +31,13 @@ export class MediaPage {
       .getByRole("textbox", { name: /search media/i })
       .or(page.getByPlaceholder(/search media/i))
       .first()
+    this.reviewStatusBar = page.getByTestId("media-review-status-bar")
+    this.reviewResultsList = page.getByTestId("media-review-results-list")
+    this.reviewResultsHeading = page.getByRole("heading", { name: /^results/i }).first()
+    this.reviewResultItems = page.getByRole("button").filter({
+      has: page.locator("input[type='checkbox'], [role='checkbox']")
+    })
+    this.reviewEmptyState = page.getByText(/^No results$/i).first()
   }
 
   /**
@@ -309,25 +321,34 @@ export class MediaPage {
   }
 
   /**
+   * Wait for the content review surface to reach a stable visible state.
+   */
+  async waitForReviewReady(): Promise<void> {
+    await Promise.race([
+      this.reviewStatusBar.waitFor({ state: "visible", timeout: 20_000 }),
+      this.reviewResultsHeading.waitFor({ state: "visible", timeout: 20_000 }),
+      this.reviewEmptyState.waitFor({ state: "visible", timeout: 20_000 })
+    ])
+  }
+
+  /**
    * Get draft items from review page
    */
   async getDraftItems(): Promise<Array<{ title: string; status: string }>> {
-    const items: Array<{ title: string; status: string }> = []
+    await this.waitForReviewReady()
 
-    const draftItems = this.page.locator(
-      "[data-testid='draft-item'], .draft-item, .review-item"
-    )
+    const items: Array<{ title: string; status: string }> = []
+    const draftItems = this.reviewResultItems
     const count = await draftItems.count()
 
     for (let i = 0; i < count; i++) {
       const item = draftItems.nth(i)
-      const title =
-        (await item.locator(".title").textContent()) ||
-        (await item.textContent()) ||
-        ""
-      const status =
-        (await item.getAttribute("data-status")) ||
-        "draft"
+      const itemLines = (await item.innerText())
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+      const title = itemLines[0] ?? ""
+      const status = itemLines[1] ?? "draft"
 
       items.push({ title: title.trim(), status })
     }

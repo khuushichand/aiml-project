@@ -1,5 +1,5 @@
 import React from "react"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import MediaReviewPage from "../MediaReviewPage"
 
@@ -494,6 +494,94 @@ describe("MediaReviewPage stage6 keyboard shortcut scope", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Item 2 of 8")).toBeInTheDocument()
+    })
+  })
+
+  it("restores viewer focus after the browser re-focuses the clicked result row", async () => {
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
+    })
+
+    const row = getResultRowByTitle("Item 1")
+    row.focus()
+    expect(row).toHaveFocus()
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(row)
+      expect(screen.getByText("Item 1 of 8")).toBeInTheDocument()
+
+      // Real browsers can leave focus on the clicked row after the click handler runs.
+      row.focus()
+      expect(row).toHaveFocus()
+
+      act(() => {
+        vi.runOnlyPendingTimers()
+      })
+
+      expect(document.activeElement).not.toBe(row)
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "j" })
+      expect(screen.getByText("Item 2 of 8")).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not let late focused-id restore overwrite keyboard navigation", async () => {
+    let resolveFocusedRestore: ((value: unknown) => void) | null = null
+    mocks.getSetting.mockImplementation((setting: { key?: string }) => {
+      switch (setting?.key) {
+        case "lastMediaId":
+          return Promise.resolve(null)
+        case "mediaReviewSelection":
+          return Promise.resolve([])
+        case "mediaReviewFocusedId":
+          return new Promise((resolve) => {
+            resolveFocusedRestore = resolve
+          })
+        default:
+          return Promise.resolve(null)
+      }
+    })
+
+    render(<MediaReviewPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText("0 / 30 selected")).toBeInTheDocument()
+    })
+
+    const row = getResultRowByTitle("Item 1")
+    fireEvent.click(row)
+
+    await waitFor(() => {
+      expect(screen.getByText("Item 1 of 8")).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "j" })
+
+    await waitFor(() => {
+      expect(screen.getByText("Item 2 of 8")).toBeInTheDocument()
+      expect(screen.getByText("Previewing 2 of 8")).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      resolveFocusedRestore?.(mediaItems[0].id)
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText("Item 2 of 8")).toBeInTheDocument()
+      expect(screen.getByText("Previewing 2 of 8")).toBeInTheDocument()
+    })
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "j" })
+
+    await waitFor(() => {
+      expect(screen.getByText("Item 3 of 8")).toBeInTheDocument()
+      expect(screen.getByText("Previewing 3 of 8")).toBeInTheDocument()
     })
   })
 })

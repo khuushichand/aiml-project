@@ -52,6 +52,9 @@ describe("e2e page object contracts", () => {
     expect(source).toContain("Generating response")
     expect(source).toContain("assistantCount === 0")
     expect(source).toContain("getLastAssistantText")
+    expect(source).toContain("getMessageBodyText")
+    expect(source).toContain("Loading content")
+    expect(source).toContain("Response complete")
     expect(source).toContain("name: /select a model/i")
   })
 

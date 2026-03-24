@@ -174,7 +174,9 @@ test.describe("KnowledgeQA Workflow", () => {
       })
 
       await authedPage.route("**/api/v1/rag/search", async (route) => {
-        await authedPage.waitForTimeout(6500)
+        // Keep the mocked search pending past the 5s AnswerPanel threshold so the
+        // reranking stage renders before the response resolves.
+        await new Promise((resolve) => setTimeout(resolve, 6_500))
         await route.fulfill({
           status: 200,
           contentType: "application/json",

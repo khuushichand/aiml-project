@@ -1,13 +1,5 @@
-import dynamic from "next/dynamic"
+import { RouteRedirect } from "@web/components/navigation/RouteRedirect"
 
-export default dynamic(async () => {
-  const { SettingsRoute } = await import("@/routes/settings-route")
-  const mod = await import("@/components/Option/Settings/ImageGenerationSettings")
-  const Component = mod.ImageGenerationSettings
-  const Page = () => (
-    <SettingsRoute>
-      <Component />
-    </SettingsRoute>
-  )
-  return { default: Page }
-}, { ssr: false })
+export default function ImageGenAliasPage() {
+  return <RouteRedirect to="/settings/image-generation" preserveParams={false} />
+}

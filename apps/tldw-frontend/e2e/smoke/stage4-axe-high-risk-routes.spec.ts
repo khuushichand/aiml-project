@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright"
 import { test, expect, seedAuth, getCriticalIssues } from "./smoke.setup"
+import { waitForAppShell } from "../utils/helpers"
 
 const LOAD_TIMEOUT = 30_000
 
@@ -79,7 +80,7 @@ test.describe("Stage 4 Axe high-risk routes", () => {
         waitUntil: "domcontentloaded",
         timeout: LOAD_TIMEOUT
       })
-      await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+      await waitForAppShell(page, LOAD_TIMEOUT)
 
       const status = response?.status() ?? 0
       test.skip(status >= 400, `Route unavailable in smoke runtime (status ${status})`)

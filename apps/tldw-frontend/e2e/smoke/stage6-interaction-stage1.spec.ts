@@ -1,4 +1,5 @@
 import { test, expect, seedAuth, SMOKE_LOAD_TIMEOUT } from "./smoke.setup"
+import { waitForAppShell } from "../utils/helpers"
 
 const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
 const UNRESOLVED_TEMPLATE_PATTERN = /\{\{[^{}\n]{1,120}\}\}/g
@@ -13,7 +14,7 @@ test.describe("Stage 6 interaction stage 1 defect closures", () => {
       waitUntil: "domcontentloaded",
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const input = page.locator("#textarea-message, [data-testid='chat-input']").first()
     await expect(input).toBeVisible({ timeout: LOAD_TIMEOUT })
@@ -40,7 +41,7 @@ test.describe("Stage 6 interaction stage 1 defect closures", () => {
       waitUntil: "domcontentloaded",
       timeout: LOAD_TIMEOUT
     })
-    await page.waitForLoadState("networkidle", { timeout: LOAD_TIMEOUT }).catch(() => {})
+    await waitForAppShell(page, LOAD_TIMEOUT)
 
     const toggle = page.getByTestId("chat-header-theme-toggle")
     await expect(toggle).toBeVisible({ timeout: LOAD_TIMEOUT })

@@ -75,45 +75,37 @@ test.describe("Companion Page", () => {
     skipIfServerUnavailable(serverInfo)
   })
 
-  test("companion page loads and shows redirect panel", async ({ authedPage, diagnostics }) => {
+  test("companion page shows a visible loading or home state instead of a blank content area", async ({
+    authedPage,
+    diagnostics,
+  }) => {
     await authedPage.goto("/companion", { waitUntil: "domcontentloaded" })
 
-    // Companion is a RouteRedirect — it shows a redirect panel briefly then navigates
-    const redirectPanel = authedPage.getByTestId("route-redirect-panel")
+    const loadingPanel = authedPage.getByTestId("companion-route-loading")
+    const companionShell = authedPage.getByTestId("companion-home-shell")
+    const companionPage = authedPage.getByTestId("companion-home-page")
 
-    // The redirect may happen quickly, so check either the panel or the destination
-    const panelVisible = await redirectPanel.isVisible().catch(() => false)
-    if (panelVisible) {
-      // Verify redirect panel elements
-      await expect(
-        authedPage.getByRole("heading", { name: /this route has moved/i })
-      ).toBeVisible()
-    }
+    await expect
+      .poll(async () => {
+        if (await loadingPanel.isVisible().catch(() => false)) return "loading"
+        if (await companionShell.isVisible().catch(() => false)) return "shell"
+        if (await companionPage.isVisible().catch(() => false)) return "page"
+        return "blank"
+      })
+      .not.toBe("blank")
 
-    // The RouteRedirect component calls router.replace — the page should eventually
-    // navigate or at minimum render without uncaught errors
     await assertNoCriticalErrors(diagnostics)
   })
 
-  test("companion redirect panel has navigation links", async ({ authedPage, diagnostics }) => {
+  test("companion page eventually renders the companion home quick actions", async ({ authedPage, diagnostics }) => {
     await authedPage.goto("/companion", { waitUntil: "domcontentloaded" })
 
-    const redirectPanel = authedPage.getByTestId("route-redirect-panel")
-    const panelVisible = await redirectPanel.isVisible().catch(() => false)
-
-    if (panelVisible) {
-      // "Open updated page" link
-      const openUpdatedLink = authedPage.getByTestId("route-redirect-open-updated-page")
-      await expect(openUpdatedLink).toBeVisible()
-
-      // "Go to Chat" link
-      const goChatLink = authedPage.getByTestId("route-redirect-go-chat")
-      await expect(goChatLink).toBeVisible()
-
-      // "Open Settings" link
-      const openSettingsLink = authedPage.getByTestId("route-redirect-open-settings")
-      await expect(openSettingsLink).toBeVisible()
-    }
+    await expect(authedPage.getByTestId("companion-home-shell")).toBeVisible({
+      timeout: 20_000,
+    })
+    await expect(authedPage.getByRole("heading", { name: "Quick actions" })).toBeVisible()
+    await expect(authedPage.getByRole("link", { name: "Open Chat" })).toBeVisible()
+    await expect(authedPage.getByRole("link", { name: "Open Knowledge" })).toBeVisible()
 
     await assertNoCriticalErrors(diagnostics)
   })

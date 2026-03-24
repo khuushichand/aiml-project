@@ -50,6 +50,7 @@ import {
   BACKEND_UNREACHABLE_EVENT,
   type BackendUnreachableDetail
 } from "@/services/request-events"
+import { CommandPalette } from "@/components/Common/CommandPalette"
 import {
   useConnectionActions,
   useConnectionState,
@@ -60,13 +61,6 @@ import { ConnectionPhase } from "@/types/connection"
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
   import("@/components/Timeline").then((m) => ({ default: m.TimelineModal }))
-)
-
-// Lazy-load Command Palette and Keyboard Shortcuts modal to reduce bundle size
-const CommandPalette = lazy(() =>
-  import("@/components/Common/CommandPalette").then((m) => ({
-    default: m.CommandPalette
-  }))
 )
 
 const KeyboardShortcutsModal = lazy(() =>
@@ -519,11 +513,9 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
         {/* Command Palette - global keyboard shortcut ⌘K */}
         {!hideHeader && (
-          <Suspense fallback={null}>
-            <CommandPalette
-              {...commandPaletteProps}
-            />
-          </Suspense>
+          <CommandPalette
+            {...commandPaletteProps}
+          />
         )}
 
         {/* Keyboard Shortcuts Help Modal - triggered by ? */}

@@ -5,10 +5,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RouteRedirect } from '@web/components/navigation/RouteRedirect';
 
 const mockReplace = vi.fn();
+const mockPrefetch = vi.fn().mockResolvedValue(undefined);
 const mockTrackRouteAliasRedirect = vi.fn().mockResolvedValue(undefined);
 const mockRouter = {
   asPath: '/search?q=rag#examples',
   pathname: '/search',
+  prefetch: mockPrefetch,
   replace: mockReplace,
 };
 
@@ -31,6 +33,8 @@ vi.mock('@/utils/route-alias-telemetry', () => ({
 describe('RouteRedirect telemetry', () => {
   beforeEach(() => {
     mockReplace.mockReset();
+    mockPrefetch.mockReset();
+    mockPrefetch.mockResolvedValue(undefined);
     mockTrackRouteAliasRedirect.mockReset();
     mockTrackRouteAliasRedirect.mockResolvedValue(undefined);
     mockRouter.asPath = '/search?q=rag#examples';
@@ -48,7 +52,11 @@ describe('RouteRedirect telemetry', () => {
       });
     });
 
+    expect(mockPrefetch).toHaveBeenCalledWith('/knowledge?q=rag#examples');
     expect(mockReplace).toHaveBeenCalledWith('/knowledge?q=rag#examples');
+    expect(mockPrefetch.mock.invocationCallOrder[0]).toBeLessThan(
+      mockReplace.mock.invocationCallOrder[0]
+    );
   });
 
   it('uses pathname fallback when asPath is unavailable', async () => {
@@ -65,6 +73,7 @@ describe('RouteRedirect telemetry', () => {
       });
     });
 
+    expect(mockPrefetch).toHaveBeenCalledWith('/content-review');
     expect(mockReplace).toHaveBeenCalledWith('/content-review');
   });
 

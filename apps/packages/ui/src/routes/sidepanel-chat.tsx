@@ -72,15 +72,11 @@ import {
   type LegacySidepanelChatSnapshot,
   readSidepanelRuntimeTabId
 } from "./sidepanel-chat-resume"
+import { CommandPalette } from "@/components/Common/CommandPalette"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
   import("@/components/Timeline").then((m) => ({ default: m.TimelineModal }))
-)
-const CommandPalette = lazy(() =>
-  import("@/components/Common/CommandPalette").then((m) => ({
-    default: m.CommandPalette
-  }))
 )
 import type { ChatHistory, Message as ChatMessage } from "~/store/option"
 
@@ -2448,28 +2444,26 @@ const SidepanelChat = () => {
           sourceLabel={t("sidepanel:notes.sourceLabel", "Source")}
         />
       ) : null}
-      <Suspense fallback={null}>
-        <CommandPalette
-          scope="sidepanel"
-          onNewChat={clearChat}
-          onToggleRag={toggleChatMode}
-          onToggleWebSearch={toggleWebSearchMode}
-          onIngestPage={() => {
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
-            }
-          }}
-          onSwitchModel={() => {
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(new CustomEvent("tldw:open-model-settings"))
-            }
-          }}
-          onToggleSidebar={toggleSidebar}
-          onSearchHistory={requestSidebarSearchFocus}
-          onSwitchChat={handleSelectTab}
-          sidepanelChats={commandPaletteChats}
-        />
-      </Suspense>
+      <CommandPalette
+        scope="sidepanel"
+        onNewChat={clearChat}
+        onToggleRag={toggleChatMode}
+        onToggleWebSearch={toggleWebSearchMode}
+        onIngestPage={() => {
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
+          }
+        }}
+        onSwitchModel={() => {
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("tldw:open-model-settings"))
+          }
+        }}
+        onToggleSidebar={toggleSidebar}
+        onSearchHistory={requestSidebarSearchFocus}
+        onSwitchChat={handleSelectTab}
+        sidepanelChats={commandPaletteChats}
+      />
       <Suspense fallback={null}>
         <TimelineModal />
       </Suspense>

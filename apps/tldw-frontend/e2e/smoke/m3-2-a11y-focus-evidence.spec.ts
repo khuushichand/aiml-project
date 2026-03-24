@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import type { Locator, Page } from "@playwright/test"
 import { test, expect, seedAuth } from "./smoke.setup"
+import { waitForVisualSettle } from "../utils/helpers"
 
 type ViewportTarget = {
   label: "desktop" | "mobile"
@@ -141,7 +142,7 @@ async function captureRouteFocusEvidence(
 ): Promise<RouteFocusEvidence> {
   await page.setViewportSize({ width: viewport.width, height: viewport.height })
   await page.goto(entry.route, { waitUntil: "domcontentloaded", timeout: 30_000 })
-  await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {})
+  await waitForVisualSettle(page, 30_000)
 
   const target = entry.target(page)
   await expect(target).toBeVisible({ timeout: 20_000 })

@@ -153,14 +153,17 @@ test.describe("Media Ingestion Workflow", () => {
         if ((await fileInput.count()) > 0) {
           await fileInput.setInputFiles(testFilePath)
 
-          // Wait for potential error message
-          await authedPage.waitForTimeout(2000)
-
           // Check for error indication
-          const _errorMessage = authedPage.locator(
+          const errorMessage = authedPage.locator(
             ".ant-message-error, .error-message, [data-testid='upload-error']"
           )
-          // Error handling behavior depends on implementation
+          await expect
+            .poll(async () => await errorMessage.first().isVisible().catch(() => false), {
+              timeout: 2_000,
+              message: "Timed out waiting for invalid upload feedback",
+            })
+            .toBe(true)
+            .catch(() => {})
         }
       } finally {
         if (fs.existsSync(testFilePath)) {
@@ -219,8 +222,21 @@ test.describe("Media Ingestion Workflow", () => {
             ".ant-form-item-explain-error, .error-message, [data-testid='url-error']"
           )
 
-          // Wait briefly for validation feedback
-          await authedPage.waitForTimeout(1000)
+          await expect
+            .poll(
+              async () =>
+                await authedPage
+                  .locator(".ant-form-item-explain-error, .error-message, [data-testid='url-error']")
+                  .first()
+                  .isVisible()
+                  .catch(() => false),
+              {
+                timeout: 3_000,
+                message: "Timed out waiting for invalid URL feedback",
+              }
+            )
+            .toBe(true)
+            .catch(() => {})
         }
       }
 
@@ -300,8 +316,20 @@ test.describe("Media Ingestion Workflow", () => {
 
         await firstItem.click()
 
-        // Should navigate to detail or open modal
-        await authedPage.waitForTimeout(1000)
+        await expect
+          .poll(
+            async () => {
+              const urlChanged = /\/media(\/|%2F)\d+/i.test(authedPage.url()) || /\/media\/\d+/i.test(authedPage.url())
+              const dialogVisible = await authedPage.getByRole("dialog").first().isVisible().catch(() => false)
+              const editVisible = await authedPage.getByRole("button", { name: /edit/i }).first().isVisible().catch(() => false)
+              return urlChanged || dialogVisible || editVisible
+            },
+            {
+              timeout: 5_000,
+              message: "Timed out waiting for the media detail surface to appear",
+            }
+          )
+          .toBe(true)
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -329,7 +357,20 @@ test.describe("Media Ingestion Workflow", () => {
             "form, [data-testid='edit-form'], .edit-modal"
           )
 
-          await authedPage.waitForTimeout(1000)
+          await expect
+            .poll(
+              async () =>
+                await authedPage
+                  .locator("form, [data-testid='edit-form'], .edit-modal")
+                  .first()
+                  .isVisible()
+                  .catch(() => false),
+              {
+                timeout: 5_000,
+                message: "Timed out waiting for the media metadata edit form",
+              }
+            )
+            .toBe(true)
         }
       }
 
@@ -616,7 +657,6 @@ test.describe("Media Ingestion Workflow", () => {
               method === "POST" &&
               /\/api\/v1\/media\/ingest\/jobs\/?(?:\?|$)/i.test(url)
             ) {
-              await new Promise((resolve) => setTimeout(resolve, 1400))
               return new Response(
                 JSON.stringify({
                   batch_id: "qi-web-cancel-mock-batch-id",
@@ -781,13 +821,7 @@ test.describe("Media Ingestion Workflow", () => {
     }) => {
       const mediaPage = new MediaPage(authedPage)
       await mediaPage.gotoReview()
-
-      // Verify review page loaded
-      const _reviewContainer = authedPage.locator(
-        "[data-testid='review-container'], .review-page, .content-review"
-      )
-
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await mediaPage.waitForReviewReady()
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -798,12 +832,38 @@ test.describe("Media Ingestion Workflow", () => {
     }) => {
       const mediaPage = new MediaPage(authedPage)
       await mediaPage.gotoReview()
+      await mediaPage.waitForReviewReady()
 
-      // Get draft items
-      const _drafts = await mediaPage.getDraftItems()
+      let settledDraftState = 0
+      await expect
+        .poll(
+          async () => {
+            const drafts = await mediaPage.getDraftItems()
+            if (drafts.length > 0) {
+              settledDraftState = drafts.length
+              return settledDraftState
+            }
 
-      // Page should load whether or not there are drafts
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+            settledDraftState = (await mediaPage.reviewEmptyState.isVisible().catch(() => false))
+              ? -1
+              : 0
+            return settledDraftState
+          },
+          {
+            timeout: 20_000,
+            message: "Timed out waiting for review rows or the empty state",
+          }
+        )
+        .not.toBe(0)
+
+      const drafts = await mediaPage.getDraftItems()
+
+      if (drafts.length > 0) {
+        expect(settledDraftState).toBeGreaterThan(0)
+        expect(drafts[0]?.title?.length ?? 0).toBeGreaterThan(0)
+      } else {
+        await expect(mediaPage.reviewEmptyState).toBeVisible({ timeout: 20_000 })
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -828,8 +888,11 @@ test.describe("Media Ingestion Workflow", () => {
         await searchInput.fill("test query")
         await searchInput.press("Enter")
 
-        // Wait for search results
-        await authedPage.waitForTimeout(2000)
+        await authedPage
+          .locator(".ant-spin-spinning, [aria-busy='true']")
+          .first()
+          .waitFor({ state: "hidden", timeout: 5_000 })
+          .catch(() => {})
       }
 
       await assertNoCriticalErrors(diagnostics)
@@ -868,8 +931,19 @@ test.describe("Media Ingestion Workflow", () => {
       await authedPage.goto("/media-multi", { waitUntil: "domcontentloaded" })
       await waitForConnection(authedPage)
 
-      // Verify page loaded
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
+      await expect
+        .poll(
+          async () =>
+            await authedPage
+              .getByTestId("media-review-status-bar")
+              .isVisible()
+              .catch(() => false),
+          {
+            timeout: 20_000,
+            message: "Timed out waiting for the media review surface to settle",
+          }
+        )
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -883,13 +957,17 @@ test.describe("Media Ingestion Workflow", () => {
       await authedPage.goto("/media-trash", { waitUntil: "domcontentloaded" })
       await waitForConnection(authedPage)
 
-      // Verify page loaded
-      await authedPage.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {})
-
-      // Look for trash content
-      const _trashContainer = authedPage.locator(
-        "[data-testid='trash-container'], .trash-page, .deleted-items"
-      )
+      await expect
+        .poll(
+          async () =>
+            (await authedPage.getByTestId("trash-retention-policy").isVisible().catch(() => false)) ||
+            (await authedPage.getByRole("heading", { name: /^trash$/i }).isVisible().catch(() => false)),
+          {
+            timeout: 20_000,
+            message: "Timed out waiting for the media trash surface to settle",
+          }
+        )
+        .toBe(true)
 
       await assertNoCriticalErrors(diagnostics)
     })

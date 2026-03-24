@@ -10,8 +10,6 @@ interface SeededReadingItem {
   highlightId?: string
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
 const seedAppAuth = async (page: Page) => {
   await page.context().addInitScript((cfg) => {
     try {
@@ -58,20 +56,21 @@ const createReadingItem = async (label: string): Promise<SeededReadingItem> => {
 const waitForReadingItemIndexed = async (title: string, expectedItemId: string) => {
   const endpoint =
     `${TEST_CONFIG.serverUrl}/api/v1/reading/items?page=1&size=25&q=${encodeURIComponent(title)}`
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  await expect.poll(async () => {
     const response = await fetchWithApiKey(endpoint, TEST_CONFIG.apiKey)
-    if (response.ok) {
-      const payload = await response.json()
-      const items: Array<{ id?: number | string }> = Array.isArray(payload?.items)
-        ? payload.items
-        : []
-      if (items.some((item) => String(item.id) === expectedItemId)) {
-        return
-      }
+    if (!response.ok) {
+      return false
     }
-    await sleep(500)
-  }
-  throw new Error(`Seeded reading item was not queryable by title: ${title}`)
+
+    const payload = await response.json()
+    const items: Array<{ id?: number | string }> = Array.isArray(payload?.items)
+      ? payload.items
+      : []
+    return items.some((item) => String(item.id) === expectedItemId)
+  }, {
+    timeout: 5_000,
+    message: `Seeded reading item was not queryable by title: ${title}`,
+  }).toBe(true)
 }
 
 const createHighlight = async (itemId: string, quote: string): Promise<string> => {
