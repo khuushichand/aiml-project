@@ -44,7 +44,12 @@ def test_load_media_content_uses_managed_media_database(monkeypatch):
         def __init__(self) -> None:
             self.closed = False
 
-        def get_media_by_id(self, media_id):
+        def get_media_by_id(
+            self,
+            media_id,
+            include_deleted: bool = False,
+            include_trash: bool = False,
+        ):
             assert media_id == 42
             return {"id": media_id, "content": "hello embeddings", "title": "Doc"}
 

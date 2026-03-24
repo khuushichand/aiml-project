@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 from tldw_Server_API.app.core.Claims_Extraction import claims_notifications
 from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import dispatch_claim_review_notifications
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 class _FakeEmailService:

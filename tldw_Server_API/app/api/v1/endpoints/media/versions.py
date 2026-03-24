@@ -33,19 +33,16 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     get_request_user,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    get_full_media_details_rich2,
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    check_media_exists,
+    get_full_media_details_rich,
+    get_document_version,
+    list_document_versions,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     ConflictError,
     DatabaseError,
     InputError,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
-    check_media_exists,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
-    get_document_version,
 )
 from tldw_Server_API.app.core.Utils.metadata_utils import (
     normalize_safe_metadata,
@@ -125,7 +122,7 @@ async def list_versions(
     offset = (page - 1) * limit
 
     try:
-        media_exists = check_media_exists(db_instance=db, media_id=media_id)
+        media_exists = check_media_exists(db, media_id=media_id)
         if not media_exists:
             logger.warning(
                 "Cannot list versions: Media ID {} not found or deleted.",
@@ -136,33 +133,14 @@ async def list_versions(
                 detail="Media item not found or deleted",
             )
 
-        select_cols_list = [
-            "dv.id",
-            "dv.uuid",
-            "dv.media_id",
-            "dv.version_number",
-            "dv.created_at",
-            "dv.prompt",
-            "dv.analysis_content",
-            "dv.safe_metadata",
-            "dv.last_modified",
-            "dv.version",
-        ]
-        if include_content:
-            select_cols_list.append("dv.content")
-        select_cols = ", ".join(select_cols_list)
-
-        query_template = """
-            SELECT {select_cols}
-            FROM DocumentVersions dv
-            WHERE dv.media_id = ? AND dv.deleted = 0
-            ORDER BY dv.version_number DESC
-            LIMIT ? OFFSET ?
-        """
-        query = query_template.format_map(locals())  # nosec B608
-        params = (media_id, limit, offset)
-        cursor = db.execute_query(query, params)
-        raw_rows = [dict(row) for row in cursor.fetchall()]
+        raw_rows = list_document_versions(
+            db,
+            media_id,
+            include_content=include_content,
+            include_deleted=False,
+            limit=limit,
+            offset=offset,
+        )
 
         versions: list[VersionDetailResponse] = []
         for rv in raw_rows:
@@ -246,7 +224,7 @@ async def get_version(
     )
     try:
         version_dict = get_document_version(
-            db_instance=db,
+            db,
             media_id=media_id,
             version_number=version_number,
             include_content=include_content,
@@ -398,8 +376,8 @@ async def create_version(
             media_id,
         )
 
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db=db,
             media_id=media_id,
             include_content=True,
             include_versions=True,
@@ -623,8 +601,8 @@ async def rollback_version(
             target_version_number,
             rollback_result.get("new_document_version_number"),
         )
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db=db,
             media_id=media_id,
             include_content=True,
             include_versions=True,
@@ -712,7 +690,7 @@ async def patch_metadata(
             ) from exc
 
         latest = get_document_version(
-            db_instance=db,
+            db,
             media_id=media_id,
             version_number=None,
             include_content=True,
@@ -771,8 +749,8 @@ async def patch_metadata(
                     connection=conn,
                 )
 
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db=db,
             media_id=media_id,
             include_content=True,
             include_versions=True,
@@ -825,7 +803,7 @@ async def put_version_metadata(
             ) from exc
 
         version_dict = get_document_version(
-            db_instance=db,
+            db,
             media_id=media_id,
             version_number=version_number,
             include_content=False,
@@ -874,8 +852,8 @@ async def put_version_metadata(
                 connection=conn,
             )
 
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db=db,
             media_id=media_id,
             include_content=True,
             include_versions=True,
@@ -930,7 +908,7 @@ async def create_or_update_version_advanced(
                 ) from exc
 
         latest = get_document_version(
-            db_instance=db,
+            db,
             media_id=media_id,
             version_number=None,
             include_content=True,
@@ -1023,8 +1001,8 @@ async def create_or_update_version_advanced(
                     connection=conn,
                 )
 
-        details = get_full_media_details_rich2(
-            db_instance=db,
+        details = get_full_media_details_rich(
+            db=db,
             media_id=media_id,
             include_content=True,
             include_versions=True,

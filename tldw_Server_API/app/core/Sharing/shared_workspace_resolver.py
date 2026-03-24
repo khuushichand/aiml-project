@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from tldw_Server_API.app.core.AuthNZ.repos.shared_workspace_repo import SharedWorkspaceRepo
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 
 
 @dataclass
@@ -18,7 +18,7 @@ class SharedWorkspaceContext:
     access_level: str
     allow_clone: bool
     source_chacha_db: CharactersRAGDB
-    source_media_db: MediaDatabase
+    source_media_db: MediaDbLike
     conversation_chacha_db: CharactersRAGDB
     embedding_namespace: str  # Owner's user_id for ChromaDB lookups
 
@@ -42,7 +42,7 @@ class SharedWorkspaceDBResolver:
         accessor_user_id: int,
         *,
         source_chacha_db: CharactersRAGDB,
-        source_media_db: MediaDatabase,
+        source_media_db: MediaDbLike,
         conversation_chacha_db: CharactersRAGDB,
     ) -> SharedWorkspaceContext:
         share = await self._repo.get_share(share_id)

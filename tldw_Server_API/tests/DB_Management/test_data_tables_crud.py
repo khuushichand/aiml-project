@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import InputError, MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.errors import InputError
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.scope_context import scoped_context
 
 
@@ -188,6 +189,61 @@ def test_data_table_admin_updates_do_not_reassign_owner(tmp_path):
     assert len(owner_db.list_data_table_columns(table_id, owner_user_id=1)) == 1
     assert len(owner_db.list_data_table_rows(table_id, owner_user_id=1)) == 1
     assert len(owner_db.list_data_table_sources(table_id, owner_user_id=1)) == 1
+
+
+@pytest.mark.unit
+def test_replace_data_table_contents_replaces_columns_rows_and_preserves_sources():
+    db = MediaDatabase(db_path=":memory:", client_id="1")
+    table = db.create_data_table(name="Replace Table", prompt="p")
+    table_id = int(table["id"])
+
+    db.insert_data_table_columns(
+        table_id,
+        [{"name": "Name", "type": "text", "position": 0}],
+    )
+    old_column_id = db.list_data_table_columns(table_id)[0]["column_id"]
+    db.insert_data_table_rows(
+        table_id,
+        [{"row_index": 0, "row_json": {old_column_id: "Alice"}}],
+    )
+    db.insert_data_table_sources(
+        table_id,
+        [{"source_type": "chat", "source_id": "chat_1"}],
+    )
+
+    column_count, row_count = db.replace_data_table_contents(
+        table_id,
+        owner_user_id="1",
+        columns=[
+            {"column_id": "col_replaced", "name": "Full Name", "type": "text", "position": 0},
+            {"column_id": "col_score", "name": "Score", "type": "number", "position": 1},
+        ],
+        rows=[
+            {"row_id": "row_replaced", "row_index": 0, "row_json": {"col_replaced": "Bob", "col_score": 98}},
+        ],
+    )
+
+    assert (column_count, row_count) == (2, 1)
+
+    active_columns = db.list_data_table_columns(table_id)
+    assert [column["column_id"] for column in active_columns] == ["col_replaced", "col_score"]
+
+    active_rows = db.list_data_table_rows(table_id)
+    assert len(active_rows) == 1
+    assert active_rows[0]["row_id"] == "row_replaced"
+    assert json.loads(active_rows[0]["row_json"]) == {"col_replaced": "Bob", "col_score": 98}
+
+    all_columns = db.list_data_table_columns(table_id, include_deleted=True)
+    assert len(all_columns) == 3
+    assert len([column for column in all_columns if column["deleted"] == 1]) == 1
+
+    all_rows = db.list_data_table_rows(table_id, include_deleted=True)
+    assert len(all_rows) == 2
+    assert len([row for row in all_rows if row["deleted"] == 1]) == 1
+
+    sources = db.list_data_table_sources(table_id)
+    assert len(sources) == 1
+    assert sources[0]["source_id"] == "chat_1"
 
 
 @pytest.mark.unit

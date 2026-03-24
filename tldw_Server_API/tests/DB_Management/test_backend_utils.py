@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     convert_sqlite_placeholders_to_postgres,
@@ -75,6 +77,194 @@ def test_prepare_backend_many_statement_handles_lists():
     )
     assert query == "UPDATE demo SET name = %s WHERE id = %s"
     assert params == [("alice", 1), ("bob", 2)]
+
+
+def test_media_db_runtime_prepare_backend_statement_forwards_expected_defaults(monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
+        backend_prepare_ops as backend_prepare_ops_module,
+    )
+
+    calls: list[tuple[object, str, object, bool, bool]] = []
+
+    def fake_prepare_backend_statement(
+        backend_type,
+        query,
+        params,
+        *,
+        apply_default_transform,
+        ensure_returning,
+    ):
+        calls.append(
+            (
+                backend_type,
+                query,
+                params,
+                apply_default_transform,
+                ensure_returning,
+            )
+        )
+        return ("prepared", ("params",))
+
+    monkeypatch.setattr(
+        backend_prepare_ops_module,
+        "prepare_backend_statement",
+        fake_prepare_backend_statement,
+    )
+
+    db = SimpleNamespace(backend_type=BackendType.POSTGRESQL)
+
+    result = backend_prepare_ops_module._prepare_backend_statement(db, "SELECT ?", [1])
+
+    assert calls == [(BackendType.POSTGRESQL, "SELECT ?", [1], True, False)]
+    assert result == ("prepared", ("params",))
+
+
+def test_media_db_runtime_prepare_backend_many_statement_forwards_expected_defaults(monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
+        backend_prepare_ops as backend_prepare_ops_module,
+    )
+
+    calls: list[tuple[object, str, object, bool, bool]] = []
+
+    def fake_prepare_backend_many_statement(
+        backend_type,
+        query,
+        params_list,
+        *,
+        apply_default_transform,
+        ensure_returning,
+    ):
+        calls.append(
+            (
+                backend_type,
+                query,
+                params_list,
+                apply_default_transform,
+                ensure_returning,
+            )
+        )
+        return ("prepared-many", [("params",)])
+
+    monkeypatch.setattr(
+        backend_prepare_ops_module,
+        "prepare_backend_many_statement",
+        fake_prepare_backend_many_statement,
+    )
+
+    db = SimpleNamespace(backend_type=BackendType.POSTGRESQL)
+
+    result = backend_prepare_ops_module._prepare_backend_many_statement(
+        db,
+        "UPDATE demo SET value = ?",
+        [[1]],
+    )
+
+    assert calls == [(BackendType.POSTGRESQL, "UPDATE demo SET value = ?", [[1]], True, False)]
+    assert result == ("prepared-many", [("params",)])
+
+
+def test_media_db_runtime_normalise_params_delegates_to_query_utils(monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
+        backend_prepare_ops as backend_prepare_ops_module,
+    )
+
+    calls: list[object] = []
+
+    def fake_normalise_params(params):
+        calls.append(params)
+        return ("normalised",)
+
+    monkeypatch.setattr(
+        backend_prepare_ops_module,
+        "normalise_params",
+        fake_normalise_params,
+    )
+
+    db = SimpleNamespace(backend_type=BackendType.POSTGRESQL)
+
+    result = backend_prepare_ops_module._normalise_params(db, [1])
+
+    assert calls == [[1]]
+    assert result == ("normalised",)
+
+
+def test_media_db_runtime_keyword_order_expression_uses_sqlite_collation():
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
+        query_utility_ops as query_utility_ops_module,
+    )
+
+    db = SimpleNamespace(backend_type=BackendType.SQLITE)
+
+    result = query_utility_ops_module._keyword_order_expression(db, "keyword")
+
+    assert result == "keyword COLLATE NOCASE"
+
+
+def test_media_db_runtime_keyword_order_expression_uses_postgres_lower_sort():
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
+        query_utility_ops as query_utility_ops_module,
+    )
+
+    db = SimpleNamespace(backend_type=BackendType.POSTGRESQL)
+
+    result = query_utility_ops_module._keyword_order_expression(db, "keyword")
+
+    assert result == "LOWER(keyword), keyword"
+
+
+def test_media_db_runtime_append_case_insensitive_like_uses_sqlite_clause():
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
+        query_utility_ops as query_utility_ops_module,
+    )
+
+    db = SimpleNamespace(backend_type=BackendType.SQLITE)
+    clauses: list[str] = []
+    params: list[object] = []
+
+    query_utility_ops_module._append_case_insensitive_like(db, clauses, params, "title", "%deep%")
+
+    assert clauses == ["title LIKE ? COLLATE NOCASE"]
+    assert params == ["%deep%"]
+
+
+def test_media_db_runtime_append_case_insensitive_like_uses_postgres_ilike():
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
+        query_utility_ops as query_utility_ops_module,
+    )
+
+    db = SimpleNamespace(backend_type=BackendType.POSTGRESQL)
+    clauses: list[str] = []
+    params: list[object] = []
+
+    query_utility_ops_module._append_case_insensitive_like(db, clauses, params, "title", "%deep%")
+
+    assert clauses == ["title ILIKE ?"]
+    assert params == ["%deep%"]
+
+
+def test_media_db_runtime_convert_sqlite_placeholders_to_postgres_delegates_to_query_utils(monkeypatch):
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import (
+        query_utility_ops as query_utility_ops_module,
+    )
+
+    calls: list[str] = []
+
+    def fake_convert(query: str) -> str:
+        calls.append(query)
+        return "SELECT %s"
+
+    monkeypatch.setattr(
+        query_utility_ops_module,
+        "convert_sqlite_placeholders_to_postgres",
+        fake_convert,
+    )
+
+    db = SimpleNamespace(backend_type=BackendType.POSTGRESQL)
+
+    result = query_utility_ops_module._convert_sqlite_placeholders_to_postgres(db, "SELECT ?")
+
+    assert calls == ["SELECT ?"]
+    assert result == "SELECT %s"
 
 
 def test_transform_sqlite_query_for_postgres_rewrites_randomblob_and_json_extract():

@@ -15,11 +15,19 @@ from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_reposito
 from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_files_repository import (
     MediaFilesRepository,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_lookup_repository import (
+    MediaLookupRepository,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_search_repository import (
+    MediaSearchRepository,
+)
 
 __all__ = [
     "ChunksRepository",
     "DocumentVersionsRepository",
     "KeywordsRepository",
     "MediaFilesRepository",
+    "MediaLookupRepository",
+    "MediaSearchRepository",
     "MediaRepository",
 ]

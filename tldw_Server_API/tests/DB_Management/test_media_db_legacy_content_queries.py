@@ -1,4 +1,4 @@
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
     fetch_keywords_for_media,
     fetch_keywords_for_media_batch,

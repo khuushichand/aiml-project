@@ -2,8 +2,7 @@ import importlib
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.media_db import legacy_content_queries
-from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
+from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 
 pytestmark = pytest.mark.unit
 
@@ -29,19 +28,18 @@ def test_legacy_content_query_callers_no_longer_depend_on_media_db_v2_exports(
 
     assert not hasattr(media_db_v2, "fetch_keywords_for_media")
     assert not hasattr(media_db_v2, "fetch_keywords_for_media_batch")
-    assert media_item.fetch_keywords_for_media is legacy_content_queries.fetch_keywords_for_media
+    assert media_item.fetch_keywords_for_media is media_db_api.fetch_keywords_for_media
     assert (
-        media_listing.fetch_keywords_for_media_batch
-        is legacy_content_queries.fetch_keywords_for_media_batch
+        media_listing.fetch_keywords_for_media_batch is media_db_api.fetch_keywords_for_media_batch
     )
 
     monkeypatch.setattr(
-        legacy_content_queries,
+        media_db_api,
         "fetch_keywords_for_media",
         lambda media_id, db_instance: ["alpha", "beta"],
     )
     monkeypatch.setattr(
-        legacy_wrappers,
+        media_db_api,
         "get_document_version",
         lambda *args, **kwargs: {
             "analysis_content": "summary",

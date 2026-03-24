@@ -179,7 +179,6 @@ async def test_worker_drive_incremental_sync_uses_delta_feed_and_advances_cursor
 
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
     import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     import tldw_Server_API.app.core.External_Sources as ext_pkg
     import tldw_Server_API.app.core.External_Sources.connectors_service as svc
     import tldw_Server_API.app.core.External_Sources.sync_coordinator as sync_coordinator
@@ -368,7 +367,6 @@ async def test_worker_drive_created_delta_without_binding_still_reconciles(monke
 
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
     import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     import tldw_Server_API.app.core.External_Sources as ext_pkg
     import tldw_Server_API.app.core.External_Sources.connectors_service as svc
     import tldw_Server_API.app.core.External_Sources.sync_coordinator as sync_coordinator
@@ -548,7 +546,6 @@ async def test_worker_drive_incremental_policy_block_marks_existing_binding_degr
 
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
     import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     import tldw_Server_API.app.core.External_Sources as ext_pkg
     import tldw_Server_API.app.core.External_Sources.connectors_service as svc
     import tldw_Server_API.app.core.External_Sources.policy as policy_mod
@@ -730,7 +727,6 @@ async def test_worker_drive_bootstrap_reconcile_failure_is_nonfatal(monkeypatch)
 
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
     import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     import tldw_Server_API.app.core.External_Sources as ext_pkg
     import tldw_Server_API.app.core.External_Sources.connectors_service as svc
     import tldw_Server_API.app.core.External_Sources.sync_coordinator as sync_coordinator

@@ -406,7 +406,6 @@ async def test_worker_subscription_renewal_updates_sync_state(monkeypatch):
 
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
     import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     import tldw_Server_API.app.core.External_Sources as ext_pkg
     import tldw_Server_API.app.core.External_Sources.connectors_service as svc_mod
 
@@ -419,7 +418,6 @@ async def test_worker_subscription_renewal_updates_sync_state(monkeypatch):
     monkeypatch.setattr(svc_mod, "get_account_tokens", _fake_get_account_tokens)
     monkeypatch.setattr(svc_mod, "get_source_sync_state", _fake_get_source_sync_state)
     monkeypatch.setattr(svc_mod, "upsert_source_sync_state", _fake_upsert_source_sync_state)
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
     monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
 
     jm = FakeJM()
@@ -539,7 +537,6 @@ async def test_worker_drive_subscription_renewal_round_trips_webhook_metadata(mo
 
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
     import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
-    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     import tldw_Server_API.app.core.External_Sources as ext_pkg
     import tldw_Server_API.app.core.External_Sources.connectors_service as svc_mod
 
@@ -552,7 +549,6 @@ async def test_worker_drive_subscription_renewal_round_trips_webhook_metadata(mo
     monkeypatch.setattr(svc_mod, "get_account_tokens", _fake_get_account_tokens)
     monkeypatch.setattr(svc_mod, "get_source_sync_state", _fake_get_source_sync_state)
     monkeypatch.setattr(svc_mod, "upsert_source_sync_state", _fake_upsert_source_sync_state)
-    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
     monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
 
     jm = FakeJM()

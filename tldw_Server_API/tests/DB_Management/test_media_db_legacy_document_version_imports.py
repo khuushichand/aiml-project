@@ -3,7 +3,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.media_db import legacy_content_queries
+from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.media_db import legacy_wrappers
 
 
@@ -35,7 +35,7 @@ async def test_legacy_document_version_callers_use_extracted_wrapper(
 
     monkeypatch.setattr(media_db_v2, "get_document_version", _shim_should_not_be_used)
     monkeypatch.setattr(
-        legacy_content_queries,
+        media_db_api,
         "fetch_keywords_for_media",
         lambda media_id, db_instance: ["alpha"],
     )
@@ -48,7 +48,7 @@ async def test_legacy_document_version_callers_use_extracted_wrapper(
         }
 
     monkeypatch.setattr(
-        legacy_wrappers,
+        media_db_api,
         "get_document_version",
         _fake_get_document_version,
     )
@@ -93,7 +93,12 @@ async def test_legacy_document_version_callers_use_extracted_wrapper(
     assert items_context[0]["summary"] == "summary-7"
 
     class StubDb:
-        def get_media_by_id(self, media_id: int):
+        def get_media_by_id(
+            self,
+            media_id: int,
+            include_deleted: bool = False,
+            include_trash: bool = False,
+        ):
             return {"id": media_id, "content": "", "title": "Doc"}
 
     content_payload = await media_embeddings.get_media_content(7, StubDb())
@@ -111,7 +116,12 @@ async def test_legacy_document_version_callers_use_extracted_wrapper(
     assert jobs_payload["media_item"]["content"] == "document body"
 
     class StubDataTablesDb:
-        def get_media_by_id(self, media_id: int):
+        def get_media_by_id(
+            self,
+            media_id: int,
+            include_deleted: bool = False,
+            include_trash: bool = False,
+        ):
             return {"id": media_id, "content": ""}
 
     monkeypatch.setattr(
@@ -143,7 +153,7 @@ def test_media_module_imports_document_version_from_legacy_wrappers(
     )
 
     reloaded = importlib.reload(media_module_impl)
-    assert reloaded.get_document_version is legacy_wrappers.get_document_version
+    assert reloaded.get_document_version is media_db_api.get_document_version
 
 
 def test_navigation_endpoint_imports_document_version_from_legacy_wrappers(
@@ -166,7 +176,7 @@ def test_navigation_endpoint_imports_document_version_from_legacy_wrappers(
     )
 
     reloaded = importlib.reload(navigation_endpoint)
-    assert reloaded.get_document_version is legacy_wrappers.get_document_version
+    assert reloaded.get_document_version is media_db_api.get_document_version
 
 
 def test_versions_endpoint_imports_document_version_from_legacy_wrappers(
@@ -189,7 +199,7 @@ def test_versions_endpoint_imports_document_version_from_legacy_wrappers(
     )
 
     reloaded = importlib.reload(versions_endpoint)
-    assert reloaded.get_document_version is legacy_wrappers.get_document_version
+    assert reloaded.get_document_version is media_db_api.get_document_version
 
 
 def test_data_tables_jobs_worker_imports_document_version_from_legacy_wrappers(
@@ -214,8 +224,7 @@ def test_data_tables_jobs_worker_imports_document_version_from_legacy_wrappers(
     )
 
     reloaded = importlib.reload(data_tables_jobs_worker)
-    assert reloaded.get_document_version is legacy_wrappers.get_document_version
-
+    assert reloaded.get_document_version is media_db_api.get_document_version
 
 def test_media_endpoint_package_imports_document_version_from_legacy_wrappers(
     monkeypatch,

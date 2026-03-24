@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import sys
 import threading
+import types
 from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock
 import uuid
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.repositories.media_repository import (
     MediaRepository,
@@ -227,6 +229,107 @@ def test_delete_fts_keyword_postgres_nulls_vector() -> None:
     sql, params = db._execute_with_connection.call_args.args[1:]
     assert sql.strip().startswith("UPDATE keywords SET keyword_fts_tsv = NULL")
     assert params == (7,)
+
+
+def test_runtime_fts_ops_update_fts_media_sqlite_preserves_synonym_expansion_and_fallback(
+    monkeypatch,
+) -> None:
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import fts_ops
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        def execute(self, sql: str, params: tuple[object, ...]):
+            self.calls.append((sql, params))
+            return None
+
+    class _Db:
+        backend_type = BackendType.SQLITE
+
+    module_name = "tldw_Server_API.app.core.RAG.rag_service.synonyms_registry"
+    synonym_module = types.ModuleType(module_name)
+
+    def fake_get_corpus_synonyms(_corpus):
+        return {"title": ["alias-one"], "body": ["alias-two"]}
+
+    synonym_module.get_corpus_synonyms = fake_get_corpus_synonyms  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, module_name, synonym_module)
+    monkeypatch.setenv("DEFAULT_FTS_CORPUS", "test-corpus")
+    monkeypatch.setenv("FTS_SYNONYM_EXPANSION_LIMIT", "1")
+
+    conn = _Conn()
+    fts_ops._update_fts_media(_Db(), conn, 9, "Title", "Body")
+
+    assert len(conn.calls) == 1
+    sql, params = conn.calls[0]
+    assert sql.startswith("INSERT OR REPLACE INTO media_fts")
+    assert params[0:2] == (9, "Title")
+    assert params[2] in {"Body alias-one", "Body alias-two"}
+
+    def raising_get_corpus_synonyms(_corpus):
+        raise RuntimeError("boom")
+
+    synonym_module.get_corpus_synonyms = raising_get_corpus_synonyms  # type: ignore[attr-defined]
+    conn_fallback = _Conn()
+    fts_ops._update_fts_media(_Db(), conn_fallback, 10, "Title", "Body")
+
+    assert conn_fallback.calls[0][1] == (10, "Title", "Body")
+
+
+def test_runtime_fts_ops_sync_refresh_noops_when_update_payload_has_no_relevant_fields() -> None:
+    from tldw_Server_API.app.core.DB_Management.media_db.runtime import fts_ops
+
+    class _Db:
+        def __init__(self) -> None:
+            self.deleted_media: list[int] = []
+            self.updated_media: list[tuple[int, str, object]] = []
+            self.deleted_keywords: list[int] = []
+            self.updated_keywords: list[tuple[int, str]] = []
+
+        def _fetchone_with_connection(self, _conn, query: str, _params=None):
+            if "FROM Media" in query:
+                return {"id": 7, "title": "Title", "content": "Body", "deleted": 0}
+            if "FROM Keywords" in query:
+                return {"id": 5, "keyword": "science", "deleted": 0}
+            raise AssertionError(f"unexpected query: {query}")
+
+        def _delete_fts_media(self, _conn, media_id: int) -> None:
+            self.deleted_media.append(media_id)
+
+        def _update_fts_media(self, _conn, media_id: int, title: str, content: object) -> None:
+            self.updated_media.append((media_id, title, content))
+
+        def _delete_fts_keyword(self, _conn, keyword_id: int) -> None:
+            self.deleted_keywords.append(keyword_id)
+
+        def _update_fts_keyword(self, _conn, keyword_id: int, keyword: str) -> None:
+            self.updated_keywords.append((keyword_id, keyword))
+
+    db = _Db()
+    conn = object()
+
+    fts_ops.sync_refresh_fts_for_entity(
+        db,
+        conn,
+        entity="Media",
+        entity_uuid="media-uuid",
+        operation="update",
+        payload={"author": "ignored"},
+    )
+    fts_ops.sync_refresh_fts_for_entity(
+        db,
+        conn,
+        entity="Keywords",
+        entity_uuid="kw-uuid",
+        operation="update",
+        payload={"confidence": 0.9},
+    )
+
+    assert db.deleted_media == []
+    assert db.updated_media == []
+    assert db.deleted_keywords == []
+    assert db.updated_keywords == []
 
 
 def test_media_repository_uses_execution_helper_for_postgres_chunk_persistence(monkeypatch) -> None:

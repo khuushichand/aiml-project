@@ -18,7 +18,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 from tldw_Server_API.app.api.v1.endpoints.audio import audio_jobs
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.TTS.tts_jobs_worker import _handle_tts_job
@@ -468,7 +468,7 @@ class TestTTSStreamingEndpoint:
 
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_generate_speech, \
                 patch(
-                    'tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase.create_tts_history_entry',
+                    'tldw_Server_API.app.core.DB_Management.media_db.native_class.MediaDatabase.create_tts_history_entry',
                     side_effect=RuntimeError("history insert failure"),
                 ):
             mock_generate_speech.side_effect = lambda *args, **kwargs: mock_stream()

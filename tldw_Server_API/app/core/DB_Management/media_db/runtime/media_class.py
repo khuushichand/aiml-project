@@ -5,13 +5,13 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_identifiers import (
-    LEGACY_MEDIA_DB_MODULE,
+NATIVE_MEDIA_DB_MODULE = (
+    "tldw_Server_API.app.core.DB_Management.media_db.native_class"
 )
 
 
 def load_media_database_cls() -> type[Any]:
-    module = import_module(LEGACY_MEDIA_DB_MODULE)
+    module = import_module(NATIVE_MEDIA_DB_MODULE)
     return module.MediaDatabase
 
 

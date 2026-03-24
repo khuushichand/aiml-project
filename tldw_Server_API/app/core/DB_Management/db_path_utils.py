@@ -13,8 +13,8 @@ from typing import Callable, Optional, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_identifiers import (
-    LEGACY_MEDIA_DB_FILENAME,
+from tldw_Server_API.app.core.DB_Management.media_db.constants import (
+    MEDIA_DB_FILENAME,
 )
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -201,7 +201,7 @@ class DatabasePaths:
     """Centralized database path management."""
 
     # Database file names
-    MEDIA_DB_NAME = LEGACY_MEDIA_DB_FILENAME
+    MEDIA_DB_NAME = MEDIA_DB_FILENAME
     CHACHA_DB_NAME = "ChaChaNotes.db"
     PROMPTS_DB_NAME = "user_prompts_v2.sqlite"
     AUDIT_DB_NAME = "unified_audit.db"

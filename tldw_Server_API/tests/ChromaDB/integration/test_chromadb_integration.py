@@ -20,7 +20,7 @@ from chromadb.config import Settings
 
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Embeddings.Embeddings_Create import create_embeddings_batch
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 @pytest.mark.integration
