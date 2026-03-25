@@ -248,6 +248,21 @@ test.describe("Stage 7 audio regression gate", () => {
     await expect(timeoutAlert).toHaveCount(0)
   })
 
+  test("speech keeps mic-only input source options", async ({ page }) => {
+    await seedAuth(page)
+    await page.goto("/speech", { waitUntil: "domcontentloaded", timeout: LOAD_TIMEOUT })
+    await waitForAppShell(page, LOAD_TIMEOUT)
+
+    const inputSourcePicker = page
+      .locator('[aria-label="Speech playground input source"]')
+      .first()
+    await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
+    await inputSourcePicker.click()
+    await expect(page.getByRole("option", { name: /Default microphone/i })).toBeVisible()
+    await expect(page.getByRole("option", { name: /Tab audio/i })).toHaveCount(0)
+    await expect(page.getByRole("option", { name: /System audio/i })).toHaveCount(0)
+  })
+
   test("stt transcription-model timeout state shows retry and recovers", async ({
     page
   }) => {

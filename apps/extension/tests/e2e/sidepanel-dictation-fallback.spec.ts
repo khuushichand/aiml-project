@@ -180,6 +180,13 @@ const waitForServerDictationMode = async (sidepanel: Page) => {
     .toBe(true)
 }
 
+const openAudioSourcePicker = async (page: Page) => {
+  const picker = page.locator('[aria-label="Dictation input source"]').first()
+  await expect(picker).toBeVisible({ timeout: 15000 })
+  await picker.click()
+  return picker
+}
+
 const installDictationBrowserMocks = async (
   pageContext: any,
   dictationErrorClass: string
@@ -240,6 +247,20 @@ const installDictationBrowserMocks = async (
     try {
       fakeMediaDevices.getUserMedia = async () =>
         createAudioContextStream() || createFakeStream()
+      fakeMediaDevices.enumerateDevices = async () => [
+        {
+          deviceId: "default",
+          kind: "audioinput",
+          label: "Default microphone",
+          groupId: "default-group"
+        },
+        {
+          deviceId: "usb-1",
+          kind: "audioinput",
+          label: "USB microphone",
+          groupId: "usb-group"
+        }
+      ]
       Object.defineProperty(navigator, "mediaDevices", {
         value: fakeMediaDevices,
         configurable: true
@@ -411,6 +432,17 @@ const runFallbackScenario = async (
     )
     await ensureChatInput(sidepanel)
     await waitForServerDictationMode(sidepanel)
+
+    const sourcePicker = await openAudioSourcePicker(sidepanel)
+    await expect(sidepanel.getByRole("option", { name: "Default microphone" })).toBeVisible()
+    await expect(sidepanel.getByRole("option", { name: "USB microphone" })).toBeVisible()
+    await expect(sidepanel.getByRole("option", { name: /tab audio/i })).toHaveCount(0)
+    await expect(sidepanel.getByRole("option", { name: /system audio/i })).toHaveCount(0)
+    await sidepanel.getByRole("option", { name: "USB microphone" }).click()
+    await expect(sourcePicker).toContainText("USB microphone")
+    await sourcePicker.click()
+    await sidepanel.getByRole("option", { name: "Default microphone" }).click()
+    await expect(sourcePicker).toContainText("Default microphone")
 
     const startButton = await findVisibleButton(sidepanel, /Start dictation/i)
     await startButton.click()

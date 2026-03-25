@@ -17,6 +17,8 @@ describe("dictation-diagnostics", () => {
       kind: "server_error",
       requestedMode: "auto",
       resolvedMode: "server",
+      requestedSourceKind: "mic_device",
+      resolvedSourceKind: "mic_device",
       speechAvailable: true,
       speechUsesServer: true,
       toggleIntent: "start_server",
@@ -27,12 +29,14 @@ describe("dictation-diagnostics", () => {
     })
 
     expect(payload).toEqual({
-      version: 1,
+      version: 2,
       at: "2026-02-22T20:00:00.000Z",
       surface: "playground",
       kind: "server_error",
       requested_mode: "auto",
       resolved_mode: "server",
+      requested_source_kind: "mic_device",
+      resolved_source_kind: "mic_device",
       speech_available: true,
       speech_uses_server: true,
       toggle_intent: "start_server",
@@ -48,6 +52,8 @@ describe("dictation-diagnostics", () => {
       kind: "toggle",
       requestedMode: "invalid" as any,
       resolvedMode: "invalid" as any,
+      requestedSourceKind: "invalid" as any,
+      resolvedSourceKind: "invalid" as any,
       toggleIntent: "invalid" as any,
       errorClass: "invalid" as any,
       fallbackReason: "invalid" as any,
@@ -62,6 +68,8 @@ describe("dictation-diagnostics", () => {
 
     expect(payload.requested_mode).toBe("unknown")
     expect(payload.resolved_mode).toBe("unknown")
+    expect(payload.requested_source_kind).toBe("unknown")
+    expect(payload.resolved_source_kind).toBe("unknown")
     expect(payload.toggle_intent).toBeNull()
     expect(payload.error_class).toBeNull()
     expect(payload.fallback_reason).toBeNull()

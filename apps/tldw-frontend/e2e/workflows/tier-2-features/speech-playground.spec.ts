@@ -54,6 +54,22 @@ test.describe("Speech Playground", () => {
       await expect(speech.stopButton).toBeVisible()
       await expect(speech.downloadButton).toBeVisible()
 
+      const inputSourcePicker = authedPage
+        .locator('[aria-label="Speech playground input source"]')
+        .first()
+      await expect(inputSourcePicker).toBeVisible()
+      await inputSourcePicker.click()
+      await expect(
+        authedPage.getByRole("option", { name: /Default microphone/i })
+      ).toBeVisible()
+      await expect(
+        authedPage.getByRole("option", { name: /Tab audio/i })
+      ).toHaveCount(0)
+      await expect(
+        authedPage.getByRole("option", { name: /System audio/i })
+      ).toHaveCount(0)
+      await authedPage.keyboard.press("Escape")
+
       await assertNoCriticalErrors(diagnostics)
     })
 

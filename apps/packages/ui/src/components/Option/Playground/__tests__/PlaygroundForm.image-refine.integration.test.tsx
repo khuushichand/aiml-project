@@ -4,6 +4,7 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PlaygroundForm } from "../PlaygroundForm"
+import { DICTATION_DIAGNOSTICS_EVENT } from "@/utils/dictation-diagnostics"
 import { fetchChatModels } from "@/services/tldw-server"
 
 const onSubmitMock = vi.hoisted(() => vi.fn(async (_payload: unknown) => null))
@@ -36,6 +37,7 @@ const serverDictationState = vi.hoisted(() => ({
   lastOptions: null as null | Record<string, any>
 }))
 const dictationStrategyState = vi.hoisted(() => ({
+  lastOptions: null as null | Record<string, any>,
   value: {
     requestedMode: "auto",
     resolvedMode: "unavailable",
@@ -60,6 +62,33 @@ const playgroundFormConnectionState = vi.hoisted(() => ({
   phase: "connected",
   isConnected: true
 }))
+const serverCapabilitiesState = vi.hoisted(() => ({
+  loading: false,
+  capabilities: { hasAudio: false, hasWebSearch: false }
+}))
+const audioSourceCatalogState = vi.hoisted(() => ({
+  devices: [] as Array<{ deviceId: string; label: string }>,
+  isSettled: true
+}))
+const { storageValues, storageLoadingKeys } = vi.hoisted(() => ({
+  storageValues: new Map<string, unknown>(),
+  storageLoadingKeys: new Set<string>()
+}))
+
+const updateStoredValue = (
+  key: string,
+  defaultValue: unknown,
+  nextValue: unknown
+) => {
+  const currentValue = storageValues.has(key)
+    ? storageValues.get(key)
+    : defaultValue
+  const resolvedValue =
+    typeof nextValue === "function"
+      ? (nextValue as (current: unknown) => unknown)(currentValue)
+      : nextValue
+  storageValues.set(key, resolvedValue)
+}
 
 const createMessageOptionState = () => ({
   onSubmit: onSubmitMock,
@@ -439,8 +468,11 @@ vi.mock("antd", () => {
 })
 
 vi.mock("@plasmohq/storage/hook", () => ({
-  useStorage: (_key: string, defaultValue: unknown) =>
-    React.useState(defaultValue)
+  useStorage: (key: string, defaultValue: unknown) => [
+    storageValues.has(key) ? storageValues.get(key) : defaultValue,
+    (nextValue: unknown) => updateStoredValue(key, defaultValue, nextValue),
+    { isLoading: storageLoadingKeys.has(key) }
+  ]
 }))
 
 vi.mock("react-router-dom", () => ({
@@ -517,10 +549,7 @@ vi.mock("@/types/connection", () => ({
 }))
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
-  useServerCapabilities: () => ({
-    loading: false,
-    capabilities: { hasAudio: false, hasWebSearch: false }
-  })
+  useServerCapabilities: () => serverCapabilitiesState
 }))
 
 vi.mock("@/hooks/useTldwAudioStatus", () => ({
@@ -559,6 +588,14 @@ vi.mock("@/hooks/useSpeechRecognition", () => ({
   })
 }))
 
+vi.mock("@/hooks/useAudioSourceCatalog", () => ({
+  useAudioSourceCatalog: () => ({
+    devices: audioSourceCatalogState.devices,
+    isLoading: false,
+    isSettled: audioSourceCatalogState.isSettled
+  })
+}))
+
 vi.mock("@/hooks/useServerDictation", () => ({
   useServerDictation: (options: Record<string, any>) => {
     serverDictationState.lastOptions = options
@@ -571,7 +608,10 @@ vi.mock("@/hooks/useServerDictation", () => ({
 }))
 
 vi.mock("@/hooks/useDictationStrategy", () => ({
-  useDictationStrategy: () => dictationStrategyState.value
+  useDictationStrategy: (options: Record<string, any>) => {
+    dictationStrategyState.lastOptions = options
+    return dictationStrategyState.value
+  }
 }))
 
 vi.mock("~/hooks/useTabMentions", () => ({
@@ -1025,12 +1065,16 @@ vi.mock("@/hooks/playground", () => ({
 
 describe("PlaygroundForm image prompt refinement modal integration", () => {
   beforeEach(() => {
+    storageValues.clear()
     onSubmitMock.mockClear()
     createChatCompletionMock.mockClear()
     vi.mocked(fetchChatModels).mockClear()
     playgroundFormMessageOptionState.value = createMessageOptionState()
     playgroundFormConnectionState.phase = "connected"
     playgroundFormConnectionState.isConnected = true
+    serverCapabilitiesState.loading = false
+    serverCapabilitiesState.capabilities.hasAudio = false
+    serverCapabilitiesState.capabilities.hasWebSearch = false
     speechRecognitionState.transcript = ""
     speechRecognitionState.isListening = false
     speechRecognitionState.supported = false
@@ -1041,6 +1085,7 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
     serverDictationState.startServerDictation.mockClear()
     serverDictationState.stopServerDictation.mockClear()
     serverDictationState.lastOptions = null
+    dictationStrategyState.lastOptions = null
     dictationStrategyState.value = {
       requestedMode: "auto",
       resolvedMode: "unavailable",
@@ -1301,6 +1346,8 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
 
 describe("PlaygroundForm dictation integration", () => {
   beforeEach(() => {
+    storageValues.clear()
+    storageLoadingKeys.clear()
     speechRecognitionState.transcript = ""
     speechRecognitionState.isListening = false
     speechRecognitionState.supported = true
@@ -1311,10 +1358,27 @@ describe("PlaygroundForm dictation integration", () => {
     serverDictationState.startServerDictation.mockClear()
     serverDictationState.stopServerDictation.mockClear()
     serverDictationState.lastOptions = null
+    dictationStrategyState.lastOptions = null
+    serverCapabilitiesState.loading = false
+    serverCapabilitiesState.capabilities.hasAudio = false
+    serverCapabilitiesState.capabilities.hasWebSearch = false
+    audioSourceCatalogState.devices = [
+      { deviceId: "default", label: "Default microphone" },
+      { deviceId: "usb-1", label: "USB microphone" },
+      { deviceId: "usb-2", label: "USB microphone 2" },
+      { deviceId: "usb-3", label: "USB microphone 3" }
+    ]
+    audioSourceCatalogState.isSettled = true
   })
 
   it("routes server dictation intent through the shared toggle handler", async () => {
     const user = userEvent.setup()
+    storageValues.set("dictationAudioSourcePreference", {
+      featureGroup: "dictation",
+      sourceKind: "default_mic",
+      deviceId: null,
+      lastKnownLabel: null
+    })
     dictationStrategyState.value = {
       requestedMode: "auto",
       resolvedMode: "server",
@@ -1339,8 +1403,233 @@ describe("PlaygroundForm dictation integration", () => {
     expect(speechRecognitionState.start).not.toHaveBeenCalled()
   })
 
+  it("routes explicit mic dictation through server capture with the selected device", async () => {
+    const user = userEvent.setup()
+    storageValues.set("dictationAudioSourcePreference", {
+      featureGroup: "dictation",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+    dictationStrategyState.value = {
+      requestedMode: "auto",
+      resolvedMode: "server",
+      speechAvailable: true,
+      speechUsesServer: true,
+      isDictating: false,
+      toggleIntent: "start_server",
+      autoFallbackActive: false,
+      autoFallbackErrorClass: null,
+      recordServerError: vi.fn(() => ({
+        errorClass: "unknown_error",
+        appliedFallback: false
+      })),
+      recordServerSuccess: vi.fn(),
+      clearAutoFallback: vi.fn()
+    }
+
+    render(<PlaygroundForm droppedFiles={[]} />)
+    await user.click(screen.getByTestId("dictation-button"))
+
+    expect(speechRecognitionState.start).not.toHaveBeenCalled()
+    expect(serverDictationState.startServerDictation).toHaveBeenCalledWith({
+      featureGroup: "dictation",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+  })
+
+  it("waits for dictation source hydration before starting with a remembered mic", async () => {
+    const user = userEvent.setup()
+    storageValues.set("dictationAudioSourcePreference", {
+      featureGroup: "dictation",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+    storageLoadingKeys.add("dictationAudioSourcePreference")
+    dictationStrategyState.value = {
+      requestedMode: "auto",
+      resolvedMode: "server",
+      speechAvailable: true,
+      speechUsesServer: true,
+      isDictating: false,
+      toggleIntent: "start_server",
+      autoFallbackActive: false,
+      autoFallbackErrorClass: null,
+      recordServerError: vi.fn(() => ({
+        errorClass: "unknown_error",
+        appliedFallback: false
+      })),
+      recordServerSuccess: vi.fn(),
+      clearAutoFallback: vi.fn()
+    }
+
+    const { rerender } = render(<PlaygroundForm droppedFiles={[]} />)
+    await user.click(screen.getByTestId("dictation-button"))
+
+    expect(serverDictationState.startServerDictation).not.toHaveBeenCalled()
+
+    storageLoadingKeys.delete("dictationAudioSourcePreference")
+    rerender(<PlaygroundForm droppedFiles={[]} />)
+
+    await waitFor(() => {
+      expect(serverDictationState.startServerDictation).toHaveBeenCalledWith({
+        featureGroup: "dictation",
+        sourceKind: "mic_device",
+        deviceId: "usb-1",
+        lastKnownLabel: "USB microphone"
+      })
+    })
+  })
+
+  it("falls back to the default mic when the remembered dictation device is missing after catalog settle", async () => {
+    const user = userEvent.setup()
+    storageValues.set("dictationAudioSourcePreference", {
+      featureGroup: "dictation",
+      sourceKind: "mic_device",
+      deviceId: "usb-missing",
+      lastKnownLabel: "Studio microphone"
+    })
+    audioSourceCatalogState.devices = [
+      { deviceId: "default", label: "Default microphone" }
+    ]
+    dictationStrategyState.value = {
+      requestedMode: "auto",
+      resolvedMode: "server",
+      speechAvailable: true,
+      speechUsesServer: true,
+      isDictating: false,
+      toggleIntent: "start_server",
+      autoFallbackActive: false,
+      autoFallbackErrorClass: null,
+      recordServerError: vi.fn(() => ({
+        errorClass: "unknown_error",
+        appliedFallback: false
+      })),
+      recordServerSuccess: vi.fn(),
+      clearAutoFallback: vi.fn()
+    }
+
+    render(<PlaygroundForm droppedFiles={[]} />)
+    await user.click(screen.getByTestId("dictation-button"))
+
+    expect(dictationStrategyState.lastOptions).toMatchObject({
+      browserDictationCompatible: true
+    })
+    expect(serverDictationState.startServerDictation).toHaveBeenCalledWith(undefined)
+  })
+
+  it("keeps auto dictation browser-compatible for the default mic when server STT is unavailable", async () => {
+    storageValues.set("dictationAudioSourcePreference", {
+      featureGroup: "dictation",
+      sourceKind: "default_mic",
+      deviceId: null,
+      lastKnownLabel: null
+    })
+    speechRecognitionState.supported = true
+    serverCapabilitiesState.capabilities.hasAudio = false
+
+    render(<PlaygroundForm droppedFiles={[]} />)
+
+    expect(dictationStrategyState.lastOptions).toMatchObject({
+      browserDictationCompatible: true,
+      resolvedModeOverride: null
+    })
+  })
+
+  it("forces browser dictation unavailable for a mic device when server STT is unavailable", async () => {
+    storageValues.set("dictationModeOverride", "browser")
+    storageValues.set("dictationAudioSourcePreference", {
+      featureGroup: "dictation",
+      sourceKind: "mic_device",
+      deviceId: "usb-3",
+      lastKnownLabel: "USB microphone 3"
+    })
+    serverCapabilitiesState.capabilities.hasAudio = false
+
+    render(<PlaygroundForm droppedFiles={[]} />)
+
+    expect(dictationStrategyState.lastOptions).toMatchObject({
+      browserDictationCompatible: false,
+      resolvedModeOverride: "unavailable"
+    })
+  })
+
+  it("emits server-error diagnostics for the updated dictation source after rerender", async () => {
+    const user = userEvent.setup()
+    const diagnosticsEvents: any[] = []
+    const handleDiagnostics = (event: Event) => {
+      diagnosticsEvents.push((event as CustomEvent).detail)
+    }
+
+    storageValues.set("dictationAudioSourcePreference", {
+      featureGroup: "dictation",
+      sourceKind: "default_mic",
+      deviceId: null,
+      lastKnownLabel: null
+    })
+    dictationStrategyState.value = {
+      requestedMode: "auto",
+      resolvedMode: "server",
+      speechAvailable: true,
+      speechUsesServer: true,
+      isDictating: false,
+      toggleIntent: "start_server",
+      autoFallbackActive: false,
+      autoFallbackErrorClass: null,
+      recordServerError: vi.fn(() => ({
+        errorClass: "provider_unavailable",
+        appliedFallback: false
+      })),
+      recordServerSuccess: vi.fn(),
+      clearAutoFallback: vi.fn()
+    }
+    serverDictationState.startServerDictation.mockImplementationOnce(async () => {
+      serverDictationState.lastOptions?.onError?.({
+        details: {
+          detail: {
+            dictation_error_class: "provider_unavailable",
+            status: "provider_unavailable",
+            message: "server unavailable"
+          }
+        }
+      })
+    })
+
+    window.addEventListener(DICTATION_DIAGNOSTICS_EVENT, handleDiagnostics)
+    try {
+      const { rerender } = render(<PlaygroundForm droppedFiles={[]} />)
+      storageValues.set("dictationAudioSourcePreference", {
+        featureGroup: "dictation",
+        sourceKind: "mic_device",
+        deviceId: "usb-2",
+        lastKnownLabel: "USB microphone 2"
+      })
+      rerender(<PlaygroundForm droppedFiles={[]} />)
+
+      await user.click(screen.getByTestId("dictation-button"))
+
+      const serverErrorEvent = diagnosticsEvents.find(
+        (event) => event.kind === "server_error"
+      )
+      expect(serverErrorEvent).toBeTruthy()
+      expect(serverErrorEvent.requested_source_kind).toBe("mic_device")
+      expect(serverErrorEvent.resolved_source_kind).toBe("mic_device")
+    } finally {
+      window.removeEventListener(DICTATION_DIAGNOSTICS_EVENT, handleDiagnostics)
+    }
+  })
+
   it("routes browser dictation intent through speech recognition start", async () => {
     const user = userEvent.setup()
+    storageValues.set("dictationAudioSourcePreference", {
+      featureGroup: "dictation",
+      sourceKind: "default_mic",
+      deviceId: null,
+      lastKnownLabel: null
+    })
     dictationStrategyState.value = {
       requestedMode: "auto",
       resolvedMode: "browser",

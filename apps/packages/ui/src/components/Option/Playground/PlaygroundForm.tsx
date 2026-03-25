@@ -40,6 +40,7 @@ import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
 import { AttachedResearchContextChip } from "./AttachedResearchContextChip"
 import { MentionsDropdown } from "./MentionsDropdown"
 import { ComposerTextarea } from "./ComposerTextarea"
@@ -90,6 +91,7 @@ import { getPresetByKey } from "./ParameterPresets"
 import { TokenProgressBar } from "./TokenProgressBar"
 import { AttachmentsSummary } from "./AttachmentsSummary"
 import { VoiceChatIndicator } from "./VoiceChatIndicator"
+import { AudioSourcePicker } from "@/components/Common/AudioSourcePicker"
 import { PlaygroundToolsPopover } from "./PlaygroundToolsPopover"
 import { PlaygroundModeLauncher } from "./PlaygroundModeLauncher"
 import { PlaygroundMcpControl } from "./PlaygroundMcpControl"
@@ -547,6 +549,7 @@ export const PlaygroundForm = ({
     setVoiceChatTtsMode
   } = useVoiceChatSettings()
   const voiceChatMessages = useVoiceChatMessages()
+  const { devices: audioInputDevices } = useAudioSourceCatalog()
   const [voiceChatTriggerInput, setVoiceChatTriggerInput] = React.useState(
     voiceChatTriggerPhrases.join(", ")
   )
@@ -2143,6 +2146,9 @@ export const PlaygroundForm = ({
   const {
     isListening,
     browserSupportsSpeechRecognition,
+    dictationAudioSourcePreference,
+    dictationResolvedSourceKind,
+    setDictationAudioSourcePreference,
     isServerDictating,
     speechAvailable,
     speechUsesServer,
@@ -2734,6 +2740,30 @@ export const PlaygroundForm = ({
             {t("playground:voiceChat.ttsModeFull", "Full")}
           </Radio.Button>
         </Radio.Group>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-[11px] text-text-muted">
+          {t("playground:voiceChat.sourceLabel", "Input source")}
+        </span>
+        <AudioSourcePicker
+          ariaLabel={t(
+            "playground:voiceChat.sourcePickerLabel",
+            "Dictation input source"
+          )}
+          devices={audioInputDevices}
+          requestedSourceKind={dictationAudioSourcePreference.sourceKind}
+          resolvedSourceKind={dictationResolvedSourceKind}
+          requestedDeviceId={dictationAudioSourcePreference.deviceId}
+          lastKnownLabel={dictationAudioSourcePreference.lastKnownLabel}
+          onChange={(nextValue) =>
+            setDictationAudioSourcePreference({
+              featureGroup: "dictation",
+              sourceKind: nextValue.sourceKind,
+              deviceId: nextValue.deviceId ?? null,
+              lastKnownLabel: nextValue.lastKnownLabel ?? null
+            })
+          }
+        />
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-text-muted">

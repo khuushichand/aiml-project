@@ -58,6 +58,8 @@ import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
 import { useComposerEvents } from "@/hooks/useComposerEvents"
 import { useTemporaryChatToggle } from "@/hooks/useTemporaryChatToggle"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
+import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
 import {
   COMPOSER_CONSTANTS,
   SPACING,
@@ -115,6 +117,7 @@ import { formatPinnedResults } from "@/utils/rag-format"
 import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import { createRenderPerfTracker } from "@/utils/perf/render-profiler"
 import { useQueuedRequests } from "@/hooks/chat/useQueuedRequests"
+import { resolveAudioCapturePlan, type AudioCaptureRequestedSource } from "@/audio"
 import {
   buildAvailableChatModelIds,
   findUnavailableChatModel,
@@ -132,6 +135,7 @@ import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
 import { browser } from "wxt/browser"
 import type { Character } from "@/types/character"
 import type { QueuedRequest } from "@/utils/chat-request-queue"
+import { AudioSourcePicker } from "@/components/Common/AudioSourcePicker"
 
 type Props = {
   dropedFile: File | undefined
@@ -369,6 +373,16 @@ export const SidepanelForm = ({
     "dictationModeOverride",
     null
   )
+  const {
+    preference: dictationAudioSourcePreference,
+    isLoading: dictationSourceLoading,
+    setPreference: setDictationAudioSourcePreference
+  } = useAudioSourcePreferences("dictation")
+  const {
+    devices: audioInputDevices,
+    isSettled: hasAudioCatalogSettled
+  } = useAudioSourceCatalog()
+  const [pendingDictationStart, setPendingDictationStart] = React.useState(false)
 
   const {
     tabMentionsEnabled,
@@ -497,6 +511,72 @@ export const SidepanelForm = ({
   const hasVoiceInputControls =
     browserSupportsSpeechRecognition || hasServerStt || hasServerVoiceChat
   const voiceChatAvailable = canUseServerAudio
+  const dictationCapturePlan = React.useMemo(
+    () =>
+      resolveAudioCapturePlan({
+        featureGroup: "dictation",
+        requestedSource: dictationAudioSourcePreference,
+        requestedSpeechPath:
+          dictationModeOverride === "browser"
+            ? "browser_dictation"
+            : "server_dictation",
+        capabilities: {
+          browserDictationSupported: browserSupportsSpeechRecognition,
+          serverDictationSupported: canUseServerStt,
+          liveVoiceSupported: false,
+          secureContextAvailable:
+            typeof window === "undefined" ? true : window.isSecureContext
+        }
+      }),
+    [
+      browserSupportsSpeechRecognition,
+      canUseServerStt,
+      dictationAudioSourcePreference,
+      dictationModeOverride
+    ]
+  )
+  const dictationSourceReady = hasAudioCatalogSettled && !dictationSourceLoading
+  const resolvedDictationSourcePreference = React.useMemo(() => {
+    if (!dictationSourceReady) {
+      return dictationAudioSourcePreference
+    }
+
+    if (dictationAudioSourcePreference.sourceKind !== "mic_device") {
+      return dictationAudioSourcePreference
+    }
+
+    const requestedDeviceId = String(dictationAudioSourcePreference.deviceId || "").trim()
+    const deviceStillAvailable = audioInputDevices.some(
+      (device) => device.deviceId === requestedDeviceId
+    )
+
+    if (deviceStillAvailable) {
+      return dictationAudioSourcePreference
+    }
+
+    return {
+      featureGroup: "dictation" as const,
+      sourceKind: "default_mic" as const,
+      deviceId: null,
+      lastKnownLabel: null
+    }
+  }, [audioInputDevices, dictationAudioSourcePreference, dictationSourceReady])
+  const resolvedDictationSourceKind = resolvedDictationSourcePreference.sourceKind
+  const browserDictationCompatible =
+    resolvedDictationSourcePreference.sourceKind === "default_mic"
+  const resolvedModeOverride =
+    dictationModeOverride === "browser" && !browserDictationCompatible
+      ? (canUseServerStt ? ("server" as const) : ("unavailable" as const))
+      : null
+  const requestedServerDictationSource = React.useMemo<
+    AudioCaptureRequestedSource | undefined
+  >(
+    () =>
+      resolvedDictationSourcePreference.sourceKind === "mic_device"
+        ? resolvedDictationSourcePreference
+        : undefined,
+    [resolvedDictationSourcePreference]
+  )
 
   const voiceChat = useVoiceChatStream({
     active: voiceChatEnabled && voiceChatAvailable,
@@ -762,12 +842,16 @@ export const SidepanelForm = ({
   const dictationDiagnosticsSnapshotRef = React.useRef<{
     requestedMode: DictationModePreference
     resolvedMode: DictationResolvedMode
+    requestedSourceKind: "default_mic" | "mic_device" | "tab_audio" | "system_audio"
+    resolvedSourceKind: "default_mic" | "mic_device" | "tab_audio" | "system_audio"
     speechAvailable: boolean
     speechUsesServer: boolean
     fallbackReason: DictationErrorClass | null
   }>({
     requestedMode: "auto",
     resolvedMode: "unavailable",
+    requestedSourceKind: "default_mic",
+    resolvedSourceKind: "default_mic",
     speechAvailable: false,
     speechUsesServer: false,
     fallbackReason: null
@@ -789,11 +873,14 @@ export const SidepanelForm = ({
   const serverDictationSuccessBridgeRef = React.useRef<() => void>(() => {})
   const handleServerDictationError = React.useCallback((error: unknown) => {
     const transition = serverDictationErrorBridgeRef.current(error)
+    const snapshot = dictationDiagnosticsSnapshotRef.current
     emitDictationDiagnostics({
       surface: "sidepanel",
       kind: "server_error",
       requestedMode: transition.requestedMode,
       resolvedMode: transition.resolvedModeBeforeError,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: transition.speechAvailableBeforeError,
       speechUsesServer: transition.speechUsesServerBeforeError,
       errorClass: transition.errorClass,
@@ -809,6 +896,8 @@ export const SidepanelForm = ({
       kind: "server_success",
       requestedMode: snapshot.requestedMode,
       resolvedMode: snapshot.resolvedMode,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: snapshot.speechAvailable,
       speechUsesServer: snapshot.speechUsesServer,
       fallbackReason: snapshot.fallbackReason
@@ -832,6 +921,8 @@ export const SidepanelForm = ({
   const dictationStrategy = useDictationStrategy({
     canUseServerStt,
     browserSupportsSpeechRecognition,
+    browserDictationCompatible,
+    resolvedModeOverride,
     isServerDictating,
     isBrowserDictating: isListening,
     modeOverride: dictationModeOverride,
@@ -842,6 +933,8 @@ export const SidepanelForm = ({
   dictationDiagnosticsSnapshotRef.current = {
     requestedMode: dictationStrategy.requestedMode,
     resolvedMode: dictationStrategy.resolvedMode,
+    requestedSourceKind: dictationCapturePlan.requestedSourceKind,
+    resolvedSourceKind: resolvedDictationSourceKind,
     speechAvailable: dictationStrategy.speechAvailable,
     speechUsesServer: dictationStrategy.speechUsesServer,
     fallbackReason: dictationStrategy.autoFallbackErrorClass
@@ -1697,19 +1790,51 @@ export const SidepanelForm = ({
       lang: speechToTextLanguage
     })
   }, [resetTranscript, speechToTextLanguage, startListening])
-
-  const handleDictationToggle = React.useCallback(() => {
+  const runPendingDictationStart = React.useCallback(() => {
     switch (dictationStrategy.toggleIntent) {
       case "start_server":
-        void startServerDictation()
+        void startServerDictation(requestedServerDictationSource)
+        return true
+      case "start_browser":
+        startBrowserDictation()
+        return true
+      default:
+        return false
+    }
+  }, [
+    dictationStrategy.toggleIntent,
+    requestedServerDictationSource,
+    startBrowserDictation,
+    startServerDictation
+  ])
+
+  const handleDictationToggle = React.useCallback(() => {
+    if (pendingDictationStart) {
+      setPendingDictationStart(false)
+      return
+    }
+
+    switch (dictationStrategy.toggleIntent) {
+      case "start_server":
+        if (!dictationSourceReady) {
+          setPendingDictationStart(true)
+          return
+        }
+        void startServerDictation(requestedServerDictationSource)
         break
       case "stop_server":
+        setPendingDictationStart(false)
         stopServerDictation()
         break
       case "start_browser":
+        if (!dictationSourceReady) {
+          setPendingDictationStart(true)
+          return
+        }
         startBrowserDictation()
         break
       case "stop_browser":
+        setPendingDictationStart(false)
         stopListening()
         break
       default:
@@ -1721,18 +1846,33 @@ export const SidepanelForm = ({
       kind: "toggle",
       requestedMode: snapshot.requestedMode,
       resolvedMode: snapshot.resolvedMode,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: snapshot.speechAvailable,
       speechUsesServer: snapshot.speechUsesServer,
       toggleIntent: dictationStrategy.toggleIntent,
       fallbackReason: snapshot.fallbackReason
     })
   }, [
+    dictationSourceReady,
     dictationStrategy.toggleIntent,
+    pendingDictationStart,
+    requestedServerDictationSource,
     startBrowserDictation,
     startServerDictation,
     stopListening,
     stopServerDictation
   ])
+
+  React.useEffect(() => {
+    if (!pendingDictationStart) return
+    if (!dictationSourceReady) return
+    if (!runPendingDictationStart()) {
+      setPendingDictationStart(false)
+      return
+    }
+    setPendingDictationStart(false)
+  }, [dictationSourceReady, pendingDictationStart, runPendingDictationStart])
 
   const voiceChatStatusLabel = React.useMemo(() => {
     switch (voiceChat.state) {
@@ -1900,6 +2040,30 @@ export const SidepanelForm = ({
             {t("playground:voiceChat.ttsModeFull", "Full")}
           </Radio.Button>
         </Radio.Group>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-[11px] text-text-muted">
+          {t("playground:voiceChat.sourceLabel", "Input source")}
+        </span>
+        <AudioSourcePicker
+          ariaLabel={t(
+            "playground:voiceChat.sourcePickerLabel",
+            "Dictation input source"
+          )}
+          devices={audioInputDevices}
+          requestedSourceKind={dictationAudioSourcePreference.sourceKind}
+          resolvedSourceKind={resolvedDictationSourceKind}
+          requestedDeviceId={dictationAudioSourcePreference.deviceId}
+          lastKnownLabel={dictationAudioSourcePreference.lastKnownLabel}
+          onChange={(nextValue) =>
+            setDictationAudioSourcePreference({
+              featureGroup: "dictation",
+              sourceKind: nextValue.sourceKind,
+              deviceId: nextValue.deviceId ?? null,
+              lastKnownLabel: nextValue.lastKnownLabel ?? null
+            })
+          }
+        />
       </div>
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] text-text-muted">

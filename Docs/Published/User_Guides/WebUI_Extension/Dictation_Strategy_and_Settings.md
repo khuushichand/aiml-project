@@ -32,6 +32,13 @@ Speech-to-Text defaults in Settings are applied to server dictation requests:
 - response format
 - optional segmentation parameters
 
+Audio input source preferences are now stored separately for:
+- dictation
+- live voice
+- speech playground
+
+Mic-device switching is available for live voice and other recorder-backed flows. Browser dictation still cannot honor an explicit non-default microphone directly, so any browser-only fallback continues to use the browser's active default input. Share-style capture options such as tab audio or system audio are not yet available in the extension.
+
 ## Fallback Behavior
 
 In `auto` mode, server dictation errors are classified into canonical error classes.

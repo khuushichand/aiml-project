@@ -19,20 +19,43 @@ const resolveSidepanelFormPath = () => {
 }
 
 describe("dictation cross-surface contract", () => {
-  it("keeps Playground and Sidepanel on the same shared dictation path", () => {
-    const playgroundFormPath = path.resolve(__dirname, "../PlaygroundForm.tsx")
+  it("keeps Playground and Sidepanel on the same shared dictation source path", () => {
+    const playgroundVoiceChatPath = path.resolve(
+      __dirname,
+      "../hooks/usePlaygroundVoiceChat.ts"
+    )
     const sidepanelFormPath = resolveSidepanelFormPath()
     if (!sidepanelFormPath) {
       throw new Error("Unable to locate Sidepanel chat form source")
     }
 
-    const playgroundSource = fs.readFileSync(playgroundFormPath, "utf8")
+    const playgroundSource = fs.readFileSync(playgroundVoiceChatPath, "utf8")
     const sidepanelSource = fs.readFileSync(sidepanelFormPath, "utf8")
 
-    expect(playgroundSource).toContain("useServerDictation({")
-    expect(sidepanelSource).toContain("useServerDictation({")
-    expect(playgroundSource).toContain("useDictationStrategy({")
-    expect(sidepanelSource).toContain("useDictationStrategy({")
+    expect(playgroundSource).toContain('useAudioSourcePreferences("dictation")')
+    expect(sidepanelSource).toContain('useAudioSourcePreferences("dictation")')
+    expect(playgroundSource).toContain("resolveAudioCapturePlan({")
+    expect(sidepanelSource).toContain("resolveAudioCapturePlan({")
+    expect(playgroundSource).toContain(
+      'dictationModeOverride === "browser" && !browserDictationCompatible'
+    )
+    expect(sidepanelSource).toContain(
+      'dictationModeOverride === "browser" && !browserDictationCompatible'
+    )
+    expect(playgroundSource).toContain('canUseServerStt ? ("server" as const) : ("unavailable" as const)')
+    expect(sidepanelSource).toContain('canUseServerStt ? ("server" as const) : ("unavailable" as const)')
+    expect(playgroundSource).toContain("resolvedModeOverride,")
+    expect(sidepanelSource).toContain("resolvedModeOverride,")
+    expect(playgroundSource).toContain("resolvedDictationSourcePreference.sourceKind")
+    expect(sidepanelSource).toContain("resolvedDictationSourcePreference.sourceKind")
+    expect(playgroundSource).toContain("audioInputDevices.some(")
+    expect(sidepanelSource).toContain("audioInputDevices.some(")
+    expect(playgroundSource).toContain("dictationSourceReady")
+    expect(sidepanelSource).toContain("dictationSourceReady")
+    expect(playgroundSource).toContain("pendingDictationStart")
+    expect(sidepanelSource).toContain("pendingDictationStart")
+    expect(playgroundSource).toContain("hasAudioCatalogSettled")
+    expect(sidepanelSource).toContain("hasAudioCatalogSettled")
 
     expect(playgroundSource).toContain(
       "serverDictationErrorBridgeRef.current = dictationStrategy.recordServerError"
@@ -46,42 +69,51 @@ describe("dictation cross-surface contract", () => {
     expect(sidepanelSource).toContain(
       "serverDictationSuccessBridgeRef.current = dictationStrategy.recordServerSuccess"
     )
+    expect(playgroundSource).toContain(
+      "const snapshot = dictationDiagnosticsSnapshotRef.current"
+    )
+    expect(sidepanelSource).toContain(
+      "const snapshot = dictationDiagnosticsSnapshotRef.current"
+    )
+    expect(playgroundSource).toContain("requestedSourceKind:")
+    expect(playgroundSource).toContain("resolvedSourceKind:")
+    expect(sidepanelSource).toContain("requestedSourceKind:")
+    expect(sidepanelSource).toContain("resolvedSourceKind:")
   })
 
   it("routes dictation controls through unified toggle intent handlers in both forms", () => {
-    const playgroundFormPath = path.resolve(__dirname, "../PlaygroundForm.tsx")
+    const playgroundVoiceChatPath = path.resolve(
+      __dirname,
+      "../hooks/usePlaygroundVoiceChat.ts"
+    )
     const sidepanelFormPath = resolveSidepanelFormPath()
     if (!sidepanelFormPath) {
       throw new Error("Unable to locate Sidepanel chat form source")
     }
 
-    const playgroundSource = fs.readFileSync(playgroundFormPath, "utf8")
+    const playgroundSource = fs.readFileSync(playgroundVoiceChatPath, "utf8")
     const sidepanelSource = fs.readFileSync(sidepanelFormPath, "utf8")
 
     expect(playgroundSource).toContain("const handleDictationToggle = React.useCallback(() => {")
     expect(playgroundSource).toContain("switch (dictationToggleIntent)")
-    expect(playgroundSource).toContain("onDictationToggle={handleDictationToggle}")
-    expect(playgroundSource).toContain("onSelectDictation={handleDictationToggle}")
-    expect(playgroundSource).not.toContain(
-      "speechUsesServer ? handleServerDictationToggle : handleSpeechToggle"
-    )
+    expect(playgroundSource).toContain("startServerDictation(requestedServerDictationSource)")
 
     expect(sidepanelSource).toContain("const handleDictationToggle = React.useCallback(() => {")
     expect(sidepanelSource).toContain("switch (dictationStrategy.toggleIntent)")
-    expect(sidepanelSource).toContain("onClick={handleDictationToggle}")
-    expect(sidepanelSource).not.toContain(
-      "speechUsesServer ? startServerDictation : handleSpeechToggle"
-    )
+    expect(sidepanelSource).toContain("startServerDictation(requestedServerDictationSource)")
   })
 
   it("keeps transcript insertion attached to the composer message in both forms", () => {
-    const playgroundFormPath = path.resolve(__dirname, "../PlaygroundForm.tsx")
+    const playgroundVoiceChatPath = path.resolve(
+      __dirname,
+      "../hooks/usePlaygroundVoiceChat.ts"
+    )
     const sidepanelFormPath = resolveSidepanelFormPath()
     if (!sidepanelFormPath) {
       throw new Error("Unable to locate Sidepanel chat form source")
     }
 
-    const playgroundSource = fs.readFileSync(playgroundFormPath, "utf8")
+    const playgroundSource = fs.readFileSync(playgroundVoiceChatPath, "utf8")
     const sidepanelSource = fs.readFileSync(sidepanelFormPath, "utf8")
 
     expect(playgroundSource).toContain("onTranscript: (text) => {")

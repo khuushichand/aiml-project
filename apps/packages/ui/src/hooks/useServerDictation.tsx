@@ -1,5 +1,10 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
+import type { AudioCaptureRequestedSource } from "@/audio"
+import {
+  createAudioCaptureSessionCoordinator,
+  type AudioCaptureSessionCoordinator
+} from "@/audio"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { SttSettings } from "@/hooks/useSttSettings"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -15,9 +20,41 @@ export interface UseServerDictationOptions {
 
 export interface UseServerDictationResult {
   isServerDictating: boolean
-  startServerDictation: () => Promise<void>
+  startServerDictation: (source?: AudioCaptureRequestedSource) => Promise<void>
   stopServerDictation: () => void
 }
+
+const AUDIO_CAPTURE_COORDINATOR_KEY = Symbol.for(
+  "tldw.audioCaptureSessionCoordinator"
+)
+
+const getAudioCaptureSessionCoordinator = (): AudioCaptureSessionCoordinator => {
+  const globalState = globalThis as typeof globalThis & {
+    [AUDIO_CAPTURE_COORDINATOR_KEY]?: AudioCaptureSessionCoordinator
+  }
+  if (!globalState[AUDIO_CAPTURE_COORDINATOR_KEY]) {
+    globalState[AUDIO_CAPTURE_COORDINATOR_KEY] =
+      createAudioCaptureSessionCoordinator()
+  }
+  return globalState[AUDIO_CAPTURE_COORDINATOR_KEY]
+}
+
+function buildAudioConstraints(
+  deviceId?: string | null
+): MediaStreamConstraints["audio"] {
+  return deviceId ? { deviceId: { exact: deviceId } } : true
+}
+
+const buildCaptureBusyError = (activeOwner: string) => ({
+  message: `Audio capture is already active for ${activeOwner}.`,
+  details: {
+    detail: {
+      dictation_error_class: "unknown_error",
+      status: "capture_busy",
+      message: `Audio capture is already active for ${activeOwner}.`
+    }
+  }
+})
 
 export const useServerDictation = (
   options: UseServerDictationOptions
@@ -35,6 +72,7 @@ export const useServerDictation = (
 
   const serverRecorderRef = React.useRef<MediaRecorder | null>(null)
   const serverChunksRef = React.useRef<BlobPart[]>([])
+  const captureOwnerRef = React.useRef(false)
   const [isServerDictating, setIsServerDictating] = React.useState(false)
 
   const reportError = React.useCallback(
@@ -55,7 +93,27 @@ export const useServerDictation = (
     }
   }, [])
 
-  const startServerDictation = React.useCallback(async () => {
+  const releaseCaptureOwner = React.useCallback(() => {
+    if (!captureOwnerRef.current) return
+    captureOwnerRef.current = false
+    getAudioCaptureSessionCoordinator().release("dictation")
+  }, [])
+
+  const reserveCaptureOwner = React.useCallback((): string | null => {
+    if (captureOwnerRef.current) return null
+    const coordinator = getAudioCaptureSessionCoordinator()
+    const activeOwner = coordinator.getActiveOwner()
+    if (activeOwner !== null) {
+      return activeOwner
+    }
+    coordinator.claim("dictation")
+    captureOwnerRef.current = true
+    return null
+  }, [])
+
+  const startServerDictation = React.useCallback(async (
+    source?: AudioCaptureRequestedSource
+  ) => {
     if (isServerDictating) {
       stopServerDictation()
       return
@@ -75,8 +133,23 @@ export const useServerDictation = (
       return
     }
 
+    const activeOwner = reserveCaptureOwner()
+    if (activeOwner) {
+      const busyError = buildCaptureBusyError(activeOwner)
+      reportError(busyError)
+      notification.error({
+        message: t("playground:actions.speechErrorTitle", "Dictation failed"),
+        description: busyError.message
+      })
+      return
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const requestedDeviceId =
+        source?.sourceKind === "mic_device" ? source.deviceId : null
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: buildAudioConstraints(requestedDeviceId)
+      })
       const recorder = new MediaRecorder(stream)
       serverChunksRef.current = []
 
@@ -95,6 +168,11 @@ export const useServerDictation = (
             "Microphone recording error. Check your permissions and try again."
           )
         })
+        try {
+          stream.getTracks().forEach((trk) => trk.stop())
+        } catch {}
+        serverRecorderRef.current = null
+        releaseCaptureOwner()
         setIsServerDictating(false)
       }
 
@@ -213,6 +291,7 @@ export const useServerDictation = (
             stream.getTracks().forEach((trk) => trk.stop())
           } catch {}
           serverRecorderRef.current = null
+          releaseCaptureOwner()
           setIsServerDictating(false)
         }
       }
@@ -221,6 +300,7 @@ export const useServerDictation = (
       recorder.start()
       setIsServerDictating(true)
     } catch (e: any) {
+      reportError(e)
       // Add permissions guidance for microphone errors
       const isChromeOrEdge =
         typeof chrome !== "undefined" && chrome.permissions
@@ -245,12 +325,17 @@ export const useServerDictation = (
           </div>
         )
       })
+      serverRecorderRef.current = null
+      setIsServerDictating(false)
+      releaseCaptureOwner()
     }
   }, [
     canUseServerStt,
     isServerDictating,
     onSuccess,
     reportError,
+    reserveCaptureOwner,
+    releaseCaptureOwner,
     speechToTextLanguage,
     sttSettings,
     stopServerDictation,

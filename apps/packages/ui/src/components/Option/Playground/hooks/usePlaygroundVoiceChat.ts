@@ -1,6 +1,9 @@
 import React from "react"
+import { resolveAudioCapturePlan } from "@/audio"
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import type {
+  AudioCaptureRequestedSource,
   DictationErrorClass,
   DictationModePreference,
   DictationResolvedMode,
@@ -9,6 +12,7 @@ import type {
 import { useDictationStrategy } from "@/hooks/useDictationStrategy"
 import { useServerDictation } from "@/hooks/useServerDictation"
 import type { SttSettings } from "@/hooks/useSttSettings"
+import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
 import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import { withTemplateFallback } from "@/utils/template-guards"
 
@@ -102,6 +106,15 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
     isSending,
     t
   } = deps
+  const {
+    preference: dictationAudioSourcePreference,
+    isLoading: dictationSourceLoading,
+    setPreference: setDictationAudioSourcePreference
+  } = useAudioSourcePreferences("dictation")
+  const {
+    devices: audioInputDevices,
+    isSettled: hasAudioCatalogSettled
+  } = useAudioSourceCatalog()
 
   const {
     transcript,
@@ -119,16 +132,88 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
       }
     }
   })
+  const [pendingDictationStart, setPendingDictationStart] = React.useState(false)
+
+  const dictationCapturePlan = React.useMemo(
+    () =>
+      resolveAudioCapturePlan({
+        featureGroup: "dictation",
+        requestedSource: dictationAudioSourcePreference,
+        requestedSpeechPath:
+          dictationModeOverride === "browser"
+            ? "browser_dictation"
+            : "server_dictation",
+        capabilities: {
+          browserDictationSupported: browserSupportsSpeechRecognition,
+          serverDictationSupported: canUseServerStt,
+          liveVoiceSupported: false,
+          secureContextAvailable:
+            typeof window === "undefined" ? true : window.isSecureContext
+        }
+      }),
+    [
+      browserSupportsSpeechRecognition,
+      canUseServerStt,
+      dictationAudioSourcePreference,
+      dictationModeOverride
+    ]
+  )
+  const dictationSourceReady = hasAudioCatalogSettled && !dictationSourceLoading
+  const resolvedDictationSourcePreference = React.useMemo(() => {
+    if (!dictationSourceReady) {
+      return dictationAudioSourcePreference
+    }
+
+    if (dictationAudioSourcePreference.sourceKind !== "mic_device") {
+      return dictationAudioSourcePreference
+    }
+
+    const requestedDeviceId = String(dictationAudioSourcePreference.deviceId || "").trim()
+    const deviceStillAvailable = audioInputDevices.some(
+      (device) => device.deviceId === requestedDeviceId
+    )
+
+    if (deviceStillAvailable) {
+      return dictationAudioSourcePreference
+    }
+
+    return {
+      featureGroup: "dictation" as const,
+      sourceKind: "default_mic" as const,
+      deviceId: null,
+      lastKnownLabel: null
+    }
+  }, [audioInputDevices, dictationAudioSourcePreference, dictationSourceReady])
+  const resolvedDictationSourceKind = resolvedDictationSourcePreference.sourceKind
+  const browserDictationCompatible =
+    resolvedDictationSourcePreference.sourceKind === "default_mic"
+  const resolvedModeOverride =
+    dictationModeOverride === "browser" && !browserDictationCompatible
+      ? (canUseServerStt ? ("server" as const) : ("unavailable" as const))
+      : null
+  const requestedServerDictationSource = React.useMemo<
+    AudioCaptureRequestedSource | undefined
+  >(
+    () =>
+      resolvedDictationSourcePreference.sourceKind === "mic_device"
+        ? resolvedDictationSourcePreference
+        : undefined,
+    [resolvedDictationSourcePreference]
+  )
 
   const dictationDiagnosticsSnapshotRef = React.useRef<{
     requestedMode: DictationModePreference
     resolvedMode: DictationResolvedMode
+    requestedSourceKind: "default_mic" | "mic_device" | "tab_audio" | "system_audio"
+    resolvedSourceKind: "default_mic" | "mic_device" | "tab_audio" | "system_audio"
     speechAvailable: boolean
     speechUsesServer: boolean
     fallbackReason: DictationErrorClass | null
   }>({
     requestedMode: "auto",
     resolvedMode: "unavailable",
+    requestedSourceKind: "default_mic",
+    resolvedSourceKind: "default_mic",
     speechAvailable: false,
     speechUsesServer: false,
     fallbackReason: null
@@ -152,11 +237,14 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
 
   const handleServerDictationError = React.useCallback((error: unknown) => {
     const transition = serverDictationErrorBridgeRef.current(error)
+    const snapshot = dictationDiagnosticsSnapshotRef.current
     emitDictationDiagnostics({
       surface: "playground",
       kind: "server_error",
       requestedMode: transition.requestedMode,
       resolvedMode: transition.resolvedModeBeforeError,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: transition.speechAvailableBeforeError,
       speechUsesServer: transition.speechUsesServerBeforeError,
       errorClass: transition.errorClass,
@@ -173,6 +261,8 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
       kind: "server_success",
       requestedMode: snapshot.requestedMode,
       resolvedMode: snapshot.resolvedMode,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: snapshot.speechAvailable,
       speechUsesServer: snapshot.speechUsesServer,
       fallbackReason: snapshot.fallbackReason
@@ -230,6 +320,8 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
   const dictationStrategy = useDictationStrategy({
     canUseServerStt,
     browserSupportsSpeechRecognition,
+    browserDictationCompatible,
+    resolvedModeOverride,
     isServerDictating,
     isBrowserDictating: isListening,
     modeOverride: dictationModeOverride,
@@ -244,6 +336,8 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
   dictationDiagnosticsSnapshotRef.current = {
     requestedMode: dictationStrategy.requestedMode,
     resolvedMode: dictationStrategy.resolvedMode,
+    requestedSourceKind: dictationCapturePlan.requestedSourceKind,
+    resolvedSourceKind: resolvedDictationSourceKind,
     speechAvailable: dictationStrategy.speechAvailable,
     speechUsesServer: dictationStrategy.speechUsesServer,
     fallbackReason: dictationStrategy.autoFallbackErrorClass
@@ -312,6 +406,23 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
       lang: speechToTextLanguage
     })
   }, [resetTranscript, speechToTextLanguage, startListening])
+  const runPendingDictationStart = React.useCallback(() => {
+    switch (dictationToggleIntent) {
+      case "start_server":
+        void startServerDictation(requestedServerDictationSource)
+        return true
+      case "start_browser":
+        startBrowserDictation()
+        return true
+      default:
+        return false
+    }
+  }, [
+    dictationToggleIntent,
+    requestedServerDictationSource,
+    startBrowserDictation,
+    startServerDictation
+  ])
 
   // --- Voice chat status label ---
   const voiceChatStatusLabel = React.useMemo(() => {
@@ -392,17 +503,32 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
 
   // --- Dictation toggle ---
   const handleDictationToggle = React.useCallback(() => {
+    if (pendingDictationStart) {
+      setPendingDictationStart(false)
+      return
+    }
+
     switch (dictationToggleIntent) {
       case "start_server":
-        void startServerDictation()
+        if (!dictationSourceReady) {
+          setPendingDictationStart(true)
+          return
+        }
+        void startServerDictation(requestedServerDictationSource)
         break
       case "stop_server":
+        setPendingDictationStart(false)
         stopServerDictation()
         break
       case "start_browser":
+        if (!dictationSourceReady) {
+          setPendingDictationStart(true)
+          return
+        }
         startBrowserDictation()
         break
       case "stop_browser":
+        setPendingDictationStart(false)
         stopSpeechRecognition()
         break
       default:
@@ -414,18 +540,33 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
       kind: "toggle",
       requestedMode: snapshot.requestedMode,
       resolvedMode: snapshot.resolvedMode,
+      requestedSourceKind: snapshot.requestedSourceKind,
+      resolvedSourceKind: snapshot.resolvedSourceKind,
       speechAvailable: snapshot.speechAvailable,
       speechUsesServer: snapshot.speechUsesServer,
       toggleIntent: dictationToggleIntent,
       fallbackReason: snapshot.fallbackReason
     })
   }, [
+    dictationSourceReady,
     dictationToggleIntent,
+    pendingDictationStart,
     startBrowserDictation,
     startServerDictation,
+    requestedServerDictationSource,
     stopServerDictation,
     stopSpeechRecognition
   ])
+
+  React.useEffect(() => {
+    if (!pendingDictationStart) return
+    if (!dictationSourceReady) return
+    if (!runPendingDictationStart()) {
+      setPendingDictationStart(false)
+      return
+    }
+    setPendingDictationStart(false)
+  }, [dictationSourceReady, pendingDictationStart, runPendingDictationStart])
 
   // Sync transcript to message value
   React.useEffect(() => {
@@ -446,6 +587,9 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
     isListening,
     resetTranscript,
     browserSupportsSpeechRecognition,
+    dictationAudioSourcePreference,
+    dictationResolvedSourceKind: resolvedDictationSourceKind,
+    setDictationAudioSourcePreference,
     // Server dictation
     isServerDictating,
     startServerDictation,

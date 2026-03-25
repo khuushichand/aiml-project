@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
@@ -8,6 +8,16 @@ const micState = vi.hoisted(() => ({
   start: vi.fn(async () => {}),
   stop: vi.fn(() => {}),
   active: true
+}))
+
+const { storageValues, useStorageMock } = vi.hoisted(() => ({
+  storageValues: new Map<string, unknown>(),
+  useStorageMock: vi.fn()
+}))
+
+const audioCatalogState = vi.hoisted(() => ({
+  devices: [] as Array<{ deviceId: string; label: string }>,
+  isSettled: true
 }))
 
 const audioPlayerState = vi.hoisted(() => ({
@@ -37,6 +47,10 @@ vi.mock("@/hooks/useStreamingAudioPlayer", () => ({
     stop: audioPlayerState.stop,
     state: audioPlayerState.state
   })
+}))
+
+vi.mock("@/hooks/useAudioSourceCatalog", () => ({
+  useAudioSourceCatalog: () => audioCatalogState
 }))
 
 vi.mock("@/hooks/useVoiceChatSettings", () => ({
@@ -73,23 +87,7 @@ vi.mock("@/utils/resolve-api-provider", () => ({
 }))
 
 vi.mock("@plasmohq/storage/hook", () => ({
-  useStorage: (key: string, defaultValue: unknown) => {
-    const map: Record<string, unknown> = {
-      speechToTextLanguage: "en-US",
-      selectedModel: "test-model",
-      ttsProvider: "tldw",
-      tldwTtsModel: "kokoro",
-      tldwTtsVoice: "af_heart",
-      tldwTtsResponseFormat: "mp3",
-      tldwTtsSpeed: 1,
-      openAITTSModel: "tts-1",
-      openAITTSVoice: "alloy",
-      elevenLabsModel: "",
-      elevenLabsVoiceId: "",
-      speechPlaybackSpeed: 1
-    }
-    return [map[key] ?? defaultValue]
-  }
+  useStorage: useStorageMock
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -150,7 +148,141 @@ describe("useVoiceChatStream interrupt handling", () => {
     audioPlayerState.append.mockClear()
     audioPlayerState.finish.mockClear()
     audioPlayerState.stop.mockClear()
+    audioCatalogState.devices = [
+      { deviceId: "default", label: "Default microphone" },
+      { deviceId: "usb-1", label: "USB microphone" }
+    ]
+    audioCatalogState.isSettled = true
+    storageValues.clear()
+    storageValues.set("speechToTextLanguage", "en-US")
+    storageValues.set("selectedModel", "test-model")
+    storageValues.set("ttsProvider", "tldw")
+    storageValues.set("tldwTtsModel", "kokoro")
+    storageValues.set("tldwTtsVoice", "af_heart")
+    storageValues.set("tldwTtsResponseFormat", "mp3")
+    storageValues.set("tldwTtsSpeed", 1)
+    storageValues.set("openAITTSModel", "tts-1")
+    storageValues.set("openAITTSVoice", "alloy")
+    storageValues.set("elevenLabsModel", "")
+    storageValues.set("elevenLabsVoiceId", "")
+    storageValues.set("speechPlaybackSpeed", 1)
+    useStorageMock.mockReset()
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => [
+      storageValues.has(key) ? storageValues.get(key) : defaultValue,
+      vi.fn(),
+      { isLoading: key === "liveVoiceAudioSourcePreference" ? false : false }
+    ])
     ;(globalThis as any).WebSocket = MockWebSocket
+  })
+
+  it("starts live voice with the remembered live_voice mic device", async () => {
+    storageValues.set("liveVoiceAudioSourcePreference", {
+      featureGroup: "live_voice",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+
+    const { result } = renderHook(() =>
+      useVoiceChatStream({
+        active: false
+      })
+    )
+
+    await act(async () => {
+      await result.current.start()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const ws = MockWebSocket.instances[0]
+    expect(ws).toBeDefined()
+
+    await act(async () => {
+      ws.triggerOpen()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(micState.start).toHaveBeenCalledWith({ deviceId: "usb-1" })
+  })
+
+  it("waits for the live_voice preference to hydrate before starting", async () => {
+    storageValues.set("liveVoiceAudioSourcePreference", {
+      featureGroup: "live_voice",
+      sourceKind: "mic_device",
+      deviceId: "usb-1",
+      lastKnownLabel: "USB microphone"
+    })
+
+    let preferenceLoading = true
+    useStorageMock.mockImplementation((key: string, defaultValue: unknown) => [
+      storageValues.has(key) ? storageValues.get(key) : defaultValue,
+      vi.fn(),
+      { isLoading: key === "liveVoiceAudioSourcePreference" ? preferenceLoading : false }
+    ])
+
+    const { rerender } = renderHook(() =>
+      useVoiceChatStream({
+        active: true
+      })
+    )
+
+    expect(MockWebSocket.instances).toHaveLength(0)
+    expect(micState.start).not.toHaveBeenCalled()
+
+    await act(async () => {
+      preferenceLoading = false
+      rerender()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const ws = MockWebSocket.instances[0]
+    expect(ws).toBeDefined()
+
+    await act(async () => {
+      ws.triggerOpen()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(micState.start).toHaveBeenCalledWith({ deviceId: "usb-1" })
+    })
+  })
+
+  it("falls back to the default microphone when the remembered live_voice device is missing", async () => {
+    storageValues.set("liveVoiceAudioSourcePreference", {
+      featureGroup: "live_voice",
+      sourceKind: "mic_device",
+      deviceId: "usb-missing",
+      lastKnownLabel: "Studio microphone"
+    })
+    audioCatalogState.devices = [{ deviceId: "default", label: "Default microphone" }]
+
+    const { result } = renderHook(() =>
+      useVoiceChatStream({
+        active: true
+      })
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const ws = MockWebSocket.instances[0]
+    expect(ws).toBeDefined()
+
+    await act(async () => {
+      ws.triggerOpen()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(micState.start).toHaveBeenCalledWith({ deviceId: null })
+    expect(result.current.connected).toBe(true)
   })
 
   it("sends interrupt when barge-in audio resumes while speaking", async () => {

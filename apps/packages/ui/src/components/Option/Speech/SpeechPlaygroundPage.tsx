@@ -19,6 +19,12 @@ import {
 import type { DefaultOptionType } from "antd/es/select"
 import { ArrowRight, Copy, Lock, Mic, Pause, Play, Plus, Save, Star, Trash2, Unlock } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  createAudioCaptureBusyError,
+  getGlobalAudioCaptureSessionCoordinator,
+  resolveAudioCapturePlan
+} from "@/audio"
+import { AudioSourcePicker } from "@/components/Common/AudioSourcePicker"
 import { PageShell } from "@/components/Common/PageShell"
 import WaveformCanvas from "@/components/Common/WaveformCanvas"
 import { inferTldwProviderFromModel, resolveTtsProviderContext } from "@/services/tts-provider"
@@ -65,6 +71,8 @@ import { TtsAdvancedTab } from "@/components/Option/Speech/TtsAdvancedTab"
 import { VoiceCloningManager } from "@/components/Option/TTS/VoiceCloningManager"
 import { RenderStrip } from "@/components/Option/Speech/RenderStrip"
 import { VoicePickerModal, type VoiceSelection } from "@/components/Option/Speech/VoicePickerModal"
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
+import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
 import { useMultiRenderState } from "@/hooks/useMultiRenderState"
 
 const { Text, Title, Paragraph } = Typography
@@ -223,6 +231,9 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [historyFavoritesOnly, setHistoryFavoritesOnly] = React.useState(false)
   const [historyQuery, setHistoryQuery] = React.useState("")
   const [ttsPreset, setTtsPreset] = useStorage<TtsPresetKey>("ttsPreset", "balanced")
+  const { preference: audioSourcePreference, setPreference: setAudioSourcePreference } =
+    useAudioSourcePreferences("speech_playground")
+  const { devices: audioInputDevices } = useAudioSourceCatalog()
   const isLockedTtsRoute = lockedMode === "listen"
   const effectiveMode = lockedMode ?? mode
   const effectiveHistoryFilter = isLockedTtsRoute ? "tts" : historyFilter
@@ -321,9 +332,134 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [recordingError, setRecordingError] = React.useState<string | null>(null)
   const [recordingStream, setRecordingStream] = React.useState<MediaStream | null>(null)
   const recorderRef = React.useRef<MediaRecorder | null>(null)
+  const recordingStreamRef = React.useRef<MediaStream | null>(null)
+  const captureOwnerRef = React.useRef(false)
   const chunksRef = React.useRef<BlobPart[]>([])
   const startedAtRef = React.useRef<number | null>(null)
   const liveTextRef = React.useRef<string>("")
+  const [hasAudioCatalogSettled, setHasAudioCatalogSettled] = React.useState(false)
+  const captureCapabilities = React.useMemo(
+    () => ({
+      browserDictationSupported:
+        typeof navigator !== "undefined" &&
+        typeof navigator.mediaDevices?.getUserMedia === "function",
+      serverDictationSupported: true,
+      liveVoiceSupported: false,
+      secureContextAvailable:
+        typeof window !== "undefined" ? window.isSecureContext : false
+    }),
+    []
+  )
+  React.useEffect(() => {
+    const mediaDevices =
+      typeof navigator !== "undefined" ? navigator.mediaDevices : undefined
+
+    if (!mediaDevices?.enumerateDevices) {
+      return
+    }
+
+    let active = true
+
+    void mediaDevices
+      .enumerateDevices()
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) {
+          setHasAudioCatalogSettled(true)
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const releaseCaptureOwner = React.useCallback(() => {
+    if (!captureOwnerRef.current) return
+    captureOwnerRef.current = false
+    getGlobalAudioCaptureSessionCoordinator().release("speech_playground")
+  }, [])
+
+  const reserveCaptureOwner = React.useCallback(() => {
+    if (captureOwnerRef.current) return
+    const coordinator = getGlobalAudioCaptureSessionCoordinator()
+    const activeOwner = coordinator.getActiveOwner()
+    if (activeOwner !== null) {
+      throw createAudioCaptureBusyError(activeOwner)
+    }
+    coordinator.claim("speech_playground")
+    captureOwnerRef.current = true
+  }, [])
+
+  const stopRecordingStreamTracks = React.useCallback(
+    (stream?: MediaStream | null, syncState = true) => {
+      const streamToStop = stream ?? recordingStreamRef.current
+      if (streamToStop) {
+        try {
+          streamToStop.getTracks().forEach((track) => track.stop())
+        } catch {}
+      }
+      if (!stream || recordingStreamRef.current === stream) {
+        recordingStreamRef.current = null
+      }
+      if (syncState) {
+        setRecordingStream(null)
+      }
+    },
+    []
+  )
+
+  const resolvedAudioSource = React.useMemo(() => {
+    if (
+      hasAudioCatalogSettled &&
+      audioSourcePreference.sourceKind === "mic_device" &&
+      !audioInputDevices.some(
+        (device) => device.deviceId === audioSourcePreference.deviceId
+      )
+    ) {
+      return {
+        sourceKind: "default_mic" as const,
+        deviceId: null
+      }
+    }
+
+    return audioSourcePreference
+  }, [audioInputDevices, audioSourcePreference, hasAudioCatalogSettled])
+  const capturePlan = React.useMemo(
+    () =>
+      resolveAudioCapturePlan({
+        featureGroup: "speech_playground",
+        requestedSource: audioSourcePreference,
+        requestedSpeechPath: "speech_playground_recording",
+        capabilities: captureCapabilities
+      }),
+    [audioSourcePreference, captureCapabilities]
+  )
+  const captureDeviceId =
+    resolvedAudioSource.sourceKind === "mic_device"
+      ? resolvedAudioSource.deviceId ?? capturePlan.resolvedDeviceId
+      : null
+
+  React.useEffect(() => {
+    return () => {
+      const recorder = recorderRef.current
+      recorderRef.current = null
+
+      if (recorder) {
+        recorder.ondataavailable = null
+        recorder.onerror = null
+        recorder.onstop = null
+        try {
+          if (recorder.state === "recording") {
+            recorder.stop()
+          }
+        } catch {}
+      }
+
+      stopRecordingStreamTracks(recordingStreamRef.current, false)
+      releaseCaptureOwner()
+    }
+  }, [releaseCaptureOwner, stopRecordingStreamTracks])
 
   const appendLiveText = React.useCallback((textChunk: string) => {
     if (!textChunk) return
@@ -434,9 +570,15 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     }
     try {
       setRecordingError(null)
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      reserveCaptureOwner()
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: captureDeviceId
+          ? { deviceId: { exact: captureDeviceId } }
+          : true
+      })
       const recorder = new MediaRecorder(stream)
       recorderRef.current = recorder
+      recordingStreamRef.current = stream
       chunksRef.current = []
       startedAtRef.current = Date.now()
       liveTextRef.current = ""
@@ -478,6 +620,9 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         })
         setIsRecording(false)
         setIsTranscribing(false)
+        recorderRef.current = null
+        stopRecordingStreamTracks(recorder.stream)
+        releaseCaptureOwner()
       }
 
       recorder.onstop = async () => {
@@ -556,10 +701,9 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
               )
           })
         } finally {
-          try {
-            recorder.stream.getTracks().forEach((trk) => trk.stop())
-          } catch {}
-          setRecordingStream(null)
+          recorderRef.current = null
+          stopRecordingStreamTracks(recorder.stream)
+          releaseCaptureOwner()
           setIsRecording(false)
           setIsTranscribing(false)
         }
@@ -568,20 +712,24 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
       recorder.start(useLongRunning ? 5000 : undefined)
       setIsRecording(true)
     } catch (e: any) {
-      setRecordingError(
+      const description =
+        e?.message ||
         t(
           "playground:actions.speechMicError",
           "Unable to access your microphone. Check browser permissions and try again."
         )
+      setRecordingError(
+        description
       )
       notification.error({
         message: t("playground:actions.speechErrorTitle", "Dictation failed"),
-        description: t(
-          "playground:actions.speechMicError",
-          "Unable to access your microphone. Check browser permissions and try again."
-        )
+        description
       })
+      recorderRef.current = null
+      stopRecordingStreamTracks()
+      releaseCaptureOwner()
       setIsRecording(false)
+      setIsTranscribing(false)
     }
   }
 
@@ -2073,17 +2221,44 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                       />
                     )}
                   </div>
-                  <div className="space-y-1">
-                    <Text type="secondary" className="block text-xs">
-                      {t("playground:stt.sessionMode", "Session mode")}
-                    </Text>
-                    <div className="flex items-center gap-2">
-                      <Switch checked={useLongRunning} onChange={setUseLongRunning} size="small" />
-                      <span className="text-xs text-text-muted">
-                        {useLongRunning
-                          ? t("playground:stt.modeLong", "Long-running (chunked recording)")
-                          : t("playground:stt.modeShort", "Short dictation (single clip)")}
-                      </span>
+                  <div className="flex flex-col gap-3">
+                    <div className="space-y-1">
+                      <Text type="secondary" className="block text-xs">
+                        {t("playground:stt.sessionMode", "Session mode")}
+                      </Text>
+                      <div className="flex items-center gap-2">
+                        <Switch checked={useLongRunning} onChange={setUseLongRunning} size="small" />
+                        <span className="text-xs text-text-muted">
+                          {useLongRunning
+                            ? t("playground:stt.modeLong", "Long-running (chunked recording)")
+                            : t("playground:stt.modeShort", "Short dictation (single clip)")}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <Text type="secondary" className="block text-xs">
+                        {t("playground:stt.sourcePickerTitle", "Input source")}
+                      </Text>
+                      <AudioSourcePicker
+                        ariaLabel={t(
+                          "playground:stt.sourcePickerLabel",
+                          "Speech playground input source"
+                        )}
+                        className="min-w-[240px]"
+                        devices={audioInputDevices}
+                        requestedSourceKind={audioSourcePreference.sourceKind}
+                        resolvedSourceKind={resolvedAudioSource.sourceKind}
+                        requestedDeviceId={audioSourcePreference.deviceId}
+                        lastKnownLabel={audioSourcePreference.lastKnownLabel}
+                        onChange={(nextValue) =>
+                          setAudioSourcePreference({
+                            featureGroup: "speech_playground",
+                            sourceKind: nextValue.sourceKind,
+                            deviceId: nextValue.deviceId ?? null,
+                            lastKnownLabel: nextValue.lastKnownLabel ?? null
+                          })
+                        }
+                      />
                     </div>
                   </div>
                 </div>
@@ -2128,6 +2303,13 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
                     }
                   >
                     <Button
+                      aria-label={
+                        isRecording
+                          ? t("playground:stt.stopAriaLabel", "Stop dictation")
+                          : isTranscribing
+                            ? t("playground:stt.transcribingAriaLabel", "Transcribing dictation")
+                            : t("playground:stt.startAriaLabel", "Start dictation")
+                      }
                       type={isRecording || isTranscribing ? "default" : "primary"}
                       danger={isRecording}
                       loading={isTranscribing}

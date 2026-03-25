@@ -109,6 +109,12 @@
     "uploadDocuments": "Upload Documents (beta)",
     "quickIngest": "Stage URLs and files for processing, even while your server is offline."
   },
+  "audioSourcePicker": {
+    "defaultMic": "Default microphone",
+    "selectLabel": "Audio input source",
+    "sourceFallbackActive": "Source fallback active",
+    "unavailable": "Unavailable"
+  },
   "feedback": {
     "prompt": "Was this helpful?",
     "thumbsUp": "Helpful",

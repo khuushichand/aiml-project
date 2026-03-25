@@ -1,5 +1,7 @@
 import React from "react"
 import { useStorage } from "@plasmohq/storage/hook"
+import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
+import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
 import { useSttSettings } from "@/hooks/useSttSettings"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useSelectedModel } from "@/hooks/chat/useSelectedModel"
@@ -108,6 +110,15 @@ export const useVoiceChatStream = ({
   } = useVoiceChatSettings()
   const [speechToTextLanguage] = useStorage("speechToTextLanguage", "en-US")
   const { selectedModel } = useSelectedModel()
+  const {
+    preference: liveVoiceSourcePreference,
+    isLoading: liveVoiceSourceLoading
+  } =
+    useAudioSourcePreferences("live_voice")
+  const {
+    devices: audioInputDevices,
+    isSettled: hasAudioCatalogSettled
+  } = useAudioSourceCatalog()
 
   const [ttsProvider] = useStorage("ttsProvider", "browser")
   const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
@@ -205,6 +216,36 @@ export const useVoiceChatStream = ({
     () => normalizeTriggerList(voiceChatTriggerPhrases),
     [voiceChatTriggerPhrases]
   )
+  const liveVoiceSourceReady = hasAudioCatalogSettled && !liveVoiceSourceLoading
+  const liveVoiceResolvedSource = React.useMemo(() => {
+    if (!liveVoiceSourceReady) {
+      return liveVoiceSourcePreference
+    }
+
+    if (liveVoiceSourcePreference.sourceKind !== "mic_device") {
+      return liveVoiceSourcePreference
+    }
+
+    const requestedDeviceId = String(liveVoiceSourcePreference.deviceId || "").trim()
+    const deviceStillAvailable = audioInputDevices.some(
+      (device) => device.deviceId === requestedDeviceId
+    )
+
+    if (deviceStillAvailable) {
+      return liveVoiceSourcePreference
+    }
+
+    return {
+      featureGroup: "live_voice" as const,
+      sourceKind: "default_mic" as const,
+      deviceId: null,
+      lastKnownLabel: null
+    }
+  }, [audioInputDevices, liveVoiceSourcePreference, liveVoiceSourceReady])
+  const liveVoiceDeviceId =
+    liveVoiceResolvedSource.sourceKind === "mic_device"
+      ? liveVoiceResolvedSource.deviceId
+      : null
 
   const resolveTtsFormat = React.useCallback((): string => {
     const preferred = String(tldwTtsResponseFormat || "mp3").toLowerCase()
@@ -417,6 +458,7 @@ export const useVoiceChatStream = ({
   )
 
   const start = React.useCallback(async () => {
+    if (!liveVoiceSourceReady) return
     if (connectingRef.current || wsRef.current) return
     connectingRef.current = true
     errorRef.current = null
@@ -544,7 +586,7 @@ export const useVoiceChatStream = ({
               })
             )
 
-            await micStart()
+            await micStart({ deviceId: liveVoiceDeviceId })
             setConnected(true)
             connectingRef.current = false
             updateState("listening")
@@ -566,6 +608,7 @@ export const useVoiceChatStream = ({
     resolveApiProviderForModel,
     selectedModel,
     speechToTextLanguage,
+    liveVoiceDeviceId,
     sttSettings.model,
     sttSettings.temperature,
     sttSettings.task,
@@ -579,6 +622,7 @@ export const useVoiceChatStream = ({
     sttSettings.segUtteranceExpansionWidth,
     sttSettings.segEmbeddingsProvider,
     sttSettings.segEmbeddingsModel,
+    liveVoiceSourceReady,
     updateState,
     voiceChatModel,
     voiceChatPauseMs
@@ -586,6 +630,7 @@ export const useVoiceChatStream = ({
 
   React.useEffect(() => {
     if (active) {
+      if (!liveVoiceSourceReady) return
       void start()
       return
     }
@@ -593,31 +638,40 @@ export const useVoiceChatStream = ({
     errorRef.current = null
     setError(null)
     updateState("idle")
-  }, [active, start, stop, updateState])
+  }, [active, liveVoiceSourceReady, start, stop, updateState])
 
   React.useEffect(() => {
     if (!pendingResumeRef.current) return
     if (audioState.playing) return
-    pendingResumeRef.current = false
     if (!active) {
+      pendingResumeRef.current = false
       updateState("idle")
       return
     }
+    if (!liveVoiceSourceReady) {
+      return
+    }
     if (voiceChatAutoResume) {
+      pendingResumeRef.current = false
       if (!voiceChatBargeIn) {
-        void micStart().then(() => updateState("listening")).catch(() => {
-          handleError("Unable to restart microphone")
-        })
+        void micStart({ deviceId: liveVoiceDeviceId })
+          .then(() => updateState("listening"))
+          .catch(() => {
+            handleError("Unable to restart microphone")
+          })
       } else {
         updateState("listening")
       }
     } else {
+      pendingResumeRef.current = false
       updateState("idle")
     }
   }, [
     active,
     audioState.playing,
     handleError,
+    liveVoiceDeviceId,
+    liveVoiceSourceReady,
     micStart,
     updateState,
     voiceChatAutoResume,
