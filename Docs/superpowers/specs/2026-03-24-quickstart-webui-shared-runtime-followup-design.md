@@ -107,9 +107,9 @@ Expected behavior:
 
 Storage precedence must be explicit:
 
-1. explicit advanced/custom host chosen by the user
-2. valid existing canonical stored config
-3. quickstart WebUI same-origin contract
+1. explicit advanced/custom host chosen by the user when browser networking mode is `advanced`
+2. quickstart WebUI same-origin contract, which must bypass or normalize any stored loopback backend origin before canonical browser config is accepted
+3. valid existing canonical stored config that is already coherent with the active browser networking mode
 4. legacy fallback values only where explicit-host platforms still require them
 
 ### 3. Centralize shared HTTP and WebSocket URL building
@@ -271,6 +271,7 @@ If the current WebUI edge cannot support safe WS upgrade proxying:
 
 - WebUI guard/validator coverage for advanced-mode missing API URL
 - representative same-origin quickstart browser behavior for shared UI flows
+- at least one integration or e2e assertion that a representative WS-backed feature succeeds through the WebUI origin, not just through a direct backend URL or a unit-tested URL builder
 
 ### Docs contract tests
 
@@ -281,6 +282,7 @@ If the current WebUI edge cannot support safe WS upgrade proxying:
 
 - The Docker + WebUI quickstart path does not write `127.0.0.1:8000` into browser runtime config for the WebUI surface.
 - Shared HTTP and shared WebSocket browser traffic in quickstart mode use the WebUI origin, not a direct backend host.
+- At least one representative WS-backed quickstart flow is proven through the WebUI origin in integration or e2e coverage.
 - Advanced mode without `NEXT_PUBLIC_API_URL` fails fast.
 - IPv6 loopback is treated the same as IPv4 loopback in browser reachability checks.
 - The Docker single-user guide launches and verifies the actual WebUI quickstart path it describes.
