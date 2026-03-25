@@ -13,6 +13,18 @@ export const TEST_CONFIG = {
   allowOffline: process.env.TLDW_E2E_ALLOW_OFFLINE !== '0',
 };
 
+const normalizeOrigin = (value: string): string => value.replace(/\/$/, '');
+
+const resolveSeedServerUrl = (cfg: Partial<typeof TEST_CONFIG>): string => {
+  if (typeof cfg.serverUrl === 'string' && cfg.serverUrl.trim().length > 0) {
+    return normalizeOrigin(cfg.serverUrl.trim());
+  }
+  if (typeof cfg.webUrl === 'string' && cfg.webUrl.trim().length > 0) {
+    return normalizeOrigin(cfg.webUrl.trim());
+  }
+  return normalizeOrigin(TEST_CONFIG.serverUrl);
+};
+
 /**
  * Seed authentication config in localStorage before page loads
  */
@@ -20,7 +32,11 @@ export async function seedAuth(
   page: Page,
   config: Partial<typeof TEST_CONFIG> = {}
 ): Promise<void> {
-  const finalConfig = { ...TEST_CONFIG, ...config };
+  const finalConfig = {
+    ...TEST_CONFIG,
+    ...config,
+    serverUrl: resolveSeedServerUrl(config),
+  };
   await page.addInitScript((cfg) => {
     const readStorageValue = (key: string) => {
       try {

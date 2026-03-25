@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 const appDir = path.resolve(__dirname, "..")
 const repoRoot = path.resolve(appDir, "..", "..")
 const nextConfigPath = path.join(appDir, "next.config.mjs")
+const validateNetworkingConfigPath = path.join(
+  appDir,
+  "scripts",
+  "validate-networking-config.mjs"
+)
 const makefilePath = path.join(repoRoot, "Makefile")
 
 const ORIGINAL_ENV = {
@@ -51,6 +56,17 @@ const loadNextConfig = async (env: {
   return mod.default
 }
 
+const loadValidateNetworkingConfig = async () => {
+  const moduleUrl = pathToFileURL(validateNetworkingConfigPath)
+  moduleUrl.searchParams.set("t", `${Date.now()}-${Math.random()}`)
+  const mod = await import(moduleUrl.href)
+  return mod.validateNetworkingConfig as (env?: Record<string, string | undefined>) => {
+    deploymentMode: string
+    internalApiOrigin: string
+    publicApiUrl: string
+  }
+}
+
 describe("frontend quickstart networking", () => {
   beforeEach(() => {
     restoreEnv()
@@ -72,12 +88,23 @@ describe("frontend quickstart networking", () => {
 
     expect(rewrites).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
+        {
           source: "/api/:path*",
           destination: "http://app:8000/api/:path*",
-        }),
+        },
       ])
     )
+  })
+
+  it("requires TLDW_INTERNAL_API_ORIGIN in quickstart mode", async () => {
+    const validateNetworkingConfig = await loadValidateNetworkingConfig()
+
+    expect(() =>
+      validateNetworkingConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "quickstart",
+        TLDW_INTERNAL_API_ORIGIN: "",
+      })
+    ).toThrow(/TLDW_INTERNAL_API_ORIGIN/i)
   })
 
   it("does not add the quickstart proxy rewrite outside quickstart mode", async () => {
@@ -108,10 +135,10 @@ describe("frontend quickstart networking", () => {
 
     expect(rewrites).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
+        {
           source: "/api/:path*",
           destination: "http://app:8000/api/:path*",
-        }),
+        },
       ])
     )
   })

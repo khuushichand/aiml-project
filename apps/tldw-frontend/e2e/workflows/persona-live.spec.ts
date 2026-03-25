@@ -8,7 +8,7 @@ import {
   expect,
   skipIfServerUnavailable
 } from "../utils/fixtures"
-import { TEST_CONFIG, fetchWithApiKey } from "../utils/helpers"
+import { TEST_CONFIG, fetchWithApiKey, seedAuth } from "../utils/helpers"
 
 type DocsInfoPayload = {
   capabilities?: Record<string, unknown> | null
@@ -40,36 +40,22 @@ const isPersonaAdvertised = (docsInfo: DocsInfoPayload): boolean => {
 
 test.describe("Persona Live Workflow", () => {
   test.beforeEach(async ({ authedPage }) => {
-    await authedPage.addInitScript(
-      (cfg) => {
-        try {
-          localStorage.setItem(
-            "tldwConfig",
-            JSON.stringify({
-              serverUrl: cfg.serverUrl,
-              authMode: "single-user",
-              apiKey: cfg.apiKey
-            })
-          )
-        } catch {
-          // ignore localStorage errors
+    await seedAuth(authedPage, {
+      serverUrl: TEST_CONFIG.webUrl,
+      webUrl: TEST_CONFIG.webUrl,
+      apiKey: TEST_CONFIG.apiKey,
+    })
+    await authedPage.addInitScript(() => {
+      const OriginalWebSocket = window.WebSocket
+      const seen: string[] = []
+      ;(window as Window & { __tldwSeenWsUrls?: string[] }).__tldwSeenWsUrls = seen
+      window.WebSocket = class extends OriginalWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          seen.push(String(url))
+          super(url, protocols)
         }
-        try {
-          localStorage.setItem("__tldw_first_run_complete", "true")
-        } catch {
-          // ignore localStorage errors
-        }
-        try {
-          localStorage.setItem("__tldw_allow_offline", "true")
-        } catch {
-          // ignore localStorage errors
-        }
-      },
-      {
-        serverUrl: TEST_CONFIG.serverUrl,
-        apiKey: TEST_CONFIG.apiKey
-      }
-    )
+      } as typeof WebSocket
+    })
   })
 
   test("shows setup gate or connects to live persona websocket and receives a plan/cancel notice", async ({
@@ -146,6 +132,22 @@ test.describe("Persona Live Workflow", () => {
       authedPage.getByText(/Cancelled pending work|Cancelled pending plan/i)
     ).toBeVisible({ timeout: 30000 })
 
+    const seenWsUrls = await authedPage.evaluate(
+      () => (window as Window & { __tldwSeenWsUrls?: string[] }).__tldwSeenWsUrls || []
+    )
+    const webHost = new URL(TEST_CONFIG.webUrl).host
+    const backendHost = new URL(TEST_CONFIG.serverUrl).host
+    const personaWsUrls = seenWsUrls.filter((raw: string) =>
+      raw.includes("/api/v1/persona/stream")
+    )
+
+    expect(personaWsUrls.length).toBeGreaterThan(0)
+    expect(
+      personaWsUrls.some((raw: string) => new URL(raw).host === webHost)
+    ).toBe(true)
+    expect(
+      personaWsUrls.every((raw: string) => new URL(raw).host !== backendHost)
+    ).toBe(true)
     expect(diagnostics.pageErrors).toHaveLength(0)
   })
 })
