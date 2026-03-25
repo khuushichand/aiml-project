@@ -15,11 +15,11 @@ The initial quickstart same-origin work moved the web-only API client onto relat
 Today:
 
 - `apps/tldw-frontend/extension/shims/runtime-bootstrap.ts` still seeds browser config with `http://127.0.0.1:8000` when `NEXT_PUBLIC_API_URL` is empty.
-- Shared UI HTTP consumers still depend on `tldwConfig.serverUrl` in several code paths.
+- Shared UI HTTP consumers still depend on `tldwConfig.serverUrl` in several code paths, including direct string concatenation callers such as ACP REST, document workspace beacon/sync flows, and connection liveness probes.
 - Shared UI stream builders still construct direct backend WebSocket URLs from `serverUrl`.
 - Advanced mode still falls back instead of requiring an explicit browser-reachable API URL.
 - IPv6 loopback is not consistently treated as non-browser-reachable.
-- The Docker single-user guide still tells users to run the API-only compose path while describing the WebUI proxy path.
+- The Docker single-user guide already describes the same-origin quickstart story, but it still tells users to run the API-only compose path and omits WebUI verification.
 
 This leaves quickstart only partially same-origin and still capable of failing from non-localhost browser origins in ways that look like application bugs.
 
@@ -48,6 +48,16 @@ The shared UI layer serves more than one browser-facing surface:
 - extension/browser-app contexts, which still require explicit backend host semantics
 
 The fix must not globally replace explicit-host behavior across all surfaces.
+
+### Existing WebUI env contract must remain authoritative
+
+The already-implemented WebUI quickstart contract in `apps/tldw-frontend` remains the source of truth for env semantics:
+
+- quickstart still requires `TLDW_INTERNAL_API_ORIGIN`
+- quickstart still forbids an absolute `NEXT_PUBLIC_API_URL`
+- advanced mode still extends, rather than replaces, that contract
+
+The follow-up work must adapt shared UI consumers to that contract, not create a second independent env truth table.
 
 ### Hosted mode is not the right abstraction
 
@@ -95,6 +105,8 @@ This helper must be platform-aware:
 - WebUI `http`/`https` contexts may use quickstart same-origin behavior
 - extension/browser-app contexts keep explicit-host semantics
 
+This helper must derive or wrap the existing `apps/tldw-frontend/lib/api-base.ts` quickstart/advanced contract rather than duplicating its rules.
+
 ### 2. Make shared browser config hydration mode-aware
 
 Update browser runtime/bootstrap and shared config hydration so quickstart WebUI does not write loopback defaults into stored connection state.
@@ -112,6 +124,8 @@ Storage precedence must be explicit:
 3. valid existing canonical stored config that is already coherent with the active browser networking mode
 4. legacy fallback values only where explicit-host platforms still require them
 
+For WebUI quickstart specifically, the canonical stored `serverUrl` may become the WebUI origin so that remaining direct-concatenation HTTP callers stay same-origin until they are individually migrated to shared helpers.
+
 ### 3. Centralize shared HTTP and WebSocket URL building
 
 Add shared helpers for browser-side HTTP base resolution and WebSocket base resolution.
@@ -122,6 +136,7 @@ Requirements:
 - WebSocket quickstart resolves to same-origin browser WebSocket endpoints
 - advanced mode uses the explicit configured origin for both HTTP and WebSocket traffic
 - loopback detection covers `localhost`, `127.0.0.1`, `::1`, and `[::1]`
+- quickstart same-origin transport preserves existing self-host auth injection semantics and must not inherit hosted-mode behavior that omits browser `Authorization` or `X-API-KEY` headers
 
 This centralization is required so request-core and all stream builders follow the same contract instead of drifting independently.
 
@@ -148,7 +163,16 @@ Advanced mode must reject incomplete configuration.
 Required invalid cases:
 
 - `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced` with no `NEXT_PUBLIC_API_URL`
-- advanced mode API URL on loopback when the page origin is not loopback
+- advanced mode API URL on loopback when the active surface is a WebUI `http`/`https` page origin that is not loopback
+- malformed advanced-mode API URL
+
+The fail-fast contract is limited to deterministic checks:
+
+- missing required env/config values
+- malformed URLs
+- loopback versus non-loopback mismatches for WebUI browser pages
+
+It does not require blocking on live DNS, TLS, CORS, auth, or backend availability probes.
 
 Failure behavior:
 
@@ -212,6 +236,7 @@ Responsibilities:
 
 - route shared HTTP requests through the correct browser transport base
 - route shared WebSocket features through the same contract
+- explicitly cover remaining browser-side HTTP callers that concatenate `serverUrl` directly, either by migrating them to the helper or by relying on quickstart canonical `serverUrl` being the WebUI origin
 - keep extension behavior explicit and unchanged where required
 
 ### WebUI edge proxy
@@ -260,15 +285,18 @@ If the current WebUI edge cannot support safe WS upgrade proxying:
 - loopback detection, including `[::1]`
 - shared runtime/bootstrap avoiding loopback seeding in quickstart WebUI
 - advanced validation rejecting missing `NEXT_PUBLIC_API_URL`
+- advanced validation scoped so extension/browser-app loopback usage is not blocked by a WebUI-only rule
 
 ### Shared transport tests
 
 - request-core quickstart behavior without explicit backend host
 - request-core advanced-mode failure on missing explicit API origin
+- at least one remaining direct-concatenation HTTP caller proves quickstart canonical `serverUrl` stays same-origin in the WebUI surface
 - stream builders for persona, prompt studio, watchlists, ACP, and any other touched WS features
 
 ### WebUI tests
 
+- existing quickstart invariants stay preserved: quickstart still requires `TLDW_INTERNAL_API_ORIGIN` and still rejects absolute `NEXT_PUBLIC_API_URL`
 - WebUI guard/validator coverage for advanced-mode missing API URL
 - representative same-origin quickstart browser behavior for shared UI flows
 - at least one integration or e2e assertion that a representative WS-backed feature succeeds through the WebUI origin, not just through a direct backend URL or a unit-tested URL builder
@@ -281,8 +309,11 @@ If the current WebUI edge cannot support safe WS upgrade proxying:
 ## Acceptance Criteria
 
 - The Docker + WebUI quickstart path does not write `127.0.0.1:8000` into browser runtime config for the WebUI surface.
+- The WebUI quickstart contract remains aligned with the existing env invariants: quickstart still requires `TLDW_INTERNAL_API_ORIGIN` and still rejects absolute `NEXT_PUBLIC_API_URL`.
 - Shared HTTP and shared WebSocket browser traffic in quickstart mode use the WebUI origin, not a direct backend host.
+- Remaining WebUI browser-side HTTP callers that still concatenate `serverUrl` directly either migrate to the shared helper or receive a canonical quickstart `serverUrl` equal to the WebUI origin.
 - At least one representative WS-backed quickstart flow is proven through the WebUI origin in integration or e2e coverage.
 - Advanced mode without `NEXT_PUBLIC_API_URL` fails fast.
+- Advanced-mode blocking validation applies only to deterministic WebUI browser-page checks and does not break extension loopback usage.
 - IPv6 loopback is treated the same as IPv4 loopback in browser reachability checks.
 - The Docker single-user guide launches and verifies the actual WebUI quickstart path it describes.
