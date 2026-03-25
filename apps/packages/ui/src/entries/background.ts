@@ -47,6 +47,10 @@ type BackgroundDiagnostics = {
   modelWarmCount: number
   lastModelWarmAt: number | null
   lastModelWarmError: string | null
+  runtimeMessageCount: number
+  runtimePingCount: number
+  lastRuntimeMessageType: string | null
+  lastRuntimeSenderUrl: string | null
   alarmFires: number
   lastAlarmAt: number | null
   ports: {
@@ -64,6 +68,10 @@ const backgroundDiagnostics: BackgroundDiagnostics = {
   modelWarmCount: 0,
   lastModelWarmAt: null,
   lastModelWarmError: null,
+  runtimeMessageCount: 0,
+  runtimePingCount: 0,
+  lastRuntimeMessageType: null,
+  lastRuntimeSenderUrl: null,
   alarmFires: 0,
   lastAlarmAt: null,
   ports: {
@@ -176,6 +184,10 @@ const warmModels = async (
 export default defineBackground({
   main() {
     const storage = createSafeStorage()
+    let handleRuntimeMessageRef:
+      | ((message: any, sender: any) => Promise<any>)
+      | null = null
+    let initializePromise: Promise<void> | null = null
     let isCopilotRunning: boolean = false
     let actionIconClick: string = "webui"
     let contextMenuClick: string = "sidePanel"
@@ -247,6 +259,10 @@ export default defineBackground({
             : null
       }
     }
+
+    ;(globalThis as typeof globalThis & {
+      __tldwBackgroundDiagnostics?: () => ReturnType<typeof buildBackgroundDiagnostics>
+    }).__tldwBackgroundDiagnostics = buildBackgroundDiagnostics
 
 
     let refreshInFlight: Promise<any> | null = null
@@ -1911,7 +1927,7 @@ export default defineBackground({
       createSessionId: createQuickIngestSessionId
     })
 
-    const handleRuntimeMessage = async (message: any, sender: any) => {
+    handleRuntimeMessageRef = async (message: any, sender: any) => {
       // Simple ping for E2E tests - verifies message handler is working
       if (message.type === "tldw:ping") {
         return { ok: true, pong: true, timestamp: Date.now() }
@@ -2051,35 +2067,6 @@ export default defineBackground({
       }
       return undefined
     }
-
-    const chromeGlobal = (globalThis as any).chrome
-
-    // Also add a direct chrome listener as backup
-    if (chromeGlobal?.runtime?.onMessage?.addListener) {
-      chromeGlobal.runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
-        if (message?.type === 'tldw:ping') {
-          sendResponse({ ok: true, pong: true, timestamp: Date.now(), source: 'chrome-listener' })
-          return true
-        }
-        return false
-      })
-    }
-
-    browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      void handleRuntimeMessage(message, sender)
-        .then((response) => {
-          sendResponse(response)
-        })
-        .catch((error) => {
-          logBackgroundError("runtime message", error)
-          sendResponse({
-            ok: false,
-            status: 0,
-            error: (error as Error)?.message || "Background error"
-          })
-        })
-      return true
-    })
 
     browser.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local") return
@@ -2713,6 +2700,57 @@ export default defineBackground({
       }
     })
 
+    const ensureInitialized = () => {
+      if (!initializePromise) {
+        initializePromise = initialize().catch((error) => {
+          initializePromise = null
+          handleRuntimeMessageRef = null
+          throw error
+        })
+      }
+      return initializePromise
+    }
+
+    const runtimeOnMessage =
+      (globalThis as any).chrome?.runtime?.onMessage || browser.runtime.onMessage
+
+    runtimeOnMessage.addListener((message: any, sender: any, sendResponse: any) => {
+      backgroundDiagnostics.runtimeMessageCount += 1
+      backgroundDiagnostics.lastRuntimeMessageType =
+        typeof message?.type === "string" ? message.type : null
+      backgroundDiagnostics.lastRuntimeSenderUrl =
+        typeof sender?.url === "string"
+          ? sender.url
+          : typeof sender?.tab?.url === "string"
+            ? sender.tab.url
+            : null
+      if (message?.type === "tldw:ping") {
+        backgroundDiagnostics.runtimePingCount += 1
+        sendResponse({ ok: true, pong: true, timestamp: Date.now() })
+        return
+      }
+
+      void ensureInitialized()
+        .then(async () => {
+          if (!handleRuntimeMessageRef) {
+            return undefined
+          }
+          return await handleRuntimeMessageRef(message, sender)
+        })
+        .then((response) => {
+          sendResponse(response)
+        })
+        .catch((error) => {
+          logBackgroundError("runtime message", error)
+          sendResponse({
+            ok: false,
+            status: 0,
+            error: (error as Error)?.message || "Background error"
+          })
+        })
+      return true
+    })
+
     if (browser?.alarms) {
       browser.alarms.onAlarm.addListener((alarm) => {
         if (alarm.name !== MODEL_WARM_ALARM_NAME) return
@@ -2722,7 +2760,7 @@ export default defineBackground({
       })
     }
 
-    initialize()
+    void ensureInitialized()
   },
   persistent: false
 })

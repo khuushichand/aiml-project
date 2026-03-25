@@ -194,7 +194,7 @@ describe("PlaygroundChat linked research status integration", () => {
     queryState.capturedOptions = null
   })
 
-  it("renders the linked research status block below empty scaffolding and above the transcript area", () => {
+  it("renders the linked research status block below empty scaffolding and above the transcript area", async () => {
     setLinkedRuns([
       {
         run_id: "rs_wait",
@@ -210,7 +210,7 @@ describe("PlaygroundChat linked research status integration", () => {
     renderChat()
 
     const emptyState = screen.getByTestId("playground-empty")
-    const statusBlock = screen.getByTestId("research-run-status-stack")
+    const statusBlock = await screen.findByTestId("research-run-status-stack")
     expect(statusBlock).toBeInTheDocument()
     expect(emptyState.compareDocumentPosition(statusBlock)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     expect(screen.getByText("Needs review")).toBeInTheDocument()
@@ -221,7 +221,7 @@ describe("PlaygroundChat linked research status integration", () => {
     )
   })
 
-  it("renders multiple linked runs with distinct labels and stacked rows", () => {
+  it("renders multiple linked runs with distinct labels and stacked rows", async () => {
     setLinkedRuns([
       {
         run_id: "rs_running",
@@ -254,13 +254,13 @@ describe("PlaygroundChat linked research status integration", () => {
 
     renderChat()
 
-    expect(screen.getAllByTestId("research-run-status-row")).toHaveLength(3)
-    expect(screen.getByText("Running")).toBeInTheDocument()
-    expect(screen.getByText("Completed")).toBeInTheDocument()
-    expect(screen.getByText("Failed")).toBeInTheDocument()
+    expect(await screen.findAllByTestId("research-run-status-row")).toHaveLength(3)
+    expect(await screen.findByText("Running")).toBeInTheDocument()
+    expect(await screen.findByText("Completed")).toBeInTheDocument()
+    expect(await screen.findByText("Failed")).toBeInTheDocument()
   })
 
-  it("shows Use in Chat only for completed linked runs", () => {
+  it("shows Use in Chat only for completed linked runs", async () => {
     setLinkedRuns([
       {
         run_id: "rs_running",
@@ -284,7 +284,7 @@ describe("PlaygroundChat linked research status integration", () => {
 
     renderChat()
 
-    const rows = screen.getAllByTestId("research-run-status-row")
+    const rows = await screen.findAllByTestId("research-run-status-row")
     expect(rows).toHaveLength(2)
     expect(within(rows[0]).queryByRole("button", { name: "Use in Chat" })).not.toBeInTheDocument()
     expect(within(rows[1]).getByRole("button", { name: "Use in Chat" })).toBeInTheDocument()
@@ -310,7 +310,7 @@ describe("PlaygroundChat linked research status integration", () => {
       </DemoModeProvider>
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Use in Chat" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Use in Chat" }))
 
     await waitFor(() =>
       expect(clientMocks.getResearchBundle).toHaveBeenCalledWith("rs_completed")
@@ -361,7 +361,7 @@ describe("PlaygroundChat linked research status integration", () => {
     const followUpSpy = vi.fn()
     renderChat({ onPrepareResearchFollowUp: followUpSpy })
 
-    const rows = screen.getAllByTestId("research-run-status-row")
+    const rows = await screen.findAllByTestId("research-run-status-row")
     expect(rows).toHaveLength(3)
     expect(within(rows[0]).queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
     expect(within(rows[1]).getByRole("button", { name: "Follow up" })).toBeInTheDocument()
@@ -526,7 +526,7 @@ describe("PlaygroundChat linked research status integration", () => {
     expect(screen.queryByText("Returned from Research")).not.toBeInTheDocument()
   })
 
-  it("renders plan review handoff rows with a specific reason label and review action", () => {
+  it("renders plan review handoff rows with a specific reason label and review action", async () => {
     setLinkedRuns([
       {
         run_id: "rs_plan",
@@ -541,7 +541,7 @@ describe("PlaygroundChat linked research status integration", () => {
 
     renderChat({ onPrepareResearchFollowUp: vi.fn(), onAttachResearchContext: vi.fn() })
 
-    const row = screen.getByTestId("research-run-status-row")
+    const row = await screen.findByTestId("research-run-status-row")
     expect(within(row).getByText("Plan review needed")).toBeInTheDocument()
     expect(within(row).getByRole("link", { name: "Review in Research" })).toHaveAttribute(
       "href",
@@ -551,7 +551,7 @@ describe("PlaygroundChat linked research status integration", () => {
     expect(within(row).queryByRole("button", { name: "Follow up" })).not.toBeInTheDocument()
   })
 
-  it("renders sources review handoff labels for both supported source-review phases", () => {
+  it("renders sources review handoff labels for both supported source-review phases", async () => {
     setLinkedRuns([
       {
         run_id: "rs_sources_1",
@@ -575,14 +575,14 @@ describe("PlaygroundChat linked research status integration", () => {
 
     renderChat()
 
-    const rows = screen.getAllByTestId("research-run-status-row")
+    const rows = await screen.findAllByTestId("research-run-status-row")
     expect(within(rows[0]).getByText("Sources review needed")).toBeInTheDocument()
     expect(within(rows[0]).getByRole("link", { name: "Review in Research" })).toBeInTheDocument()
     expect(within(rows[1]).getByText("Sources review needed")).toBeInTheDocument()
     expect(within(rows[1]).getByRole("link", { name: "Review in Research" })).toBeInTheDocument()
   })
 
-  it("renders outline review handoff labels for checkpoint-needed rows", () => {
+  it("renders outline review handoff labels for checkpoint-needed rows", async () => {
     setLinkedRuns([
       {
         run_id: "rs_outline",
@@ -597,12 +597,12 @@ describe("PlaygroundChat linked research status integration", () => {
 
     renderChat()
 
-    const row = screen.getByTestId("research-run-status-row")
+    const row = await screen.findByTestId("research-run-status-row")
     expect(within(row).getByText("Outline review needed")).toBeInTheDocument()
     expect(within(row).getByRole("link", { name: "Review in Research" })).toBeInTheDocument()
   })
 
-  it("falls back to a generic review-needed label for unknown waiting_human phases", () => {
+  it("falls back to a generic review-needed label for unknown waiting_human phases", async () => {
     setLinkedRuns([
       {
         run_id: "rs_unknown_review",
@@ -617,12 +617,12 @@ describe("PlaygroundChat linked research status integration", () => {
 
     renderChat()
 
-    const row = screen.getByTestId("research-run-status-row")
+    const row = await screen.findByTestId("research-run-status-row")
     expect(within(row).getByText("Review needed")).toBeInTheDocument()
     expect(within(row).getByRole("link", { name: "Review in Research" })).toBeInTheDocument()
   })
 
-  it("keeps completed-run actions unchanged while checkpoint handoff rows are stricter", () => {
+  it("keeps completed-run actions unchanged while checkpoint handoff rows are stricter", async () => {
     setLinkedRuns([
       {
         run_id: "rs_completed",
@@ -637,7 +637,7 @@ describe("PlaygroundChat linked research status integration", () => {
 
     renderChat({ onPrepareResearchFollowUp: vi.fn(), onAttachResearchContext: vi.fn() })
 
-    const row = screen.getByTestId("research-run-status-row")
+    const row = await screen.findByTestId("research-run-status-row")
     expect(within(row).getByRole("button", { name: "Use in Chat" })).toBeInTheDocument()
     expect(within(row).getByRole("button", { name: "Follow up" })).toBeInTheDocument()
     expect(within(row).getByRole("link", { name: "Open in Research" })).toHaveAttribute(

@@ -116,6 +116,22 @@ async def test_auto_model_selects_customvoice_cpu(fake_qwen_module):
     assert fake_qwen_module["last_model_id"] == adapter.MODEL_CUSTOMVOICE_06B
 
 
+@pytest.mark.parametrize("model_alias", ["qwen3_tts", "qwen3-tts"])
+def test_provider_style_model_aliases_resolve_to_canonical_model(model_alias):
+    adapter = Qwen3TTSAdapter({"device": "cpu", "model": "auto"})
+
+    request = TTSRequest(
+        text="Hello",
+        voice="Vivian",
+        language="en",
+        format=AudioFormat.PCM,
+        stream=False,
+    )
+    request.model = model_alias
+
+    assert adapter._resolve_model(request) == adapter.MODEL_CUSTOMVOICE_06B
+
+
 @pytest.mark.asyncio
 async def test_voice_design_requires_instruct(fake_qwen_module):
     adapter = Qwen3TTSAdapter({"device": "cpu", "model": "auto"})

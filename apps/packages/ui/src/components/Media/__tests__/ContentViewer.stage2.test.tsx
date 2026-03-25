@@ -114,7 +114,7 @@ describe('ContentViewer stage 2 ergonomics', () => {
     expect(screen.queryByRole('button', { name: 'Back to top' })).not.toBeInTheDocument()
   })
 
-  it('keeps markdown mode rendering active while text size changes', () => {
+  it('keeps markdown mode rendering active while text size changes', async () => {
     render(
       <ContentViewer
         selectedMedia={selectedNote}
@@ -124,10 +124,10 @@ describe('ContentViewer stage 2 ergonomics', () => {
       />
     )
 
-    expect(screen.getByTestId('markdown-preview')).toHaveAttribute('data-size', 'sm')
+    expect(await screen.findByTestId('markdown-preview')).toHaveAttribute('data-size', 'sm')
 
     fireEvent.click(screen.getByRole('button', { name: 'Text size S' }))
 
-    expect(screen.getByTestId('markdown-preview')).toHaveAttribute('data-size', 'xs')
+    expect(await screen.findByTestId('markdown-preview')).toHaveAttribute('data-size', 'xs')
   })
 })

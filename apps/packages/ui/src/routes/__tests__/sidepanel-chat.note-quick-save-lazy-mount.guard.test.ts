@@ -11,6 +11,10 @@ describe("sidepanel-chat note quick save mounting", () => {
     const source = readFileSync(sourcePath, "utf8")
 
     expect(source).toContain("{noteModalOpen ? (")
-    expect(source).toContain("<NoteQuickSaveModal")
+    expect(source).not.toContain(
+      'import NoteQuickSaveModal from "~/components/Sidepanel/Notes/NoteQuickSaveModal"'
+    )
+    expect(source).toContain('import("~/components/Sidepanel/Notes/NoteQuickSaveModal")')
+    expect(source).toContain("<LazyNoteQuickSaveModal")
   })
 })

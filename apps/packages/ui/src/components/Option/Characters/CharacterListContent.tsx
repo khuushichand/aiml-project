@@ -31,8 +31,7 @@ import {
   Columns2,
   Upload as UploadIcon
 } from "lucide-react"
-import { CharacterGalleryCard, type GalleryCardDensity } from "./CharacterGalleryCard"
-import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
+import type { GalleryCardDensity } from "./CharacterGalleryCard"
 import {
   MAX_NAME_DISPLAY_LENGTH,
   MAX_DESCRIPTION_LENGTH,
@@ -52,6 +51,18 @@ import {
   buildServerLogHint
 } from "@/utils/server-error-message"
 import type { TFunction } from "i18next"
+
+const LazyCharacterGalleryCard = React.lazy(() =>
+  import("./CharacterGalleryCard").then((module) => ({
+    default: module.CharacterGalleryCard,
+  })),
+)
+
+const LazyCharacterPreviewPopup = React.lazy(() =>
+  import("./CharacterPreviewPopup").then((module) => ({
+    default: module.CharacterPreviewPopup,
+  })),
+)
 
 export type CharacterListContentProps = {
   t: TFunction
@@ -127,6 +138,7 @@ export type CharacterListContentProps = {
   // actions
   handleChat: (record: any) => void
   handleChatInNewTab: (record: any) => Promise<void>
+  preloadCharacterEditor: () => Promise<unknown>
   handleEdit: (record: any, trigger?: Element) => void
   handleDuplicate: (record: any) => void
   handleDelete: (record: any) => Promise<void>
@@ -232,6 +244,7 @@ export const CharacterListContent: React.FC<CharacterListContentProps> = (props)
     setBulkTagModalOpen,
     handleChat,
     handleChatInNewTab,
+    preloadCharacterEditor,
     handleEdit,
     handleDuplicate,
     handleDelete,
@@ -1285,6 +1298,12 @@ export const CharacterListContent: React.FC<CharacterListContentProps> = (props)
                           "Edit character {{name}}",
                           name
                         )}
+                        onMouseEnter={() => {
+                          void preloadCharacterEditor()
+                        }}
+                        onFocus={() => {
+                          void preloadCharacterEditor()
+                        }}
                         onClick={(e) => {
                           handleEdit(record, e.currentTarget)
                         }}>
@@ -1505,145 +1524,127 @@ export const CharacterListContent: React.FC<CharacterListContentProps> = (props)
 
       {/* Gallery View */}
       {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === 'gallery' && (
-        <div className="space-y-4" data-testid="characters-gallery-view">
-          <div
-            className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 ${
-              galleryDensity === "compact" ? "gap-3" : "gap-4"
-            }`}>
-            {pagedGalleryData.map((character: any) => {
-              const charId = String(character.id || character.slug || character.name)
-              return (
-                <CharacterGalleryCard
-                  key={charId}
-                  character={{
-                    ...character,
-                    tags: getCharacterVisibleTags(character?.tags)
-                  }}
-                  onClick={() => setPreviewCharacter(character)}
-                  conversationCount={conversationCounts?.[charId]}
-                  isFavorite={isCharacterFavoriteRecord(character)}
-                  onToggleFavorite={() => {
-                    void handleToggleFavorite(character)
-                  }}
-                  density={galleryDensity}
-                />
-              )
-            })}
-          </div>
-          {totalCharacters > pageSize && (
-            <div className="flex justify-end">
-              <Pagination
-                current={currentPage}
-                pageSize={pageSize}
-                total={totalCharacters}
-                onChange={(page, nextPageSize) => {
-                  const normalizedNextPageSize = normalizePageSize(nextPageSize)
-                  if (normalizedNextPageSize !== pageSize) {
-                    setPageSize(normalizedNextPageSize)
-                    setCurrentPage(1)
-                    return
-                  }
-                  setCurrentPage(page)
-                }}
-                onShowSizeChange={(_page, nextPageSize) => {
-                  setPageSize(normalizePageSize(nextPageSize))
-                  setCurrentPage(1)
-                }}
-                showSizeChanger
-                pageSizeOptions={PAGE_SIZE_OPTIONS.map((size) => String(size))}
-              />
+        <React.Suspense fallback={null}>
+          <div className="space-y-4" data-testid="characters-gallery-view">
+            <div
+              className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 ${
+                galleryDensity === "compact" ? "gap-3" : "gap-4"
+              }`}>
+              {pagedGalleryData.map((character: any) => {
+                const charId = String(character.id || character.slug || character.name)
+                return (
+                  <LazyCharacterGalleryCard
+                    key={charId}
+                    character={{
+                      ...character,
+                      tags: getCharacterVisibleTags(character?.tags)
+                    }}
+                    onClick={() => setPreviewCharacter(character)}
+                    conversationCount={conversationCounts?.[charId]}
+                    isFavorite={isCharacterFavoriteRecord(character)}
+                    onToggleFavorite={() => {
+                      void handleToggleFavorite(character)
+                    }}
+                    density={galleryDensity}
+                  />
+                )
+              })}
             </div>
-          )}
-        </div>
+            {totalCharacters > pageSize && (
+              <div className="flex justify-end">
+                <Pagination
+                  current={currentPage}
+                  pageSize={pageSize}
+                  total={totalCharacters}
+                  onChange={(page, nextPageSize) => {
+                    const normalizedNextPageSize = normalizePageSize(nextPageSize)
+                    if (normalizedNextPageSize !== pageSize) {
+                      setPageSize(normalizedNextPageSize)
+                      setCurrentPage(1)
+                      return
+                    }
+                    setCurrentPage(page)
+                  }}
+                  onShowSizeChange={(_page, nextPageSize) => {
+                    setPageSize(normalizePageSize(nextPageSize))
+                    setCurrentPage(1)
+                  }}
+                  showSizeChanger
+                  pageSizeOptions={PAGE_SIZE_OPTIONS.map((size) => String(size))}
+                />
+              </div>
+            )}
+          </div>
+        </React.Suspense>
       )}
 
       {/* Character Preview Popup for Gallery View */}
-      <CharacterPreviewPopup
-        character={
-          previewCharacter
-            ? {
-                ...previewCharacter,
-                tags: getCharacterVisibleTags(previewCharacter?.tags)
-              }
-            : null
-        }
-        open={!!previewCharacter}
-        onClose={() => setPreviewCharacter(null)}
-        onChat={() => {
-          if (previewCharacter) {
-            handleChat(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onChatInNewTab={() => {
-          if (previewCharacter) {
-            void handleChatInNewTab(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onQuickChat={() => {
-          if (previewCharacter) {
-            openQuickChat(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onEdit={() => {
-          if (previewCharacter) {
-            handleEdit(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onDuplicate={() => {
-          if (previewCharacter) {
-            handleDuplicate(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onExport={async (format?: 'json' | 'png') => {
-          if (previewCharacter) {
-            await handleExport(previewCharacter, format || 'json')
-          }
-        }}
-        onDelete={async () => {
-          if (previewCharacter) {
-            await handleDelete(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onViewConversations={() => {
-          if (previewCharacter) {
-            handleViewConversations(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onCreatePersonaFromCharacter={() => {
-          if (previewCharacter) {
-            void createPersonaFromCharacter(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onOpenPersonaGarden={() => {
-          if (previewCharacter) {
-            void openPersonaGardenForCharacter(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        onViewVersionHistory={() => {
-          if (previewCharacter) {
-            openVersionHistory(previewCharacter)
-            setPreviewCharacter(null)
-          }
-        }}
-        creatingPersonaFromCharacter={
-          previewCharacter ? isPersonaCreatePending(previewCharacter) : false
-        }
-        attachedWorldBooks={previewCharacterWorldBooks}
-        attachedWorldBooksLoading={previewCharacterWorldBooksLoading}
-        launchedFromWorldBooks={crossNavigationContext.launchedFromWorldBooks}
-        launchedFromWorldBookId={crossNavigationContext.focusWorldBookId}
-        deleting={deleting}
-        exporting={!!exporting && exporting === (previewCharacter?.id || previewCharacter?.slug || previewCharacter?.name)}
-      />
+      {previewCharacter ? (
+        <React.Suspense fallback={null}>
+          <LazyCharacterPreviewPopup
+            character={{
+              ...previewCharacter,
+              tags: getCharacterVisibleTags(previewCharacter?.tags)
+            }}
+            open
+            onClose={() => setPreviewCharacter(null)}
+            onChat={() => {
+              handleChat(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onChatInNewTab={() => {
+              void handleChatInNewTab(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onQuickChat={() => {
+              openQuickChat(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onEdit={() => {
+              void preloadCharacterEditor()
+              handleEdit(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onDuplicate={() => {
+              handleDuplicate(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onExport={async (format?: 'json' | 'png') => {
+              await handleExport(previewCharacter, format || 'json')
+            }}
+            onDelete={async () => {
+              await handleDelete(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onViewConversations={() => {
+              handleViewConversations(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onCreatePersonaFromCharacter={() => {
+              void createPersonaFromCharacter(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onOpenPersonaGarden={() => {
+              void openPersonaGardenForCharacter(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            onViewVersionHistory={() => {
+              openVersionHistory(previewCharacter)
+              setPreviewCharacter(null)
+            }}
+            creatingPersonaFromCharacter={isPersonaCreatePending(previewCharacter)}
+            attachedWorldBooks={previewCharacterWorldBooks}
+            attachedWorldBooksLoading={previewCharacterWorldBooksLoading}
+            launchedFromWorldBooks={crossNavigationContext.launchedFromWorldBooks}
+            launchedFromWorldBookId={crossNavigationContext.focusWorldBookId}
+            deleting={deleting}
+            exporting={
+              !!exporting &&
+              exporting === (previewCharacter.id || previewCharacter.slug || previewCharacter.name)
+            }
+          />
+        </React.Suspense>
+      ) : null}
     </>
   )
 }

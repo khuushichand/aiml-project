@@ -160,4 +160,22 @@ describe('ContentViewer metadata stage 2 details', () => {
     expect(screen.getByTestId('metadata-safe-empty')).toBeInTheDocument()
     expect(screen.getByTestId('media-keywords-select')).toBeInTheDocument()
   })
+
+  it('loads the collapsed metadata section body on demand', async () => {
+    render(
+      <ContentViewer
+        selectedMedia={baseSelectedMedia}
+        content={'metadata section content'}
+        mediaDetail={{ type: 'document' }}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle('Metadata'))
+
+    const panel = await screen.findByTestId('media-metadata-section-panel')
+    expect(panel).toHaveTextContent('ID')
+    expect(panel).toHaveTextContent('909')
+    expect(panel).toHaveTextContent('Source')
+    expect(panel).toHaveTextContent('scholar.example')
+  })
 })

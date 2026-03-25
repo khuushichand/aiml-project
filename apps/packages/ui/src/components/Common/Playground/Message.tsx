@@ -297,6 +297,7 @@ export const PlaygroundMessage = (props: Props) => {
   )
   const [userPersonaImage] = useStorage("chatUserPersonaImage", "")
   const [ttsProvider] = useStorage("ttsProvider", "browser")
+  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
   const { t } = useTranslation(["common", "playground"])
   const { capabilities } = useServerCapabilities()
   const uiMode = useUiModeStore((state) => state.mode)
@@ -312,7 +313,8 @@ export const PlaygroundMessage = (props: Props) => {
   const { cancel, isSpeaking, speak } = useTTS()
   const { healthState: audioHealthState, voicesAvailable } =
     useTldwAudioStatus({
-      requireVoices: ttsProvider === "tldw"
+      requireVoices: ttsProvider === "tldw",
+      tldwTtsModel
     })
   const [isFeedbackOpen, setIsFeedbackOpen] = React.useState(false)
   const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = React.useState(false)

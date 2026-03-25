@@ -18,6 +18,7 @@ from loguru import logger
 
 _silero_vad_model: Any = None
 _silero_vad_utils: Any = None
+_silero_vad_error: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -59,6 +60,20 @@ def _lazy_import_torch():
     except ImportError as e:  # pragma: no cover - defensive
         logger.warning(f"Failed to import torch for Silero VAD: {e}")
         return None
+
+
+def _format_silero_vad_error(exc: BaseException) -> str:
+    """Normalize loader failures into a stable, user-facing reason string."""
+    if isinstance(exc, ModuleNotFoundError):
+        missing = getattr(exc, "name", None)
+        if missing:
+            return f"missing_dependency: {missing}"
+    return f"{type(exc).__name__}: {exc}"
+
+
+def get_silero_vad_unavailable_reason() -> str | None:
+    """Return the last recorded Silero VAD initialization failure, if any."""
+    return _silero_vad_error
 
 
 def _repo_root_with_models() -> Path | None:
@@ -122,7 +137,7 @@ def _lazy_import_silero_vad() -> tuple[Any | None, Any | None]:
         `read_audio`, `VADIterator`, and `collect_chunks`; `(None, None)` if loading
         or validation fails.
     """
-    global _silero_vad_model, _silero_vad_utils
+    global _silero_vad_model, _silero_vad_utils, _silero_vad_error
 
     # Reuse cached model when already loaded
     if _silero_vad_model is not None:
@@ -130,11 +145,13 @@ def _lazy_import_silero_vad() -> tuple[Any | None, Any | None]:
 
     # Check torch availability
     if not _torch_available():
+        _silero_vad_error = "missing_dependency: torch"
         logger.warning("PyTorch not available, cannot load Silero VAD")
         return None, None
 
     torch = _lazy_import_torch()
     if not torch:
+        _silero_vad_error = "missing_dependency: torch"
         logger.warning("Failed to import torch for Silero VAD")
         return None, None
 
@@ -167,16 +184,24 @@ def _lazy_import_silero_vad() -> tuple[Any | None, Any | None]:
                 )
 
         # Load model with explicit parameters
+        load_kwargs = {
+            "repo_or_dir": (str(local_repo) if local_repo else "snakers4/silero-vad"),
+            "model": "silero_vad",
+            "force_reload": False,  # Use cached version if available
+            "trust_repo": True,  # Required for loading
+            "verbose": False,  # Reduce output noise
+        }
+        if local_repo:
+            # torch.hub requires an explicit source when repo_or_dir is a filesystem path.
+            load_kwargs["source"] = "local"
+
         result = torch.hub.load(
-            repo_or_dir=(str(local_repo) if local_repo else "snakers4/silero-vad"),
-            model="silero_vad",
-            force_reload=False,  # Use cached version if available
-            trust_repo=True,  # Required for loading
-            verbose=False,  # Reduce output noise
+            **load_kwargs,
         )
 
         # Accept (model, utils) or (model, utils, config...) shapes
         if not isinstance(result, (tuple, list)) or len(result) < 2:
+            _silero_vad_error = "invalid_silero_vad_result"
             logger.error(
                 f"Unexpected Silero VAD return format. Expected (model, utils) tuple, "
                 f"got {type(result).__name__} with length {len(result) if hasattr(result, '__len__') else 'unknown'}"
@@ -187,11 +212,13 @@ def _lazy_import_silero_vad() -> tuple[Any | None, Any | None]:
 
         # Validate model
         if model is None:
+            _silero_vad_error = "invalid_silero_vad_model"
             logger.error("Silero VAD model is None")
             return None, None
 
         # Validate utils format
         if not isinstance(utils, (tuple, list)) or len(utils) < 5:
+            _silero_vad_error = "invalid_silero_vad_utils"
             logger.error(
                 f"Unexpected Silero VAD utils format. Expected tuple/list with 5+ items, "
                 f"got {type(utils).__name__} with {len(utils) if hasattr(utils, '__len__') else 'unknown'} items"
@@ -200,6 +227,7 @@ def _lazy_import_silero_vad() -> tuple[Any | None, Any | None]:
 
         _silero_vad_model = model
         _silero_vad_utils = utils
+        _silero_vad_error = None
 
         logger.info("Silero VAD loaded successfully")
         logger.debug(f"Silero VAD utils count: {len(utils)}")
@@ -207,6 +235,7 @@ def _lazy_import_silero_vad() -> tuple[Any | None, Any | None]:
         return model, utils
 
     except Exception as e:  # noqa: BLE001
+        _silero_vad_error = _format_silero_vad_error(e)
         logger.error(f"Failed to load Silero VAD: {type(e).__name__}: {e}")
         logger.debug("Full error while loading Silero VAD:", exc_info=True)
         _silero_vad_model = None
@@ -214,4 +243,4 @@ def _lazy_import_silero_vad() -> tuple[Any | None, Any | None]:
         return None, None
 
 
-__all__ = ["_lazy_import_silero_vad"]
+__all__ = ["_lazy_import_silero_vad", "get_silero_vad_unavailable_reason"]

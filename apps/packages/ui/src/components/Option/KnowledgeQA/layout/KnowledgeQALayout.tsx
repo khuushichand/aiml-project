@@ -3,17 +3,30 @@ import { Download, PanelLeftOpen, PanelLeftClose } from "lucide-react"
 import { cn } from "@/libs/utils"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { isKnowledgeQaHistoryItem, sortHistoryNewestFirst } from "../historyUtils"
-import { HistoryPane } from "../history/HistoryPane"
 import { KnowledgeContextBar } from "../context/KnowledgeContextBar"
 import { CompactToolbar } from "../context/CompactToolbar"
 import { KnowledgeComposer } from "../composer/KnowledgeComposer"
 import { KnowledgeReadyState } from "../empty/KnowledgeReadyState"
-import { InlineRecentSessions } from "../empty/InlineRecentSessions"
 import { AnswerWorkspace } from "../panels/AnswerWorkspace"
-import { NoResultsRecovery } from "../panels/NoResultsRecovery"
-import { EvidenceRail } from "../evidence/EvidenceRail"
 import { useLayoutMode } from "../hooks/useLayoutMode"
 import { useMobile } from "@/hooks/useMediaQuery"
+
+const LazyHistoryPane = React.lazy(() =>
+  import("../history/HistoryPane").then((module) => ({ default: module.HistoryPane })),
+)
+const LazyInlineRecentSessions = React.lazy(() =>
+  import("../empty/InlineRecentSessions").then((module) => ({
+    default: module.InlineRecentSessions,
+  })),
+)
+const LazyNoResultsRecovery = React.lazy(() =>
+  import("../panels/NoResultsRecovery").then((module) => ({
+    default: module.NoResultsRecovery,
+  })),
+)
+const LazyEvidenceRail = React.lazy(() =>
+  import("../evidence/EvidenceRail").then((module) => ({ default: module.EvidenceRail })),
+)
 
 type KnowledgeQALayoutProps = {
   onExportClick: () => void
@@ -302,7 +315,9 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
           aria-label="Search history"
           className="transition-all duration-300"
         >
-          <HistoryPane />
+          <React.Suspense fallback={null}>
+            <LazyHistoryPane />
+          </React.Suspense>
         </aside>
       )}
 
@@ -373,10 +388,12 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   />
                   {/* Inline recent sessions for returning users in Simple mode */}
                   {effectiveSimple && recentSessions.length > 0 && (
-                    <InlineRecentSessions
-                      items={recentSessions}
-                      onRestore={(item) => void restoreFromHistory(item)}
-                    />
+                    <React.Suspense fallback={null}>
+                      <LazyInlineRecentSessions
+                        items={recentSessions}
+                        onRestore={(item) => void restoreFromHistory(item)}
+                      />
+                    </React.Suspense>
                   )}
                 </>
               ) : null}
@@ -415,12 +432,14 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                 ) : null}
 
                 {showNoResultsState ? (
-                  <NoResultsRecovery
-                    onBroadenScope={handleBroadenScope}
-                    onEnableWeb={handleEnableWeb}
-                    onShowNearestMatches={handleShowNearestMatches}
-                    webEnabled={settings.enable_web_fallback}
-                  />
+                  <React.Suspense fallback={null}>
+                    <LazyNoResultsRecovery
+                      onBroadenScope={handleBroadenScope}
+                      onEnableWeb={handleEnableWeb}
+                      onShowNearestMatches={handleShowNearestMatches}
+                      webEnabled={settings.enable_web_fallback}
+                    />
+                  </React.Suspense>
                 ) : null}
 
                 <AnswerWorkspace queryStage={queryStage} />
@@ -430,20 +449,22 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
         </section>
 
         {hasVisibleResultsArea ? (
-          <EvidenceRail
-            open={isEvidenceRailOpen}
-            tab={evidenceRailTab}
-            onOpenChange={(open) => {
-              if (!open && hasResults) {
-                userClosedRailRef.current = true
-              }
-              setEvidenceRailOpen(open)
-            }}
-            onTabChange={setEvidenceRailTab}
-            resultsCount={results.length}
-            citationsCount={citations.length}
-            className="bg-surface/20"
-          />
+          <React.Suspense fallback={null}>
+            <LazyEvidenceRail
+              open={isEvidenceRailOpen}
+              tab={evidenceRailTab}
+              onOpenChange={(open) => {
+                if (!open && hasResults) {
+                  userClosedRailRef.current = true
+                }
+                setEvidenceRailOpen(open)
+              }}
+              onTabChange={setEvidenceRailTab}
+              resultsCount={results.length}
+              citationsCount={citations.length}
+              className="bg-surface/20"
+            />
+          </React.Suspense>
         ) : null}
       </main>
 

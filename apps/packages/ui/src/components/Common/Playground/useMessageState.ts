@@ -251,6 +251,7 @@ export function useMessageState(props: MessageStateProps) {
   )
   const [userPersonaImage] = useStorage("chatUserPersonaImage", "")
   const [ttsProvider] = useStorage("ttsProvider", "browser")
+  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
 
   // ── Translation ───────────────────────────────────────────────────────────
   const { t } = useTranslation(["common", "playground"])
@@ -275,7 +276,8 @@ export function useMessageState(props: MessageStateProps) {
   // ── TTS ───────────────────────────────────────────────────────────────────
   const { cancel, isSpeaking, speak } = useTTS()
   const { healthState: audioHealthState, voicesAvailable } = useTldwAudioStatus({
-    requireVoices: ttsProvider === "tldw"
+    requireVoices: ttsProvider === "tldw",
+    tldwTtsModel
   })
 
   // ── Disco Skills ──────────────────────────────────────────────────────────

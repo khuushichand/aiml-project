@@ -30,6 +30,7 @@ def test_step_names_include_profile_identity():
     )
 
     assert f"{build_audio_selection_key('cpu_local', 'performance', 'v2')}:deps:stt:faster_whisper" in step_names
+    assert f"{build_audio_selection_key('cpu_local', 'performance', 'v2')}:deps:stt:silero_vad" in step_names
     assert f"{build_audio_selection_key('cpu_local', 'performance', 'v2')}:stt:faster_whisper:medium" in step_names
 
 
@@ -154,6 +155,27 @@ def test_verify_audio_bundle_uses_selected_tts_choice_and_persists_canonical_ide
     assert readiness["last_verification"]["tts_choice"] == "kitten_tts"
 
 
+def test_install_dependencies_include_silero_vad_when_stt_selected(mocker):
+    plan = install_manager.build_install_plan_from_bundle("cpu_local")
+    status = install_manager.InstallationStatus(plan)
+    errors: list[str] = []
+    calls: list[tuple[str, str]] = []
+
+    def _fake_install_backend_dependencies(category: str, engine: str, status_obj, errors_obj):
+        calls.append((category, engine))
+
+    mocker.patch.object(
+        install_manager,
+        "_install_backend_dependencies",
+        side_effect=_fake_install_backend_dependencies,
+    )
+
+    install_manager._install_dependencies(plan, status, errors)
+
+    assert ("stt", "faster_whisper") in calls
+    assert ("stt", "silero_vad") in calls
+
+
 def test_safe_rerun_skips_bundle_when_expected_steps_are_already_completed(mocker):
     selection_key = build_audio_selection_key("cpu_local", "balanced", "v2")
     mocker.patch.object(
@@ -163,6 +185,7 @@ def test_safe_rerun_skips_bundle_when_expected_steps_are_already_completed(mocke
             "status": "completed",
             "steps": [
                 {"name": f"{selection_key}:deps:stt:faster_whisper", "status": "completed"},
+                {"name": f"{selection_key}:deps:stt:silero_vad", "status": "completed"},
                 {"name": f"{selection_key}:stt:faster_whisper:small", "status": "completed"},
                 {"name": f"{selection_key}:stt:silero_vad", "status": "completed"},
                 {"name": f"{selection_key}:deps:tts:kokoro", "status": "completed"},
@@ -206,6 +229,7 @@ def test_safe_rerun_does_not_skip_when_profile_changes(mocker):
             "status": "completed",
             "steps": [
                 {"name": f"{selection_key}:deps:stt:faster_whisper", "status": "completed"},
+                {"name": f"{selection_key}:deps:stt:silero_vad", "status": "completed"},
                 {"name": f"{selection_key}:stt:faster_whisper:tiny", "status": "completed"},
                 {"name": f"{selection_key}:stt:silero_vad", "status": "completed"},
                 {"name": f"{selection_key}:deps:tts:kokoro", "status": "completed"},

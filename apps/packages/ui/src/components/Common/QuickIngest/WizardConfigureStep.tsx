@@ -1,0 +1,459 @@
+import React from "react"
+import { Button, Input, Switch, Tooltip, Typography } from "antd"
+import { useTranslation } from "react-i18next"
+import { ArrowLeft, ArrowRight } from "lucide-react"
+
+import { useIngestWizard } from "./IngestWizardContext"
+import { PresetSelector } from "./PresetSelector"
+import type { CommonOptions, DetectedMediaType, TypeDefaults } from "./types"
+
+const DRAFT_STORAGE_CAP_BYTES = 5 * 1024 * 1024
+
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
+const nextTypeDefaults = (
+  previous: TypeDefaults,
+  nextValue: React.SetStateAction<TypeDefaults | null>
+): TypeDefaults => {
+  const resolved =
+    typeof nextValue === "function"
+      ? nextValue(previous)
+      : nextValue
+
+  return resolved ?? {}
+}
+
+export const WizardConfigureStep: React.FC = () => {
+  const { t } = useTranslation(["option"])
+  const { state, setPreset, setCustomOptions, goNext, goBack } = useIngestWizard()
+  const { queueItems, selectedPreset, presetConfig } = state
+
+  const qi = React.useCallback(
+    (key: string, defaultValue: string, options?: Record<string, unknown>) =>
+      options
+        ? t(`quickIngest.${key}`, { defaultValue, ...options })
+        : t(`quickIngest.${key}`, defaultValue),
+    [t]
+  )
+
+  const detectedTypes = React.useMemo(() => {
+    const types = new Set<DetectedMediaType>()
+    for (const item of queueItems) {
+      types.add(item.detectedType)
+    }
+    return types
+  }, [queueItems])
+
+  const hasAudioItems = detectedTypes.has("audio")
+  const hasVideoItems = detectedTypes.has("video")
+  const hasTranscriptionItems = hasAudioItems || hasVideoItems
+  const hasDocumentItems =
+    detectedTypes.has("document") ||
+    detectedTypes.has("pdf") ||
+    detectedTypes.has("ebook") ||
+    detectedTypes.has("image")
+
+  const setCommon = React.useCallback(
+    (nextValue: React.SetStateAction<CommonOptions>) => {
+      const resolved =
+        typeof nextValue === "function"
+          ? nextValue(presetConfig.common)
+          : nextValue
+      setCustomOptions({ common: resolved })
+    },
+    [presetConfig.common, setCustomOptions]
+  )
+
+  const setTypeDefaults = React.useCallback(
+    (nextValue: React.SetStateAction<TypeDefaults | null>) => {
+      setCustomOptions({
+        typeDefaults: nextTypeDefaults(presetConfig.typeDefaults ?? {}, nextValue),
+      })
+    },
+    [presetConfig.typeDefaults, setCustomOptions]
+  )
+
+  const handleAnalysisToggle = React.useCallback(
+    (checked: boolean) => {
+      setCommon((current) => ({ ...current, perform_analysis: checked }))
+    },
+    [setCommon]
+  )
+
+  const handleChunkingToggle = React.useCallback(
+    (checked: boolean) => {
+      setCommon((current) => ({ ...current, perform_chunking: checked }))
+    },
+    [setCommon]
+  )
+
+  const handleOverwriteToggle = React.useCallback(
+    (checked: boolean) => {
+      setCommon((current) => ({ ...current, overwrite_existing: checked }))
+    },
+    [setCommon]
+  )
+
+  const handleAudioLanguageChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const nextLanguage = event.target.value.trim()
+      setTypeDefaults((previous) => ({
+        ...(previous ?? {}),
+        audio: {
+          ...(previous?.audio ?? {}),
+          language: nextLanguage || undefined,
+        },
+      }))
+    },
+    [setTypeDefaults]
+  )
+
+  const handleAudioDiarizeChange = React.useCallback(
+    (checked: boolean) => {
+      setTypeDefaults((previous) => ({
+        ...(previous ?? {}),
+        audio: {
+          ...(previous?.audio ?? {}),
+          diarize: checked,
+        },
+      }))
+    },
+    [setTypeDefaults]
+  )
+
+  const handleDocumentOcrChange = React.useCallback(
+    (checked: boolean) => {
+      setTypeDefaults((previous) => ({
+        ...(previous ?? {}),
+        document: {
+          ...(previous?.document ?? {}),
+          ocr: checked,
+        },
+      }))
+    },
+    [setTypeDefaults]
+  )
+
+  const handleVideoCaptionsChange = React.useCallback(
+    (checked: boolean) => {
+      setTypeDefaults((previous) => ({
+        ...(previous ?? {}),
+        video: {
+          ...(previous?.video ?? {}),
+          captions: checked,
+        },
+      }))
+    },
+    [setTypeDefaults]
+  )
+
+  const handleStoreRemoteChange = React.useCallback(
+    (checked: boolean) => {
+      setCustomOptions({ storeRemote: checked })
+    },
+    [setCustomOptions]
+  )
+
+  const handleReviewBeforeStorageChange = React.useCallback(
+    (checked: boolean) => {
+      setCustomOptions({
+        reviewBeforeStorage: checked,
+        ...(checked ? { storeRemote: true } : {}),
+      })
+    },
+    [setCustomOptions]
+  )
+
+  const handleTranscriptionModelChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const nextModel = event.target.value.trim()
+      setCustomOptions({
+        advancedValues: {
+          transcription_model: nextModel || undefined,
+        },
+      })
+    },
+    [setCustomOptions]
+  )
+
+  const storageLabel = presetConfig.reviewBeforeStorage
+    ? qi("reviewModeStorageLabel", "Review drafts locally")
+    : presetConfig.storeRemote
+      ? qi("storageServerLabel", "Server")
+      : qi("storageLocalLabel", "Local only")
+
+  React.useEffect(() => {
+    if (presetConfig.reviewBeforeStorage && !presetConfig.storeRemote) {
+      setCustomOptions({ storeRemote: true })
+    }
+  }, [presetConfig.reviewBeforeStorage, presetConfig.storeRemote, setCustomOptions])
+
+  return (
+    <div className="space-y-5 py-3">
+      <PresetSelector
+        qi={qi}
+        value={selectedPreset}
+        onChange={setPreset}
+        queueItems={queueItems}
+      />
+
+      <div className="rounded-md border border-border bg-surface p-4">
+        <div className="space-y-4">
+          <div>
+            <Typography.Title level={5} className="!mb-1">
+              {t("quickIngest.commonOptions") || "Ingestion options"}
+            </Typography.Title>
+            <Typography.Text type="secondary" className="text-xs text-text-subtle">
+              {qi(
+                "defaultsForNewItems",
+                "Defaults apply to items added after this point."
+              )}
+            </Typography.Text>
+          </div>
+
+          <div className="flex flex-wrap gap-4">
+            <Tooltip
+              title={qi(
+                "analysisTooltip",
+                "Generate AI summary and analysis of content"
+              )}
+            >
+              <label className="flex items-center gap-2 text-sm text-text">
+                <span>{qi("analysisLabel", "Analysis")}</span>
+                <Switch
+                  aria-label="Ingestion options – analysis"
+                  checked={presetConfig.common.perform_analysis}
+                  onChange={handleAnalysisToggle}
+                />
+              </label>
+            </Tooltip>
+
+            <Tooltip
+              title={qi(
+                "chunkingTooltip",
+                "Split content into chunks for RAG retrieval"
+              )}
+            >
+              <label className="flex items-center gap-2 text-sm text-text">
+                <span>{qi("chunkingLabel", "Chunking")}</span>
+                <Switch
+                  aria-label="Ingestion options – chunking"
+                  checked={presetConfig.common.perform_chunking}
+                  onChange={handleChunkingToggle}
+                />
+              </label>
+            </Tooltip>
+
+            <Tooltip
+              title={qi(
+                "overwriteTooltip",
+                "Replace existing content if URL was previously ingested"
+              )}
+            >
+              <label className="flex items-center gap-2 text-sm text-text">
+                <span>{qi("overwriteLabel", "Overwrite existing")}</span>
+                <Switch
+                  aria-label="Ingestion options – overwrite existing"
+                  checked={presetConfig.common.overwrite_existing}
+                  onChange={handleOverwriteToggle}
+                />
+              </label>
+            </Tooltip>
+          </div>
+
+          <div className={`space-y-2 ${!hasTranscriptionItems ? "opacity-50" : ""}`}>
+            <Typography.Title level={5} className="!mb-1">
+              {t("quickIngest.audioOptions") || "Audio options"}
+              {!hasTranscriptionItems && (
+                <span className="ml-2 text-xs font-normal text-text-muted">
+                  {qi("audioOptionsDisabled", "(add audio or video to enable)")}
+                </span>
+              )}
+            </Typography.Title>
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+              <Input
+                aria-label="Audio language"
+                title="Audio language"
+                placeholder={t("quickIngest.audioLanguage") || "Language (e.g., en)"}
+                value={presetConfig.typeDefaults.audio?.language || ""}
+                onChange={handleAudioLanguageChange}
+                disabled={!hasTranscriptionItems}
+              />
+              <label className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm text-text">
+                <span>{qi("audioDiarizationLabel", "Diarization")}</span>
+                <Switch
+                  aria-label="Audio diarization toggle"
+                  checked={presetConfig.typeDefaults.audio?.diarize ?? false}
+                  onChange={handleAudioDiarizeChange}
+                  disabled={!hasTranscriptionItems}
+                />
+              </label>
+            </div>
+            <Input
+              aria-label={qi("transcriptionModelLabel", "Transcription model")}
+              title={qi("transcriptionModelLabel", "Transcription model")}
+              placeholder={qi("transcriptionModelPlaceholder", "Select model")}
+              value={String(presetConfig.advancedValues?.transcription_model || "")}
+              onChange={handleTranscriptionModelChange}
+              disabled={!hasTranscriptionItems}
+            />
+          </div>
+
+          <div className={`space-y-2 ${!hasDocumentItems ? "opacity-50" : ""}`}>
+            <Typography.Title level={5} className="!mb-1">
+              {t("quickIngest.documentOptions") || "Document options"}
+              {!hasDocumentItems && (
+                <span className="ml-2 text-xs font-normal text-text-muted">
+                  {qi("documentOptionsDisabled", "(add document to enable)")}
+                </span>
+              )}
+            </Typography.Title>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm text-text">
+              <span>{qi("ocrLabel", "OCR")}</span>
+              <Switch
+                aria-label="OCR toggle"
+                title="OCR toggle"
+                checked={presetConfig.typeDefaults.document?.ocr ?? false}
+                onChange={handleDocumentOcrChange}
+                disabled={!hasDocumentItems}
+              />
+            </label>
+          </div>
+
+          <div className={`space-y-2 ${!hasVideoItems ? "opacity-50" : ""}`}>
+            <Typography.Title level={5} className="!mb-1">
+              {t("quickIngest.videoOptions") || "Video options"}
+              {!hasVideoItems && (
+                <span className="ml-2 text-xs font-normal text-text-muted">
+                  {qi("videoOptionsDisabled", "(add video to enable)")}
+                </span>
+              )}
+            </Typography.Title>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm text-text">
+              <span>{qi("captionsLabel", "Captions")}</span>
+              <Switch
+                aria-label="Captions toggle"
+                title="Captions toggle"
+                checked={presetConfig.typeDefaults.video?.captions ?? false}
+                onChange={handleVideoCaptionsChange}
+                disabled={!hasVideoItems}
+              />
+            </label>
+          </div>
+
+          <div className="rounded-md border border-border bg-surface2 p-3">
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <Typography.Text strong>
+                    {t(
+                      "quickIngest.storageHeading",
+                      "Where ingest results are stored"
+                    )}
+                  </Typography.Text>
+                  <div className="mt-2 space-y-1 text-xs text-text-muted">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-[2px]">•</span>
+                      <span>
+                        {t(
+                          "quickIngest.storageServerDescription",
+                          "Stored on your tldw server (recommended for RAG and shared workspaces)."
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="mt-[2px]">•</span>
+                      <span>
+                        {t(
+                          "quickIngest.storageLocalDescription",
+                          "Kept in this browser only; no data written to your server."
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-text">
+                  <Switch
+                    aria-label={
+                      presetConfig.storeRemote
+                        ? t(
+                            "quickIngest.storeRemoteAria",
+                            "Store ingest results on your tldw server"
+                          )
+                        : t(
+                            "quickIngest.processOnlyAria",
+                            "Process ingest results locally only"
+                          )
+                    }
+                    checked={presetConfig.storeRemote}
+                    disabled={presetConfig.reviewBeforeStorage}
+                    onChange={handleStoreRemoteChange}
+                  />
+                  <span>{storageLabel}</span>
+                </label>
+              </div>
+
+              <div className="border-t border-border pt-3 text-xs text-text-muted">
+                <div className="flex items-start justify-between gap-3">
+                  <label className="flex items-center gap-2 text-sm text-text">
+                    <Switch
+                      aria-label={qi(
+                        "reviewBeforeStorage",
+                        "Review before saving"
+                      )}
+                      checked={presetConfig.reviewBeforeStorage}
+                      onChange={handleReviewBeforeStorageChange}
+                    />
+                    <span>{qi("reviewBeforeStorage", "Review before saving")}</span>
+                  </label>
+                  {presetConfig.reviewBeforeStorage ? (
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                      {qi("reviewEnabled", "Review mode")}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-2 flex items-start gap-2">
+                  <span className="mt-[2px]">•</span>
+                  <span>
+                    {qi(
+                      "reviewBeforeStorageHint",
+                      "Process now, then edit drafts locally before committing to your server."
+                    )}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-start gap-2">
+                  <span className="mt-[2px]">•</span>
+                  <span>
+                    {qi("reviewStorageCap", "Local drafts are capped at {{cap}}.", {
+                      cap: formatBytes(DRAFT_STORAGE_CAP_BYTES),
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between pt-2">
+        <Button onClick={goBack}>
+          <ArrowLeft className="mr-1 h-4 w-4" />
+          {qi("wizard.back", "Back")}
+        </Button>
+        <Button type="primary" onClick={goNext}>
+          {qi("wizard.next", "Next")}
+          <ArrowRight className="ml-1 h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+export default WizardConfigureStep

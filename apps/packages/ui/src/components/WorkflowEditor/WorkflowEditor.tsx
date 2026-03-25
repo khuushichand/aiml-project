@@ -7,7 +7,7 @@
  * - Sidebar with palette, config, and execution panels
  */
 
-import { useEffect, useCallback, useState } from "react"
+import { useEffect, useCallback, useState, lazy, Suspense } from "react"
 import {
   Button,
   Input,
@@ -43,8 +43,18 @@ import { useWorkflowEditorStore } from "@/store/workflow-editor"
 import { useDesktop } from "@/hooks/useMediaQuery"
 import { WorkflowCanvas } from "./WorkflowCanvas"
 import { NodePalette } from "./NodePalette"
-import { NodeConfigPanel } from "./NodeConfigPanel"
-import { ExecutionPanel } from "./ExecutionPanel"
+
+const LazyNodeConfigPanel = lazy(() =>
+  import("./NodeConfigPanel").then((module) => ({
+    default: module.NodeConfigPanel
+  }))
+)
+
+const LazyExecutionPanel = lazy(() =>
+  import("./ExecutionPanel").then((module) => ({
+    default: module.ExecutionPanel
+  }))
+)
 
 interface WorkflowEditorProps {
   className?: string
@@ -218,6 +228,26 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
         ? `Validation issues: ${errorCount} errors`
         : `Validation issues: ${warningCount} warnings`
 
+  const renderSidebarPanel = () => {
+    if (sidebarPanel === "config") {
+      return (
+        <Suspense fallback={null}>
+          <LazyNodeConfigPanel className="h-full" />
+        </Suspense>
+      )
+    }
+
+    if (sidebarPanel === "execution") {
+      return (
+        <Suspense fallback={null}>
+          <LazyExecutionPanel className="h-full" />
+        </Suspense>
+      )
+    }
+
+    return <NodePalette className="h-full" />
+  }
+
   const sidebarContent = (
     <>
       <div className="flex items-center p-2 border-b border-border">
@@ -242,9 +272,7 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {sidebarPanel === "palette" && <NodePalette className="h-full" />}
-        {sidebarPanel === "config" && <NodeConfigPanel className="h-full" />}
-        {sidebarPanel === "execution" && <ExecutionPanel className="h-full" />}
+        {renderSidebarPanel()}
       </div>
     </>
   )

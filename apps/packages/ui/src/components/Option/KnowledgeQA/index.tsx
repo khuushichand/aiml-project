@@ -7,8 +7,6 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
 import { KnowledgeQAProvider, useKnowledgeQA } from "./KnowledgeQAProvider"
-import { SettingsPanel } from "./SettingsPanel"
-import { ExportDialog } from "./ExportDialog"
 import { KnowledgeQALayout } from "./layout/KnowledgeQALayout"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
@@ -24,6 +22,13 @@ import {
   KNOWLEDGE_QA_RETRY_TICK_MS,
 } from "./retryScheduler"
 import { useLocation, useNavigate } from "react-router-dom"
+
+const LazySettingsPanel = React.lazy(() =>
+  import("./SettingsPanel").then((module) => ({ default: module.SettingsPanel })),
+)
+const LazyExportDialog = React.lazy(() =>
+  import("./ExportDialog").then((module) => ({ default: module.ExportDialog })),
+)
 
 const ROUTE_HYDRATION_RETRY_DELAY_MS = 1500
 const ROUTE_HYDRATION_MAX_RETRIES = 2
@@ -420,16 +425,24 @@ function KnowledgeQAContent() {
       <KnowledgeQALayout onExportClick={() => setExportDialogOpen(true)} />
 
       {/* Settings panel (drawer) */}
-      <SettingsPanel
-        open={settingsPanelOpen}
-        onClose={() => setSettingsPanelOpen(false)}
-      />
+      {settingsPanelOpen ? (
+        <React.Suspense fallback={null}>
+          <LazySettingsPanel
+            open={settingsPanelOpen}
+            onClose={() => setSettingsPanelOpen(false)}
+          />
+        </React.Suspense>
+      ) : null}
 
       {/* Export dialog */}
-      <ExportDialog
-        open={exportDialogOpen}
-        onClose={() => setExportDialogOpen(false)}
-      />
+      {exportDialogOpen ? (
+        <React.Suspense fallback={null}>
+          <LazyExportDialog
+            open={exportDialogOpen}
+            onClose={() => setExportDialogOpen(false)}
+          />
+        </React.Suspense>
+      ) : null}
     </div>
   )
 }

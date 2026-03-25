@@ -295,7 +295,7 @@ vi.mock("~/components/Sidepanel/Chat/SidepanelHeaderSimple", () => ({
 import SidepanelPersona from "../sidepanel-persona"
 
 describe("SidepanelPersona command handoff", () => {
-  it("switches from test lab to commands and back to rerun the repaired phrase", () => {
+  it("switches from test lab to commands and back to rerun the repaired phrase", async () => {
     render(
       <MemoryRouter initialEntries={["/persona?tab=test-lab"]}>
         <SidepanelPersona />
@@ -305,12 +305,12 @@ describe("SidepanelPersona command handoff", () => {
     expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
       "test-lab"
     )
-    fireEvent.click(screen.getByTestId("test-lab-open-command"))
+    fireEvent.click(await screen.findByTestId("test-lab-open-command"))
 
     expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
       "commands"
     )
-    expect(screen.getByTestId("commands-panel")).toHaveTextContent(
+    expect(await screen.findByTestId("commands-panel")).toHaveTextContent(
       "active:cmd-alert:cmd-alert:none"
     )
 
@@ -319,7 +319,7 @@ describe("SidepanelPersona command handoff", () => {
     expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
       "test-lab"
     )
-    expect(screen.getByTestId("test-lab-state")).toHaveTextContent(
+    expect(await screen.findByTestId("test-lab-state")).toHaveTextContent(
       "active:send alert for model drift:1"
     )
 
@@ -328,12 +328,12 @@ describe("SidepanelPersona command handoff", () => {
     expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
       "commands"
     )
-    expect(screen.getByTestId("commands-panel")).toHaveTextContent(
+    expect(await screen.findByTestId("commands-panel")).toHaveTextContent(
       "active:cmd-alert:cmd-alert:none"
     )
   })
 
-  it("opens a new command draft from an unmatched test lab phrase", () => {
+  it("opens a new command draft from an unmatched test lab phrase", async () => {
     render(
       <MemoryRouter initialEntries={["/persona?tab=test-lab"]}>
         <SidepanelPersona />
@@ -343,12 +343,12 @@ describe("SidepanelPersona command handoff", () => {
     expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
       "test-lab"
     )
-    fireEvent.click(screen.getByTestId("test-lab-create-command"))
+    fireEvent.click(await screen.findByTestId("test-lab-create-command"))
 
     expect(screen.getByTestId("persona-garden-active-tab")).toHaveTextContent(
       "commands"
     )
-    expect(screen.getByTestId("commands-panel")).toHaveTextContent(
+    expect(await screen.findByTestId("commands-panel")).toHaveTextContent(
       "active:none:none:start a focused research sprint"
     )
   })

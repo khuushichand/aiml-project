@@ -79,6 +79,7 @@ vi.mock("antd", () => ({
       ))}
     </div>
   ),
+  Tooltip: ({ children }: any) => <>{children}</>,
   Input: Object.assign(
     (props: any) => <input {...props} />,
     {
@@ -101,6 +102,7 @@ vi.mock("antd", () => ({
   ),
   Tag: ({ children, ...props }: any) => <span {...props}>{children}</span>,
   Typography: {
+    Title: ({ children, ...props }: any) => <div {...props}>{children}</div>,
     Text: ({ children, ...props }: any) => <span {...props}>{children}</span>,
   },
   Progress: ({ percent, ...props }: any) => (
@@ -147,6 +149,17 @@ vi.mock("lucide-react", () => {
   return mocks
 })
 
+vi.mock("wxt/browser", () => ({
+  browser: {
+    runtime: {
+      onMessage: {
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      },
+    },
+  },
+}))
+
 // SSE hook — no-op
 vi.mock("@/components/Common/QuickIngest/useIngestSSE", () => ({
   useIngestSSE: () => {},
@@ -171,6 +184,22 @@ vi.mock("@/services/background-proxy", () => ({
   bgRequest: vi.fn().mockResolvedValue({}),
 }))
 
+vi.mock("@/services/tldw/quick-ingest-batch", () => ({
+  cancelQuickIngestSession: vi.fn().mockResolvedValue({ ok: true }),
+  startQuickIngestSession: vi.fn().mockResolvedValue({ ok: true, sessionId: "qi-test" }),
+  submitQuickIngestBatch: vi.fn().mockResolvedValue({ ok: true, results: [] }),
+}))
+
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    initialize: vi.fn().mockResolvedValue(undefined),
+  },
+}))
+
+vi.mock("@/components/Common/QuickIngest/FloatingProgressWidget", () => ({
+  FloatingProgressWidget: () => null,
+}))
+
 // Deterministic UUIDs
 let uuidCounter = 0
 beforeEach(() => {
@@ -191,10 +220,12 @@ import {
   useIngestWizard,
 } from "@/components/Common/QuickIngest/IngestWizardContext"
 import { AddContentStep } from "@/components/Common/QuickIngest/AddContentStep"
+import { WizardConfigureStep } from "@/components/Common/QuickIngest/WizardConfigureStep"
+import { QuickIngestWizardModal } from "@/components/Common/QuickIngestWizardModal"
 import { ReviewStep } from "@/components/Common/QuickIngest/ReviewStep"
 import { ProcessingStep } from "@/components/Common/QuickIngest/ProcessingStep"
 import { WizardResultsStep } from "@/components/Common/QuickIngest/WizardResultsStep"
-import { PresetSelector } from "@/components/Common/QuickIngest/PresetSelector"
+import { useQuickIngestSessionStore } from "@/store/quick-ingest-session"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -229,30 +260,10 @@ const InnerWizardContent: React.FC<{ onClose: () => void }> = ({
         <span>Results</span>
       </nav>
       {currentStep === 1 && <AddContentStep />}
-      {currentStep === 2 && <ConfigureStepProxy />}
+      {currentStep === 2 && <WizardConfigureStep />}
       {currentStep === 3 && <ReviewStep />}
       {currentStep === 4 && <ProcessingStep />}
       {currentStep === 5 && <WizardResultsStep onClose={onClose} />}
-    </div>
-  )
-}
-
-const ConfigureStepProxy: React.FC = () => {
-  const { state, setPreset, goNext, goBack } = useIngestWizard()
-  return (
-    <div>
-      <PresetSelector
-        qi={(key, dv) => dv}
-        value={state.selectedPreset}
-        onChange={setPreset}
-        queueItems={state.queueItems}
-      />
-      <div>
-        <button onClick={goBack}>Back</button>
-        <button onClick={goNext} data-type="primary">
-          Next
-        </button>
-      </div>
     </div>
   )
 }
@@ -635,5 +646,84 @@ describe("QuickIngestWizardModal — full wizard flow integration", () => {
 
     // The file drop zone should be visible again
     expect(screen.getByTestId("file-drop-zone")).toBeTruthy()
+  })
+})
+
+describe("QuickIngestWizardModal — real configure step", () => {
+  beforeEach(() => {
+    useQuickIngestSessionStore.setState({
+      session: null,
+      triggerSummary: { count: 0, label: null, hadFailure: false },
+    })
+    useQuickIngestSessionStore.getState().createDraftSession()
+  })
+
+  it("shows the full inline options surface without forcing the old full-modal placeholder", async () => {
+    const user = userEvent.setup()
+    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /standard preset/i })
+      ).toBeTruthy()
+    })
+
+    expect(
+      screen.queryByText(/advanced options are available in the full ingest modal/i)
+    ).not.toBeInTheDocument()
+    const analysisToggle = screen.getByRole("checkbox", {
+      name: /ingestion options – analysis/i,
+    })
+    expect(analysisToggle).toBeInTheDocument()
+    expect(screen.getByText("Review before saving")).toBeInTheDocument()
+    expect(screen.getByTitle("Captions toggle")).toBeInTheDocument()
+    expect(screen.getByText("Next")).toBeInTheDocument()
+
+    await user.click(analysisToggle)
+
+    expect(screen.getByText(/using custom settings/i)).toBeInTheDocument()
+  })
+
+  it("keeps review mode anchored to remote storage and leaves audio defaults available for video-only batches", async () => {
+    const user = userEvent.setup()
+    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    const audioLanguageInput = await screen.findByTitle("Audio language")
+    const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
+
+    expect(audioLanguageInput).not.toBeDisabled()
+    expect(diarizationToggle).not.toBeDisabled()
+
+    await user.click(
+      screen.getByLabelText(/store ingest results on your tldw server/i)
+    )
+
+    const reviewToggle = screen.getByLabelText(/review before saving/i)
+    await user.click(reviewToggle)
+
+    expect(
+      screen.getByLabelText(/store ingest results on your tldw server/i)
+    ).toBeChecked()
   })
 })

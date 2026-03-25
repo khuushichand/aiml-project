@@ -71,6 +71,78 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
   return raw.replace(/\/$/, "")
 }
 
+const getCurrentBrowserHostname = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    const hostname = String(window.location?.hostname || "").trim().toLowerCase()
+    return hostname || null
+  } catch {
+    return null
+  }
+}
+
+const isLocalhostLikeHostname = (value?: string | null): boolean => {
+  const normalized = String(value || "").trim().toLowerCase()
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  )
+}
+
+const parsePrivateIpv4Host = (value?: string | null): number[] | null => {
+  const normalized = String(value || "").trim().toLowerCase()
+  const match = normalized.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!match) return null
+
+  const parts = match.slice(1).map((raw) => Number(raw))
+  if (parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return null
+  }
+
+  const [a, b] = parts
+  if (a === 10) return parts
+  if (a === 192 && b === 168) return parts
+  if (a === 172 && b >= 16 && b <= 31) return parts
+  return null
+}
+
+const formatHostnameForUrl = (value: string): string => {
+  return value.includes(":") && !value.startsWith("[") ? `[${value}]` : value
+}
+
+const deriveCurrentHostRecoveryServerUrl = (
+  configuredServerUrl?: string | null
+): string | null => {
+  if (!configuredServerUrl) return null
+
+  const browserHostname = getCurrentBrowserHostname()
+  if (!browserHostname) return null
+
+  try {
+    const parsed = new URL(String(configuredServerUrl))
+    const configuredHost = String(parsed.hostname || "").trim().toLowerCase()
+    if (!configuredHost || configuredHost === browserHostname) return null
+
+    const configuredPrivateIp = parsePrivateIpv4Host(configuredHost)
+    const browserPrivateIp = parsePrivateIpv4Host(browserHostname)
+    const configuredIsLocal = isLocalhostLikeHostname(configuredHost)
+    const browserIsLocal = isLocalhostLikeHostname(browserHostname)
+
+    const shouldRecover =
+      (configuredPrivateIp && browserIsLocal) ||
+      (configuredIsLocal && browserPrivateIp) ||
+      (configuredPrivateIp && browserPrivateIp)
+    if (!shouldRecover) return null
+
+    const port = parsed.port || "8000"
+    return `${parsed.protocol}//${formatHostnameForUrl(browserHostname)}:${port}`
+  } catch {
+    return null
+  }
+}
+
 const DEFAULT_TLDW_SERVER_URL = "http://127.0.0.1:8000"
 
 const seedTldwConfigFromEnv = async (): Promise<void> => {
@@ -83,16 +155,21 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
       return null
     }
   })()
+  const repairedExplicitWebHost =
+    deriveCurrentHostRecoveryServerUrl(explicitWebHost) || explicitWebHost
+  const envDefaultServerUrl =
+    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL) || DEFAULT_TLDW_SERVER_URL
+  const repairedEnvDefaultServerUrl =
+    deriveCurrentHostRecoveryServerUrl(envDefaultServerUrl) ||
+    envDefaultServerUrl
   const serverUrl =
-    explicitWebHost ||
-    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL) ||
-    DEFAULT_TLDW_SERVER_URL
+    repairedExplicitWebHost || repairedEnvDefaultServerUrl
   const apiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || null
   const apiBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim() || null
 
   if (!serverUrl && !apiKey && !apiBearer) return
 
-  if (!explicitWebHost && serverUrl) {
+  if (serverUrl && explicitWebHost !== serverUrl) {
     try {
       window.localStorage.setItem("tldw-api-host", serverUrl)
     } catch {

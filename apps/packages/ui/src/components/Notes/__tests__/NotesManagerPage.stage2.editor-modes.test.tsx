@@ -192,7 +192,7 @@ describe("NotesManagerPage stage 2 editor modes", () => {
 
     expect(screen.queryByPlaceholderText(textareaPlaceholder)).not.toBeInTheDocument()
     expect(screen.getByText("Preview (Markdown + LaTeX)")).toBeInTheDocument()
-    expect(screen.getByTestId("markdown-preview-content")).toHaveTextContent("## Heading")
+    expect(await screen.findByTestId("markdown-preview-content")).toHaveTextContent("## Heading")
 
     fireEvent.click(screen.getByRole("button", { name: "Split" }))
 

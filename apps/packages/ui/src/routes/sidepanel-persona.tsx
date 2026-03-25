@@ -16,16 +16,7 @@ import {
   PersonaSetupHandoffCard,
 } from "@/components/PersonaGarden/PersonaSetupHandoffCard"
 import { AssistantSetupWizard } from "@/components/PersonaGarden/AssistantSetupWizard"
-import {
-  CommandsPanel,
-  type CommandDraftSource
-} from "@/components/PersonaGarden/CommandsPanel"
-import { ConnectionsPanel } from "@/components/PersonaGarden/ConnectionsPanel"
-import { LiveSessionPanel } from "@/components/PersonaGarden/LiveSessionPanel"
 import { PersonaGardenTabs } from "@/components/PersonaGarden/PersonaGardenTabs"
-import { PoliciesPanel } from "@/components/PersonaGarden/PoliciesPanel"
-import { ProfilePanel } from "@/components/PersonaGarden/ProfilePanel"
-import { ScopesPanel } from "@/components/PersonaGarden/ScopesPanel"
 import {
   SetupSafetyConnectionsStep,
 } from "@/components/PersonaGarden/SetupSafetyConnectionsStep"
@@ -33,12 +24,12 @@ import { SetupStarterCommandsStep } from "@/components/PersonaGarden/SetupStarte
 import {
   SetupTestAndFinishStep,
 } from "@/components/PersonaGarden/SetupTestAndFinishStep"
-import { StateDocsPanel } from "@/components/PersonaGarden/StateDocsPanel"
 import {
-  TestLabPanel,
-  type TestLabDryRunCompletedResult,
+  type CommandDraftSource
+} from "@/components/PersonaGarden/CommandsPanel"
+import {
+  type TestLabDryRunCompletedResult
 } from "@/components/PersonaGarden/TestLabPanel"
-import { VoiceExamplesPanel } from "@/components/PersonaGarden/VoiceExamplesPanel"
 import { useConnectionUxState } from "@/hooks/useConnectionState"
 import { useServerOnline } from "@/hooks/useServerOnline"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
@@ -77,6 +68,60 @@ import {
   buildTurnDetectionValuesFromSavedDefaults,
   areTurnDetectionValuesEqual,
 } from "./personaTypes"
+
+const LazyCommandsPanel = React.lazy(() =>
+  import("@/components/PersonaGarden/CommandsPanel").then((module) => ({
+    default: module.CommandsPanel
+  }))
+)
+
+const LazyConnectionsPanel = React.lazy(() =>
+  import("@/components/PersonaGarden/ConnectionsPanel").then((module) => ({
+    default: module.ConnectionsPanel
+  }))
+)
+
+const LazyLiveSessionPanel = React.lazy(() =>
+  import("@/components/PersonaGarden/LiveSessionPanel").then((module) => ({
+    default: module.LiveSessionPanel
+  }))
+)
+
+const LazyPoliciesPanel = React.lazy(() =>
+  import("@/components/PersonaGarden/PoliciesPanel").then((module) => ({
+    default: module.PoliciesPanel
+  }))
+)
+
+const LazyProfilePanel = React.lazy(() =>
+  import("@/components/PersonaGarden/ProfilePanel").then((module) => ({
+    default: module.ProfilePanel
+  }))
+)
+
+const LazyScopesPanel = React.lazy(() =>
+  import("@/components/PersonaGarden/ScopesPanel").then((module) => ({
+    default: module.ScopesPanel
+  }))
+)
+
+const LazyStateDocsPanel = React.lazy(() =>
+  import("@/components/PersonaGarden/StateDocsPanel").then((module) => ({
+    default: module.StateDocsPanel
+  }))
+)
+
+const LazyTestLabPanel = React.lazy(() =>
+  import("@/components/PersonaGarden/TestLabPanel").then((module) => ({
+    default: module.TestLabPanel
+  }))
+)
+
+const LazyVoiceExamplesPanel = React.lazy(() =>
+  import("@/components/PersonaGarden/VoiceExamplesPanel").then((module) => ({
+    default: module.VoiceExamplesPanel
+  }))
+)
 
 const SidepanelPersona = ({
   mode = "persona",
@@ -704,6 +749,33 @@ const SidepanelPersona = ({
       </div>
     ),
     [renderSetupHandoffCard]
+  )
+
+  const renderLazyPersonaTab = React.useCallback(
+    (
+      tab: PersonaGardenTabKey,
+      content: React.ReactNode,
+      options?: {
+        includeSetupHandoff?: boolean
+      }
+    ) => {
+      if (activeTab !== tab) {
+        return null
+      }
+
+      const tabContent = (
+        <React.Suspense fallback={null}>
+          {content}
+        </React.Suspense>
+      )
+
+      if (options?.includeSetupHandoff === false) {
+        return tabContent
+      }
+
+      return withSetupHandoff(tab, tabContent)
+    },
+    [activeTab, withSetupHandoff]
   )
 
   // ── Persona unsupported check ──
@@ -1465,9 +1537,9 @@ const SidepanelPersona = ({
     {
       key: "commands",
       label: t("sidepanel:persona.tabCommands", "Commands"),
-      content: withSetupHandoff(
+      content: renderLazyPersonaTab(
         "commands",
-        <CommandsPanel
+        <LazyCommandsPanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "commands"}
@@ -1496,9 +1568,9 @@ const SidepanelPersona = ({
     {
       key: "test-lab",
       label: t("sidepanel:persona.tabTestLab", "Test Lab"),
-      content: withSetupHandoff(
+      content: renderLazyPersonaTab(
         "test-lab",
-        <TestLabPanel
+        <LazyTestLabPanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "test-lab"}
@@ -1523,9 +1595,9 @@ const SidepanelPersona = ({
     {
       key: "live",
       label: t("sidepanel:persona.tabLive", "Live Session"),
-      content: withSetupHandoff(
+      content: renderLazyPersonaTab(
         "live",
-        <LiveSessionPanel
+        <LazyLiveSessionPanel
           controls={liveSessionControls}
           assistantVoice={assistantVoiceCard}
           error={liveSessionStatusPanels}
@@ -1538,9 +1610,9 @@ const SidepanelPersona = ({
     {
       key: "profiles",
       label: t("sidepanel:persona.tabProfiles", "Profiles"),
-      content: withSetupHandoff(
+      content: renderLazyPersonaTab(
         "profiles",
-        <ProfilePanel
+        <LazyProfilePanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           personaCount={catalog.length}
@@ -1574,20 +1646,24 @@ const SidepanelPersona = ({
     {
       key: "voice",
       label: t("sidepanel:persona.tabVoice", "Voice & Examples"),
-      content: (
-        <VoiceExamplesPanel
+      content: renderLazyPersonaTab(
+        "voice",
+        <LazyVoiceExamplesPanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "voice"}
-        />
+        />,
+        {
+          includeSetupHandoff: false
+        }
       )
     },
     {
       key: "connections",
       label: t("sidepanel:persona.tabConnections", "Connections"),
-      content: withSetupHandoff(
+      content: renderLazyPersonaTab(
         "connections",
-        <ConnectionsPanel
+        <LazyConnectionsPanel
           selectedPersonaId={selectedPersonaId}
           selectedPersonaName={selectedPersonaName}
           isActive={activeTab === "connections"}
@@ -1612,17 +1688,35 @@ const SidepanelPersona = ({
     {
       key: "state",
       label: t("sidepanel:persona.tabStateDocs", "State Docs"),
-      content: <StateDocsPanel>{stateDocsCard}</StateDocsPanel>
+      content: renderLazyPersonaTab(
+        "state",
+        <LazyStateDocsPanel>{stateDocsCard}</LazyStateDocsPanel>,
+        {
+          includeSetupHandoff: false
+        }
+      )
     },
     {
       key: "scopes",
       label: t("sidepanel:persona.tabScopes", "Scopes"),
-      content: <ScopesPanel selectedPersonaName={selectedPersonaName} />
+      content: renderLazyPersonaTab(
+        "scopes",
+        <LazyScopesPanel selectedPersonaName={selectedPersonaName} />,
+        {
+          includeSetupHandoff: false
+        }
+      )
     },
     {
       key: "policies",
       label: t("sidepanel:persona.tabPolicies", "Policies"),
-      content: <PoliciesPanel hasPendingPlan={Boolean(pendingPlan)} />
+      content: renderLazyPersonaTab(
+        "policies",
+        <LazyPoliciesPanel hasPendingPlan={Boolean(pendingPlan)} />,
+        {
+          includeSetupHandoff: false
+        }
+      )
     }
   ]
 

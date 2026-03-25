@@ -112,12 +112,12 @@ def test_webui_dockerfile_installs_only_frontend_and_ui_workspaces():
     )
 
 
-def test_webui_dockerfile_bakes_hosted_mode_build_args():
-    """The WebUI Docker build should accept hosted-mode public env args."""
+def test_webui_dockerfile_bakes_quickstart_mode_build_args():
+    """The WebUI Docker build should accept quickstart-mode public env args."""
     text = _read_text("Dockerfiles/Dockerfile.webui")
 
     _require(
-        "ARG NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=local" in text,
+        "ARG NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=quickstart" in text,
         "Expected Dockerfile.webui to define NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE build arg",
     )
     _require(

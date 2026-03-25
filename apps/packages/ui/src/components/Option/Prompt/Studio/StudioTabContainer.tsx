@@ -15,7 +15,7 @@ import {
   Sparkles,
   Settings
 } from "lucide-react"
-import React, { useEffect } from "react"
+import React, { Suspense, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useSearchParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -43,10 +43,30 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import WorkspaceConnectionGate from "@/components/Common/WorkspaceConnectionGate"
 import { QueueHealthWidget } from "./QueueHealthWidget"
 import { ProjectsTab } from "./Projects/ProjectsTab"
-import { StudioPromptsTab } from "./Prompts/StudioPromptsTab"
-import { TestCasesTab } from "./TestCases/TestCasesTab"
-import { EvaluationsTab } from "./Evaluations/EvaluationsTab"
-import { OptimizationsTab } from "./Optimizations/OptimizationsTab"
+
+const StudioPromptsTab = React.lazy(() =>
+  import("./Prompts/StudioPromptsTab").then((module) => ({
+    default: module.StudioPromptsTab
+  }))
+)
+
+const TestCasesTab = React.lazy(() =>
+  import("./TestCases/TestCasesTab").then((module) => ({
+    default: module.TestCasesTab
+  }))
+)
+
+const EvaluationsTab = React.lazy(() =>
+  import("./Evaluations/EvaluationsTab").then((module) => ({
+    default: module.EvaluationsTab
+  }))
+)
+
+const OptimizationsTab = React.lazy(() =>
+  import("./Optimizations/OptimizationsTab").then((module) => ({
+    default: module.OptimizationsTab
+  }))
+)
 
 const SUB_TAB_OPTIONS: StudioSubTab[] = [
   "projects",
@@ -481,18 +501,34 @@ export const StudioTabContainer: React.FC = () => {
     }
   })
 
-  const renderContent = () => {
+  const renderStudioSubTab = () => {
     switch (activeSubTab) {
       case "projects":
         return <ProjectsTab />
       case "prompts":
-        return <StudioPromptsTab />
+        return (
+          <Suspense fallback={<div className="py-8 text-sm text-text-muted">Loading prompts...</div>}>
+            <StudioPromptsTab />
+          </Suspense>
+        )
       case "testCases":
-        return <TestCasesTab />
+        return (
+          <Suspense fallback={<div className="py-8 text-sm text-text-muted">Loading test cases...</div>}>
+            <TestCasesTab />
+          </Suspense>
+        )
       case "evaluations":
-        return <EvaluationsTab />
+        return (
+          <Suspense fallback={<div className="py-8 text-sm text-text-muted">Loading evaluations...</div>}>
+            <EvaluationsTab />
+          </Suspense>
+        )
       case "optimizations":
-        return <OptimizationsTab />
+        return (
+          <Suspense fallback={<div className="py-8 text-sm text-text-muted">Loading optimizations...</div>}>
+            <OptimizationsTab />
+          </Suspense>
+        )
       default:
         return <ProjectsTab />
     }
@@ -595,7 +631,7 @@ export const StudioTabContainer: React.FC = () => {
       )}
 
       {/* Content area */}
-      <div className="min-h-[400px]">{renderContent()}</div>
+      <div className="min-h-[400px]">{renderStudioSubTab()}</div>
     </div>
   )
 }

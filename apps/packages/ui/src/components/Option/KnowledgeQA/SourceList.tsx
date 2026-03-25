@@ -6,7 +6,6 @@ import React, { useCallback, useMemo, useEffect } from "react"
 import { FileText, Keyboard, X } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { SourceCard, type SourceAskTemplate } from "./SourceCard"
-import { SourceViewerModal } from "./SourceViewerModal"
 import { cn } from "@/libs/utils"
 import type { RagResult } from "./types"
 import { getFeedbackSessionId, submitExplicitFeedback } from "@/services/feedback"
@@ -53,6 +52,10 @@ const SOURCE_CONTENT_FACETS: SourceContentFacet[] = [
   "web",
   "other",
 ]
+
+const LazySourceViewerModal = React.lazy(() =>
+  import("./SourceViewerModal").then((module) => ({ default: module.SourceViewerModal })),
+)
 
 type SourceListProps = {
   className?: string
@@ -929,12 +932,14 @@ export function SourceList({ className }: SourceListProps) {
         </>
       )}
 
-      <SourceViewerModal
-        open={Boolean(viewerState.result)}
-        result={viewerState.result}
-        index={viewerState.index}
-        onClose={closeViewer}
-      />
+      <React.Suspense fallback={null}>
+        <LazySourceViewerModal
+          open={Boolean(viewerState.result)}
+          result={viewerState.result}
+          index={viewerState.index}
+          onClose={closeViewer}
+        />
+      </React.Suspense>
 
       {shortcutsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

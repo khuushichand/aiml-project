@@ -86,7 +86,7 @@ Good fit for:
 Choose one base onboarding path.
 
 Recommended default:
-- Run `make quickstart` for the Docker single-user + WebUI setup most users want.
+- Run `make quickstart` for the Docker single-user + WebUI setup most users want. The default browser path uses same-origin browser API requests through the WebUI proxy.
 - Use [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) if you are deploying for a team or exposing the app publicly.
 - Keep local setup in [apps/DEVELOPMENT.md](apps/DEVELOPMENT.md) and the local profile docs.
 
@@ -259,10 +259,12 @@ This target:
 - Starts the Docker single-user + WebUI setup.
 - Uses the existing `quickstart-docker-webui` flow under the hood.
 - Brings up the API at `http://localhost:8000` and WebUI at `http://localhost:8080`.
+- Keeps the default browser path on same-origin browser API requests through the WebUI proxy.
 
 Want a more advanced deployment?
 - Team/public deployment: [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
 - API-only Docker deployment: `make quickstart-docker`
+- Use the advanced/custom-host path for LAN, reverse-proxy, or custom-domain browser access only when you need browsers to call a non-default host.
 
 ### No-Docker Path (Makefile, Development)
 
@@ -502,12 +504,14 @@ Quickest full-stack path (containerized API + WebUI):
 make quickstart-docker-webui
 # API:   http://localhost:8000
 # WebUI: http://localhost:8080
-# Optional (non-localhost deployments):
-# make quickstart-docker-webui NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
+# Optional advanced/custom-host path for LAN, reverse-proxy, or custom-domain browser access:
+# make quickstart-docker-webui NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced NEXT_PUBLIC_API_URL=http://YOUR_HOST_OR_DOMAIN:8000
 # Optional (force image rebuild instead of cached layers):
 # make quickstart-docker-webui DOCKER_BUILD=true
 ```
 No-`make` equivalent: use [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly).
+
+Default quickstart behavior keeps same-origin browser API requests through the WebUI proxy. When you intentionally move the browser onto an advanced/custom-host path for LAN, reverse-proxy, or custom-domain browser access, set both `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced` and `NEXT_PUBLIC_API_URL`.
 
 Local WebUI development (API should already be running, for example via `make quickstart`):
 
@@ -623,7 +627,7 @@ docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.p
 
 Notes
 - Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
-- For `Dockerfiles/docker-compose.webui.yml`, `NEXT_PUBLIC_API_URL` is injected at WebUI build time and must be externally reachable by browsers (Docker host IP/name, reverse-proxy URL, or public domain), not an internal `localhost` default.
+- For `Dockerfiles/docker-compose.webui.yml`, the default quickstart leaves `NEXT_PUBLIC_API_URL` empty so browsers stay on same-origin browser API requests through the WebUI proxy. Set `NEXT_PUBLIC_API_URL` only for the advanced/custom-host path for LAN, reverse-proxy, or custom-domain browser access.
 - `NEXT_PUBLIC_API_VERSION` and `NEXT_PUBLIC_X_API_KEY` are also build-time public values in the client bundle; set them explicitly for your target deployment/auth mode.
 - If you need per-environment API URLs without rebuilding the WebUI image, switch to a runtime env-substitution strategy instead of compile-time `NEXT_PUBLIC_*` build args.
 - The primary UI is the Next.js WebUI in `apps/tldw-frontend/`.

@@ -1,7 +1,13 @@
 import { useQuery } from "@tanstack/react-query"
 import { apiSend } from "@/services/api-send"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
-import { fetchTldwVoices, type TldwVoice } from "@/services/tldw/audio-voices"
+import {
+  fetchTldwVoiceCatalog,
+  fetchTldwVoices,
+  type TldwVoice
+} from "@/services/tldw/audio-voices"
+import { inferTldwProviderFromModel } from "@/services/tts-provider"
+import { toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
 
 export type AudioHealthState =
   | "unknown"
@@ -12,6 +18,7 @@ export type AudioHealthState =
 type Options = {
   enabled?: boolean
   requireVoices?: boolean
+  tldwTtsModel?: string | null
 }
 
 type AudioStatus = {
@@ -49,6 +56,13 @@ const HEALTH_PROBE_RETRY_DELAY_MS = 500
 export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   const { capabilities, loading } = useServerCapabilities()
   const probeEnabled = options.enabled ?? true
+  const shouldProbeVoices = probeEnabled && Boolean(options.requireVoices)
+  const inferredTldwProvider = options.requireVoices
+    ? inferTldwProviderFromModel(options.tldwTtsModel)
+    : null
+  const catalogProvider = inferredTldwProvider
+    ? toServerTtsProviderKey(inferredTldwProvider)
+    : null
   const hasStt = !loading && Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
   const hasTts = !loading && Boolean(capabilities?.hasTts ?? capabilities?.hasAudio)
   const hasVoiceChat =
@@ -95,24 +109,6 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
     refetchOnWindowFocus: false
   })
 
-  let ttsHealthState: AudioHealthState = "unknown"
-  if (!hasTts) {
-    ttsHealthState = loading ? "unknown" : "unavailable"
-  } else if (!probeEnabled) {
-    ttsHealthState = "unknown"
-  } else if (ttsHealthQuery.isLoading) {
-    ttsHealthState = "unknown"
-  } else if (ttsHealthQuery.isError) {
-    // Probe errors should not hard-disable audio features.
-    ttsHealthState = "unknown"
-  } else if (ttsHealthQuery.data?.ok) {
-    ttsHealthState = "healthy"
-  } else if (ttsHealthQuery.data?.status === 404) {
-    ttsHealthState = "unknown"
-  } else {
-    ttsHealthState = "unhealthy"
-  }
-
   let sttHealthState: AudioHealthState = "unknown"
   if (!hasStt) {
     sttHealthState = loading ? "unknown" : "unavailable"
@@ -144,9 +140,17 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   }
 
   const voicesQuery = useQuery<TldwVoice[]>({
-    queryKey: ["audio-voices"],
-    queryFn: () => fetchTldwVoices(),
-    enabled: hasTts && probeEnabled && Boolean(options.requireVoices),
+    queryKey: ["audio-voices", catalogProvider],
+    queryFn: async () => {
+      if (catalogProvider) {
+        const catalogVoices = await fetchTldwVoiceCatalog(catalogProvider)
+        if (catalogVoices.length > 0) {
+          return catalogVoices
+        }
+      }
+      return fetchTldwVoices()
+    },
+    enabled: shouldProbeVoices,
     staleTime: 300_000,
     refetchOnWindowFocus: false
   })
@@ -154,6 +158,30 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   const voices = voicesQuery.data ?? []
   const voicesAvailable =
     options.requireVoices && !voicesQuery.isLoading ? voices.length > 0 : null
+  const voicesConfirmTts =
+    Boolean(options.requireVoices) && !voicesQuery.isLoading && voices.length > 0
+
+  let ttsHealthState: AudioHealthState = "unknown"
+  if (!hasTts) {
+    if (loading || voicesQuery.isLoading) {
+      ttsHealthState = "unknown"
+    } else {
+      ttsHealthState = voicesConfirmTts ? "unknown" : "unavailable"
+    }
+  } else if (!probeEnabled) {
+    ttsHealthState = "unknown"
+  } else if (ttsHealthQuery.isLoading) {
+    ttsHealthState = "unknown"
+  } else if (ttsHealthQuery.isError) {
+    // Probe errors should not hard-disable audio features.
+    ttsHealthState = "unknown"
+  } else if (ttsHealthQuery.data?.ok) {
+    ttsHealthState = "healthy"
+  } else if (ttsHealthQuery.data?.status === 404) {
+    ttsHealthState = "unknown"
+  } else {
+    ttsHealthState = "unhealthy"
+  }
 
   return {
     hasAudio,

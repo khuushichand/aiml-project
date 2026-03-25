@@ -45,7 +45,7 @@ describe("SourceList full-source viewer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "View full source 1" }))
 
-    const dialog = screen.getByRole("dialog", {
+    const dialog = await screen.findByRole("dialog", {
       name: /Source 1: Quarterly Financial Review/i,
     })
     expect(dialog).toBeInTheDocument()

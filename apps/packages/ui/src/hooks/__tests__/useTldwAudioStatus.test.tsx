@@ -14,7 +14,9 @@ const state = vi.hoisted(() => ({
   } as any,
   loading: false,
   apiSend: vi.fn(),
-  fetchVoices: vi.fn()
+  fetchVoices: vi.fn(),
+  fetchVoiceCatalog: vi.fn(),
+  inferProviderFromModel: vi.fn(() => null)
 }))
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
@@ -31,7 +33,14 @@ vi.mock("@/services/api-send", () => ({
 
 vi.mock("@/services/tldw/audio-voices", () => ({
   fetchTldwVoices: (...args: unknown[]) =>
-    (state.fetchVoices as (...args: unknown[]) => unknown)(...args)
+    (state.fetchVoices as (...args: unknown[]) => unknown)(...args),
+  fetchTldwVoiceCatalog: (...args: unknown[]) =>
+    (state.fetchVoiceCatalog as (...args: unknown[]) => unknown)(...args)
+}))
+
+vi.mock("@/services/tts-provider", () => ({
+  inferTldwProviderFromModel: (...args: unknown[]) =>
+    (state.inferProviderFromModel as (...args: unknown[]) => unknown)(...args)
 }))
 
 const buildWrapper = () => {
@@ -57,8 +66,13 @@ describe("useTldwAudioStatus", () => {
     }
     state.loading = false
     state.apiSend.mockReset()
+    state.apiSend.mockResolvedValue({ ok: false, status: 404 })
     state.fetchVoices.mockReset()
+    state.fetchVoiceCatalog.mockReset()
+    state.inferProviderFromModel.mockReset()
+    state.inferProviderFromModel.mockReturnValue(null)
     state.fetchVoices.mockResolvedValue([])
+    state.fetchVoiceCatalog.mockResolvedValue([])
   })
 
   it("runs split STT/TTS probes when capabilities are available", async () => {
@@ -228,5 +242,65 @@ describe("useTldwAudioStatus", () => {
     expect(result.current.hasStt).toBe(true)
     expect(result.current.hasTts).toBe(true)
     expect(result.current.hasAudio).toBe(true)
+  })
+
+  it("treats provider catalog voices as available before falling back to custom voices", async () => {
+    state.fetchVoices.mockResolvedValue([])
+    state.fetchVoiceCatalog.mockResolvedValue([
+      { voice_id: "Bella", name: "Bella", provider: "kitten_tts" }
+    ])
+    state.inferProviderFromModel.mockReturnValue("kitten_tts")
+
+    const { result } = renderHook(
+      () =>
+        useTldwAudioStatus({
+          requireVoices: true,
+          tldwTtsModel: "KittenML/kitten-tts-nano-0.8"
+        } as any),
+      {
+        wrapper: buildWrapper()
+      }
+    )
+
+    await waitFor(() => {
+      expect(result.current.voicesLoading).toBe(false)
+    })
+
+    expect(result.current.voicesAvailable).toBe(true)
+    expect(state.fetchVoiceCatalog).toHaveBeenCalledWith("kitten_tts")
+    expect(state.fetchVoices).not.toHaveBeenCalled()
+  })
+
+  it("does not mark TTS unavailable when catalog voices prove the selected provider is reachable", async () => {
+    state.capabilities = {
+      hasAudio: false,
+      hasStt: false,
+      hasTts: false,
+      hasVoiceChat: false
+    }
+    state.fetchVoiceCatalog.mockResolvedValue([
+      { voice_id: "Bella", name: "Bella", provider: "kitten_tts" }
+    ])
+    state.inferProviderFromModel.mockReturnValue("kitten_tts")
+
+    const { result } = renderHook(
+      () =>
+        useTldwAudioStatus({
+          requireVoices: true,
+          tldwTtsModel: "KittenML/kitten-tts-nano-0.8"
+        } as any),
+      {
+        wrapper: buildWrapper()
+      }
+    )
+
+    await waitFor(() => {
+      expect(result.current.voicesLoading).toBe(false)
+    })
+
+    expect(result.current.voicesAvailable).toBe(true)
+    expect(result.current.ttsHealthState).toBe("unknown")
+    expect(state.fetchVoiceCatalog).toHaveBeenCalledWith("kitten_tts")
+    expect(state.apiSend).not.toHaveBeenCalled()
   })
 })

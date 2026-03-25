@@ -3,7 +3,7 @@
 Choose exactly one base setup profile and follow it end-to-end.
 
 Recommended default:
-- Run `make quickstart` from the repo root for the Docker single-user + WebUI path.
+- Run `make quickstart` from the repo root for the Docker single-user + WebUI path. That default browser flow uses same-origin browser API requests through the WebUI proxy.
 - Use `make quickstart-docker` if you want the API-only Docker path.
 - Use `Docker multi-user + Postgres` when you need a team or public deployment.
 - Use `Local single-user` for development, debugging, or contributor workflows.
@@ -24,6 +24,7 @@ Optional add-ons:
 
 - Pick the profile that matches your target environment.
 - For most users, start with the `quickstart-docker-webui` path via `make quickstart`.
+- Treat LAN/custom-host browser access as advanced configuration and stay on the default same-origin browser API requests through the WebUI proxy unless you specifically need another device or origin to reach the API.
 - Complete the guide sections in order: prerequisites, install, run, verify, troubleshoot.
 - Do not mix setup commands from other docs unless the guide explicitly links to them.
 - Apply add-ons only after your chosen base profile is healthy.

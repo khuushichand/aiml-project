@@ -5,6 +5,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const paTesseractPath = path.resolve(__dirname, 'node_modules/pa-tesseract.js');
+const deploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE;
+const internalApiOrigin = (process.env.TLDW_INTERNAL_API_ORIGIN?.trim() || 'http://app:8000').replace(/\/$/, '');
 
 const nextConfig = {
   reactStrictMode: true,
@@ -17,6 +19,18 @@ const nextConfig = {
         source: '/chat/settings',
         destination: '/settings/chat',
         permanent: false,
+      },
+    ];
+  },
+  async rewrites() {
+    if (deploymentMode !== 'quickstart' || !internalApiOrigin) {
+      return [];
+    }
+
+    return [
+      {
+        source: '/api/:path*',
+        destination: `${internalApiOrigin}/api/:path*`,
       },
     ];
   },

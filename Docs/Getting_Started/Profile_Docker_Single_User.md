@@ -29,6 +29,8 @@ SINGLE_USER_API_KEY=replace-with-strong-key
 docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
 ```
 
+The default Docker + WebUI quickstart keeps same-origin browser API requests through the WebUI proxy. Treat LAN/custom-host browser access as advanced configuration and leave that off unless you specifically need another device, hostname, or proxy in front of the browser.
+
 By default this profile stores application data in Docker named volumes, not in the repo checkout:
 
 - `app-data` backs `/app/Databases`
@@ -54,6 +56,8 @@ curl -sS http://127.0.0.1:8000/health
 curl -sS http://127.0.0.1:8000/docs > /dev/null && echo "docs-ok"
 curl -sS http://127.0.0.1:8000/api/v1/config/quickstart
 ```
+
+If you later need LAN/custom-host browser access as advanced configuration, switch to the root README WebUI guidance and use the advanced override pair: `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced` plus `NEXT_PUBLIC_API_URL=...`.
 
 ## Optional Add-ons
 

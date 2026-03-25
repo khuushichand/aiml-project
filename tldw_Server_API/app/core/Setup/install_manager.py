@@ -95,6 +95,13 @@ def _install_dependencies(plan: InstallPlan, status: InstallationStatus, errors:
                 _install_backend_dependencies('stt', entry.engine, status, errors)
             processed_backends.add(key)
 
+    if plan.stt:
+        key = "stt:silero_vad"
+        if key not in processed_backends:
+            with contextlib.suppress(PipInstallBlockedError):
+                _install_backend_dependencies('stt', 'silero_vad', status, errors)
+            processed_backends.add(key)
+
     for entry in plan.tts:
         key = f"tts:{entry.engine}"
         if key not in processed_backends:
@@ -637,6 +644,7 @@ def _plan_step_names(
         step_names.add(f"{selection_key}:deps:stt:{entry.engine}")
         step_names.add(f"{selection_key}:stt:{entry.engine}:{_entry_suffix(entry, 'models')}")
     if plan.stt:
+        step_names.add(f"{selection_key}:deps:stt:silero_vad")
         step_names.add(f"{selection_key}:stt:silero_vad")
 
     for entry in plan.tts:
@@ -1160,14 +1168,19 @@ def _install_silero_vad() -> None:
     """
     _ensure_downloads_allowed("Silero VAD model")
     try:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib import _lazy_import_silero_vad
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib import (
+            _lazy_import_silero_vad,
+            get_silero_vad_unavailable_reason,
+        )
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError("Silero VAD helper not available; ensure audio dependencies are installed.") from exc
 
     model, utils = _lazy_import_silero_vad()
     if not model or not utils:
-        # Defer to outer handler to log/mark as skipped vs failed
-        raise DownloadBlockedError("Silero VAD model could not be loaded; check network or torch hub configuration.")
+        reason = get_silero_vad_unavailable_reason()
+        if reason:
+            raise RuntimeError(f"Silero VAD model could not be loaded: {reason}")
+        raise RuntimeError("Silero VAD model could not be loaded; check network or torch hub configuration.")
 
 
 def _install_qwen2_audio() -> None:
@@ -1473,6 +1486,10 @@ class PipRequirement:
 STT_DEPENDENCIES: dict[str, list[PipRequirement]] = {
     'faster_whisper': [
         PipRequirement(package='faster-whisper>=1.0.0', import_name='faster_whisper', cpu_package='faster-whisper>=1.0.0'),
+    ],
+    'silero_vad': [
+        PipRequirement(package='torch>=2.2.0', import_name='torch'),
+        PipRequirement(package='torchaudio>=2.2.0', import_name='torchaudio'),
     ],
     'qwen2_audio': [
         PipRequirement(package='torch>=2.2.0', import_name='torch'),

@@ -20,7 +20,6 @@ import { useLayoutUiStore } from "@/store/layout-ui"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
 import { NotesDockHost } from "@/components/Common/NotesDock"
-import { CurrentChatModelSettings } from "../Common/Settings/CurrentChatModelSettings"
 import { Sidebar } from "../Option/Sidebar"
 import { Header } from "./Header"
 import { QuickIngestModalHost } from "@/components/Layouts/QuickIngestButton"
@@ -41,7 +40,7 @@ import { useSetting } from "@/hooks/useSetting"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { useStoreMessageOption } from "@/store/option"
 import { usePromptPaletteCommands } from "@/components/Option/Prompt/usePromptPaletteCommands"
-import { CommandPalette } from "@/components/Common/CommandPalette"
+import { CommandPaletteHost } from "@/components/Common/CommandPaletteHost"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -63,6 +62,12 @@ const TutorialRunner = lazy(() =>
 const TutorialPrompt = lazy(() =>
   import("@/components/Common/TutorialPrompt").then((m) => ({
     default: m.TutorialPrompt
+  }))
+)
+
+const CurrentChatModelSettings = lazy(() =>
+  import("../Common/Settings/CurrentChatModelSettings").then((m) => ({
+    default: m.CurrentChatModelSettings
   }))
 )
 
@@ -486,13 +491,15 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         </Drawer>
         )}
 
-        {!hideHeader && (
-          <CurrentChatModelSettings
-            open={openModelSettings}
-            setOpen={setOpenModelSettings}
-            useDrawer
-            isOCREnabled={useOCR}
-          />
+        {!hideHeader && openModelSettings && (
+          <Suspense fallback={null}>
+            <CurrentChatModelSettings
+              open={openModelSettings}
+              setOpen={setOpenModelSettings}
+              useDrawer
+              isOCREnabled={useOCR}
+            />
+          </Suspense>
         )}
 
         {/* Quick Chat Helper floating button (legacy layout only) */}
@@ -514,9 +521,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
         {/* Command Palette - global keyboard shortcut ⌘K */}
         {!hideHeader && (
-          <CommandPalette
-            {...commandPaletteProps}
-          />
+          <CommandPaletteHost commandPaletteProps={commandPaletteProps} />
         )}
 
         {/* Page Help Modal (Tutorials + Shortcuts) - triggered by ? */}

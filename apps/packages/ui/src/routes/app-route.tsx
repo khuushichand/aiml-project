@@ -8,11 +8,11 @@ import {
   useLocation,
   useNavigate
 } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import { useDarkMode } from "~/hooks/useDarkmode"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { useAutoButtonTitles } from "@/hooks/useAutoButtonTitles"
-import { ensureI18nNamespaces } from "@/i18n"
-import { registerUiDiagnostics } from "@/utils/ui-diagnostics"
+import { ensureI18nNamespaces, type Namespace } from "@/i18n"
 import { useLayoutUiStore } from "@/store/layout-ui"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import {
@@ -20,8 +20,6 @@ import {
   type PlatformTarget
 } from "@/config/platform"
 import {
-  optionRoutes,
-  sidepanelRoutes,
   type RouteDefinition,
   type RouteKind
 } from "@/routes/route-registry"
@@ -54,7 +52,69 @@ const ROUTE_FALLBACKS: Record<
   }
 }
 
-const RouteNotFoundState = ({
+const OPTIONS_STARTUP_NAMESPACES: Namespace[] = [
+  "common",
+  "option",
+  "settings"
+]
+
+const SIDEPANEL_STARTUP_NAMESPACES: Namespace[] = [
+  "common",
+  "sidepanel",
+  "settings",
+  "playground",
+  "option"
+]
+
+const addNamespaces = (target: Set<Namespace>, namespaces: Namespace[]) => {
+  namespaces.forEach((namespace) => target.add(namespace))
+}
+
+const getRouteBootstrapNamespaces = (
+  kind: RouteKind,
+  pathname: string
+): Namespace[] => {
+  const namespaces = new Set<Namespace>(
+    kind === "options"
+      ? OPTIONS_STARTUP_NAMESPACES
+      : SIDEPANEL_STARTUP_NAMESPACES
+  )
+
+  if (kind === "options") {
+    if (pathname === "/chat") {
+      addNamespaces(namespaces, ["playground"])
+    }
+    if (pathname === "/knowledge") {
+      addNamespaces(namespaces, ["knowledge"])
+    }
+    if (pathname === "/sources" || pathname.startsWith("/sources/")) {
+      addNamespaces(namespaces, ["sources"])
+    }
+    if (
+      pathname === "/review" ||
+      pathname === "/media" ||
+      pathname === "/media-multi"
+    ) {
+      addNamespaces(namespaces, ["review"])
+    }
+    if (pathname === "/data-tables") {
+      addNamespaces(namespaces, ["dataTables"])
+    }
+    if (pathname === "/evaluations") {
+      addNamespaces(namespaces, ["evaluations"])
+    }
+    if (pathname === "/audiobook-studio") {
+      addNamespaces(namespaces, ["audiobook"])
+    }
+    if (pathname === "/companion/conversation") {
+      addNamespaces(namespaces, ["sidepanel"])
+    }
+  }
+
+  return [...namespaces]
+}
+
+export const RouteNotFoundState = ({
   routeLabel,
   kind
 }: {
@@ -268,12 +328,31 @@ class SidepanelErrorBoundary extends React.Component<
   }
 }
 
-export const RouteShell = ({ kind }: { kind: RouteKind }) => {
+export const RouteShell = ({
+  kind,
+  routes,
+  renderUnmatchedRoute
+}: {
+  kind: RouteKind
+  routes: RouteDefinition[]
+  renderUnmatchedRoute?: (props: {
+    attemptedRoute: string
+    kind: RouteKind
+    capabilities: ReturnType<typeof useServerCapabilities>["capabilities"]
+    capabilitiesLoading: boolean
+    label: string
+    description: string
+  }) => ReactNode
+}) => {
   const { mode } = useDarkMode()
   const navigate = useNavigate()
   const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
   useAutoButtonTitles()
   const location = useLocation()
+  const { i18n } = useTranslation()
+  const routeNamespaces = getRouteBootstrapNamespaces(kind, location.pathname)
+  const [routeNamespacesReady, setRouteNamespacesReady] = React.useState(false)
+  const activeLanguage = i18n.resolvedLanguage || i18n.language || "en"
   const setChatSidebarCollapsed = useLayoutUiStore(
     (state) => state.setChatSidebarCollapsed
   )
@@ -335,36 +414,41 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
     }
   }, [kind, navigate])
   React.useEffect(() => {
-    registerUiDiagnostics(kind === "options" ? "options" : "sidepanel")
+    let active = true
+
+    void import("@/utils/ui-diagnostics")
+      .then(({ registerUiDiagnostics }) => {
+        if (!active) return
+        registerUiDiagnostics(kind === "options" ? "options" : "sidepanel")
+      })
+      .catch(() => {
+        // Diagnostics should never block the route shell.
+      })
+
+    return () => {
+      active = false
+    }
   }, [kind])
   React.useEffect(() => {
-    if (kind === "options") {
-      void ensureI18nNamespaces([
-        "option",
-        "settings",
-        "dataTables",
-        "evaluations",
-        "audiobook"
-      ])
-      const path = location.pathname
-      const needsReview =
-        path === "/review" ||
-        path === "/media" ||
-        path === "/media-multi"
-      const needsCompanionConversation = path === "/companion/conversation"
-      if (needsReview) {
-        void ensureI18nNamespaces(["review"])
+    let cancelled = false
+
+    const loadRouteNamespaces = async () => {
+      setRouteNamespacesReady(false)
+      await ensureI18nNamespaces(routeNamespaces, "en")
+      if (activeLanguage !== "en") {
+        await ensureI18nNamespaces(routeNamespaces, activeLanguage)
       }
-      if (needsCompanionConversation) {
-        void ensureI18nNamespaces(["sidepanel", "common"])
+      if (!cancelled) {
+        setRouteNamespacesReady(true)
       }
-    } else {
-      void ensureI18nNamespaces(["sidepanel", "common", "settings", "playground"])
-      void ensureI18nNamespaces(["dataTables"])
-      // Sidepanel uses some "option" strings; keep loaded for now to avoid missing labels.
-      void ensureI18nNamespaces(["option"])
     }
-  }, [kind, location.pathname])
+
+    void loadRouteNamespaces()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeLanguage, kind, location.pathname])
   React.useEffect(() => {
     setChatSidebarCollapsed(true)
     void setSetting(HEADER_SHORTCUTS_EXPANDED_SETTING, false).catch(() => {
@@ -372,7 +456,6 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
     })
   }, [location.pathname, setChatSidebarCollapsed])
   const { label, description } = ROUTE_FALLBACKS[kind]
-  const routes = kind === "options" ? optionRoutes : sidepanelRoutes
   const visibleRoutes = getRoutesForTarget(routes, platformConfig.target)
   const attemptedRoute = `${location.pathname}${location.search}${location.hash}` || "/"
   const handleOptionsReset = () => {
@@ -406,7 +489,18 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
       })}
       <Route
         path="*"
-        element={<RouteNotFoundState routeLabel={attemptedRoute} kind={kind} />}
+        element={
+          renderUnmatchedRoute
+            ? renderUnmatchedRoute({
+                attemptedRoute,
+                kind,
+                capabilities,
+                capabilitiesLoading,
+                label,
+                description
+              })
+            : <RouteNotFoundState routeLabel={attemptedRoute} kind={kind} />
+        }
       />
     </Routes>
   )
@@ -424,15 +518,19 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
       <React.Suspense
         fallback={<PageAssistLoader label={label} description={description} />}
       >
-        {kind === "options" ? (
+        {!routeNamespacesReady ? (
+          <PageAssistLoader label={label} description={description} />
+        ) : null}
+        {routeNamespacesReady && kind === "options" ? (
           <OptionsErrorBoundary onReset={handleOptionsReset}>
             {wrappedContent}
           </OptionsErrorBoundary>
-        ) : (
+        ) : null}
+        {routeNamespacesReady && kind === "sidepanel" ? (
           <SidepanelErrorBoundary onReset={handleSidepanelReset}>
             {wrappedContent}
           </SidepanelErrorBoundary>
-        )}
+        ) : null}
       </React.Suspense>
     </div>
   )

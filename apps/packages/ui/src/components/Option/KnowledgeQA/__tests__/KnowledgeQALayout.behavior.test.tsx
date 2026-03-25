@@ -196,7 +196,7 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
     state.evidenceRailOpen = true
 
     const { rerender } = renderLayout()
-    expect(screen.getByTestId("knowledge-evidence-rail-open")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-open")).toBeInTheDocument()
 
     state.settingsPanelOpen = true
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
@@ -213,7 +213,7 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
 
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
 
-    expect(screen.getByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
   })
 
   it("reopens the evidence rail for a new search after a manual close", async () => {
@@ -230,7 +230,7 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close evidence panel" }))
 
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
-    expect(screen.getByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
 
     state.queryStage = "searching"
     state.messages = [
@@ -244,7 +244,7 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
     })
 
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
-    expect(screen.getByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-closed")).toBeInTheDocument()
 
     state.results = [{ id: "r2" }]
     state.answer = "Updated answer"
@@ -257,7 +257,7 @@ describe("KnowledgeQALayout evidence-rail transitions", () => {
 
     rerender(<KnowledgeQALayout onExportClick={vi.fn()} />)
 
-    expect(screen.getByTestId("knowledge-evidence-rail-open")).toBeInTheDocument()
+    expect(await screen.findByTestId("knowledge-evidence-rail-open")).toBeInTheDocument()
   })
 
   it("marks the scope as changed when granular source filters differ from the last search", () => {

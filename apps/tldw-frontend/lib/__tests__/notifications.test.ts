@@ -118,4 +118,24 @@ describe("web notifications adapter", () => {
 
     unsubscribe()
   })
+
+  it("builds relative notification SSE URLs when the api base is relative", async () => {
+    mocks.getApiBaseUrl.mockReturnValue("/api/v1")
+    mocks.streamStructuredSSE.mockImplementationOnce(async (url, _options, _onEvent) => {
+      expect(url).toBe("/api/v1/notifications/stream?after=12")
+      return
+    })
+
+    const unsubscribe = subscribeNotificationsStream({
+      after: 12,
+      onEvent: vi.fn(),
+      onError: vi.fn()
+    })
+
+    await Promise.resolve()
+
+    expect(mocks.streamStructuredSSE).toHaveBeenCalledTimes(1)
+
+    unsubscribe()
+  })
 })

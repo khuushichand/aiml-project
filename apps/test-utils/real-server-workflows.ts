@@ -1121,10 +1121,11 @@ const clickQuickIngestRun = async (modal: Locator) => {
       .poll(async () => {
         const state = await getRunState()
         lastState = state
+        const normalizedText = state.text.trim()
         return (
           state.dataRunning === "true" ||
           state.dataState === "running" ||
-          /processing/i.test(state.text) ||
+          /^(step 4:\s*)?processing$/i.test(normalizedText) ||
           state.disabled
         )
       }, { timeout: 15000 })

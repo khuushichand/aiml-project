@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import { addRequestHistory } from '@web/lib/history';
 import { getApiBearer, getApiKey } from '@web/lib/authStorage';
+import { buildApiBaseUrl, resolvePublicApiOrigin } from '@web/lib/api-base';
 import { captureSessionIdFromHeaders, getOrCreateSessionId, SESSION_HEADER_NAME } from '@web/lib/session';
 import type { AxiosConfigWithMetadata, ApiErrorResponse } from '@web/types/common';
 
@@ -27,10 +28,16 @@ export class ApiError extends Error {
   }
 }
 
-// Resolve API base URL with sensible defaults
-const apiHost = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const deploymentEnv = {
+  NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+};
 const apiVersion = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
-const baseURL = `${apiHost.replace(/\/$/, '')}/api/${apiVersion}`;
+
+function resolveDefaultApiBaseUrl(): string {
+  const pageOrigin = typeof window !== 'undefined' ? window.location?.origin : undefined;
+  return buildApiBaseUrl(resolvePublicApiOrigin(deploymentEnv, pageOrigin), apiVersion);
+}
 
 // Read cookie value on client
 function getCookie(name: string): string | null {
@@ -41,7 +48,7 @@ function getCookie(name: string): string | null {
 
 // Create axios instance with base configuration
 const api: AxiosInstance = axios.create({
-  baseURL,
+  baseURL: resolveDefaultApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -200,7 +207,7 @@ export const apiClient = {
 export default api;
 
 // Streaming helpers
-export const API_BASE_URL = baseURL;
+export const API_BASE_URL = resolveDefaultApiBaseUrl();
 
 export function getApiBaseUrl(): string {
   return api.defaults.baseURL || API_BASE_URL;

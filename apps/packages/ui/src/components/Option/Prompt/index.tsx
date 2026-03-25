@@ -16,30 +16,20 @@ import {
 } from "antd"
 import { Computer, Zap, Star, StarOff, UploadCloud, Download, Trash2, Pen, Undo2, AlertTriangle, Layers, Cloud, Clipboard, Copy, Keyboard, FolderPlus, Play, LayoutGrid, List } from "lucide-react"
 import { PromptActionsMenu } from "./PromptActionsMenu"
-import { PromptDrawer } from "./PromptDrawer"
 import { SyncStatusBadge } from "./SyncStatusBadge"
-import { ConflictResolutionModal } from "./ConflictResolutionModal"
 import { PromptBulkActionBar } from "./PromptBulkActionBar"
-import {
-  PromptGalleryCard,
-  type PromptGalleryDensity
-} from "./PromptGalleryCard"
-import { PromptInspectorPanel } from "./PromptInspectorPanel"
+import type { PromptGalleryDensity } from "./PromptGalleryCard"
 import {
   PromptListTable,
   type PromptTableDensity
 } from "./PromptListTable"
 import { PromptListToolbar } from "./PromptListToolbar"
 import { PromptSidebar } from "./PromptSidebar"
-import { PromptFullPageEditor } from "./PromptFullPageEditor"
-import { PromptStarterCards } from "./PromptStarterCards"
-import { ContextualHint } from "./ContextualHint"
 import { useContextualHints } from "./useContextualHints"
 import { useFilterPresets, type FilterPreset } from "./useFilterPresets"
 import type { PromptListQueryState, PromptRowVM, PromptSavedView } from "./prompt-workspace-types"
 // buildSyncBatchPlan moved to usePromptFilteredData hook
-import { ProjectSelector } from "./ProjectSelector"
-import React, { useMemo, useRef, useState, useEffect } from "react"
+import React, { Suspense, useMemo, useRef, useState, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import {
@@ -62,7 +52,6 @@ import {
   type PromptCollection
 } from "@/services/prompts-api"
 // prompt-studio imports moved to usePromptInteractions hook
-import { StudioTabContainer } from "./Studio/StudioTabContainer"
 // execute-playground-provider-utils, tldwClient, usePromptStudioStore moved to usePromptInteractions hook
 import {
   type TagMatchMode
@@ -82,6 +71,46 @@ import { usePromptCollections } from "./hooks/usePromptCollections"
 import { usePromptUtilities } from "./hooks/usePromptUtilities"
 import { usePromptFilteredData } from "./hooks/usePromptFilteredData"
 import { usePromptInteractions } from "./hooks/usePromptInteractions"
+
+const PromptDrawer = React.lazy(() =>
+  import("./PromptDrawer").then((module) => ({ default: module.PromptDrawer }))
+)
+const ConflictResolutionModal = React.lazy(() =>
+  import("./ConflictResolutionModal").then((module) => ({
+    default: module.ConflictResolutionModal
+  }))
+)
+const PromptInspectorPanel = React.lazy(() =>
+  import("./PromptInspectorPanel").then((module) => ({
+    default: module.PromptInspectorPanel
+  }))
+)
+const PromptFullPageEditor = React.lazy(() =>
+  import("./PromptFullPageEditor").then((module) => ({
+    default: module.PromptFullPageEditor
+  }))
+)
+const ProjectSelector = React.lazy(() =>
+  import("./ProjectSelector").then((module) => ({ default: module.ProjectSelector }))
+)
+const PromptGalleryCard = React.lazy(() =>
+  import("./PromptGalleryCard").then((module) => ({
+    default: module.PromptGalleryCard
+  }))
+)
+const PromptStarterCards = React.lazy(() =>
+  import("./PromptStarterCards").then((module) => ({
+    default: module.PromptStarterCards
+  }))
+)
+const ContextualHint = React.lazy(() =>
+  import("./ContextualHint").then((module) => ({ default: module.ContextualHint }))
+)
+const StudioTabContainer = React.lazy(() =>
+  import("./Studio/StudioTabContainer").then((module) => ({
+    default: module.StudioTabContainer
+  }))
+)
 
 type SegmentType = "custom" | "copilot" | "studio" | "trash"
 
@@ -1538,21 +1567,25 @@ export const PromptBody = () => {
               <h3 className="mb-3 text-sm font-medium text-text-muted">
                 Or start with a template
               </h3>
-              <PromptStarterCards
-                onUse={(starter) => editor.openFullEditor(starter)}
-              />
+              <Suspense fallback={null}>
+                <PromptStarterCards
+                  onUse={(starter) => editor.openFullEditor(starter)}
+                />
+              </Suspense>
             </div>
           </>
         )}
 
         {status === "success" && Array.isArray(data) && data.length >= 5 && shouldShowHint("keyboard-shortcuts") && (
-          <ContextualHint
-            id="keyboard-shortcuts"
-            message="Press Enter to preview, E to edit, or ? for all keyboard shortcuts."
-            visible={true}
-            onDismiss={dismissHint}
-            onShown={markHintShown}
-          />
+          <Suspense fallback={null}>
+            <ContextualHint
+              id="keyboard-shortcuts"
+              message="Press Enter to preview, E to edit, or ? for all keyboard shortcuts."
+              visible={true}
+              onDismiss={dismissHint}
+              onShown={markHintShown}
+            />
+          </Suspense>
         )}
 
         {status === "success" && Array.isArray(data) && data.length > 0 && viewMode === "table" && (
@@ -1626,15 +1659,17 @@ export const PromptBody = () => {
             <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 ${
               galleryDensity === "compact" ? "gap-3" : "gap-4"
             }`}>
-              {customPromptRows.map((prompt) => (
-                <PromptGalleryCard
-                  key={prompt.id}
-                  prompt={prompt}
-                  onClick={() => openPromptInspector(prompt.id)}
-                  density={galleryDensity}
-                  onToggleFavorite={(next) => editor.handleTogglePromptFavorite(prompt.id, next)}
-                />
-              ))}
+              <Suspense fallback={null}>
+                {customPromptRows.map((prompt) => (
+                  <PromptGalleryCard
+                    key={prompt.id}
+                    prompt={prompt}
+                    onClick={() => openPromptInspector(prompt.id)}
+                    density={galleryDensity}
+                    onToggleFavorite={(next) => editor.handleTogglePromptFavorite(prompt.id, next)}
+                  />
+                ))}
+              </Suspense>
             </div>
             {tableTotal > resultsPerPage && (
               <div className="flex justify-end">
@@ -2119,6 +2154,108 @@ export const PromptBody = () => {
     )
   }
 
+  const deferredPromptSurfaceFallback = null
+
+  const renderStudioTabContainer = () => (
+    <Suspense fallback={deferredPromptSurfaceFallback}>
+      <StudioTabContainer />
+    </Suspense>
+  )
+
+  const renderPromptDrawer = () => (
+    <Suspense fallback={deferredPromptSurfaceFallback}>
+      <PromptDrawer
+        open={editor.drawerOpen}
+        onClose={() => {
+          editor.setDrawerOpen(false)
+          editor.setDrawerInitialValues(null)
+        }}
+        mode={editor.drawerMode}
+        initialValues={editor.drawerInitialValues}
+        onSubmit={editor.handleDrawerSubmit}
+        isLoading={editor.drawerMode === "create" ? editor.savePromptLoading : editor.isUpdatingPrompt}
+        allTags={allTags}
+      />
+    </Suspense>
+  )
+
+  const renderPromptFullPageEditor = () => (
+    <Suspense fallback={deferredPromptSurfaceFallback}>
+      <PromptFullPageEditor
+        open={editor.fullEditorOpen}
+        onClose={editor.closeFullEditor}
+        mode={editor.fullEditorMode}
+        initialValues={editor.fullEditorInitialValues}
+        onSubmit={editor.handleFullEditorSubmit}
+        isLoading={editor.fullEditorMode === "create" ? editor.savePromptLoading : editor.isUpdatingPrompt}
+        allTags={allTags}
+      />
+    </Suspense>
+  )
+
+  const renderPromptInspectorPanel = () => (
+    <Suspense fallback={deferredPromptSurfaceFallback}>
+      <PromptInspectorPanel
+        open={inspectorOpen}
+        prompt={inspectorPrompt}
+        onClose={closeInspector}
+        onEdit={(promptId) => {
+          const promptRecord = getPromptRecordById(promptId)
+          if (!promptRecord) return
+          closeInspector()
+          editor.openFullEditor(promptRecord)
+        }}
+        onUseInChat={(promptId) => {
+          const promptRecord = getPromptRecordById(promptId)
+          if (!promptRecord) return
+          closeInspector()
+          void handleUsePromptInChat(promptRecord)
+        }}
+        onDuplicate={(promptId) => {
+          const promptRecord = getPromptRecordById(promptId)
+          if (!promptRecord) return
+          editor.handleDuplicatePrompt(promptRecord)
+        }}
+        onDelete={(promptId) => {
+          const promptRecord = getPromptRecordById(promptId)
+          if (!promptRecord) return
+          closeInspector()
+          void editor.handleDeletePrompt(promptRecord)
+        }}
+      />
+    </Suspense>
+  )
+
+  const renderProjectSelector = () => (
+    <Suspense fallback={deferredPromptSurfaceFallback}>
+      <ProjectSelector
+        open={sync.projectSelectorOpen}
+        onClose={() => {
+          sync.setProjectSelectorOpen(false)
+          sync.setPromptToSync(null)
+        }}
+        onSelect={(projectId) => {
+          if (sync.promptToSync) {
+            sync.pushToStudioMutation({ localId: sync.promptToSync, projectId })
+          }
+        }}
+        loading={sync.isPushing}
+      />
+    </Suspense>
+  )
+
+  const renderConflictResolutionModal = () => (
+    <Suspense fallback={deferredPromptSurfaceFallback}>
+      <ConflictResolutionModal
+        open={sync.conflictModalOpen}
+        loading={sync.isLoadingConflictInfo || sync.isResolvingConflict}
+        conflictInfo={sync.conflictInfo}
+        onClose={sync.closeConflictResolution}
+        onResolve={sync.handleResolveConflict}
+      />
+    </Suspense>
+  )
+
   return (
     <div>
       {/* Screen reader status announcements */}
@@ -2298,64 +2435,18 @@ export const PromptBody = () => {
       <div className={isCompactViewport ? "px-4" : "p-4"}>
       {selectedSegment === "custom" && customPrompts()}
       {selectedSegment === "copilot" && copilotPrompts()}
-      {selectedSegment === "studio" && <StudioTabContainer />}
+      {selectedSegment === "studio" && renderStudioTabContainer()}
       {selectedSegment === "trash" && trashPrompts()}
       </div>
 
       </div>
       </div>
 
-      <PromptDrawer
-        open={editor.drawerOpen}
-        onClose={() => {
-          editor.setDrawerOpen(false)
-          editor.setDrawerInitialValues(null)
-        }}
-        mode={editor.drawerMode}
-        initialValues={editor.drawerInitialValues}
-        onSubmit={editor.handleDrawerSubmit}
-        isLoading={editor.drawerMode === "create" ? editor.savePromptLoading : editor.isUpdatingPrompt}
-        allTags={allTags}
-      />
+      {renderPromptDrawer()}
 
-      <PromptFullPageEditor
-        open={editor.fullEditorOpen}
-        onClose={editor.closeFullEditor}
-        mode={editor.fullEditorMode}
-        initialValues={editor.fullEditorInitialValues}
-        onSubmit={editor.handleFullEditorSubmit}
-        isLoading={editor.fullEditorMode === "create" ? editor.savePromptLoading : editor.isUpdatingPrompt}
-        allTags={allTags}
-      />
+      {renderPromptFullPageEditor()}
 
-      <PromptInspectorPanel
-        open={inspectorOpen}
-        prompt={inspectorPrompt}
-        onClose={closeInspector}
-        onEdit={(promptId) => {
-          const promptRecord = getPromptRecordById(promptId)
-          if (!promptRecord) return
-          closeInspector()
-          editor.openFullEditor(promptRecord)
-        }}
-        onUseInChat={(promptId) => {
-          const promptRecord = getPromptRecordById(promptId)
-          if (!promptRecord) return
-          closeInspector()
-          void handleUsePromptInChat(promptRecord)
-        }}
-        onDuplicate={(promptId) => {
-          const promptRecord = getPromptRecordById(promptId)
-          if (!promptRecord) return
-          editor.handleDuplicatePrompt(promptRecord)
-        }}
-        onDelete={(promptId) => {
-          const promptRecord = getPromptRecordById(promptId)
-          if (!promptRecord) return
-          closeInspector()
-          void editor.handleDeletePrompt(promptRecord)
-        }}
-      />
+      {renderPromptInspectorPanel()}
 
       <Modal
         title={t("managePrompts.modal.editTitle")}
@@ -2785,27 +2876,9 @@ export const PromptBody = () => {
       </Modal>
 
       {/* Project Selector for Push to Server */}
-      <ProjectSelector
-        open={sync.projectSelectorOpen}
-        onClose={() => {
-          sync.setProjectSelectorOpen(false)
-          sync.setPromptToSync(null)
-        }}
-        onSelect={(projectId) => {
-          if (sync.promptToSync) {
-            sync.pushToStudioMutation({ localId: sync.promptToSync, projectId })
-          }
-        }}
-        loading={sync.isPushing}
-      />
+      {renderProjectSelector()}
 
-      <ConflictResolutionModal
-        open={sync.conflictModalOpen}
-        loading={sync.isLoadingConflictInfo || sync.isResolvingConflict}
-        conflictInfo={sync.conflictInfo}
-        onClose={sync.closeConflictResolution}
-        onResolve={sync.handleResolveConflict}
-      />
+      {renderConflictResolutionModal()}
     </div>
   )
 }

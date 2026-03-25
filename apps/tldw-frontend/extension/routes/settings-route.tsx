@@ -1,5 +1,4 @@
 import { lazy, type ComponentType, type ReactNode } from "react"
-import OptionLayout from "@web/components/layout/WebLayout"
 import { SettingsLayout } from "~/components/Layouts/SettingsOptionLayout"
 import { RouteErrorBoundary } from "@/components/Common/RouteErrorBoundary"
 
@@ -8,11 +7,9 @@ type SettingsRouteProps = {
 }
 
 export const SettingsRoute = ({ children }: SettingsRouteProps) => (
-  <OptionLayout hideHeader>
-    <RouteErrorBoundary routeId="settings" routeLabel="Settings">
-      <SettingsLayout>{children}</SettingsLayout>
-    </RouteErrorBoundary>
-  </OptionLayout>
+  <RouteErrorBoundary routeId="settings" routeLabel="Settings">
+    <SettingsLayout>{children}</SettingsLayout>
+  </RouteErrorBoundary>
 )
 
 type SettingsModule = {

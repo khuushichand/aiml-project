@@ -205,6 +205,28 @@ const render = (ui: React.ReactNode) => {
   )
 }
 
+const openPersonaTab = async (name: string) => {
+  fireEvent.click(screen.getByRole("tab", { name }))
+}
+
+const waitForLiveSessionPanel = async () => {
+  await screen.findByTestId("persona-memory-toggle")
+  await screen.findByTestId("persona-resume-session-select")
+}
+
+const openStateDocsTab = async () => {
+  await openPersonaTab("State Docs")
+  await screen.findByTestId("persona-state-editor-toggle-button")
+}
+
+const waitForStateDocsEditor = async () => {
+  await screen.findByTestId("persona-state-editor-toggle-button")
+  if (!screen.queryByTestId("persona-state-soul-input")) {
+    fireEvent.click(screen.getByTestId("persona-state-editor-toggle-button"))
+  }
+  return (await screen.findByTestId("persona-state-soul-input")) as HTMLTextAreaElement
+}
+
 class MockWebSocket {
   static instances: MockWebSocket[] = []
 
@@ -372,7 +394,7 @@ describe("SidepanelPersona", () => {
     expect(screen.getByText("Persona unavailable")).toBeInTheDocument()
   })
 
-  it("renders Persona Garden framing while keeping live session controls", () => {
+  it("renders Persona Garden framing while keeping live session controls", async () => {
     render(<SidepanelPersona />)
 
     expect(screen.getByTestId("sidepanel-header")).toHaveTextContent("Persona Garden")
@@ -382,8 +404,7 @@ describe("SidepanelPersona", () => {
     expect(screen.getByRole("tab", { name: "State Docs" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Scopes" })).toBeInTheDocument()
     expect(screen.getByRole("tab", { name: "Policies" })).toBeInTheDocument()
-    expect(screen.getByTestId("persona-memory-toggle")).toBeInTheDocument()
-    expect(screen.getByTestId("persona-resume-session-select")).toBeInTheDocument()
+    await waitForLiveSessionPanel()
   })
 
   it("boots persona selection and active tab from query params", async () => {
@@ -441,8 +462,8 @@ describe("SidepanelPersona", () => {
       "true"
     )
 
-    fireEvent.click(screen.getByRole("tab", { name: "Live Session" }))
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await openPersonaTab("Live Session")
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(mocks.fetchWithAuth).toHaveBeenCalled()
@@ -3811,7 +3832,7 @@ describe("SidepanelPersona", () => {
     })
 
     render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
@@ -3892,7 +3913,7 @@ describe("SidepanelPersona", () => {
     })
 
     render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
@@ -4002,7 +4023,7 @@ describe("SidepanelPersona", () => {
     })
 
     render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
@@ -4078,7 +4099,7 @@ describe("SidepanelPersona", () => {
     })
 
     render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
@@ -4811,6 +4832,7 @@ describe("SidepanelPersona", () => {
       expect(stateDefaultToggleInput).not.toBeDisabled()
     })
 
+    await waitForLiveSessionPanel()
     fireEvent.click(screen.getByTestId("persona-state-context-default-toggle"))
 
     await waitFor(() => {
@@ -4942,8 +4964,9 @@ describe("SidepanelPersona", () => {
       expect(MockWebSocket.instances).toHaveLength(1)
     })
     MockWebSocket.instances[0].emitOpen()
+    await openStateDocsTab()
 
-    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const soulInput = await waitForStateDocsEditor()
     const identityInput = screen.getByTestId(
       "persona-state-identity-input"
     ) as HTMLTextAreaElement
@@ -5073,7 +5096,7 @@ describe("SidepanelPersona", () => {
     })
 
     render(<SidepanelPersona />)
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1)
@@ -5094,8 +5117,11 @@ describe("SidepanelPersona", () => {
       expect(profileGetCall).toBeTruthy()
     })
 
+    await waitForLiveSessionPanel()
     fireEvent.click(screen.getByTestId("persona-state-context-default-toggle"))
-    fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
+    await openStateDocsTab()
+    const soulInput = await waitForStateDocsEditor()
+    fireEvent.change(soulInput, {
       target: { value: "builder state update" }
     })
     fireEvent.click(screen.getByTestId("persona-state-save-button"))
@@ -5183,8 +5209,9 @@ describe("SidepanelPersona", () => {
       expect(MockWebSocket.instances).toHaveLength(1)
     })
     MockWebSocket.instances[0].emitOpen()
+    await openStateDocsTab()
 
-    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const soulInput = await waitForStateDocsEditor()
     const dirtyTag = screen.getByTestId("persona-state-dirty-tag")
     const saveButton = screen.getByTestId("persona-state-save-button")
     const revertButton = screen.getByTestId("persona-state-revert-button")
@@ -5281,8 +5308,9 @@ describe("SidepanelPersona", () => {
       expect(MockWebSocket.instances).toHaveLength(1)
     })
     MockWebSocket.instances[0].emitOpen()
+    await openStateDocsTab()
 
-    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const soulInput = await waitForStateDocsEditor()
     const revertButton = screen.getByTestId("persona-state-revert-button")
     await waitFor(() => {
       expect(soulInput.value).toBe("stable soul")
@@ -5383,8 +5411,9 @@ describe("SidepanelPersona", () => {
       expect(MockWebSocket.instances).toHaveLength(1)
     })
     MockWebSocket.instances[0].emitOpen()
+    await openStateDocsTab()
 
-    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const soulInput = await waitForStateDocsEditor()
     await waitFor(() => {
       expect(soulInput.value).toBe("stable soul")
     })
@@ -5471,8 +5500,9 @@ describe("SidepanelPersona", () => {
       expect(MockWebSocket.instances).toHaveLength(1)
     })
     MockWebSocket.instances[0].emitOpen()
+    await openStateDocsTab()
 
-    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const soulInput = await waitForStateDocsEditor()
     await waitFor(() => {
       expect(soulInput.value).toBe("stable soul")
     })
@@ -5590,6 +5620,7 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
+    await openStateDocsTab()
 
     fireEvent.click(screen.getByTestId("persona-state-history-button"))
     await waitFor(() => {
@@ -5693,6 +5724,7 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
+    await openStateDocsTab()
 
     fireEvent.click(screen.getByTestId("persona-state-history-button"))
     await screen.findByText("newer history content")
@@ -5800,6 +5832,7 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
+    await openStateDocsTab()
 
     expect(screen.queryByTestId("persona-state-soul-input")).not.toBeInTheDocument()
     expect(screen.getByText("Show editor")).toBeInTheDocument()
@@ -5884,10 +5917,12 @@ describe("SidepanelPersona", () => {
     const initialCreateSessionCalls = mocks.fetchWithAuth.mock.calls.filter(
       ([path]) => String(path) === "/api/v1/persona/session"
     ).length
-    fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
+    await openStateDocsTab()
+    fireEvent.change(await waitForStateDocsEditor(), {
       target: { value: "local draft soul" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await openPersonaTab("Live Session")
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }))
 
     await waitFor(() => {
       expect(confirmSpy).toHaveBeenCalled()
@@ -5963,14 +5998,16 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
+    await openStateDocsTab()
 
-    fireEvent.change(screen.getByTestId("persona-state-soul-input"), {
+    fireEvent.change(await waitForStateDocsEditor(), {
       target: { value: "unsaved disconnect draft" }
     })
 
     confirmSpy.mockClear()
     confirmSpy.mockReturnValueOnce(false)
-    fireEvent.click(screen.getByRole("button", { name: /Disconnect/i }))
+    await openPersonaTab("Live Session")
+    fireEvent.click(await screen.findByRole("button", { name: /Disconnect/i }))
     await waitFor(() => {
       expect(confirmSpy).toHaveBeenCalled()
     })
@@ -6091,8 +6128,9 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
+    await openStateDocsTab()
 
-    const soulInput = screen.getByTestId("persona-state-soul-input") as HTMLTextAreaElement
+    const soulInput = await waitForStateDocsEditor()
     await waitFor(() => {
       expect(soulInput.value).toBe("initial soul")
     })
@@ -6204,6 +6242,7 @@ describe("SidepanelPersona", () => {
     })
     MockWebSocket.instances[0].emitOpen()
     await screen.findByText("Persona stream connected")
+    await openStateDocsTab()
 
     fireEvent.click(screen.getByTestId("persona-state-history-button"))
     await screen.findByTestId("persona-state-history-empty")

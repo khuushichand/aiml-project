@@ -166,7 +166,9 @@ describe('ContentViewer stage 14 scheduled source refresh baseline', () => {
     )
 
     fireEvent.click(screen.getByTestId('menu-item-schedule-refresh'))
-    expect(screen.getByTestId('media-schedule-refresh-modal')).toBeInTheDocument()
+    expect(
+      await screen.findByTestId('media-schedule-refresh-modal')
+    ).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('media-schedule-refresh-preset-weekly'))
     fireEvent.click(screen.getByTestId('media-schedule-refresh-confirm'))

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from "react"
+import React, { Suspense, useCallback, useEffect, useMemo, useRef } from "react"
 import { Alert, Button, Drawer, Modal, Select, Switch, Tabs, Tooltip } from "antd"
 import { DismissibleBetaAlert } from "@/components/Common/DismissibleBetaAlert"
 import type { TabsProps } from "antd"
@@ -24,14 +24,6 @@ import { fetchWatchlistRuns, triggerWatchlistRun } from "@/services/watchlists"
 import { useWatchlistsStore } from "@/store/watchlists"
 import type { WatchlistRun } from "@/types/watchlists"
 import type { WatchlistTab } from "@/types/watchlists"
-import { OverviewTab } from "./OverviewTab/OverviewTab"
-import { SourcesTab } from "./SourcesTab/SourcesTab"
-import { JobsTab } from "./JobsTab/JobsTab"
-import { RunsTab } from "./RunsTab/RunsTab"
-import { OutputsTab } from "./OutputsTab/OutputsTab"
-import { TemplatesTab } from "./TemplatesTab/TemplatesTab"
-import { SettingsTab } from "./SettingsTab/SettingsTab"
-import { ItemsTab } from "./ItemsTab/ItemsTab"
 import {
   WATCHLISTS_ISSUE_REPORT_URL,
   WATCHLISTS_MAIN_DOCS_URL,
@@ -70,6 +62,31 @@ const ORIENTATION_DISMISSED_STORAGE_KEY = "watchlists:orientation-dismissed:v1"
 const SHOW_ALL_VIEWS_STORAGE_KEY = "watchlists:show-all-views:v1"
 const SECONDARY_EXPANDED_STORAGE_KEY = "watchlists:secondary-expanded:v1"
 const SUCCESSFUL_RUN_STATUSES = new Set(["completed", "succeeded", "success", "done", "finished"])
+
+const OverviewTab = React.lazy(() =>
+  import("./OverviewTab/OverviewTab").then((module) => ({ default: module.OverviewTab }))
+)
+const SourcesTab = React.lazy(() =>
+  import("./SourcesTab/SourcesTab").then((module) => ({ default: module.SourcesTab }))
+)
+const JobsTab = React.lazy(() =>
+  import("./JobsTab/JobsTab").then((module) => ({ default: module.JobsTab }))
+)
+const RunsTab = React.lazy(() =>
+  import("./RunsTab/RunsTab").then((module) => ({ default: module.RunsTab }))
+)
+const ItemsTab = React.lazy(() =>
+  import("./ItemsTab/ItemsTab").then((module) => ({ default: module.ItemsTab }))
+)
+const OutputsTab = React.lazy(() =>
+  import("./OutputsTab/OutputsTab").then((module) => ({ default: module.OutputsTab }))
+)
+const TemplatesTab = React.lazy(() =>
+  import("./TemplatesTab/TemplatesTab").then((module) => ({ default: module.TemplatesTab }))
+)
+const SettingsTab = React.lazy(() =>
+  import("./SettingsTab/SettingsTab").then((module) => ({ default: module.SettingsTab }))
+)
 
 /** Primary tabs in the progressive disclosure layout */
 const PROGRESSIVE_PRIMARY_TABS = ["sources", "items", "outputs"] as const
@@ -1190,6 +1207,65 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       </span>
     ) : null
 
+  const tabPanelFallback = (
+    <div className="py-6 text-sm text-text-muted" data-testid="watchlists-tab-loading" />
+  )
+
+  const renderWatchlistsTab = useCallback((tab: WatchlistsTabKey): React.ReactNode => {
+    switch (tab) {
+      case "overview":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <OverviewTab />
+          </Suspense>
+        )
+      case "sources":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <SourcesTab />
+          </Suspense>
+        )
+      case "jobs":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <JobsTab />
+          </Suspense>
+        )
+      case "runs":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <RunsTab />
+          </Suspense>
+        )
+      case "items":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <ItemsTab />
+          </Suspense>
+        )
+      case "outputs":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <OutputsTab />
+          </Suspense>
+        )
+      case "templates":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <TemplatesTab />
+          </Suspense>
+        )
+      case "settings":
+        return (
+          <Suspense fallback={tabPanelFallback}>
+            <SettingsTab />
+          </Suspense>
+        )
+      default:
+        return null
+    }
+  }, [])
+
   // Full 8-tab items (used in "show all views" mode)
   const allTabItems: TabsProps["items"] = [
     {
@@ -1200,7 +1276,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {t("watchlists:tabs.overview", "Overview")}
         </span>
       ),
-      children: <OverviewTab />
+      children: renderWatchlistsTab("overview")
     },
     {
       key: "sources",
@@ -1211,7 +1287,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {tabAttentionBadge(overviewBadges.sources)}
         </span>
       ),
-      children: <SourcesTab />
+      children: renderWatchlistsTab("sources")
     },
     {
       key: "jobs",
@@ -1221,7 +1297,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {t("watchlists:tabs.jobs", "Monitors")}
         </span>
       ),
-      children: <JobsTab />
+      children: renderWatchlistsTab("jobs")
     },
     {
       key: "runs",
@@ -1232,7 +1308,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {tabAttentionBadge(overviewBadges.runs)}
         </span>
       ),
-      children: <RunsTab />
+      children: renderWatchlistsTab("runs")
     },
     {
       key: "items",
@@ -1242,7 +1318,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {t("watchlists:tabs.items", "Articles")}
         </span>
       ),
-      children: <ItemsTab />
+      children: renderWatchlistsTab("items")
     },
     {
       key: "outputs",
@@ -1253,7 +1329,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {tabAttentionBadge(overviewBadges.outputs)}
         </span>
       ),
-      children: <OutputsTab />
+      children: renderWatchlistsTab("outputs")
     },
     {
       key: "templates",
@@ -1263,7 +1339,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {t("watchlists:tabs.templates", "Templates")}
         </span>
       ),
-      children: <TemplatesTab />
+      children: renderWatchlistsTab("templates")
     },
     {
       key: "settings",
@@ -1273,7 +1349,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           {t("watchlists:tabs.settings", "Settings")}
         </span>
       ),
-      children: <SettingsTab />
+      children: renderWatchlistsTab("settings")
     }
   ]
 
@@ -1290,14 +1366,14 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       ),
       children: (
         <>
-          <SourcesTab />
+          {renderWatchlistsTab("sources")}
           <InlineSecondarySection
             sectionKey="monitors"
             title={t("watchlists:tabs.jobs", "Monitors")}
             expanded={Boolean(secondaryExpanded.monitors)}
             onToggle={toggleSecondaryExpanded}
           >
-            <JobsTab />
+            {renderWatchlistsTab("jobs")}
           </InlineSecondarySection>
         </>
       )
@@ -1319,9 +1395,9 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
             expanded={Boolean(secondaryExpanded.activity)}
             onToggle={toggleSecondaryExpanded}
           >
-            <RunsTab />
+            {renderWatchlistsTab("runs")}
           </InlineSecondarySection>
-          <ItemsTab />
+          {renderWatchlistsTab("items")}
         </>
       )
     },
@@ -1336,14 +1412,14 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
       ),
       children: (
         <>
-          <OutputsTab />
+          {renderWatchlistsTab("outputs")}
           <InlineSecondarySection
             sectionKey="templates"
             title={t("watchlists:tabs.templates", "Templates")}
             expanded={Boolean(secondaryExpanded.templates)}
             onToggle={toggleSecondaryExpanded}
           >
-            <TemplatesTab />
+            {renderWatchlistsTab("templates")}
           </InlineSecondarySection>
         </>
       )
@@ -1689,6 +1765,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
           onChange={navigateToTab}
           items={renderedTabItems}
           className="watchlists-tabs"
+          destroyOnHidden
         />
       )}
 
@@ -1700,7 +1777,7 @@ export const WatchlistsPlaygroundPage: React.FC = () => {
         size={isMobile ? "100%" : 520}
         data-testid="watchlists-settings-drawer"
       >
-        <SettingsTab />
+        {renderWatchlistsTab("settings")}
       </Drawer>
 
       <Modal

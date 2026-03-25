@@ -35,6 +35,14 @@ def test_infer_tts_provider_kitten_aliases(model_name: str) -> None:
     assert _infer_tts_provider_from_model(model_name) == "kitten_tts"
 
 
+@pytest.mark.parametrize(
+    "model_name",
+    ["qwen3_tts", "qwen3-tts", "Qwen/Qwen3-TTS-12Hz-0.6B-Base"],
+)
+def test_infer_tts_provider_qwen3_aliases(model_name: str) -> None:
+    assert _infer_tts_provider_from_model(model_name) == "qwen3_tts"
+
+
 def test_sanitize_speech_request_passes_kitten_provider_hint(monkeypatch) -> None:
     captured: dict[str, str | None] = {}
 

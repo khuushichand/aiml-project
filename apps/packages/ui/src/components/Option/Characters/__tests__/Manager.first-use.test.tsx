@@ -300,6 +300,15 @@ const openAdvancedFilters = async (
   }
 }
 
+const findEditSubmitButton = async (timeout = 15000) =>
+  waitFor(() => {
+    const candidate = screen
+      .getAllByRole("button", { name: "Save changes" })
+      .find((button) => button.getAttribute("type") === "submit")
+    expect(candidate).toBeDefined()
+    return candidate as HTMLElement
+  }, { timeout })
+
 describe("CharactersManager first-use onboarding", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -883,13 +892,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     await user.click(await screen.findByRole("button", { name: /Edit character/i }))
 
-    const saveButton = await waitFor(() => {
-      const candidate = screen
-        .getAllByRole("button", { name: "Save changes" })
-        .find((button) => button.getAttribute("type") === "submit")
-      expect(candidate).toBeDefined()
-      return candidate as HTMLElement
-    })
+    const saveButton = await findEditSubmitButton()
     const editFormElement = saveButton.closest("form")
     expect(editFormElement).not.toBeNull()
     const editScope = within(editFormElement as HTMLElement)
@@ -983,13 +986,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Edit character/i }))
 
-    const saveButton = await waitFor(() => {
-      const candidate = screen
-        .getAllByRole("button", { name: "Save changes" })
-        .find((button) => button.getAttribute("type") === "submit")
-      expect(candidate).toBeDefined()
-      return candidate as HTMLElement
-    })
+    const saveButton = await findEditSubmitButton()
     const editFormElement = saveButton.closest("form")
     expect(editFormElement).not.toBeNull()
     const editScope = within(editFormElement as HTMLElement)
@@ -1595,13 +1592,7 @@ describe("CharactersManager first-use onboarding", () => {
 
     await user.click(await screen.findByRole("button", { name: /Edit character/i }))
 
-    const saveButton = await waitFor(() => {
-      const candidate = screen
-        .getAllByRole("button", { name: "Save changes" })
-        .find((button) => button.getAttribute("type") === "submit")
-      expect(candidate).toBeDefined()
-      return candidate as HTMLElement
-    })
+    const saveButton = await findEditSubmitButton()
     const editFormElement = saveButton.closest("form")
     expect(editFormElement).not.toBeNull()
     const editScope = within(editFormElement as HTMLElement)
@@ -3152,13 +3143,7 @@ describe("CharactersManager first-use onboarding", () => {
     render(<CharactersManager />)
 
     await user.click(await screen.findByRole("button", { name: /Edit character/i }))
-    const saveButton = await waitFor(() => {
-      const candidate = screen
-        .getAllByRole("button", { name: "Save changes" })
-        .find((button) => button.getAttribute("type") === "submit")
-      expect(candidate).toBeDefined()
-      return candidate as HTMLElement
-    })
+    const saveButton = await findEditSubmitButton()
     const editFormElement = saveButton.closest("form")
     expect(editFormElement).not.toBeNull()
     const editScope = within(editFormElement as HTMLElement)

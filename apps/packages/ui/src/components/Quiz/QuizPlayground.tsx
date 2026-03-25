@@ -8,7 +8,7 @@ import {
   SettingOutlined,
   ThunderboltOutlined
 } from "@ant-design/icons"
-import { TakeQuizTab, GenerateTab, CreateTab, ManageTab, ResultsTab } from "./tabs"
+import { TakeQuizTab } from "./tabs/TakeQuizTab"
 import type { TakeTabNavigationIntent } from "./navigation"
 import { RESULTS_FILTER_PREFS_KEY, TAKE_QUIZ_LIST_PREFS_KEY } from "./stateKeys"
 import { useAttemptsQuery, useQuizzesQuery } from "./hooks"
@@ -23,6 +23,19 @@ const INITIAL_TAB_RESET_VERSION: Record<QuizTabKey, number> = {
   manage: 0,
   results: 0
 }
+
+const LazyGenerateTab = React.lazy(() =>
+  import("./tabs/GenerateTab").then((module) => ({ default: module.GenerateTab }))
+)
+const LazyCreateTab = React.lazy(() =>
+  import("./tabs/CreateTab").then((module) => ({ default: module.CreateTab }))
+)
+const LazyManageTab = React.lazy(() =>
+  import("./tabs/ManageTab").then((module) => ({ default: module.ManageTab }))
+)
+const LazyResultsTab = React.lazy(() =>
+  import("./tabs/ResultsTab").then((module) => ({ default: module.ResultsTab }))
+)
 
 /**
  * QuizPlayground contains all the tabs and core quiz logic.
@@ -68,6 +81,13 @@ export const QuizPlayground: React.FC = () => {
   const [tabResetVersion, setTabResetVersion] = React.useState<Record<QuizTabKey, number>>(
     INITIAL_TAB_RESET_VERSION
   )
+  const [loadedTabs, setLoadedTabs] = React.useState<Record<QuizTabKey, boolean>>({
+    take: true,
+    generate: false,
+    create: false,
+    manage: false,
+    results: false
+  })
   const searchTokenCounter = React.useRef(0)
   const tabsRef = React.useRef<HTMLDivElement | null>(null)
 
@@ -80,6 +100,17 @@ export const QuizPlayground: React.FC = () => {
     })
     setActiveTab("take")
   }, [initialAssessmentIntent?.deckName])
+
+  React.useEffect(() => {
+    setLoadedTabs((current) =>
+      current[activeTab]
+        ? current
+        : {
+          ...current,
+          [activeTab]: true
+        }
+    )
+  }, [activeTab])
 
   const { data: quizCounts } = useQuizzesQuery({ limit: 1, offset: 0 })
   const { data: attemptCounts } = useAttemptsQuery({ limit: 1, offset: 0 })
@@ -166,8 +197,31 @@ export const QuizPlayground: React.FC = () => {
       }
       setCreateTabDirty(false)
     }
+    setLoadedTabs((current) =>
+      current[nextTab]
+        ? current
+        : {
+          ...current,
+          [nextTab]: true
+        }
+    )
     setActiveTab(nextTab)
   }, [activeTab, createTabDirty, t])
+
+  const renderLazyTab = React.useCallback(
+    (tabKey: Exclude<QuizTabKey, "take">, content: React.ReactNode) => {
+      if (!loadedTabs[tabKey] && activeTab !== tabKey) {
+        return null
+      }
+
+      return (
+        <React.Suspense fallback={null}>
+          {content}
+        </React.Suspense>
+      )
+    },
+    [activeTab, loadedTabs]
+  )
 
   const handleApplyGlobalSearch = React.useCallback(() => {
     const nextQuery = globalSearchQuery.trim()
@@ -277,11 +331,14 @@ export const QuizPlayground: React.FC = () => {
               <ThunderboltOutlined />
             ),
             children: (
-              <GenerateTab
-                key={`generate-${tabResetVersion.generate}`}
-                onNavigateToTake={(intent) => navigateToTake(intent)}
-                onNavigateToManage={() => setActiveTab("manage")}
-              />
+              renderLazyTab(
+                "generate",
+                <LazyGenerateTab
+                  key={`generate-${tabResetVersion.generate}`}
+                  onNavigateToTake={(intent) => navigateToTake(intent)}
+                  onNavigateToManage={() => setActiveTab("manage")}
+                />
+              )
             )
           },
           {
@@ -292,11 +349,14 @@ export const QuizPlayground: React.FC = () => {
               <EditOutlined />
             ),
             children: (
-              <CreateTab
-                key={`create-${tabResetVersion.create}`}
-                onDirtyStateChange={setCreateTabDirty}
-                onNavigateToTake={(intent) => navigateToTake(intent)}
-              />
+              renderLazyTab(
+                "create",
+                <LazyCreateTab
+                  key={`create-${tabResetVersion.create}`}
+                  onDirtyStateChange={setCreateTabDirty}
+                  onNavigateToTake={(intent) => navigateToTake(intent)}
+                />
+              )
             )
           },
           {
@@ -308,23 +368,26 @@ export const QuizPlayground: React.FC = () => {
               totalQuizzes
             ),
             children: (
-              <ManageTab
-                key={`manage-${tabResetVersion.manage}`}
-                externalSearchQuery={manageSearchIntent?.query ?? null}
-                externalSearchToken={manageSearchIntent?.token ?? null}
-                onExternalSearchHandled={() => {
-                  setManageSearchIntent(null)
-                }}
-                onNavigateToCreate={() => setActiveTab("create")}
-                onNavigateToGenerate={() => setActiveTab("generate")}
-                onStartQuiz={(quizId) => {
-                  navigateToTake({
-                    startQuizId: quizId,
-                    highlightQuizId: quizId,
-                    sourceTab: "manage"
-                  })
-                }}
-              />
+              renderLazyTab(
+                "manage",
+                <LazyManageTab
+                  key={`manage-${tabResetVersion.manage}`}
+                  externalSearchQuery={manageSearchIntent?.query ?? null}
+                  externalSearchToken={manageSearchIntent?.token ?? null}
+                  onExternalSearchHandled={() => {
+                    setManageSearchIntent(null)
+                  }}
+                  onNavigateToCreate={() => setActiveTab("create")}
+                  onNavigateToGenerate={() => setActiveTab("generate")}
+                  onStartQuiz={(quizId) => {
+                    navigateToTake({
+                      startQuizId: quizId,
+                      highlightQuizId: quizId,
+                      sourceTab: "manage"
+                    })
+                  }}
+                />
+              )
             )
           },
           {
@@ -336,10 +399,13 @@ export const QuizPlayground: React.FC = () => {
               totalAttempts
             ),
             children: (
-              <ResultsTab
-                key={`results-${tabResetVersion.results}`}
-                onRetakeQuiz={(intent) => navigateToTake(intent)}
-              />
+              renderLazyTab(
+                "results",
+                <LazyResultsTab
+                  key={`results-${tabResetVersion.results}`}
+                  onRetakeQuiz={(intent) => navigateToTake(intent)}
+                />
+              )
             )
           }
           ]}

@@ -66,7 +66,7 @@ vi.mock("antd", () => ({
   }
 }))
 
-vi.mock("../tabs", () => ({
+vi.mock("../tabs/TakeQuizTab", () => ({
   TakeQuizTab: ({
     startQuizId,
     highlightQuizId,
@@ -89,7 +89,10 @@ vi.mock("../tabs", () => ({
         externalSearchQuery
       })}
     </div>
-  ),
+  )
+}))
+
+vi.mock("../tabs/GenerateTab", () => ({
   GenerateTab: ({ onNavigateToTake, onNavigateToManage }: any) => (
     <div>
       <button
@@ -107,7 +110,10 @@ vi.mock("../tabs", () => ({
         Mock Generate Review
       </button>
     </div>
-  ),
+  )
+}))
+
+vi.mock("../tabs/CreateTab", () => ({
   CreateTab: ({ onNavigateToTake, onDirtyStateChange }: any) => (
     <div>
       <button
@@ -125,7 +131,10 @@ vi.mock("../tabs", () => ({
         Mock Mark Create Dirty
       </button>
     </div>
-  ),
+  )
+}))
+
+vi.mock("../tabs/ManageTab", () => ({
   ManageTab: ({ onStartQuiz, externalSearchQuery }: any) => (
     <div>
       <button type="button" onClick={() => onStartQuiz(99)}>
@@ -133,7 +142,10 @@ vi.mock("../tabs", () => ({
       </button>
       <div data-testid="manage-search-intent">{externalSearchQuery ?? ""}</div>
     </div>
-  ),
+  )
+}))
+
+vi.mock("../tabs/ResultsTab", () => ({
   ResultsTab: ({ onRetakeQuiz }: any) => (
     <button
       type="button"
@@ -152,12 +164,12 @@ vi.mock("../tabs", () => ({
 }))
 
 describe("QuizPlayground navigation intents", () => {
-  it("prompts before leaving Create tab when unsaved changes are present", () => {
+  it("prompts before leaving Create tab when unsaved changes are present", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false)
 
     render(<QuizPlayground />)
     fireEvent.click(screen.getByRole("button", { name: "Create" }))
-    fireEvent.click(screen.getByRole("button", { name: "Mock Mark Create Dirty" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Mock Mark Create Dirty" }))
     fireEvent.click(screen.getByRole("button", { name: "Take Quiz" }))
 
     expect(confirmSpy).toHaveBeenCalledWith("You have unsaved quiz changes. Leave Create tab?")
@@ -166,12 +178,12 @@ describe("QuizPlayground navigation intents", () => {
     confirmSpy.mockRestore()
   })
 
-  it("allows leaving Create tab after confirmation", () => {
+  it("allows leaving Create tab after confirmation", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
 
     render(<QuizPlayground />)
     fireEvent.click(screen.getByRole("button", { name: "Create" }))
-    fireEvent.click(screen.getByRole("button", { name: "Mock Mark Create Dirty" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Mock Mark Create Dirty" }))
     fireEvent.click(screen.getByRole("button", { name: "Take Quiz" }))
 
     expect(screen.getByTestId("active-tab")).toHaveTextContent("take")
@@ -191,10 +203,11 @@ describe("QuizPlayground navigation intents", () => {
     expect(screen.getByTestId("take-intent")).toHaveTextContent("\"externalSearchQuery\":\"bio\"")
   })
 
-  it("applies global search to Manage tab when Manage is active", () => {
+  it("applies global search to Manage tab when Manage is active", async () => {
     render(<QuizPlayground />)
 
     fireEvent.click(screen.getByRole("button", { name: "Manage" }))
+    await screen.findByTestId("manage-search-intent")
     fireEvent.change(screen.getByTestId("quiz-global-search-input"), {
       target: { value: "chem" }
     })
@@ -204,12 +217,12 @@ describe("QuizPlayground navigation intents", () => {
     expect(screen.getByTestId("manage-search-intent")).toHaveTextContent("chem")
   })
 
-  it("resets take-tab intent and clears take-tab persisted state on explicit reset", () => {
+  it("resets take-tab intent and clears take-tab persisted state on explicit reset", async () => {
     window.sessionStorage.setItem(TAKE_QUIZ_LIST_PREFS_KEY, JSON.stringify({ page: 2 }))
     render(<QuizPlayground />)
 
     fireEvent.click(screen.getByRole("button", { name: "Generate" }))
-    fireEvent.click(screen.getByRole("button", { name: "Mock Generate Navigate" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Mock Generate Navigate" }))
 
     expect(screen.getByTestId("take-intent")).toHaveTextContent(
       JSON.stringify({
@@ -265,11 +278,11 @@ describe("QuizPlayground navigation intents", () => {
     expect(screen.getByText("Stats")).toBeInTheDocument()
   })
 
-  it("routes generate navigation payload into Take tab intent", () => {
+  it("routes generate navigation payload into Take tab intent", async () => {
     render(<QuizPlayground />)
 
     fireEvent.click(screen.getByRole("button", { name: "Generate" }))
-    fireEvent.click(screen.getByRole("button", { name: "Mock Generate Navigate" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Mock Generate Navigate" }))
 
     expect(screen.getByTestId("active-tab")).toHaveTextContent("take")
     expect(screen.getByTestId("take-intent")).toHaveTextContent(
@@ -286,20 +299,20 @@ describe("QuizPlayground navigation intents", () => {
     )
   })
 
-  it("routes generate preview-review action into Manage tab", () => {
+  it("routes generate preview-review action into Manage tab", async () => {
     render(<QuizPlayground />)
 
     fireEvent.click(screen.getByRole("button", { name: "Generate" }))
-    fireEvent.click(screen.getByRole("button", { name: "Mock Generate Review" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Mock Generate Review" }))
 
     expect(screen.getByTestId("active-tab")).toHaveTextContent("manage")
   })
 
-  it("routes results retake payload into Take tab intent", () => {
+  it("routes results retake payload into Take tab intent", async () => {
     render(<QuizPlayground />)
 
     fireEvent.click(screen.getByRole("button", { name: "Results" }))
-    fireEvent.click(screen.getByRole("button", { name: "Mock Results Retake" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Mock Results Retake" }))
 
     expect(screen.getByTestId("active-tab")).toHaveTextContent("take")
     expect(screen.getByTestId("take-intent")).toHaveTextContent(

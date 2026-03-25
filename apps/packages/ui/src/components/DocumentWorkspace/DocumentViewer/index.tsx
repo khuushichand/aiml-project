@@ -1,14 +1,35 @@
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Button, Spin } from "antd"
 import { FileText, AlertCircle, Highlighter, MessageSquare, Lightbulb, HelpCircle, X } from "lucide-react"
 import type { PdfDocumentProxy } from "@/hooks/document-workspace/usePdfSearch"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { ViewerToolbar } from "./ViewerToolbar"
-import { PdfDocument } from "./PdfViewer/PdfDocument"
-import { PdfSearch } from "./PdfSearch"
-import { EpubViewer } from "./EpubViewer"
 import type { DocumentType } from "../types"
+
+const PdfDocument = React.lazy(() =>
+  import("./PdfViewer/PdfDocument").then((module) => ({
+    default: module.PdfDocument
+  }))
+)
+
+const PdfSearch = React.lazy(() =>
+  import("./PdfSearch").then((module) => ({
+    default: module.PdfSearch
+  }))
+)
+
+const EpubViewer = React.lazy(() =>
+  import("./EpubViewer").then((module) => ({
+    default: module.EpubViewer
+  }))
+)
+
+const viewerFallback = (
+  <div className="flex h-full items-center justify-center">
+    <Spin size="large" />
+  </div>
+)
 
 interface DocumentViewerProps {
   className?: string
@@ -318,28 +339,32 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     switch (activeDocumentType) {
       case "pdf":
         return (
-          <PdfDocument
-            url={activeDocument.url}
-            documentId={activeDocumentId}
-            currentPage={currentPage}
-            zoomLevel={zoomLevel}
-            viewMode={viewMode}
-            onLoadSuccess={handleLoadSuccess}
-            onLoadError={handleLoadError}
-            onPageChange={setCurrentPage}
-            pdfDocumentRef={pdfDocumentRef}
-          />
+          <Suspense fallback={viewerFallback}>
+            <PdfDocument
+              url={activeDocument.url}
+              documentId={activeDocumentId}
+              currentPage={currentPage}
+              zoomLevel={zoomLevel}
+              viewMode={viewMode}
+              onLoadSuccess={handleLoadSuccess}
+              onLoadError={handleLoadError}
+              onPageChange={setCurrentPage}
+              pdfDocumentRef={pdfDocumentRef}
+            />
+          </Suspense>
         )
       case "epub":
         return (
-          <EpubViewer
-            url={activeDocument.url!}
-            documentId={activeDocumentId}
-            onLoadSuccess={({ chapterCount }) => {
-              // chapterCount is available if needed
-            }}
-            onLoadError={handleLoadError}
-          />
+          <Suspense fallback={viewerFallback}>
+            <EpubViewer
+              url={activeDocument.url!}
+              documentId={activeDocumentId}
+              onLoadSuccess={({ chapterCount }) => {
+                // chapterCount is available if needed
+              }}
+              onLoadError={handleLoadError}
+            />
+          </Suspense>
         )
       default:
         return (
@@ -377,7 +402,9 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           </div>
         )}
         {activeDocumentType === "pdf" && (
-          <PdfSearch pdfDocumentRef={pdfDocumentRef} />
+          <Suspense fallback={null}>
+            <PdfSearch pdfDocumentRef={pdfDocumentRef} />
+          </Suspense>
         )}
         {renderViewer()}
       </div>

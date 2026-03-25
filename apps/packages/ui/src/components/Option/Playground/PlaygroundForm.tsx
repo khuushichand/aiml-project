@@ -49,8 +49,6 @@ import { CompareToggle } from "./CompareToggle"
 import { useMobileComposerViewport } from "./useMobileComposerViewport"
 import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
-import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
-import { ActorPopout } from "@/components/Common/Settings/ActorPopout"
 import { ChatQueuePanel } from "@/components/Common/ChatQueuePanel"
 import { useConnectionState } from "@/hooks/useConnectionState"
 import { ConnectionPhase, deriveConnectionUxState } from "@/types/connection"
@@ -82,7 +80,6 @@ import type { Character } from "@/types/character"
 import { type KnowledgeTab } from "@/components/Knowledge"
 import { BetaTag } from "@/components/Common/Beta"
 import type { SlashCommandItem } from "@/components/Sidepanel/Chat/SlashCommandMenu"
-import { DocumentGeneratorDrawer } from "@/components/Common/Playground/DocumentGeneratorDrawer"
 import { useUiModeStore } from "@/store/ui-mode"
 import {
   useStoreChatModelSettings,
@@ -93,12 +90,6 @@ import { getPresetByKey } from "./ParameterPresets"
 import { TokenProgressBar } from "./TokenProgressBar"
 import { AttachmentsSummary } from "./AttachmentsSummary"
 import { VoiceChatIndicator } from "./VoiceChatIndicator"
-import { VoiceModeSelector } from "./VoiceModeSelector"
-import { PlaygroundImageGenModal } from "./PlaygroundImageGenModal"
-import { PlaygroundRawRequestModal } from "./PlaygroundRawRequestModal"
-import { PlaygroundStartupTemplateModal } from "./PlaygroundStartupTemplateModal"
-import { PlaygroundContextWindowModal } from "./PlaygroundContextWindowModal"
-import { PlaygroundMcpSettingsModal } from "./PlaygroundMcpSettingsModal"
 import { PlaygroundToolsPopover } from "./PlaygroundToolsPopover"
 import { PlaygroundModeLauncher } from "./PlaygroundModeLauncher"
 import { PlaygroundMcpControl } from "./PlaygroundMcpControl"
@@ -309,6 +300,58 @@ const stringifyKeyClaims = (context: AttachedResearchContext | null): string =>
 const stringifyUnresolvedQuestions = (
   context: AttachedResearchContext | null
 ): string => context?.unresolved_questions.join("\n") ?? ""
+
+const LazyCurrentChatModelSettings = React.lazy(() =>
+  import("@/components/Common/Settings/CurrentChatModelSettings").then(
+    (module) => ({ default: module.CurrentChatModelSettings })
+  )
+)
+
+const LazyActorPopout = React.lazy(() =>
+  import("@/components/Common/Settings/ActorPopout").then((module) => ({
+    default: module.ActorPopout
+  }))
+)
+
+const LazyDocumentGeneratorDrawer = React.lazy(() =>
+  import("@/components/Common/Playground/DocumentGeneratorDrawer")
+)
+
+const LazyVoiceModeSelector = React.lazy(() =>
+  import("./VoiceModeSelector").then((module) => ({
+    default: module.VoiceModeSelector
+  }))
+)
+
+const LazyPlaygroundImageGenModal = React.lazy(() =>
+  import("./PlaygroundImageGenModal").then((module) => ({
+    default: module.PlaygroundImageGenModal
+  }))
+)
+
+const LazyPlaygroundRawRequestModal = React.lazy(() =>
+  import("./PlaygroundRawRequestModal").then((module) => ({
+    default: module.PlaygroundRawRequestModal
+  }))
+)
+
+const LazyPlaygroundStartupTemplateModal = React.lazy(() =>
+  import("./PlaygroundStartupTemplateModal").then((module) => ({
+    default: module.PlaygroundStartupTemplateModal
+  }))
+)
+
+const LazyPlaygroundContextWindowModal = React.lazy(() =>
+  import("./PlaygroundContextWindowModal").then((module) => ({
+    default: module.PlaygroundContextWindowModal
+  }))
+)
+
+const LazyPlaygroundMcpSettingsModal = React.lazy(() =>
+  import("./PlaygroundMcpSettingsModal").then((module) => ({
+    default: module.PlaygroundMcpSettingsModal
+  }))
+)
 
 export const PlaygroundForm = ({
   droppedFiles,
@@ -4459,62 +4502,70 @@ export const PlaygroundForm = ({
           </div>
         </div>
       </div>
-      <PlaygroundImageGenModal
-        open={imageGenerateModalOpen}
-        onClose={() => setImageGenerateModalOpen(false)}
-        busy={imageGenerateBusy}
-        backend={imageGenerateBackend}
-        backendOptions={imageGenerateBackendOptions}
-        onBackendChange={setImageGenerateBackend}
-        onHydrateSettings={hydrateImageGenerateSettings}
-        promptMode={imageGeneratePromptMode}
-        onPromptModeChange={setImageGeneratePromptMode}
-        promptStrategies={imagePromptStrategies}
-        syncPolicy={imageGenerateSyncPolicy}
-        onSyncPolicyChange={setImageGenerateSyncPolicy}
-        syncChatMode={imageEventSyncChatMode}
-        onSyncChatModeChange={(next) => void updateChatSettings({ imageEventSyncMode: next })}
-        syncGlobalDefault={imageEventSyncGlobalDefault}
-        onSyncGlobalDefaultChange={(next) => void setImageEventSyncGlobalDefault(next)}
-        resolvedSyncMode={imageGenerateResolvedSyncMode}
-        prompt={imageGeneratePrompt}
-        onPromptChange={setImageGeneratePrompt}
-        contextBreakdown={imagePromptContextBreakdown}
-        onClearRefineState={clearImagePromptRefineState}
-        refineSubmitting={imagePromptRefineSubmitting}
-        refineBaseline={imagePromptRefineBaseline}
-        refineCandidate={imagePromptRefineCandidate}
-        refineModel={imagePromptRefineModel}
-        refineLatencyMs={imagePromptRefineLatencyMs}
-        refineDiff={imagePromptRefineDiff}
-        onCreateDraft={handleCreateImagePromptDraft}
-        onRefine={handleRefineImagePromptDraft}
-        onApplyRefined={applyRefinedImagePromptCandidate}
-        onRejectRefined={rejectRefinedImagePromptCandidate}
-        format={imageGenerateFormat}
-        onFormatChange={setImageGenerateFormat}
-        width={imageGenerateWidth}
-        onWidthChange={setImageGenerateWidth}
-        height={imageGenerateHeight}
-        onHeightChange={setImageGenerateHeight}
-        steps={imageGenerateSteps}
-        onStepsChange={setImageGenerateSteps}
-        cfgScale={imageGenerateCfgScale}
-        onCfgScaleChange={setImageGenerateCfgScale}
-        seed={imageGenerateSeed}
-        onSeedChange={setImageGenerateSeed}
-        sampler={imageGenerateSampler}
-        onSamplerChange={setImageGenerateSampler}
-        model={imageGenerateModel}
-        onModelChange={setImageGenerateModel}
-        negativePrompt={imageGenerateNegativePrompt}
-        onNegativePromptChange={setImageGenerateNegativePrompt}
-        extraParams={imageGenerateExtraParams}
-        onExtraParamsChange={setImageGenerateExtraParams}
-        submitting={imageGenerateSubmitting}
-        onSubmit={submitImageGenerateModal}
-        t={t}
-      />
+      {imageGenerateModalOpen && (
+        <React.Suspense fallback={null}>
+          <LazyPlaygroundImageGenModal
+            open={imageGenerateModalOpen}
+            onClose={() => setImageGenerateModalOpen(false)}
+            busy={imageGenerateBusy}
+            backend={imageGenerateBackend}
+            backendOptions={imageGenerateBackendOptions}
+            onBackendChange={setImageGenerateBackend}
+            onHydrateSettings={hydrateImageGenerateSettings}
+            promptMode={imageGeneratePromptMode}
+            onPromptModeChange={setImageGeneratePromptMode}
+            promptStrategies={imagePromptStrategies}
+            syncPolicy={imageGenerateSyncPolicy}
+            onSyncPolicyChange={setImageGenerateSyncPolicy}
+            syncChatMode={imageEventSyncChatMode}
+            onSyncChatModeChange={(next) =>
+              void updateChatSettings({ imageEventSyncMode: next })
+            }
+            syncGlobalDefault={imageEventSyncGlobalDefault}
+            onSyncGlobalDefaultChange={(next) =>
+              void setImageEventSyncGlobalDefault(next)
+            }
+            resolvedSyncMode={imageGenerateResolvedSyncMode}
+            prompt={imageGeneratePrompt}
+            onPromptChange={setImageGeneratePrompt}
+            contextBreakdown={imagePromptContextBreakdown}
+            onClearRefineState={clearImagePromptRefineState}
+            refineSubmitting={imagePromptRefineSubmitting}
+            refineBaseline={imagePromptRefineBaseline}
+            refineCandidate={imagePromptRefineCandidate}
+            refineModel={imagePromptRefineModel}
+            refineLatencyMs={imagePromptRefineLatencyMs}
+            refineDiff={imagePromptRefineDiff}
+            onCreateDraft={handleCreateImagePromptDraft}
+            onRefine={handleRefineImagePromptDraft}
+            onApplyRefined={applyRefinedImagePromptCandidate}
+            onRejectRefined={rejectRefinedImagePromptCandidate}
+            format={imageGenerateFormat}
+            onFormatChange={setImageGenerateFormat}
+            width={imageGenerateWidth}
+            onWidthChange={setImageGenerateWidth}
+            height={imageGenerateHeight}
+            onHeightChange={setImageGenerateHeight}
+            steps={imageGenerateSteps}
+            onStepsChange={setImageGenerateSteps}
+            cfgScale={imageGenerateCfgScale}
+            onCfgScaleChange={setImageGenerateCfgScale}
+            seed={imageGenerateSeed}
+            onSeedChange={setImageGenerateSeed}
+            sampler={imageGenerateSampler}
+            onSamplerChange={setImageGenerateSampler}
+            model={imageGenerateModel}
+            onModelChange={setImageGenerateModel}
+            negativePrompt={imageGenerateNegativePrompt}
+            onNegativePromptChange={setImageGenerateNegativePrompt}
+            extraParams={imageGenerateExtraParams}
+            onExtraParamsChange={setImageGenerateExtraParams}
+            submitting={imageGenerateSubmitting}
+            onSubmit={submitImageGenerateModal}
+            t={t}
+          />
+        </React.Suspense>
+      )}
       <Modal
         open={followUpResearchModalOpen}
         onCancel={closeFollowUpResearchModal}
@@ -4575,102 +4626,127 @@ export const PlaygroundForm = ({
           ) : null}
         </div>
       </Modal>
-      <PlaygroundRawRequestModal
-        open={rawRequestModalOpen}
-        onClose={() => setRawRequestModalOpen(false)}
-        snapshot={rawRequestSnapshot}
-        json={rawRequestJson}
-        onRefresh={refreshRawRequestSnapshot}
-        onCopy={copyRawRequestJson}
-        extraFooter={rawRequestModalFooterExtras}
-        beforeJson={rawRequestAttachedResearchPanel}
-        t={t}
-      />
-      <PlaygroundStartupTemplateModal
-        preview={startupTemplatePreview}
-        onClose={() => setStartupTemplatePreview(null)}
-        onDelete={handleDeleteStartupTemplate}
-        onApply={handleApplyStartupTemplate}
-        promptDescription={startupTemplatePromptDescription}
-        promptResolution={startupTemplatePromptResolution}
-        preset={startupTemplatePreset}
-        t={t}
-      />
-      <PlaygroundContextWindowModal
-        contextWindowModalOpen={contextWindowModalOpen}
-        onCloseContextWindow={() => setContextWindowModalOpen(false)}
-        onSaveContextWindow={saveContextWindowSetting}
-        onResetContextWindow={resetContextWindowSetting}
-        contextWindowDraftValue={contextWindowDraftValue}
-        onContextWindowDraftChange={setContextWindowDraftValue}
-        resolvedMaxContext={resolvedMaxContext}
-        requestedContextWindowOverride={requestedContextWindowOverride}
-        modelContextLength={modelContextLength}
-        isContextWindowOverrideActive={isContextWindowOverrideActive}
-        isContextWindowOverrideClamped={isContextWindowOverrideClamped}
-        nonMessageContextPercent={nonMessageContextPercent}
-        showNonMessageContextWarning={showNonMessageContextWarning}
-        tokenBudgetRiskLabel={tokenBudgetRiskLabel}
-        tokenBudgetRisk={tokenBudgetRisk}
-        contextFootprintRows={contextFootprintRows}
-        formatContextWindowValue={formatContextWindowValue}
-        onClearPromptContext={clearPromptContext}
-        onClearPinnedSourceContext={clearPinnedSourceContext}
-        onClearHistoryContext={clearHistoryContext}
-        onCreateSummaryCheckpoint={insertSummaryCheckpointPrompt}
-        onReviewCharacterContext={() => setOpenActorSettings(true)}
-        onTrimLargestContextContributor={trimLargestContextContributor}
-        sessionInsightsOpen={sessionInsightsOpen}
-        onCloseSessionInsights={() => setSessionInsightsOpen(false)}
-        sessionInsights={sessionInsights}
-        t={t}
-      />
-      <PlaygroundMcpSettingsModal
-        open={mcpSettingsOpen}
-        onClose={() => setMcpSettingsOpen(false)}
-        hasMcp={hasMcp}
-        mcpStatusLabel={mcpCtrl.mcpStatusLabel}
-        catalogsLoading={mcpCatalogsLoading}
-        catalogGroups={mcpCtrl.catalogGroups}
-        catalogDraft={mcpCtrl.catalogDraft}
-        onCatalogDraftChange={mcpCtrl.setCatalogDraft}
-        onCatalogCommit={mcpCtrl.commitCatalog}
-        onCatalogSelect={mcpCtrl.handleCatalogSelect}
-        toolCatalogId={toolCatalogId}
-        onToolCatalogIdChange={setToolCatalogId}
-        toolCatalogStrict={toolCatalogStrict}
-        onToolCatalogStrictChange={setToolCatalogStrict}
-        moduleOptions={moduleOptions}
-        moduleOptionsLoading={moduleOptionsLoading}
-        toolModules={toolModules}
-        onModuleSelect={handleModuleSelect}
-        isSmallModel={isSmallModel}
-        t={t}
-      />
+      {rawRequestModalOpen && (
+        <React.Suspense fallback={null}>
+          <LazyPlaygroundRawRequestModal
+            open={rawRequestModalOpen}
+            onClose={() => setRawRequestModalOpen(false)}
+            snapshot={rawRequestSnapshot}
+            json={rawRequestJson}
+            onRefresh={refreshRawRequestSnapshot}
+            onCopy={copyRawRequestJson}
+            extraFooter={rawRequestModalFooterExtras}
+            beforeJson={rawRequestAttachedResearchPanel}
+            t={t}
+          />
+        </React.Suspense>
+      )}
+      {startupTemplatePreview && (
+        <React.Suspense fallback={null}>
+          <LazyPlaygroundStartupTemplateModal
+            preview={startupTemplatePreview}
+            onClose={() => setStartupTemplatePreview(null)}
+            onDelete={handleDeleteStartupTemplate}
+            onApply={handleApplyStartupTemplate}
+            promptDescription={startupTemplatePromptDescription}
+            promptResolution={startupTemplatePromptResolution}
+            preset={startupTemplatePreset}
+            t={t}
+          />
+        </React.Suspense>
+      )}
+      {(contextWindowModalOpen || sessionInsightsOpen) && (
+        <React.Suspense fallback={null}>
+          <LazyPlaygroundContextWindowModal
+            contextWindowModalOpen={contextWindowModalOpen}
+            onCloseContextWindow={() => setContextWindowModalOpen(false)}
+            onSaveContextWindow={saveContextWindowSetting}
+            onResetContextWindow={resetContextWindowSetting}
+            contextWindowDraftValue={contextWindowDraftValue}
+            onContextWindowDraftChange={setContextWindowDraftValue}
+            resolvedMaxContext={resolvedMaxContext}
+            requestedContextWindowOverride={requestedContextWindowOverride}
+            modelContextLength={modelContextLength}
+            isContextWindowOverrideActive={isContextWindowOverrideActive}
+            isContextWindowOverrideClamped={isContextWindowOverrideClamped}
+            nonMessageContextPercent={nonMessageContextPercent}
+            showNonMessageContextWarning={showNonMessageContextWarning}
+            tokenBudgetRiskLabel={tokenBudgetRiskLabel}
+            tokenBudgetRisk={tokenBudgetRisk}
+            contextFootprintRows={contextFootprintRows}
+            formatContextWindowValue={formatContextWindowValue}
+            onClearPromptContext={clearPromptContext}
+            onClearPinnedSourceContext={clearPinnedSourceContext}
+            onClearHistoryContext={clearHistoryContext}
+            onCreateSummaryCheckpoint={insertSummaryCheckpointPrompt}
+            onReviewCharacterContext={() => setOpenActorSettings(true)}
+            onTrimLargestContextContributor={trimLargestContextContributor}
+            sessionInsightsOpen={sessionInsightsOpen}
+            onCloseSessionInsights={() => setSessionInsightsOpen(false)}
+            sessionInsights={sessionInsights}
+            t={t}
+          />
+        </React.Suspense>
+      )}
+      {mcpSettingsOpen && (
+        <React.Suspense fallback={null}>
+          <LazyPlaygroundMcpSettingsModal
+            open={mcpSettingsOpen}
+            onClose={() => setMcpSettingsOpen(false)}
+            hasMcp={hasMcp}
+            mcpStatusLabel={mcpCtrl.mcpStatusLabel}
+            catalogsLoading={mcpCatalogsLoading}
+            catalogGroups={mcpCtrl.catalogGroups}
+            catalogDraft={mcpCtrl.catalogDraft}
+            onCatalogDraftChange={mcpCtrl.setCatalogDraft}
+            onCatalogCommit={mcpCtrl.commitCatalog}
+            onCatalogSelect={mcpCtrl.handleCatalogSelect}
+            toolCatalogId={toolCatalogId}
+            onToolCatalogIdChange={setToolCatalogId}
+            toolCatalogStrict={toolCatalogStrict}
+            onToolCatalogStrictChange={setToolCatalogStrict}
+            moduleOptions={moduleOptions}
+            moduleOptionsLoading={moduleOptionsLoading}
+            toolModules={toolModules}
+            onModuleSelect={handleModuleSelect}
+            isSmallModel={isSmallModel}
+            t={t}
+          />
+        </React.Suspense>
+      )}
       {openModelSettings && (
-        <CurrentChatModelSettings
-          open={openModelSettings}
-          setOpen={setOpenModelSettings}
-          isOCREnabled={useOCR}
-        />
+        <React.Suspense fallback={null}>
+          <LazyCurrentChatModelSettings
+            open={openModelSettings}
+            setOpen={setOpenModelSettings}
+            isOCREnabled={useOCR}
+          />
+        </React.Suspense>
       )}
       {openActorSettings && (
-        <ActorPopout open={openActorSettings} setOpen={setOpenActorSettings} />
+        <React.Suspense fallback={null}>
+          <LazyActorPopout
+            open={openActorSettings}
+            setOpen={setOpenActorSettings}
+          />
+        </React.Suspense>
       )}
       {documentGeneratorOpen && (
-        <DocumentGeneratorDrawer
-          open={documentGeneratorOpen}
-          onClose={() => {
-            setDocumentGeneratorOpen(false)
-            setDocumentGeneratorSeed({})
-          }}
-          conversationId={
-            documentGeneratorSeed?.conversationId ?? serverChatId ?? null
-          }
-          defaultModel={selectedModel || null}
-          seedMessage={documentGeneratorSeed?.message ?? null}
-          seedMessageId={documentGeneratorSeed?.messageId ?? null}
-        />
+        <React.Suspense fallback={null}>
+          <LazyDocumentGeneratorDrawer
+            open={documentGeneratorOpen}
+            onClose={() => {
+              setDocumentGeneratorOpen(false)
+              setDocumentGeneratorSeed({})
+            }}
+            conversationId={
+              documentGeneratorSeed?.conversationId ?? serverChatId ?? null
+            }
+            defaultModel={selectedModel || null}
+            seedMessage={documentGeneratorSeed?.message ?? null}
+            seedMessageId={documentGeneratorSeed?.messageId ?? null}
+          />
+        </React.Suspense>
       )}
       {voiceChatEnabled && voiceChat.state !== "idle" && (
         <VoiceChatIndicator
@@ -4679,8 +4755,9 @@ export const PlaygroundForm = ({
           onStop={handleVoiceChatToggle}
         />
       )}
-        {voiceModeSelectorOpen && (
-          <VoiceModeSelector
+      {voiceModeSelectorOpen && (
+        <React.Suspense fallback={null}>
+          <LazyVoiceModeSelector
             open={voiceModeSelectorOpen}
             onClose={() => setVoiceModeSelectorOpen(false)}
             onSelectDictation={handleDictationToggle}
@@ -4688,7 +4765,8 @@ export const PlaygroundForm = ({
             dictationAvailable={speechAvailable}
             conversationAvailable={voiceChatAvailable}
           />
-        )}
+        </React.Suspense>
+      )}
       </div>
     </React.Profiler>
   )

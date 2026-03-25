@@ -15,6 +15,7 @@ import {
   Edit3,
   ExternalLink,
   Expand,
+  History,
   Minimize2,
   Loader2,
   Trash2,
@@ -23,15 +24,9 @@ import {
   Download
 } from 'lucide-react'
 import React, { useState, Suspense, useMemo, useRef, useCallback } from 'react'
-import { Select, Dropdown, Tooltip, message, Spin, Modal } from 'antd'
+import { Select, Dropdown, Tooltip, message, Spin } from 'antd'
 import { useTranslation } from 'react-i18next'
 import type { MenuProps } from 'antd'
-import { AnalysisModal } from './AnalysisModal'
-import { AnalysisEditModal } from './AnalysisEditModal'
-import { VersionHistoryPanel } from './VersionHistoryPanel'
-import { DeveloperToolsSection } from './DeveloperToolsSection'
-import { DiffViewModal } from './DiffViewModal'
-import { MarkdownPreview } from '@/components/Common/MarkdownPreview'
 import type { MediaResultItem } from './types'
 import type { MediaNavigationFormat } from '@/utils/media-navigation-scope'
 import { parseLeadingTranscriptTiming } from '@/utils/media-transcript-display'
@@ -54,8 +49,6 @@ import { useContentEditState } from './hooks/useContentEditState'
 import { useContentRendering, TEXT_SIZE_CONTROL_OPTIONS } from './hooks/useContentRendering'
 import {
   useContentViewerModals,
-  DOCUMENT_INTELLIGENCE_TABS,
-  ANNOTATION_COLOR_OPTIONS
 } from './hooks/useContentViewerModals'
 import { useReadingProgress } from './hooks/useReadingProgress'
 import {
@@ -78,6 +71,43 @@ export {
 const ContentEditModal = React.lazy(() =>
   import('./ContentEditModal').then((m) => ({ default: m.ContentEditModal }))
 )
+const LazyAnalysisModal = React.lazy(() =>
+  import('./AnalysisModal').then((m) => ({ default: m.AnalysisModal }))
+)
+const LazyAnalysisEditModal = React.lazy(() =>
+  import('./AnalysisEditModal').then((m) => ({ default: m.AnalysisEditModal }))
+)
+const LazyDeveloperToolsSection = React.lazy(() =>
+  import('./DeveloperToolsSection').then((m) => ({
+    default: m.DeveloperToolsSection
+  }))
+)
+const LazyDiffViewModal = React.lazy(() =>
+  import('./DiffViewModal').then((m) => ({ default: m.DiffViewModal }))
+)
+const LazyVersionHistoryPanel = React.lazy(() =>
+  import('./VersionHistoryPanel').then((m) => ({ default: m.VersionHistoryPanel }))
+)
+const LazyContentViewerDocumentIntelligenceSection = React.lazy(() =>
+  import('./ContentViewerDocumentIntelligenceSection').then((m) => ({
+    default: m.ContentViewerDocumentIntelligenceSection
+  }))
+)
+const LazyContentViewerActionModals = React.lazy(() =>
+  import('./ContentViewerActionModals').then((m) => ({
+    default: m.ContentViewerActionModals
+  }))
+)
+const LazyContentViewerMetadataSectionBody = React.lazy(() =>
+  import('./ContentViewerMetadataSectionBody').then((m) => ({
+    default: m.ContentViewerMetadataSectionBody
+  }))
+)
+const LazyMarkdownPreview = React.lazy(() =>
+  import('@/components/Common/MarkdownPreview').then((m) => ({
+    default: m.MarkdownPreview
+  }))
+)
 
 export const shouldShowMediaDeveloperTools = (
   env: Record<string, unknown> | null | undefined
@@ -88,8 +118,6 @@ export const shouldShowMediaDeveloperTools = (
 }
 
 // Metadata helpers moved to useContentMetadata hook
-
-type ReingestSchedulePreset = 'hourly' | 'daily' | 'weekly'
 
 interface ContentViewerProps {
   selectedMedia: MediaResultItem | null
@@ -173,6 +201,7 @@ export function ContentViewer({
   const rootContainerRef = useRef<HTMLDivElement | null>(null)
   const contentBodyRef = useRef<HTMLDivElement | null>(null)
   const contentScrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const [versionHistoryMounted, setVersionHistoryMounted] = useState(false)
 
   const selectedMediaId = selectedMedia?.id != null ? String(selectedMedia.id) : null
   const isNote = selectedMedia?.kind === 'note'
@@ -212,6 +241,11 @@ export function ContentViewer({
     selectedMediaId,
     shouldShowEmbeddedPlayer: false // placeholder, resolved below
   })
+  const markdownFallbackContent =
+    rendering.contentForPreview ||
+    t('review:mediaPage.noContent', {
+      defaultValue: 'No content available'
+    })
 
   // --- Hook: Content Viewer Modals ---
   const modals = useContentViewerModals({
@@ -369,293 +403,6 @@ export function ContentViewer({
       ...prev,
       [section]: !prev[section]
     }))
-  }
-
-  // Document intelligence panel renderer
-  const renderDocumentIntelligencePanel = () => {
-    if (!modals.activeDocumentIntelligencePanel) {
-      return null
-    }
-
-    if (modals.activeDocumentIntelligencePanel.loading) {
-      return (
-        <div
-          className="text-xs text-text-muted"
-          data-testid="media-intelligence-loading"
-        >
-          {t('review:mediaPage.intelligenceLoading', {
-            defaultValue: 'Loading intelligence data...'
-          })}
-        </div>
-      )
-    }
-
-    if (modals.activeDocumentIntelligencePanel.error) {
-      return (
-        <div className="space-y-2" data-testid="media-intelligence-error">
-          <p className="text-xs text-danger">{modals.activeDocumentIntelligencePanel.error}</p>
-          <button
-            type="button"
-            onClick={() => {
-              void modals.fetchDocumentIntelligence()
-            }}
-            className="rounded border border-border bg-surface2 px-2 py-1 text-xs text-text hover:bg-surface"
-            data-testid="media-intelligence-retry"
-          >
-            {t('common:retry', { defaultValue: 'Retry' })}
-          </button>
-        </div>
-      )
-    }
-
-    if (
-      modals.activeIntelligenceTab !== 'annotations' &&
-      (!Array.isArray(modals.activeDocumentIntelligencePanel.data) ||
-        modals.activeDocumentIntelligencePanel.data.length === 0)
-    ) {
-      return (
-        <div
-          className="text-xs text-text-muted"
-          data-testid="media-intelligence-empty"
-        >
-          {t(`review:mediaPage.intelligenceEmpty.${modals.activeIntelligenceTab}`, {
-            defaultValue: `No ${modals.activeIntelligenceTab} available for this item.`
-          })}
-        </div>
-      )
-    }
-
-    if (modals.activeIntelligenceTab === 'outline') {
-      return (
-        <ul className="space-y-1 text-xs" data-testid="media-intelligence-outline-list">
-          {modals.activeDocumentIntelligencePanel.data.map((entry: any, index: number) => (
-            <li
-              key={`${entry?.title || 'entry'}-${entry?.page || index}-${index}`}
-              className="flex items-start justify-between gap-2 rounded bg-surface2 px-2 py-1 text-text"
-              data-testid="media-intelligence-outline-item"
-            >
-              <span className="truncate">{entry?.title || `Section ${index + 1}`}</span>
-              <span className="shrink-0 text-text-muted">{entry?.page ?? '\u2014'}</span>
-            </li>
-          ))}
-        </ul>
-      )
-    }
-
-    if (modals.activeIntelligenceTab === 'insights') {
-      return (
-        <ul className="space-y-2 text-xs" data-testid="media-intelligence-insights-list">
-          {modals.activeDocumentIntelligencePanel.data.map((entry: any, index: number) => (
-            <li
-              key={`${entry?.category || 'insight'}-${index}`}
-              className="rounded bg-surface2 px-2 py-1.5"
-              data-testid="media-intelligence-insight-item"
-            >
-              <p className="font-medium text-text">{entry?.title || `Insight ${index + 1}`}</p>
-              <p className="mt-1 whitespace-pre-wrap text-text-muted">
-                {entry?.content || ''}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )
-    }
-
-    if (modals.activeIntelligenceTab === 'references') {
-      return (
-        <ul className="space-y-1 text-xs" data-testid="media-intelligence-references-list">
-          {modals.activeDocumentIntelligencePanel.data.map((entry: any, index: number) => {
-            const label =
-              entry?.title ||
-              entry?.raw_text ||
-              t('review:mediaPage.referenceLabel', {
-                defaultValue: `Reference ${index + 1}`
-              })
-            return (
-              <li
-                key={`${entry?.doi || entry?.url || 'reference'}-${index}`}
-                className="rounded bg-surface2 px-2 py-1 text-text"
-                data-testid="media-intelligence-reference-item"
-              >
-                {label}
-              </li>
-            )
-          })}
-        </ul>
-      )
-    }
-
-    if (modals.activeIntelligenceTab === 'figures') {
-      return (
-        <ul className="space-y-1 text-xs" data-testid="media-intelligence-figures-list">
-          {modals.activeDocumentIntelligencePanel.data.map((entry: any, index: number) => (
-            <li
-              key={`${entry?.id || 'figure'}-${index}`}
-              className="rounded bg-surface2 px-2 py-1 text-text"
-              data-testid="media-intelligence-figure-item"
-            >
-              {entry?.caption || `Figure ${index + 1}`} (p.{entry?.page ?? '\u2014'})
-            </li>
-          ))}
-        </ul>
-      )
-    }
-
-    const annotationEntries = Array.isArray(modals.activeDocumentIntelligencePanel.data)
-      ? modals.activeDocumentIntelligencePanel.data
-      : []
-
-    return (
-      <div className="space-y-2 text-xs" data-testid="media-intelligence-annotations-panel">
-        <div className="space-y-2 rounded border border-border bg-surface2 p-2">
-          <p className="text-[11px] text-text-muted">
-            {modals.annotationSelectionText
-              ? t('review:mediaPage.annotationSelectionCaptured', {
-                  defaultValue: 'Selection captured. Add details and save.'
-                })
-              : t('review:mediaPage.annotationManualHint', {
-                  defaultValue: 'Create an annotation from selected text or enter text manually.'
-                })}
-          </p>
-          {modals.annotationSelectionText ? (
-            <p
-              className="max-h-20 overflow-y-auto rounded border border-border bg-surface px-2 py-1 text-text"
-              data-testid="media-annotation-selection-preview"
-            >
-              {modals.annotationSelectionText}
-            </p>
-          ) : null}
-          <textarea
-            value={modals.annotationManualText}
-            onChange={(event) => modals.setAnnotationManualText(event.target.value)}
-            placeholder={t('review:mediaPage.annotationTextPlaceholder', {
-              defaultValue: 'Annotation text'
-            })}
-            className="min-h-[56px] w-full rounded border border-border bg-surface px-2 py-1 text-xs text-text"
-            data-testid="media-annotation-manual-text"
-          />
-          <input
-            value={modals.annotationDraftNote}
-            onChange={(event) => modals.setAnnotationDraftNote(event.target.value)}
-            placeholder={t('review:mediaPage.annotationNotePlaceholder', {
-              defaultValue: 'Optional note'
-            })}
-            className="h-8 w-full rounded border border-border bg-surface px-2 text-xs text-text"
-            data-testid="media-annotation-note-input"
-          />
-          <div className="flex items-center gap-2">
-            <select
-              value={modals.annotationDraftColor}
-              onChange={(event) =>
-                modals.setAnnotationDraftColor(event.target.value as any)
-              }
-              className="h-8 rounded border border-border bg-surface px-2 text-xs text-text"
-              data-testid="media-annotation-color"
-            >
-              {ANNOTATION_COLOR_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => {
-                void modals.handleCreateAnnotation()
-              }}
-              disabled={modals.annotationCreating}
-              className="inline-flex h-8 items-center rounded border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
-              data-testid="media-annotation-create"
-            >
-              {modals.annotationCreating
-                ? t('review:mediaPage.annotationSaving', {
-                    defaultValue: 'Saving...'
-                  })
-                : t('review:mediaPage.annotationSave', {
-                    defaultValue: 'Save annotation'
-                  })}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                void modals.handleSyncAnnotations()
-              }}
-              disabled={modals.annotationSyncing || annotationEntries.length === 0}
-              className="inline-flex h-8 items-center rounded border border-border px-2 text-xs text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
-              data-testid="media-annotation-sync"
-            >
-              {modals.annotationSyncing
-                ? t('review:mediaPage.annotationSyncing', {
-                    defaultValue: 'Syncing...'
-                  })
-                : t('review:mediaPage.annotationSync', {
-                    defaultValue: 'Sync now'
-                  })}
-            </button>
-            <button
-              type="button"
-              onClick={modals.clearAnnotationDraft}
-              className="inline-flex h-8 items-center rounded border border-border px-2 text-xs text-text hover:bg-surface"
-              data-testid="media-annotation-clear-draft"
-            >
-              {t('common:clear', { defaultValue: 'Clear' })}
-            </button>
-          </div>
-        </div>
-
-        {annotationEntries.length > 0 ? (
-          <ul className="space-y-1 text-xs" data-testid="media-intelligence-annotations-list">
-            {annotationEntries.map((entry: any, index: number) => (
-              <li
-                key={`${entry?.id || 'annotation'}-${index}`}
-                className="rounded bg-surface2 px-2 py-1 text-text"
-                data-testid="media-intelligence-annotation-item"
-              >
-                <p>{entry?.text || entry?.note || `Annotation ${index + 1}`}</p>
-                {entry?.note ? (
-                  <p className="mt-1 text-[11px] text-text-muted">{entry.note}</p>
-                ) : null}
-                <div className="mt-1 flex items-center gap-2">
-                  <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase text-text-muted">
-                    {entry.color || 'yellow'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void modals.handleUpdateAnnotationNote(entry)
-                    }}
-                    disabled={modals.annotationUpdatingId === entry.id}
-                    className="rounded border border-border px-2 py-0.5 text-[11px] text-text hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
-                    data-testid={`media-annotation-edit-${entry.id}`}
-                  >
-                    {modals.annotationUpdatingId === entry.id
-                      ? t('review:mediaPage.annotationUpdating', {
-                          defaultValue: 'Updating...'
-                        })
-                      : t('common:edit', { defaultValue: 'Edit' })}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void modals.handleDeleteAnnotation(entry.id)
-                    }}
-                    disabled={modals.annotationDeletingId === entry.id}
-                    className="rounded border border-danger/50 px-2 py-0.5 text-[11px] text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
-                    data-testid={`media-annotation-delete-${entry.id}`}
-                  >
-                    {modals.annotationDeletingId === entry.id
-                      ? t('review:mediaPage.annotationDeleting', {
-                          defaultValue: 'Deleting...'
-                        })
-                      : t('common:delete', { defaultValue: 'Delete' })}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
-    )
   }
 
   if (!selectedMedia || editState.isAwaitingSelectionUpdate) {
@@ -1479,15 +1226,20 @@ export function ContentViewer({
                       </p>
                     )
                   ) : (
-                    <MarkdownPreview
-                      content={
-                        rendering.contentForPreview ||
-                        t('review:mediaPage.noContent', {
-                          defaultValue: 'No content available'
-                        })
+                    <Suspense
+                      fallback={
+                        <div
+                          className={`whitespace-pre-wrap text-text ${rendering.contentBodyTypographyClass}`}
+                        >
+                          {markdownFallbackContent}
+                        </div>
                       }
-                      size={rendering.markdownPreviewSize}
-                    />
+                    >
+                      <LazyMarkdownPreview
+                        content={markdownFallbackContent}
+                        size={rendering.markdownPreviewSize}
+                      />
+                    </Suspense>
                   )}
                   {/* Fade overlay when collapsed */}
                   {!modals.contentExpanded && shouldShowExpandToggle && (
@@ -1765,138 +1517,135 @@ export function ContentViewer({
               )}
             </button>
             {!collapsedSections.metadata && (
-              <div className="p-3 bg-surface animate-in fade-in slide-in-from-top-1 duration-150">
-                <div className="space-y-1 text-sm">
-                  <div className="flex justify-between py-1">
-                    <span className="text-text-muted text-xs">
-                      {t('review:mediaPage.idLabel', { defaultValue: 'ID' })}
-                    </span>
-                    <span className="text-text font-mono text-xs">
-                      {selectedMedia.id}
-                    </span>
-                  </div>
-                  {selectedMedia.meta?.type && (
-                    <div className="flex justify-between py-1">
-                      <span className="text-text-muted text-xs">
-                        {t('review:mediaPage.typeLabel', { defaultValue: 'Type' })}
-                      </span>
-                      <span className="text-text text-xs capitalize">
-                        {selectedMedia.meta.type}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex justify-between py-1">
-                    <span className="text-text-muted text-xs">
-                      {t('review:mediaPage.titleLabel', { defaultValue: 'Title' })}
-                    </span>
-                    <span className="text-text text-xs truncate max-w-[200px]">
-                      {selectedMedia.title || t('review:mediaPage.notAvailable', { defaultValue: 'N/A' })}
-                    </span>
-                  </div>
-                  {selectedMedia.meta?.source && (
-                    <div className="flex justify-between py-1">
-                      <span className="text-text-muted text-xs">
-                        {t('review:mediaPage.source', { defaultValue: 'Source' })}
-                      </span>
-                      <span className="text-text text-xs truncate max-w-[200px]">
-                        {selectedMedia.meta.source}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
+              <Suspense fallback={null}>
+                <LazyContentViewerMetadataSectionBody
+                  selectedMedia={selectedMedia}
+                  t={t}
+                />
+              </Suspense>
             )}
           </div>
 
           {/* Document Intelligence */}
           {!isNote && (
-            <div
-              className="bg-surface border border-border rounded-lg mb-2 overflow-hidden"
-              data-testid="media-intelligence-section"
-            >
-              <button
-                onClick={() => toggleSection('intelligence')}
-                className="w-full flex items-center justify-between px-3 py-2 bg-surface2 hover:bg-surface transition-colors"
-                title={t('review:mediaPage.documentIntelligence', {
-                  defaultValue: 'Document Intelligence'
-                })}
-                data-testid="media-intelligence-toggle"
-              >
-                <span className="text-sm font-medium text-text">
-                  {t('review:mediaPage.documentIntelligence', {
-                    defaultValue: 'Document Intelligence'
-                  })}
-                </span>
-                {modals.intelligenceSectionCollapsed ? (
-                  <ChevronDown className="w-4 h-4 text-text-subtle" />
-                ) : (
-                  <ChevronUp className="w-4 h-4 text-text-subtle" />
-                )}
-              </button>
-              {!modals.intelligenceSectionCollapsed && (
+            <Suspense
+              fallback={
                 <div
-                  className="space-y-2 p-3 bg-surface animate-in fade-in slide-in-from-top-1 duration-150"
-                  data-testid="media-intelligence-panel"
+                  className="bg-surface border border-border rounded-lg mb-2 overflow-hidden"
+                  data-testid="media-intelligence-section"
                 >
-                  <div className="flex flex-wrap gap-1">
-                    {DOCUMENT_INTELLIGENCE_TABS.map((tab) => {
-                      const isActive = tab.key === modals.activeIntelligenceTab
-                      return (
-                        <button
-                          key={tab.key}
-                          type="button"
-                          onClick={() => modals.setActiveIntelligenceTab(tab.key)}
-                          className={`rounded border px-2 py-1 text-xs transition-colors ${
-                            isActive
-                              ? 'border-primary bg-primary text-white'
-                              : 'border-border bg-surface2 text-text hover:bg-surface'
-                          }`}
-                          aria-pressed={isActive}
-                          data-testid={`media-intelligence-tab-${tab.key}`}
-                        >
-                          {t(`review:mediaPage.documentIntelligenceTab.${tab.key}`, {
-                            defaultValue: tab.label
-                          })}
-                        </button>
-                      )
+                  <button
+                    onClick={() => toggleSection('intelligence')}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-surface2 hover:bg-surface transition-colors"
+                    title={t('review:mediaPage.documentIntelligence', {
+                      defaultValue: 'Document Intelligence'
                     })}
-                  </div>
-                  <div data-testid="media-intelligence-content">
-                    {renderDocumentIntelligencePanel()}
-                  </div>
+                    data-testid="media-intelligence-toggle"
+                  >
+                    <span className="text-sm font-medium text-text">
+                      {t('review:mediaPage.documentIntelligence', {
+                        defaultValue: 'Document Intelligence'
+                      })}
+                    </span>
+                    {modals.intelligenceSectionCollapsed ? (
+                      <ChevronDown className="w-4 h-4 text-text-subtle" />
+                    ) : (
+                      <ChevronUp className="w-4 h-4 text-text-subtle" />
+                    )}
+                  </button>
+                  {!modals.intelligenceSectionCollapsed ? (
+                    <div
+                      className="space-y-2 p-3 bg-surface animate-in fade-in slide-in-from-top-1 duration-150"
+                      data-testid="media-intelligence-panel"
+                    >
+                      <div
+                        className="text-xs text-text-muted"
+                        data-testid="media-intelligence-loading"
+                      >
+                        {t('review:mediaPage.intelligenceLoading', {
+                          defaultValue: 'Loading intelligence data...'
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              )}
-            </div>
+              }
+            >
+              <LazyContentViewerDocumentIntelligenceSection
+                modals={modals}
+                onToggleCollapsed={() => toggleSection('intelligence')}
+                t={t}
+              />
+            </Suspense>
           )}
 
           {/* Version History - only for media */}
           {!isNote && (
             <div className="mb-2">
-              <VersionHistoryPanel
-                mediaId={selectedMedia.id}
-                currentContent={content}
-                currentPrompt={editState.derivedPrompt}
-                currentAnalysis={editState.derivedAnalysisContent}
-                onVersionLoad={(vContent, vAnalysis, vPrompt, vNum) => {
-                  if (vAnalysis) {
-                    editState.setEditingAnalysisText(vAnalysis)
-                    editState.setAnalysisEditModalOpen(true)
+              {versionHistoryMounted ? (
+                <Suspense
+                  fallback={
+                    <div className="rounded-lg border border-border bg-surface overflow-hidden">
+                      <div className="w-full flex items-center justify-between px-3 py-2 bg-surface2 text-text">
+                        <div className="flex items-center gap-2">
+                          <History className="w-4 h-4 text-text-subtle" />
+                          <span className="text-sm font-medium text-text">
+                            {t('mediaPage.versionHistory', 'Version History')}
+                          </span>
+                        </div>
+                        <Loader2 className="w-4 h-4 animate-spin text-text-subtle" />
+                      </div>
+                    </div>
                   }
-                }}
-                onRefresh={onRefreshMedia}
-                onShowDiff={modals.handleShowDiff}
-              />
+                >
+                  <LazyVersionHistoryPanel
+                    mediaId={selectedMedia.id}
+                    currentContent={content}
+                    currentPrompt={editState.derivedPrompt}
+                    currentAnalysis={editState.derivedAnalysisContent}
+                    defaultExpanded
+                    onVersionLoad={(vContent, vAnalysis, vPrompt, vNum) => {
+                      if (vAnalysis) {
+                        editState.setEditingAnalysisText(vAnalysis)
+                        editState.setAnalysisEditModalOpen(true)
+                      }
+                    }}
+                    onRefresh={onRefreshMedia}
+                    onShowDiff={modals.handleShowDiff}
+                  />
+                </Suspense>
+              ) : (
+                <div className="rounded-lg border border-border bg-surface overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setVersionHistoryMounted(true)}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-surface2 hover:bg-surface transition-colors text-text"
+                    title={t('mediaPage.versionHistory', 'Version History')}
+                    aria-label={t('mediaPage.versionHistory', 'Version History')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <History className="w-4 h-4 text-text-subtle" />
+                      <span className="text-sm font-medium text-text">
+                        {t('mediaPage.versionHistory', 'Version History')}
+                      </span>
+                    </div>
+                    <ChevronDown className="w-4 h-4 text-text-subtle" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
           {/* Developer Tools */}
           {showDeveloperTools ? (
-            <DeveloperToolsSection
-              data={mediaDetail}
-              label={t('review:mediaPage.developerTools', {
-                defaultValue: 'Developer Tools'
-              })}
-            />
+            <Suspense fallback={null}>
+              <LazyDeveloperToolsSection
+                data={mediaDetail}
+                label={t('review:mediaPage.developerTools', {
+                  defaultValue: 'Developer Tools'
+                })}
+              />
+            </Suspense>
           ) : null}
           {selectedMedia && onDeleteItem && (
             <div className="mt-2">
@@ -1941,201 +1690,57 @@ export function ContentViewer({
         </button>
       )}
 
-      {/* Schedule refresh modal */}
-      {selectedMedia && !isNote && (
-        <Modal
-          open={modals.scheduleRefreshModalOpen}
-          onCancel={() => {
-            if (!modals.scheduleRefreshSubmitting) {
-              modals.setScheduleRefreshModalOpen(false)
-            }
-          }}
-          footer={null}
-          title={t('review:mediaPage.scheduleSourceRefresh', {
-            defaultValue: 'Schedule source refresh'
-          })}
-          destroyOnHidden
-        >
-          <div className="space-y-3" data-testid="media-schedule-refresh-modal">
-            <p className="m-0 text-xs text-text-muted">
-              {t('review:mediaPage.scheduleSourceRefreshHint', {
-                defaultValue:
-                  'Create a watchlist monitor to re-fetch this source URL on a schedule.'
-              })}
-            </p>
-            <p className="m-0 rounded border border-border bg-surface2 px-2 py-1 text-[11px] text-text">
-              {modals.sourceUrlForScheduling || t('review:mediaPage.scheduleSourceRefreshNoUrl', {
-                defaultValue: 'No source URL available for scheduling.'
-              })}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {(
-                ['hourly', 'daily', 'weekly'] as ReingestSchedulePreset[]
-              ).map((preset) => {
-                const isActive = modals.scheduleRefreshPreset === preset
-                const label =
-                  preset === 'hourly'
-                    ? t('review:mediaPage.schedulePresetHourly', { defaultValue: 'Hourly' })
-                    : preset === 'daily'
-                      ? t('review:mediaPage.schedulePresetDaily', { defaultValue: 'Daily' })
-                      : t('review:mediaPage.schedulePresetWeekly', { defaultValue: 'Weekly' })
-                return (
-                  <button
-                    key={preset}
-                    type="button"
-                    className={`rounded border px-2 py-1 text-xs transition-colors ${
-                      isActive
-                        ? 'border-primary bg-primary text-white'
-                        : 'border-border bg-surface2 text-text hover:bg-surface'
-                    }`}
-                    onClick={() => modals.setScheduleRefreshPreset(preset)}
-                    aria-pressed={isActive}
-                    data-testid={`media-schedule-refresh-preset-${preset}`}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-            <div className="text-xs text-text-muted" data-testid="media-schedule-refresh-cron">
-              {t('review:mediaPage.scheduleSourceRefreshCron', {
-                defaultValue: 'Cron: {{cron}}',
-                cron: modals.REINGEST_CRON_BY_PRESET[modals.scheduleRefreshPreset]
-              })}
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="rounded border border-border px-3 py-1.5 text-xs text-text hover:bg-surface2"
-                onClick={() => modals.setScheduleRefreshModalOpen(false)}
-                disabled={modals.scheduleRefreshSubmitting}
-              >
-                {t('common:cancel', { defaultValue: 'Cancel' })}
-              </button>
-              <button
-                type="button"
-                className="rounded border border-primary bg-primary px-3 py-1.5 text-xs text-white hover:bg-primaryStrong disabled:opacity-60"
-                onClick={() => {
-                  void modals.handleScheduleSourceRefresh()
-                }}
-                disabled={modals.scheduleRefreshSubmitting || !modals.sourceUrlForScheduling}
-                data-testid="media-schedule-refresh-confirm"
-              >
-                {modals.scheduleRefreshSubmitting
-                  ? t('review:mediaPage.scheduleSourceRefreshSubmitting', {
-                      defaultValue: 'Scheduling...'
-                    })
-                  : t('review:mediaPage.scheduleSourceRefreshConfirm', {
-                      defaultValue: 'Schedule'
-                    })}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Export Modal */}
-      {selectedMedia && !isNote && (
-        <Modal
-          open={modals.exportModalOpen}
-          onCancel={() => modals.setExportModalOpen(false)}
-          footer={null}
-          title={t('review:mediaPage.exportMedia', {
-            defaultValue: 'Export content'
-          })}
-          destroyOnHidden
-        >
-          <div className="space-y-3" data-testid="media-export-modal">
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  ['json', 'JSON'],
-                  ['markdown', 'Markdown'],
-                  ['text', 'Plain text'],
-                  ['bibtex', 'BibTeX']
-                ] as Array<[string, string]>
-              ).map(([format, label]) => {
-                const isActive = modals.exportFormat === format
-                return (
-                  <button
-                    key={format}
-                    type="button"
-                    className={`rounded border px-2 py-1 text-xs transition-colors ${
-                      isActive
-                        ? 'border-primary bg-primary text-white'
-                        : 'border-border bg-surface2 text-text hover:bg-surface'
-                    }`}
-                    onClick={() => modals.setExportFormat(format as any)}
-                    aria-pressed={isActive}
-                    data-testid={`media-export-format-${format}`}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-            <div className="text-xs text-text-muted" data-testid="media-export-hint">
-              {t('review:mediaPage.exportHint', {
-                defaultValue: 'Exports content, analysis, and key metadata for this item.'
-              })}
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="rounded border border-border px-3 py-1.5 text-xs text-text hover:bg-surface2"
-                onClick={() => modals.setExportModalOpen(false)}
-              >
-                {t('common:cancel', { defaultValue: 'Cancel' })}
-              </button>
-              <button
-                type="button"
-                className="rounded border border-primary bg-primary px-3 py-1.5 text-xs text-white hover:bg-primaryStrong"
-                onClick={modals.confirmExportMedia}
-                data-testid="media-export-confirm"
-              >
-                {t('review:mediaPage.exportNow', { defaultValue: 'Export' })}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      {/* Export and schedule-refresh modals */}
+      {selectedMedia &&
+      !isNote &&
+      (modals.exportModalOpen || modals.scheduleRefreshModalOpen) ? (
+        <Suspense fallback={null}>
+          <LazyContentViewerActionModals modals={modals} t={t} />
+        </Suspense>
+      ) : null}
 
       {/* Analysis Generation Modal - only for media */}
-      {selectedMedia && !isNote && (
-        <AnalysisModal
-          open={modals.analysisModalOpen}
-          onClose={() => modals.setAnalysisModalOpen(false)}
-          mediaId={selectedMedia.id}
-          mediaContent={content}
-          onAnalysisGenerated={(analysisText) => {
-            if (analysisText) {
-              editState.setOptimisticAnalysis(analysisText)
-            }
-            if (onRefreshMedia) {
-              onRefreshMedia()
-            }
-          }}
-        />
+      {selectedMedia && !isNote && modals.analysisModalOpen && (
+        <Suspense fallback={null}>
+          <LazyAnalysisModal
+            open={modals.analysisModalOpen}
+            onClose={() => modals.setAnalysisModalOpen(false)}
+            mediaId={selectedMedia.id}
+            mediaContent={content}
+            onAnalysisGenerated={(analysisText) => {
+              if (analysisText) {
+                editState.setOptimisticAnalysis(analysisText)
+              }
+              if (onRefreshMedia) {
+                onRefreshMedia()
+              }
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Analysis Edit Modal */}
-      <AnalysisEditModal
-        open={editState.analysisEditModalOpen}
-        onClose={() => editState.setAnalysisEditModalOpen(false)}
-        initialText={editState.editingAnalysisText}
-        mediaId={selectedMedia?.id}
-        content={content}
-        prompt={editState.derivedPrompt}
-        onSendToChat={onSendAnalysisToChat}
-        onSaveNewVersion={() => {
-          if (onRefreshMedia) {
-            onRefreshMedia()
-          }
-        }}
-      />
+      {editState.analysisEditModalOpen ? (
+        <Suspense fallback={null}>
+          <LazyAnalysisEditModal
+            open={editState.analysisEditModalOpen}
+            onClose={() => editState.setAnalysisEditModalOpen(false)}
+            initialText={editState.editingAnalysisText}
+            mediaId={selectedMedia?.id}
+            content={content}
+            prompt={editState.derivedPrompt}
+            onSendToChat={onSendAnalysisToChat}
+            onSaveNewVersion={() => {
+              if (onRefreshMedia) {
+                onRefreshMedia()
+              }
+            }}
+          />
+        </Suspense>
+      ) : null}
 
       {/* Content Edit Modal */}
-      {selectedMedia && !isNote && (
+      {selectedMedia && !isNote && editState.contentEditModalOpen ? (
         <Suspense fallback={null}>
           <ContentEditModal
             open={editState.contentEditModalOpen}
@@ -2151,18 +1756,22 @@ export function ContentViewer({
             }}
           />
         </Suspense>
-      )}
+      ) : null}
 
       {/* Diff View Modal */}
-      <DiffViewModal
-        open={modals.diffModalOpen}
-        onClose={modals.closeDiffModal}
-        leftText={modals.diffLeftText}
-        rightText={modals.diffRightText}
-        leftLabel={modals.diffLeftLabel}
-        rightLabel={modals.diffRightLabel}
-        metadataDiff={modals.diffMetadataSummary || undefined}
-      />
+      {modals.diffModalOpen ? (
+        <Suspense fallback={null}>
+          <LazyDiffViewModal
+            open={modals.diffModalOpen}
+            onClose={modals.closeDiffModal}
+            leftText={modals.diffLeftText}
+            rightText={modals.diffRightText}
+            leftLabel={modals.diffLeftLabel}
+            rightLabel={modals.diffRightLabel}
+            metadataDiff={modals.diffMetadataSummary || undefined}
+          />
+        </Suspense>
+      ) : null}
     </div>
   )
 }

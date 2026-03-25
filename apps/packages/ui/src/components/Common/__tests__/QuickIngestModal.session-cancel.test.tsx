@@ -271,6 +271,16 @@ describe("QuickIngestModal session cancel flow", () => {
     expect(await screen.findByTestId("quick-ingest-complete")).toBeInTheDocument()
   })
 
+  it("constrains the modal body height so the full options surface remains scrollable", async () => {
+    render(<QuickIngestModal open onClose={vi.fn()} />)
+
+    const modalBody = document.querySelector(".ant-modal-body") as HTMLElement | null
+
+    expect(modalBody).not.toBeNull()
+    expect(modalBody?.style.maxHeight).toBe("calc(100vh - 160px)")
+    expect(modalBody?.style.overflowY).toBe("auto")
+  })
+
   it("requires confirmation before sending cancel and applies immediate cancelled terminal state", async () => {
     const onClose = vi.fn()
     const user = userEvent.setup()

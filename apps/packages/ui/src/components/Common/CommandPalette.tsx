@@ -81,6 +81,9 @@ export interface CommandPaletteProps {
   onSwitchChat?: (chatId: string) => void
   sidepanelChats?: { id: string; label: string }[]
   scope?: "global" | "sidepanel"
+  openSignal?: number
+  registerGlobalOpenShortcut?: boolean
+  listenForOpenEvents?: boolean
 }
 
 export function CommandPalette({
@@ -95,12 +98,16 @@ export function CommandPalette({
   onSwitchChat,
   sidepanelChats,
   scope = "global",
+  openSignal,
+  registerGlobalOpenShortcut = true,
+  listenForOpenEvents = true,
 }: CommandPaletteProps) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(() => (openSignal ?? 0) > 0)
   const [query, setQuery] = useState("")
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const lastOpenSignalRef = useRef(openSignal ?? 0)
   const location = useLocation()
   const navigate = useNavigate()
   const { t } = useTranslation(["common", "settings"])
@@ -114,7 +121,7 @@ export function CommandPalette({
     modifiers: ["meta"],
     action: () => setOpen(true),
     description: "Open command palette",
-    enabled: shortcutEnabled,
+    enabled: registerGlobalOpenShortcut && shortcutEnabled,
     allowInInput: false,
   })
 
@@ -128,12 +135,23 @@ export function CommandPalette({
   })
 
   useEffect(() => {
+    if (!listenForOpenEvents) {
+      return
+    }
     const handleOpen = () => setOpen(true)
     window.addEventListener("tldw:open-command-palette", handleOpen)
     return () => {
       window.removeEventListener("tldw:open-command-palette", handleOpen)
     }
-  }, [])
+  }, [listenForOpenEvents])
+
+  useEffect(() => {
+    const currentOpenSignal = openSignal ?? 0
+    if (currentOpenSignal > lastOpenSignalRef.current) {
+      setOpen(true)
+    }
+    lastOpenSignalRef.current = currentOpenSignal
+  }, [openSignal])
 
   // Build default commands
   const defaultCommands: CommandItem[] = useMemo(() => {

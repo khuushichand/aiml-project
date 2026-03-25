@@ -3,7 +3,12 @@ import { X, PanelRightOpen, FileText, BarChart3 } from "lucide-react"
 import { cn } from "@/libs/utils"
 import { useDesktop } from "@/hooks/useMediaQuery"
 import { SourceList } from "../SourceList"
-import { SearchDetailsPanel } from "../SearchDetailsPanel"
+
+const LazySearchDetailsPanel = React.lazy(() =>
+  import("../SearchDetailsPanel").then((module) => ({
+    default: module.SearchDetailsPanel,
+  })),
+)
 
 type EvidenceRailProps = {
   open: boolean
@@ -91,7 +96,9 @@ function EvidenceRailContent({
             </div>
           )
         ) : (
-          <SearchDetailsPanel />
+          <React.Suspense fallback={null}>
+            <LazySearchDetailsPanel />
+          </React.Suspense>
         )}
       </div>
     </div>

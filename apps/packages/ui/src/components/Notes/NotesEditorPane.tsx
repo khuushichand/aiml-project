@@ -12,7 +12,6 @@ import {
   Paperclip as PaperclipIcon
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { MarkdownPreview } from '@/components/Common/MarkdownPreview'
 import NotesEditorHeader from '@/components/Notes/NotesEditorHeader'
 import type { ActiveWikilinkQuery, WikilinkCandidate } from '@/components/Notes/wikilinks'
 import type {
@@ -36,6 +35,12 @@ import {
 } from './notes-manager-utils'
 import { NOTES_TITLE_SUGGEST_STRATEGY_SETTING } from '@/services/settings/ui-settings'
 import { setSetting } from '@/services/settings/registry'
+
+const LazyMarkdownPreview = React.lazy(() =>
+  import('@/components/Common/MarkdownPreview').then((module) => ({
+    default: module.MarkdownPreview,
+  }))
+)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -300,6 +305,20 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   applyWikilinkSuggestion,
 }) => {
   const { t } = useTranslation(['option', 'common'])
+
+  const renderMarkdownPreviewSurface = (
+    testId: string,
+  ) => (
+    <div
+      className="w-full flex-1 text-sm p-4 rounded-lg border border-border bg-surface2 overflow-auto"
+      onClick={handlePreviewLinkClick}
+      data-testid={testId}
+    >
+      <React.Suspense fallback={null}>
+        <LazyMarkdownPreview content={previewContent} size="sm" />
+      </React.Suspense>
+    </div>
+  )
 
   return (
     <section
@@ -1057,13 +1076,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div
-                    className="w-full flex-1 text-sm p-4 rounded-lg border border-border bg-surface2 overflow-auto"
-                    onClick={handlePreviewLinkClick}
-                    data-testid="notes-preview-surface"
-                  >
-                    <MarkdownPreview content={previewContent} size="sm" />
-                  </div>
+                  renderMarkdownPreviewSurface('notes-preview-surface')
                 )}
               </div>
             ) : (
@@ -1206,13 +1219,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
                         </div>
                       </div>
                     ) : (
-                      <div
-                        className="w-full flex-1 text-sm p-4 rounded-lg border border-border bg-surface2 overflow-auto"
-                        onClick={handlePreviewLinkClick}
-                        data-testid="notes-split-preview-surface"
-                      >
-                        <MarkdownPreview content={previewContent} size="sm" />
-                      </div>
+                      renderMarkdownPreviewSurface('notes-split-preview-surface')
                     )}
                   </>
                 ) : (

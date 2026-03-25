@@ -1,4 +1,4 @@
-import React, { useEffect } from "react"
+import React, { Suspense, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { Drawer, Tabs, Modal, Input, Empty, Skeleton, Button, message } from "antd"
 import type { InputRef } from "antd"
@@ -37,9 +37,7 @@ import { WorkspaceBanner } from "./WorkspaceBanner"
 import { SharedWorkspaceBanner } from "./SharedWorkspaceBanner"
 import { SharedWorkspaceProvider } from "./SharedWorkspaceContext"
 import { WorkspaceStatusBar } from "./WorkspaceStatusBar"
-import { SourcesPane } from "./SourcesPane"
 import { ChatPane } from "./ChatPane"
-import { StudioPane } from "./StudioPane"
 import { useSourceListViewState } from "./use-source-list-view-state"
 import {
   PaneResizer,
@@ -57,6 +55,14 @@ import {
   type WorkspaceGlobalSearchNoteDocument,
   type WorkspaceGlobalSearchResult
 } from "./workspace-global-search"
+
+const SourcesPane = React.lazy(() =>
+  import("./SourcesPane").then((module) => ({ default: module.SourcesPane }))
+)
+
+const StudioPane = React.lazy(() =>
+  import("./StudioPane").then((module) => ({ default: module.StudioPane }))
+)
 
 const WORKSPACE_SWITCH_TRANSITION_MS = 420
 const WORKSPACE_SOURCE_STATUS_POLL_INTERVAL_MS = 5000
@@ -532,6 +538,16 @@ const WorkspacePlaygroundSkeleton: React.FC<{ isMobile: boolean }> = ({
         <Skeleton active paragraph={{ rows: 8 }} title={false} />
       </div>
     )}
+  </div>
+)
+
+const WorkspacePaneFallback: React.FC<{ testId: string }> = ({ testId }) => (
+  <div
+    data-testid={testId}
+    className="flex h-full min-h-0 flex-col gap-3 bg-transparent px-3 py-3"
+  >
+    <div className="h-8 rounded-md bg-surface2/80" />
+    <div className="flex-1 rounded-lg border border-border/70 bg-surface2/60" />
   </div>
 )
 
@@ -1854,14 +1870,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
           )}
         </span>
       ),
-      children: (
-        <SourcesPane
-          sourceListViewState={sourceListViewState}
-          onPatchSourceListViewState={patchSourceListViewState}
-          onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
-          statusGuardrailsEnabled={statusGuardrailsEnabled}
-        />
-      )
+      children: renderSourcesPane()
     },
     {
       key: "chat",
@@ -1892,9 +1901,35 @@ const WorkspacePlaygroundBody: React.FC = () => {
           )}
         </span>
       ),
-      children: <StudioPane />
+      children: renderStudioPane()
     }
   ]
+
+  function renderSourcesPane(options?: { onHide?: () => void }) {
+    return (
+      <Suspense
+        fallback={<WorkspacePaneFallback testId="workspace-sources-pane" />}
+      >
+        <SourcesPane
+          onHide={options?.onHide}
+          sourceListViewState={sourceListViewState}
+          onPatchSourceListViewState={patchSourceListViewState}
+          onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
+          statusGuardrailsEnabled={statusGuardrailsEnabled}
+        />
+      </Suspense>
+    )
+  }
+
+  function renderStudioPane(options?: { onHide?: () => void }) {
+    return (
+      <Suspense
+        fallback={<WorkspacePaneFallback testId="workspace-studio-pane" />}
+      >
+        <StudioPane onHide={options?.onHide} />
+      </Suspense>
+    )
+  }
 
   const sessionSummaryItems = [
     {
@@ -2068,6 +2103,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
             onChange={(key) => setActiveTab(key as WorkspaceTabKey)}
             items={mobileTabItems}
             centered
+            destroyOnHidden
             className="flex-1 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content-holder]:flex-1 [&_.ant-tabs-tabpane]:h-full"
             tabBarStyle={{ marginBottom: 0, borderBottom: "1px solid var(--border)" }}
           />
@@ -2106,13 +2142,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
                   className="hidden shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
                   style={{ width: leftPaneWidth }}
                 >
-                  <SourcesPane
-                    onHide={() => setLeftPaneCollapsed(true)}
-                    sourceListViewState={sourceListViewState}
-                    onPatchSourceListViewState={patchSourceListViewState}
-                    onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
-                    statusGuardrailsEnabled={statusGuardrailsEnabled}
-                  />
+                  {renderSourcesPane({
+                    onHide: () => setLeftPaneCollapsed(true)
+                  })}
                 </aside>
                 <PaneResizer
                   pane="left"
@@ -2137,12 +2169,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
               className="lg:hidden"
               styles={{ wrapper: { width: 320 }, body: { padding: 0 } }}
             >
-              <SourcesPane
-                sourceListViewState={sourceListViewState}
-                onPatchSourceListViewState={patchSourceListViewState}
-                onResetAdvancedSourceFilters={resetAdvancedSourceFilters}
-                statusGuardrailsEnabled={statusGuardrailsEnabled}
-              />
+              {renderSourcesPane()}
             </Drawer>
 
             <main
@@ -2171,7 +2198,9 @@ const WorkspacePlaygroundBody: React.FC = () => {
                   className="hidden min-h-0 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-surface/90 shadow-card lg:flex lg:flex-col"
                   style={{ width: rightPaneWidth }}
                 >
-                  <StudioPane onHide={() => setRightPaneCollapsed(true)} />
+                  {renderStudioPane({
+                    onHide: () => setRightPaneCollapsed(true)
+                  })}
                 </aside>
               </>
             )}
@@ -2190,7 +2219,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
               className="lg:hidden"
               styles={{ wrapper: { width: 360 }, body: { padding: 0 } }}
             >
-              <StudioPane />
+              {renderStudioPane()}
             </Drawer>
           </div>
 

@@ -11,14 +11,15 @@ services:
     build:
       context: ..
       dockerfile: Dockerfiles/Dockerfile.webui
-      # These NEXT_PUBLIC_* values are embedded into the Next.js client bundle at build time.
-      # NEXT_PUBLIC_API_URL must be browser-reachable (Docker host, reverse proxy, or public domain),
-      # and should not default to localhost in containerized builds.
-      # NEXT_PUBLIC_API_VERSION and NEXT_PUBLIC_X_API_KEY are also build-time public values.
+      # Quickstart defaults to same-origin browser requests with a server-side
+      # rewrite to the internal Docker app service. Advanced users can still
+      # provide NEXT_PUBLIC_API_URL for an explicit absolute browser API origin.
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL to an externally reachable API URL}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
         NEXT_PUBLIC_API_VERSION: ${NEXT_PUBLIC_API_VERSION:-v1}
         NEXT_PUBLIC_X_API_KEY: ${NEXT_PUBLIC_X_API_KEY:-}
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: ${NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE:-quickstart}
+        TLDW_INTERNAL_API_ORIGIN: ${TLDW_INTERNAL_API_ORIGIN:-http://app:8000}
     image: tldw-webui:prod
     container_name: tldw-webui
     restart: unless-stopped
@@ -31,3 +32,5 @@ services:
       - NODE_ENV=production
       - HOSTNAME=0.0.0.0
       - PORT=3000
+      - NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=${NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE:-quickstart}
+      - TLDW_INTERNAL_API_ORIGIN=${TLDW_INTERNAL_API_ORIGIN:-http://app:8000}

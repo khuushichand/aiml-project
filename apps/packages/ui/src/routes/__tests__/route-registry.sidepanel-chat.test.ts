@@ -2,9 +2,9 @@ import { existsSync, readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
 const routeRegistryPathCandidates = [
-  "src/routes/route-registry.tsx",
-  "../packages/ui/src/routes/route-registry.tsx",
-  "apps/packages/ui/src/routes/route-registry.tsx"
+  "src/routes/sidepanel-route-registry.tsx",
+  "../packages/ui/src/routes/sidepanel-route-registry.tsx",
+  "apps/packages/ui/src/routes/sidepanel-route-registry.tsx"
 ]
 
 const routeRegistryPath = routeRegistryPathCandidates.find((candidate) =>
@@ -13,7 +13,7 @@ const routeRegistryPath = routeRegistryPathCandidates.find((candidate) =>
 
 if (!routeRegistryPath) {
   throw new Error(
-    "Unable to locate route-registry.tsx for sidepanel chat route test"
+    "Unable to locate sidepanel-route-registry.tsx for sidepanel chat route test"
   )
 }
 

@@ -150,7 +150,7 @@ test.describe("Background proxy API routing", () => {
 
       await setSelectedModel(page, "tldw:proxy-test-model")
 
-      const sidepanel = await openSidepanel()
+      const sidepanel = await openSidepanel("/chat")
       await waitForConnectionStore(sidepanel, "proxy-api:store")
       await forceConnected(
         sidepanel,

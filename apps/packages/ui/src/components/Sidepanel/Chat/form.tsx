@@ -101,6 +101,7 @@ import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { useSetting } from "@/hooks/useSetting"
 import { useFocusComposerOnConnect } from "@/hooks/useComposerFocus"
 import { useQuickIngestStore } from "@/store/quick-ingest"
+import { useQuickIngestSessionStore } from "@/store/quick-ingest-session"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreMessageOption } from "@/store/option"
 import { shallow } from "zustand/shallow"
@@ -459,6 +460,21 @@ export const SidepanelForm = ({
   const [ingestOpen, setIngestOpen] = React.useState(false)
   const [autoProcessQueuedIngest, setAutoProcessQueuedIngest] =
     React.useState(false)
+  const {
+    quickIngestSession,
+    createDraftQuickIngestSession,
+    showQuickIngestSession,
+    hideQuickIngestSession
+  } = useQuickIngestSessionStore(
+    (state) => ({
+      quickIngestSession: state.session,
+      createDraftQuickIngestSession: state.createDraftSession,
+      showQuickIngestSession: state.showSession,
+      hideQuickIngestSession: state.hideSession
+    }),
+    shallow
+  )
+  const shouldRenderQuickIngest = ingestOpen || Boolean(quickIngestSession)
   const quickIngestBtnRef = React.useRef<HTMLButtonElement>(null)
   const { phase, isConnected, serverUrl } = useConnectionState()
   const { uxState } = useConnectionUxState()
@@ -836,11 +852,20 @@ export const SidepanelForm = ({
   // Composer window events hook
   const handleOpenQuickIngest = React.useCallback(() => {
     setAutoProcessQueuedIngest(false)
+    if (quickIngestSession) {
+      showQuickIngestSession()
+    } else {
+      createDraftQuickIngestSession()
+    }
     setIngestOpen(true)
     requestAnimationFrame(() => {
       quickIngestBtnRef.current?.focus()
     })
-  }, [])
+  }, [
+    createDraftQuickIngestSession,
+    quickIngestSession,
+    showQuickIngestSession
+  ])
 
   const {
     openActorSettings,
@@ -1913,8 +1938,17 @@ export const SidepanelForm = ({
 
   const handleQuickIngestOpen = React.useCallback(() => {
     setAutoProcessQueuedIngest(false)
+    if (quickIngestSession) {
+      showQuickIngestSession()
+    } else {
+      createDraftQuickIngestSession()
+    }
     setIngestOpen(true)
-  }, [])
+  }, [
+    createDraftQuickIngestSession,
+    quickIngestSession,
+    showQuickIngestSession
+  ])
 
   const handleProcessQueuedIngest = React.useCallback(() => {
     if (!isConnectionReady) return
@@ -1923,13 +1957,29 @@ export const SidepanelForm = ({
     // render and click, we still open the modal but skip auto-processing.
     if (queuedQuickIngestCount <= 0) {
       setAutoProcessQueuedIngest(false)
+      if (quickIngestSession) {
+        showQuickIngestSession()
+      } else {
+        createDraftQuickIngestSession()
+      }
       setIngestOpen(true)
       return
     }
 
     setAutoProcessQueuedIngest(true)
+    if (quickIngestSession) {
+      showQuickIngestSession()
+    } else {
+      createDraftQuickIngestSession()
+    }
     setIngestOpen(true)
-  }, [isConnectionReady, queuedQuickIngestCount])
+  }, [
+    createDraftQuickIngestSession,
+    isConnectionReady,
+    queuedQuickIngestCount,
+    quickIngestSession,
+    showQuickIngestSession
+  ])
 
   React.useEffect(() => {
     if (!sttError) return
@@ -3364,11 +3414,12 @@ export const SidepanelForm = ({
           seedMessageId={documentGeneratorSeed?.messageId ?? null}
         />
       )}
-        {ingestOpen && (
+        {shouldRenderQuickIngest && (
           <QuickIngestModal
             open={ingestOpen}
             autoProcessQueued={autoProcessQueuedIngest}
             onClose={() => {
+              hideQuickIngestSession()
               setIngestOpen(false)
               setAutoProcessQueuedIngest(false)
               requestAnimationFrame(() => quickIngestBtnRef.current?.focus())

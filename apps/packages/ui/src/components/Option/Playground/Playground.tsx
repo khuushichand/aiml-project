@@ -21,7 +21,6 @@ import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { useTranslation } from "react-i18next"
 import { useStoreMessageOption } from "@/store/option"
 import { useArtifactsStore } from "@/store/artifacts"
-import { ArtifactsPanel } from "@/components/Sidepanel/Chat/ArtifactsPanel"
 import { useSetting } from "@/hooks/useSetting"
 import { useStorage } from "@plasmohq/storage/hook"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
@@ -69,6 +68,25 @@ import { useNavigate } from "react-router-dom"
 
 const toText = (value: unknown): string =>
   typeof value === "string" ? value : String(value)
+
+const LazyArtifactsPanel = React.lazy(() =>
+  import("@/components/Sidepanel/Chat/ArtifactsPanel").then((module) => ({
+    default: module.ArtifactsPanel
+  }))
+)
+
+const renderArtifactsPanel = () => (
+  <React.Suspense
+    fallback={
+      <div className="flex h-full items-center justify-center text-sm text-text-muted">
+        Loading artifacts...
+      </div>
+    }
+  >
+    <LazyArtifactsPanel />
+  </React.Suspense>
+)
+
 export const Playground = () => {
   const drop = React.useRef<HTMLDivElement>(null)
   const artifactsTriggerRef = React.useRef<HTMLButtonElement>(null)
@@ -1653,7 +1671,7 @@ export const Playground = () => {
         {artifactsOpen && (
           <>
             <div className="hidden h-full w-[36%] min-w-[280px] max-w-[520px] shrink-0 lg:flex">
-              <ArtifactsPanel />
+              {renderArtifactsPanel()}
             </div>
             <div className="lg:hidden">
               <button
@@ -1697,7 +1715,7 @@ export const Playground = () => {
                   </button>
                 </div>
                 <div className="min-h-0 flex-1">
-                  <ArtifactsPanel />
+                  {renderArtifactsPanel()}
                 </div>
               </div>
             </div>

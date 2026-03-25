@@ -10,6 +10,7 @@ import dynamic from "next/dynamic"
 import { useRouter } from "next/router"
 import React from "react"
 import { AppProviders } from "@web/components/AppProviders"
+import { ConfigurationGuard } from "@web/components/networking/ConfigurationGuard"
 import { loadTldwAuth, loadTldwClient } from "@web/lib/configured-auth-state"
 
 const OptionLayout = dynamic(
@@ -254,17 +255,19 @@ export default function App({ Component, pageProps }: AppProps) {
 
   return (
     <AppProviders>
-      {isPublicAuthRoute ? (
-        <Component {...pageProps} />
-      ) : (
-        <OptionLayout
-          hideHeader={hideShellNav}
-          hideSidebar={hideShellNav || isSettingsRoute}
-          allowNestedHideHeader={!isSettingsRoute}
-        >
+      <ConfigurationGuard>
+        {isPublicAuthRoute ? (
           <Component {...pageProps} />
-        </OptionLayout>
-      )}
+        ) : (
+          <OptionLayout
+            hideHeader={hideShellNav}
+            hideSidebar={hideShellNav || isSettingsRoute}
+            allowNestedHideHeader={!isSettingsRoute}
+          >
+            <Component {...pageProps} />
+          </OptionLayout>
+        )}
+      </ConfigurationGuard>
     </AppProviders>
   )
 }

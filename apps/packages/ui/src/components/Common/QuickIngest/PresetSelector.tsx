@@ -144,7 +144,7 @@ export const PresetSelector: React.FC<PresetSelectorProps> = ({
   return (
     <div className="flex flex-col gap-3">
       {/* Card grid */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {CARD_PRESETS.map((preset) => (
           <PresetCard
             key={preset}
@@ -158,14 +158,18 @@ export const PresetSelector: React.FC<PresetSelectorProps> = ({
         ))}
       </div>
 
-      {/* Custom preset info line + reset */}
-      <div className="flex items-center justify-between">
-        {value === "custom" && (
-          <span className="text-xs text-text-muted">
-            {qi("preset.custom.active", "Using custom settings (no preset match)")}
-          </span>
-        )}
-        {value !== "custom" && onReset && (
+      {/* Preset helper line + reset */}
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <span className="text-xs text-text-muted">
+          {qi(
+            "preset.helper",
+            "Presets are starting points. Adjust any settings below or in Advanced options to fit this run."
+          )}
+          {value === "custom"
+            ? ` ${qi("preset.custom.active", "Using custom settings (no preset match).")}`
+            : ""}
+        </span>
+        {onReset && (
           <button
             type="button"
             onClick={onReset}

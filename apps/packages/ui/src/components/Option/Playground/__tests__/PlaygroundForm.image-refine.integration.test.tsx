@@ -1109,7 +1109,7 @@ describe("PlaygroundForm image prompt refinement modal integration", () => {
 
     await user.click(screen.getByRole("button", { name: "Generate image" }))
     expect(
-      screen.getByRole("heading", { name: "Generate image" })
+      await screen.findByRole("dialog", { name: "Generate image" })
     ).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: "Create prompt" }))

@@ -59,6 +59,8 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
         return "supertonic"
     if m.startswith("echo-tts") or m.startswith("echo_tts") or m.startswith("jordand/echo-tts"):
         return "echo_tts"
+    if m.startswith("qwen3_tts") or m.startswith("qwen3-tts") or m.startswith("qwen/qwen3-tts"):
+        return "qwen3_tts"
     return None
 
 
