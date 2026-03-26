@@ -259,7 +259,6 @@ import {
 } from "@/components/Common/QuickIngest/IngestWizardContext"
 import { AddContentStep } from "@/components/Common/QuickIngest/AddContentStep"
 import { WizardConfigureStep } from "@/components/Common/QuickIngest/WizardConfigureStep"
-import { QuickIngestWizardModal } from "@/components/Common/QuickIngestWizardModal"
 import { ReviewStep } from "@/components/Common/QuickIngest/ReviewStep"
 import { ProcessingStep } from "@/components/Common/QuickIngest/ProcessingStep"
 import { WizardResultsStep } from "@/components/Common/QuickIngest/WizardResultsStep"
@@ -276,7 +275,16 @@ import { useQuickIngestSessionStore } from "@/store/quick-ingest-session"
 let ctxRef: ReturnType<typeof useIngestWizard> | null = null
 
 const ContextSpy: React.FC = () => {
-  ctxRef = useIngestWizard()
+  const ctx = useIngestWizard()
+
+  React.useEffect(() => {
+    ctxRef = ctx
+
+    return () => {
+      ctxRef = null
+    }
+  }, [ctx])
+
   return null
 }
 
