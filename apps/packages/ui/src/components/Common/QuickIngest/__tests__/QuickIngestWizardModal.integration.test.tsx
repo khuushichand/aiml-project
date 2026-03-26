@@ -726,4 +726,71 @@ describe("QuickIngestWizardModal — real configure step", () => {
       screen.getByLabelText(/store ingest results on your tldw server/i)
     ).toBeChecked()
   })
+
+  it("stores a standard audio language option when selected", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await user.selectOptions(audioLanguageSelect, "en-US")
+
+    expect(ctxRef).not.toBeNull()
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.typeDefaults.audio?.language
+      ).toBe("en-US")
+    })
+  })
+
+  it("maps an unknown saved audio language to a custom entry field", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      typeDefaults: {
+        audio: {
+          language: "zz-Unknown",
+        },
+      },
+    })
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await waitFor(() => {
+      expect(audioLanguageSelect).toHaveValue("__custom__")
+    })
+
+    const customInput = await screen.findByLabelText("Custom audio language")
+    await waitFor(() => {
+      expect(customInput).toHaveValue("zz-Unknown")
+    })
+  })
 })
