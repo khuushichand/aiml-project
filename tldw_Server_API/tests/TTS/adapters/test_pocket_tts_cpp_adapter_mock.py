@@ -140,7 +140,7 @@ async def test_non_streaming_generation_uses_provider_voice_path_and_stdout_for_
 
 
 @pytest.mark.asyncio
-async def test_non_streaming_generation_requires_provider_managed_voice_path(tmp_path):
+async def test_non_streaming_generation_requires_provider_managed_voice_path_for_custom_voice(tmp_path):
     adapter = _build_adapter(tmp_path)
     adapter._initialized = True
     adapter._status = ProviderStatus.AVAILABLE
@@ -148,6 +148,23 @@ async def test_non_streaming_generation_requires_provider_managed_voice_path(tmp
     request = TTSRequest(
         text="hello world",
         voice="custom:voice-1",
+        format=AudioFormat.WAV,
+        stream=False,
+        extra_params={},
+    )
+
+    with pytest.raises(TTSInvalidVoiceReferenceError):
+        await adapter.generate(request)
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_generation_requires_provider_managed_voice_path_for_direct_reference(tmp_path):
+    adapter = _build_adapter(tmp_path)
+    adapter._initialized = True
+    adapter._status = ProviderStatus.AVAILABLE
+
+    request = TTSRequest(
+        text="hello world",
         format=AudioFormat.WAV,
         stream=False,
         voice_reference=_make_wav_bytes(),
