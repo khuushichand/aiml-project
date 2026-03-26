@@ -149,4 +149,45 @@ describe("useCanonicalConnectionConfig", () => {
       apiKey: "frontend-key"
     })
   })
+
+  it("preserves an explicit custom host in webui quickstart contexts", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+    useStorageMock.mockImplementation(
+      createUseStorageImplementation({
+        serverUrl: "https://api.example.test:9443",
+        apiKey: "frontend-key"
+      })
+    )
+    getConfigMock.mockResolvedValue({
+      serverUrl: "https://api.example.test:9443",
+      authMode: "single-user",
+      apiKey: "frontend-key"
+    })
+
+    const mockWindow = Object.create(originalWindow)
+    Object.defineProperty(mockWindow, "location", {
+      value: {
+        origin: "http://192.168.5.184:3000",
+        protocol: "http:",
+        hostname: "192.168.5.184"
+      },
+      configurable: true
+    })
+    Object.defineProperty(globalThis, "window", {
+      value: mockWindow,
+      configurable: true
+    })
+
+    const { result } = renderHook(() => useCanonicalConnectionConfig())
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false)
+    })
+
+    expect(result.current.config).toMatchObject({
+      serverUrl: "https://api.example.test:9443",
+      authMode: "single-user",
+      apiKey: "frontend-key"
+    })
+  })
 })

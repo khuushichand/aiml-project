@@ -5,7 +5,8 @@ import {
   buildBrowserWebSocketBase,
   detectBrowserNetworkingIssue,
   isLoopbackHost,
-  resolveBrowserTransport
+  resolveBrowserTransport,
+  resolveWebUiQuickstartServerUrl
 } from "@/services/tldw/browser-networking"
 
 describe("browser-networking", () => {
@@ -60,6 +61,30 @@ describe("browser-networking", () => {
       apiOrigin: "http://127.0.0.1:8000",
       pageOrigin: "http://192.168.5.184:8080"
     })
+  })
+
+  it("preserves an explicit non-loopback custom host in webui quickstart mode", () => {
+    expect(
+      resolveWebUiQuickstartServerUrl({
+        surface: "webui-page",
+        deploymentMode: "quickstart",
+        pageOrigin: "http://192.168.5.184:3000",
+        apiOrigin: "",
+        configuredServerUrl: "https://api.example.test:9443"
+      })
+    ).toBe("https://api.example.test:9443")
+  })
+
+  it("canonicalizes loopback quickstart hosts back to the current webui origin", () => {
+    expect(
+      resolveWebUiQuickstartServerUrl({
+        surface: "webui-page",
+        deploymentMode: "quickstart",
+        pageOrigin: "http://192.168.5.184:3000",
+        apiOrigin: "",
+        configuredServerUrl: "http://127.0.0.1:8000"
+      })
+    ).toBe("http://192.168.5.184:3000")
   })
 
   it("does not block loopback mismatch for extension or browser-app surfaces", () => {

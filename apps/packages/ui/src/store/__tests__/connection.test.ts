@@ -366,6 +366,57 @@ describe("connection store stability", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it("preserves an explicit custom host during quickstart webui health checks", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "https://api.example.test:9443",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      consecutiveFailures: 0
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "https://api.example.test:9443",
+      authMode: "single-user",
+      apiKey: "test-key"
+    } as any)
+    mockedApiSend.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { status: "alive" }
+    })
+
+    const originalWindow = globalThis.window
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "http://192.168.5.184:3000",
+          hostname: "192.168.5.184",
+          protocol: "http:"
+        }
+      },
+      configurable: true
+    })
+
+    try {
+      await useConnectionStore.getState().checkOnce()
+    } finally {
+      Object.defineProperty(globalThis, "window", {
+        value: originalWindow,
+        configurable: true
+      })
+    }
+
+    const state = useConnectionStore.getState().state
+    expect(mockedClient.updateConfig).not.toHaveBeenCalledWith({
+      serverUrl: "http://192.168.5.184:3000"
+    })
+    expect(state.phase).toBe(ConnectionPhase.CONNECTED)
+    expect(state.isConnected).toBe(true)
+    expect(state.serverUrl).toBe("https://api.example.test:9443")
+  })
+
   it("preserves persisted first-run completion when offline bypass is enabled", async () => {
     setConnectionState({
       hasCompletedFirstRun: false,

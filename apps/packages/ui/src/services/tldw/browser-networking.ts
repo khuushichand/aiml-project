@@ -22,6 +22,10 @@ type ResolveBrowserTransportInput = {
   apiOrigin?: string | null
 }
 
+type ResolveWebUiQuickstartServerUrlInput = ResolveBrowserTransportInput & {
+  configuredServerUrl?: string | null
+}
+
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, "")
 
 const normalizeString = (value?: string | null): string =>
@@ -111,6 +115,29 @@ export const buildBrowserWebSocketBase = (resolved: BrowserTransport): string =>
   }
 
   return `${parsedOrigin.protocol === "https:" ? "wss:" : "ws:"}//${parsedOrigin.host}`
+}
+
+export const resolveWebUiQuickstartServerUrl = (
+  input: ResolveWebUiQuickstartServerUrlInput
+): string | null => {
+  const resolved = resolveBrowserTransport(input)
+  if (resolved.surface !== "webui-page" || resolved.mode !== "quickstart") {
+    return null
+  }
+
+  const configuredOrigin = normalizeOrigin(input.configuredServerUrl)
+  if (configuredOrigin) {
+    const parsedConfiguredOrigin = parseHttpOrigin(configuredOrigin)
+    if (
+      parsedConfiguredOrigin &&
+      !isLoopbackHost(parsedConfiguredOrigin.hostname) &&
+      configuredOrigin !== resolved.pageOrigin
+    ) {
+      return configuredOrigin
+    }
+  }
+
+  return resolved.pageOrigin || null
 }
 
 export const detectBrowserNetworkingIssue = (

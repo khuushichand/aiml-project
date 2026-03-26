@@ -14,7 +14,7 @@ import {
   UI_MODE_SETTING
 } from "@/services/settings/ui-settings"
 import {
-  resolveBrowserTransportMode,
+  resolveWebUiQuickstartServerUrl,
   type BrowserSurface
 } from "@/services/tldw/browser-networking"
 
@@ -104,19 +104,20 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
   return "browser-app"
 }
 
-const getQuickstartWebUiServerUrl = (): string | null => {
-  if (getCurrentBrowserSurface() !== "webui-page") {
+const getQuickstartWebUiServerUrl = (
+  configuredServerUrl?: string | null
+): string | null => {
+  try {
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin: getCurrentBrowserOrigin(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
+      configuredServerUrl
+    })
+  } catch {
     return null
   }
-
-  if (
-    resolveBrowserTransportMode(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE) !==
-    "quickstart"
-  ) {
-    return null
-  }
-
-  return getCurrentBrowserOrigin()
 }
 
 const getCurrentBrowserHostname = (): string | null => {
@@ -196,7 +197,6 @@ const DEFAULT_TLDW_SERVER_URL = "http://127.0.0.1:8000"
 const seedTldwConfigFromEnv = async (): Promise<void> => {
   if (typeof window === "undefined") return
 
-  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
   const explicitWebHost = (() => {
     try {
       return normalizeBaseUrl(window.localStorage.getItem("tldw-api-host"))
@@ -211,18 +211,17 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
   const repairedEnvDefaultServerUrl =
     deriveCurrentHostRecoveryServerUrl(envDefaultServerUrl) ||
     envDefaultServerUrl
-  const serverUrl =
-    quickstartWebUiServerUrl ||
+  const initialQuickstartWebUiServerUrl = getQuickstartWebUiServerUrl(explicitWebHost)
+  const initialServerUrl =
+    initialQuickstartWebUiServerUrl ||
     repairedExplicitWebHost ||
     repairedEnvDefaultServerUrl
   const apiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || null
   const apiBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim() || null
 
-  if (!serverUrl && !apiKey && !apiBearer) return
-
-  if (serverUrl && explicitWebHost !== serverUrl) {
+  if (initialServerUrl && explicitWebHost !== initialServerUrl) {
     try {
-      window.localStorage.setItem("tldw-api-host", serverUrl)
+      window.localStorage.setItem("tldw-api-host", initialServerUrl)
     } catch {
       // Best-effort only; ignore storage failures in web contexts.
     }
@@ -231,6 +230,25 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
   try {
     const storage = createSafeStorage()
     const existing = (await storage.get<TldwConfig>("tldwConfig").catch(() => null)) || null
+    const storedServerUrl =
+      (await storage.get<string>("tldwServerUrl").catch(() => null)) || null
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
+      explicitWebHost || existing?.serverUrl || null
+    )
+    const serverUrl =
+      quickstartWebUiServerUrl ||
+      repairedExplicitWebHost ||
+      repairedEnvDefaultServerUrl
+
+    if (!serverUrl && !apiKey && !apiBearer) return
+
+    if (serverUrl && initialServerUrl !== serverUrl) {
+      try {
+        window.localStorage.setItem("tldw-api-host", serverUrl)
+      } catch {
+        // Best-effort only; ignore storage failures in web contexts.
+      }
+    }
 
     const next: TldwConfig = {
       ...(existing || {}),
@@ -239,10 +257,14 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
     }
 
     let changed = false
+    let shouldSyncStoredServerUrl = false
 
     if (serverUrl && next.serverUrl !== serverUrl) {
       next.serverUrl = serverUrl
       changed = true
+    }
+    if (next.serverUrl && storedServerUrl !== next.serverUrl) {
+      shouldSyncStoredServerUrl = true
     }
 
     if (!next.apiKey && !next.accessToken) {
@@ -257,7 +279,7 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
       }
     }
 
-    if (changed) {
+    if (changed || shouldSyncStoredServerUrl) {
       await storage.set("tldwConfig", next)
       if (next.serverUrl) {
         await storage.set("tldwServerUrl", next.serverUrl)

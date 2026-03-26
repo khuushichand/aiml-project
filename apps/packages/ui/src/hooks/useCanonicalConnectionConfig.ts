@@ -3,7 +3,7 @@ import { useStorage } from "@plasmohq/storage/hook"
 
 import { tldwClient, type TldwConfig } from "@/services/tldw/TldwApiClient"
 import {
-  resolveBrowserTransportMode,
+  resolveWebUiQuickstartServerUrl,
   type BrowserSurface
 } from "@/services/tldw/browser-networking"
 
@@ -29,35 +29,44 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
   return "browser-app"
 }
 
-const getQuickstartWebUiServerUrl = (): string | null => {
-  if (getCurrentBrowserSurface() !== "webui-page") {
-    return null
-  }
-
-  if (
-    resolveBrowserTransportMode(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE) !==
-    "quickstart"
-  ) {
-    return null
-  }
-
+const getQuickstartWebUiServerUrl = (
+  configuredServerUrl?: string | null
+): string | null => {
   try {
-    const origin = String(window.location?.origin || "").trim()
-    return origin || null
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin:
+        typeof window === "undefined" ? null : String(window.location?.origin || "").trim(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
+      configuredServerUrl
+    })
   } catch {
     return null
   }
 }
 
+const resolveCanonicalServerUrl = (
+  configuredServerUrl: string | null | undefined,
+  fallbackServerUrl: string
+): string => {
+  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
+    configuredServerUrl || fallbackServerUrl
+  )
+  if (quickstartWebUiServerUrl) {
+    return quickstartWebUiServerUrl
+  }
+
+  return typeof configuredServerUrl === "string" && configuredServerUrl.trim().length > 0
+    ? configuredServerUrl
+    : fallbackServerUrl
+}
+
 const normalizeConnectionConfig = (
   config: TldwConfig | null | undefined,
-  fallback: TldwConfig,
-  quickstartWebUiServerUrl?: string | null
+  fallback: TldwConfig
 ): TldwConfig => ({
-  serverUrl: quickstartWebUiServerUrl ||
-    (typeof config?.serverUrl === "string" && config.serverUrl.trim().length > 0
-      ? config.serverUrl
-      : fallback.serverUrl),
+  serverUrl: resolveCanonicalServerUrl(config?.serverUrl, fallback.serverUrl),
   authMode:
     config?.authMode === "multi-user" || config?.authMode === "single-user"
       ? config.authMode
@@ -72,10 +81,9 @@ export const useCanonicalConnectionConfig = (): {
   config: TldwConfig | null
   loading: boolean
 } => {
-  const quickstartWebUiServerUrl = React.useMemo(() => getQuickstartWebUiServerUrl(), [])
   const [legacyServerUrl] = useStorage(
     "serverUrl",
-    quickstartWebUiServerUrl || DEFAULT_SERVER_URL
+    getQuickstartWebUiServerUrl() || DEFAULT_SERVER_URL
   )
   const [legacyAuthMode] = useStorage("authMode", "single-user")
   const [legacyApiKey] = useStorage("apiKey", "")
@@ -84,10 +92,7 @@ export const useCanonicalConnectionConfig = (): {
   const fallbackConfig = React.useMemo<TldwConfig>(
     () => ({
       serverUrl:
-        quickstartWebUiServerUrl ||
-        (typeof legacyServerUrl === "string" && legacyServerUrl.trim().length > 0
-          ? legacyServerUrl
-          : DEFAULT_SERVER_URL),
+        resolveCanonicalServerUrl(legacyServerUrl, DEFAULT_SERVER_URL),
       authMode: legacyAuthMode === "multi-user" ? "multi-user" : "single-user",
       apiKey: legacyApiKey || undefined,
       accessToken: legacyAccessToken || undefined
@@ -96,8 +101,7 @@ export const useCanonicalConnectionConfig = (): {
       legacyAccessToken,
       legacyApiKey,
       legacyAuthMode,
-      legacyServerUrl,
-      quickstartWebUiServerUrl
+      legacyServerUrl
     ]
   )
 
@@ -113,11 +117,7 @@ export const useCanonicalConnectionConfig = (): {
         const canonicalConfig = await tldwClient.getConfig()
         if (!cancelled) {
           setConfig(
-            normalizeConnectionConfig(
-              canonicalConfig,
-              fallbackConfig,
-              quickstartWebUiServerUrl
-            )
+            normalizeConnectionConfig(canonicalConfig, fallbackConfig)
           )
         }
       } catch {
@@ -136,7 +136,7 @@ export const useCanonicalConnectionConfig = (): {
     return () => {
       cancelled = true
     }
-  }, [fallbackConfig, quickstartWebUiServerUrl])
+  }, [fallbackConfig])
 
   return { config, loading }
 }

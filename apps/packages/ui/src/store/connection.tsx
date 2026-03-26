@@ -5,7 +5,7 @@ import { getStoredTldwServerURL } from "@/services/tldw-server"
 import { apiSend } from "@/services/api-send"
 import { createSafeStorage } from "@/utils/safe-storage"
 import {
-  resolveBrowserTransportMode,
+  resolveWebUiQuickstartServerUrl,
   type BrowserSurface
 } from "@/services/tldw/browser-networking"
 import {
@@ -243,19 +243,20 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
   return "browser-app"
 }
 
-const getQuickstartWebUiServerUrl = (): string | null => {
-  if (getCurrentBrowserSurface() !== "webui-page") {
+const getQuickstartWebUiServerUrl = (
+  configuredServerUrl?: string | null
+): string | null => {
+  try {
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin: getCurrentBrowserOrigin(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
+      configuredServerUrl
+    })
+  } catch {
     return null
   }
-
-  if (
-    resolveBrowserTransportMode(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE) !==
-    "quickstart"
-  ) {
-    return null
-  }
-
-  return getCurrentBrowserOrigin()
 }
 
 const getCurrentBrowserHostname = (): string | null => {
@@ -434,13 +435,14 @@ const initialState: ConnectionState = {
 }
 
 const getPersistedServerUrl = async (): Promise<string | null> => {
-  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
-  if (quickstartWebUiServerUrl) {
-    return quickstartWebUiServerUrl
-  }
-
   try {
     const cfg = await tldwClient.getConfig()
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
+      cfg?.serverUrl ?? null
+    )
+    if (quickstartWebUiServerUrl) {
+      return quickstartWebUiServerUrl
+    }
     if (cfg?.serverUrl) return cfg.serverUrl
   } catch {
     // ignore config read errors
@@ -449,6 +451,12 @@ const getPersistedServerUrl = async (): Promise<string | null> => {
   try {
     const storage = createSafeStorage()
     const cfg = await storage.get<TldwConfig>("tldwConfig")
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
+      cfg?.serverUrl ?? null
+    )
+    if (quickstartWebUiServerUrl) {
+      return quickstartWebUiServerUrl
+    }
     if (cfg?.serverUrl) return cfg.serverUrl
   } catch {
     // ignore storage read errors
@@ -613,7 +621,9 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
     try {
       let cfg = await tldwClient.getConfig()
-      const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+      const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
+        cfg?.serverUrl ?? null
+      )
       let serverUrl = quickstartWebUiServerUrl ?? cfg?.serverUrl ?? null
 
       if (

@@ -3,7 +3,7 @@ import { tldwClient, tldwModels } from "./tldw"
 import { setNoOfRetrievedDocs, setTotalFilePerKB } from "./app"
 import { createSafeStorage } from "@/utils/safe-storage"
 import {
-  resolveBrowserTransportMode,
+  resolveWebUiQuickstartServerUrl,
   type BrowserSurface
 } from "@/services/tldw/browser-networking"
 
@@ -32,21 +32,18 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
   return "browser-app"
 }
 
-const getQuickstartWebUiServerUrl = (): string | null => {
-  if (getCurrentBrowserSurface() !== "webui-page") {
-    return null
-  }
-
-  if (
-    resolveBrowserTransportMode(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE) !==
-    "quickstart"
-  ) {
-    return null
-  }
-
+const getQuickstartWebUiServerUrl = (
+  configuredServerUrl?: string | null
+): string | null => {
   try {
-    const origin = String(window.location?.origin || "").trim()
-    return origin || null
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin:
+        typeof window === "undefined" ? null : String(window.location?.origin || "").trim(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
+      configuredServerUrl
+    })
   } catch {
     return null
   }
@@ -78,17 +75,20 @@ export const getStoredTldwServerURL = async (): Promise<string | null> => {
 }
 
 export const getTldwServerURL = async () => {
-  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+  const config = await tldwClient.getConfig()
+  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(config?.serverUrl)
   if (quickstartWebUiServerUrl) {
     return quickstartWebUiServerUrl
   }
-
-  const config = await tldwClient.getConfig()
   if (config?.serverUrl) {
     return config.serverUrl
   }
   // Fallback to stored URL or default
   const stored = await getStoredTldwServerURL()
+  const quickstartStoredServerUrl = getQuickstartWebUiServerUrl(stored)
+  if (quickstartStoredServerUrl) {
+    return quickstartStoredServerUrl
+  }
   return stored || DEFAULT_TLDW_URL
 }
 

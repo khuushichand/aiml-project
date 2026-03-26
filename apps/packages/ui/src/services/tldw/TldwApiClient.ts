@@ -16,7 +16,7 @@ import {
   normalizeDefaultCharacterPreferenceId
 } from "@/utils/default-character-preference"
 import {
-  resolveBrowserTransportMode,
+  resolveWebUiQuickstartServerUrl,
   type BrowserSurface
 } from "@/services/tldw/browser-networking"
 import {
@@ -332,21 +332,18 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
   return "browser-app"
 }
 
-const getQuickstartWebUiServerUrl = (): string | null => {
-  if (getCurrentBrowserSurface() !== "webui-page") {
-    return null
-  }
-
-  if (
-    resolveBrowserTransportMode(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE) !==
-    "quickstart"
-  ) {
-    return null
-  }
-
+const getQuickstartWebUiServerUrl = (
+  configuredServerUrl?: string | null
+): string | null => {
   try {
-    const origin = String(window.location?.origin || "").trim()
-    return origin || null
+    return resolveWebUiQuickstartServerUrl({
+      surface: getCurrentBrowserSurface(),
+      deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin:
+        typeof window === "undefined" ? null : String(window.location?.origin || "").trim(),
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
+      configuredServerUrl
+    })
   } catch {
     return null
   }
@@ -1555,7 +1552,9 @@ export class TldwApiClient {
       }
     }
     const envApiKey = this.getEnvApiKey()
-    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
+      stored?.serverUrl ?? null
+    )
 
     if (!stored) {
       // True first-run: leave config null so callers (like the connection
