@@ -334,6 +334,14 @@ const applyDocsInfoFeatureGates = (
   capabilities: ServerCapabilities,
   docsInfo: DocsInfoResponse | null | undefined
 ): ServerCapabilities => {
+  const audioFeatureEnabled = extractFeatureFlag(docsInfo, "hasAudio")
+  const sttFeatureEnabled = extractFeatureFlag(docsInfo, "hasStt")
+  const ttsFeatureEnabled = extractFeatureFlag(docsInfo, "hasTts")
+  const voiceChatFeatureEnabled = extractFeatureFlag(docsInfo, "hasVoiceChat")
+  const voiceConversationTransportFeatureEnabled = extractFeatureFlag(
+    docsInfo,
+    "hasVoiceConversationTransport"
+  )
   const slidesFeatureEnabled = extractFeatureFlag(docsInfo, "hasSlides")
   const presentationStudioFeatureEnabled = extractFeatureFlag(
     docsInfo,
@@ -350,6 +358,21 @@ const applyDocsInfoFeatureGates = (
   )
   const mergeFeatureFlag = (computed: boolean, explicit: boolean | null): boolean =>
     explicit === null ? computed : explicit
+  const hasStt = mergeFeatureFlag(capabilities.hasStt, sttFeatureEnabled)
+  const hasTts = mergeFeatureFlag(capabilities.hasTts, ttsFeatureEnabled)
+  const hasVoiceChat = mergeFeatureFlag(
+    capabilities.hasVoiceChat,
+    voiceChatFeatureEnabled
+  )
+  const hasVoiceConversationTransport = mergeFeatureFlag(
+    capabilities.hasVoiceConversationTransport,
+    voiceConversationTransportFeatureEnabled
+  )
+  const hasAudio =
+    mergeFeatureFlag(capabilities.hasAudio, audioFeatureEnabled) ||
+    hasStt ||
+    hasTts ||
+    hasVoiceChat
   const hasSlides = mergeFeatureFlag(capabilities.hasSlides, slidesFeatureEnabled)
   const hasPresentationStudio =
     mergeFeatureFlag(
@@ -364,6 +387,11 @@ const applyDocsInfoFeatureGates = (
 
   return {
     ...capabilities,
+    hasAudio,
+    hasStt,
+    hasTts,
+    hasVoiceChat,
+    hasVoiceConversationTransport,
     hasSlides,
     hasPresentationStudio,
     hasPresentationRender,

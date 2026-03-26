@@ -353,6 +353,16 @@ class TestAdapterRegistry:
         adapter = await registry.get_adapter(TTSProvider.OPENAI)
         assert adapter is None
 
+    async def test_close_all_skips_resource_manager_when_no_adapters_initialized(self):
+        """Cleanup should not lazily create the TTS resource manager."""
+        registry = TTSAdapterRegistry({})
+
+        with patch(
+            "tldw_Server_API.app.core.TTS.adapter_registry.get_resource_manager",
+            new=AsyncMock(side_effect=AssertionError("resource manager should not be created during close_all")),
+        ):
+            await registry.close_all()
+
     async def test_find_adapter_for_requirements(self):
         """Test finding adapter by requirements"""
         registry = TTSAdapterRegistry({"openai_api_key": "test"})

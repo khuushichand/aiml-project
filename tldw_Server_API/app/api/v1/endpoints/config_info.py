@@ -106,6 +106,8 @@ def load_safe_config() -> dict:
 
     # Feature flags / capabilities (safe to expose)
     try:
+        has_audio_http = bool(config_mod.route_enabled("audio", default_stable=True))
+        has_audio_websocket = bool(config_mod.route_enabled("audio-websocket", default_stable=True))
         caps = {
             "personalization": bool(config_mod.legacy_get("PERSONALIZATION_ENABLED", True))
             and bool(config_mod.route_enabled("personalization", default_stable=False)),
@@ -117,6 +119,13 @@ def load_safe_config() -> dict:
         caps["hasPresentationRender"] = bool(caps["hasPresentationStudio"]) and bool(
             is_truthy(os.getenv("PRESENTATION_RENDER_ENABLED", "true"))
         )
+        # Docs-info serves as the authoritative feature gate for clients that
+        # cannot infer websocket transport support from OpenAPI alone.
+        caps["hasStt"] = bool(has_audio_http or has_audio_websocket)
+        caps["hasTts"] = bool(has_audio_http or has_audio_websocket)
+        caps["hasVoiceChat"] = bool(has_audio_http or has_audio_websocket)
+        caps["hasVoiceConversationTransport"] = bool(has_audio_websocket)
+        caps["hasAudio"] = bool(caps["hasStt"] or caps["hasTts"] or caps["hasVoiceChat"])
         # expose both for backward-compat and forward-looking UI
         safe_config["supported_features"] = caps
         safe_config["capabilities"] = caps

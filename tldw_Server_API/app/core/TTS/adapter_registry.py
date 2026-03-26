@@ -26,7 +26,7 @@ from .tts_exceptions import (
     TTSError,
     TTSProviderNotConfiguredError,
 )
-from .tts_resource_manager import get_resource_manager
+from .tts_resource_manager import get_existing_resource_manager, get_resource_manager
 from .utils import parse_bool
 
 #
@@ -915,12 +915,8 @@ class TTSAdapterRegistry:
         """Close all initialized adapters and clean up resources"""
         logger.info("Closing all TTS adapters...")
 
-        # Get resource manager for cleanup
-        try:
-            resource_manager = await get_resource_manager()
-        except _TTS_REGISTRY_NONCRITICAL_EXCEPTIONS as e:
-            logger.warning(f"Could not get resource manager for cleanup: {e}")
-            resource_manager = None
+        # Teardown should only clean up an already-initialized manager.
+        resource_manager = get_existing_resource_manager()
 
         tasks = []
         for provider, adapter in self._adapters.items():

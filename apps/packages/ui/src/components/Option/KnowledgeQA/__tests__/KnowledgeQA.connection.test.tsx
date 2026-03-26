@@ -204,4 +204,12 @@ describe("KnowledgeQA connection states", () => {
       vi.runOnlyPendingTimers()
     })
   })
+
+  it("stretches the knowledge workspace root to the full route width", () => {
+    renderKnowledgeQa()
+
+    expect(screen.getByTestId("knowledge-page-root")).toHaveClass("w-full")
+    expect(screen.getByTestId("knowledge-page-root")).toHaveClass("flex-1")
+    expect(screen.getByTestId("knowledge-page-root")).toHaveClass("min-w-0")
+  })
 })

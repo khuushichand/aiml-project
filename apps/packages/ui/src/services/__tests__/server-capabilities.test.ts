@@ -310,6 +310,57 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.specSource).toBe("authoritative")
   })
 
+  it("treats docs-info audio flags as authoritative when the spec omits websocket paths", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-docs-info-authoritative" },
+      paths: {
+        "/api/v1/chat/completions": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({
+      capabilities: {
+        hasAudio: true,
+        hasStt: true,
+        hasTts: true,
+        hasVoiceChat: true,
+        hasVoiceConversationTransport: true
+      }
+    })
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasAudio).toBe(true)
+    expect(capabilities.hasStt).toBe(true)
+    expect(capabilities.hasTts).toBe(true)
+    expect(capabilities.hasVoiceChat).toBe(true)
+    expect(capabilities.hasVoiceConversationTransport).toBe(true)
+    expect(capabilities.specSource).toBe("authoritative")
+  })
+
+  it("lets docs-info explicitly disable strict voice conversation transport", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-docs-info-transport-off" },
+      paths: {
+        "/api/v1/audio/chat/stream": {},
+        "/api/v1/audio/transcriptions": {},
+        "/api/v1/audio/speech": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({
+      capabilities: {
+        hasVoiceConversationTransport: false
+      }
+    })
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasVoiceChat).toBe(true)
+    expect(capabilities.hasVoiceConversationTransport).toBe(false)
+    expect(capabilities.specSource).toBe("authoritative")
+  })
+
   it("does not reuse persisted V1 capability payloads for the new cache contract", async () => {
     cacheState.values.set("__tldwServerCapabilitiesCacheV1", {
       key: "http://127.0.0.1:8000::single-user",
