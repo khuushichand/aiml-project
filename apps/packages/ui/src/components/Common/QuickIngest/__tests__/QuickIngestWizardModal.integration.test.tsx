@@ -48,28 +48,47 @@ vi.mock("antd", () => ({
       {...props}
     />
   ),
-  Select: ({ value, onChange, options, placeholder, ...props }: any) => {
+  Select: ({
+    value,
+    onChange,
+    onClear,
+    options,
+    placeholder,
+    allowClear,
+    ...props
+  }: any) => {
     const selectProps: any = { ...props }
     if (value !== undefined) {
       selectProps.value = value
     }
 
     return (
-      <select
-        onChange={(e: any) => onChange?.(e.target.value)}
-        {...selectProps}
-      >
-        {placeholder ? (
-          <option value="" disabled hidden>
-            {placeholder}
-          </option>
+      <React.Fragment>
+        <select
+          onChange={(e: any) => onChange?.(e.target.value)}
+          {...selectProps}
+        >
+          {placeholder ? (
+            <option value="" disabled hidden>
+              {placeholder}
+            </option>
+          ) : null}
+          {options?.map((o: any) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        {allowClear ? (
+          <button
+            type="button"
+            aria-label="Clear audio language"
+            onClick={() => onClear?.()}
+          >
+            Clear
+          </button>
         ) : null}
-        {options?.map((o: any) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+      </React.Fragment>
     )
   },
   Radio: Object.assign(
@@ -767,6 +786,46 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
   })
 
+  it("clears a selected standard audio language back to unset", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await user.selectOptions(audioLanguageSelect, "en-US")
+
+    expect(ctxRef).not.toBeNull()
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.typeDefaults.audio?.language
+      ).toBe("en-US")
+    })
+
+    await user.click(
+      screen.getByRole("button", { name: /clear audio language/i })
+    )
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.typeDefaults.audio?.language
+      ).toBeUndefined()
+    })
+    expect(audioLanguageSelect).not.toHaveAttribute("value")
+    expect(screen.getByText("Select language")).toBeInTheDocument()
+  })
+
   it("maps an unknown saved audio language to a custom entry field", async () => {
     const user = userEvent.setup()
     render(<WizardTestHarness onClose={vi.fn()} />)
@@ -802,6 +861,55 @@ describe("QuickIngestWizardModal — real configure step", () => {
     const customInput = await screen.findByLabelText("Custom audio language")
     await waitFor(() => {
       expect(customInput).toHaveValue("zz-Unknown")
+    })
+  })
+
+  it("reopens custom audio language with current stored value after unknown-to-standard then custom", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      typeDefaults: {
+        audio: {
+          language: "zz-Unknown",
+        },
+      },
+    })
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await waitFor(() => {
+      expect(audioLanguageSelect).toHaveValue("__custom__")
+    })
+
+    let customInput = await screen.findByLabelText("Custom audio language")
+    await waitFor(() => {
+      expect(customInput).toHaveValue("zz-Unknown")
+    })
+
+    await user.selectOptions(audioLanguageSelect, "en-US")
+    await waitFor(() => {
+      expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("en-US")
+    })
+
+    await user.selectOptions(audioLanguageSelect, "__custom__")
+    await waitFor(() => {
+      customInput = screen.getByLabelText("Custom audio language")
+      expect(customInput).toHaveValue("en-US")
     })
   })
 
@@ -883,13 +991,5 @@ describe("QuickIngestWizardModal — real configure step", () => {
     expect(customInput).toBeInTheDocument()
 
     expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("en-US")
-
-    await user.clear(customInput)
-    await user.type(customInput, "zz-Unknown")
-    await waitFor(() => {
-      expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe(
-        "zz-Unknown"
-      )
-    })
   })
 })

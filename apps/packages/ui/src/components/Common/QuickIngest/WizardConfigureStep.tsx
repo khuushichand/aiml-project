@@ -124,6 +124,12 @@ export const WizardConfigureStep: React.FC = () => {
     savedAudioLanguageRef.current = normalizedAudioLanguage
   }, [isKnownLanguage, normalizedAudioLanguage])
 
+  React.useEffect(() => {
+    if (audioLanguageMode === "custom") {
+      setCustomAudioLanguage(normalizedAudioLanguage)
+    }
+  }, [audioLanguageMode, normalizedAudioLanguage])
+
   const shouldShowCustomAudioLanguageInput =
     audioLanguageMode === "custom"
 
@@ -177,6 +183,18 @@ export const WizardConfigureStep: React.FC = () => {
     },
     [setTypeDefaults]
   )
+
+  const handleAudioLanguageClear = React.useCallback(() => {
+    setAudioLanguageMode("empty")
+    setCustomAudioLanguage("")
+    setTypeDefaults((previous) => ({
+      ...(previous ?? {}),
+      audio: {
+        ...(previous?.audio ?? {}),
+        language: undefined,
+      },
+    }))
+  }, [setTypeDefaults])
 
   const handleCustomAudioLanguageChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -365,6 +383,8 @@ export const WizardConfigureStep: React.FC = () => {
                     "Select language"
                   )}
                   value={audioLanguageSelectValue}
+                  allowClear
+                  onClear={handleAudioLanguageClear}
                   onChange={handleAudioLanguageOptionChange}
                   options={[
                     ...SUPPORTED_LANGUAGES,
