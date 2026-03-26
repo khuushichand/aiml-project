@@ -445,6 +445,7 @@ class TestMetricsCollection:
             *,
             metadata_only: bool = False,
             metadata_target=None,
+            user_id=None,
         ):
             yield b"fallback-audio"
 
@@ -532,6 +533,7 @@ class TestMetricsCollection:
             *,
             metadata_only: bool = False,
             metadata_target=None,
+            user_id=None,
         ):
             service._record_fallback_event(
                 from_provider=from_provider or "unknown",

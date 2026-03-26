@@ -30,8 +30,8 @@ def _install_fake_tokenizer_module(monkeypatch):
     return FakeTokenizer
 
 
-def test_serialize_audio_output_wav_wraps_raw_pcm_bytes():
-    pcm = np.array([0, 1000, -1000, 0], dtype=np.int16).tobytes()
+def test_serialize_audio_output_wav_wraps_numpy_audio():
+    pcm = np.array([0, 1000, -1000, 0], dtype=np.int16)
     wav_bytes = tokenizer_service._serialize_audio_output(pcm, 24000, "wav")
     assert wav_bytes[:4] == b"RIFF"
     decoded, sample_rate = sf.read(io.BytesIO(wav_bytes), dtype="int16")
@@ -47,30 +47,34 @@ def test_serialize_audio_output_wav_passthrough():
     assert output == wav_bytes
 
 
-def test_load_qwen3_tokenizer_patches_chunked_decode(monkeypatch):
+def test_load_qwen3_tokenizer_instantiates_fake_backend(monkeypatch):
     tokenizer_cls = _install_fake_tokenizer_module(monkeypatch)
-    original_fn = tokenizer_cls.chunked_decode
 
     tokenizer = tokenizer_service._load_qwen3_tokenizer(
         "Qwen/Qwen3-TTS-Tokenizer-12Hz/",
         allow_download=False,
-        patch_chunked_decode=True,
     )
+    assert isinstance(tokenizer, tokenizer_cls)
+    assert tokenizer.model == "Qwen/Qwen3-TTS-Tokenizer-12Hz/"
+
+
+def test_load_qwen3_tokenizer_uses_from_pretrained_when_available(monkeypatch):
+    module = types.ModuleType("qwen_tts")
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, model_id, local_files_only=True):
+            instance = cls()
+            instance.model = model_id
+            instance.local_files_only = local_files_only
+            return instance
+
+    module.Qwen3TTSTokenizer = FakeTokenizer
+    monkeypatch.setitem(sys.modules, "qwen_tts", module)
+
+    tokenizer = tokenizer_service._load_qwen3_tokenizer("Qwen/Qwen3-TTS-Tokenizer-12Hz", allow_download=False)
     assert tokenizer.model == "Qwen/Qwen3-TTS-Tokenizer-12Hz"
-    assert tokenizer.__class__.chunked_decode is not original_fn
-
-
-def test_load_qwen3_tokenizer_patch_toggle_off(monkeypatch):
-    tokenizer_cls = _install_fake_tokenizer_module(monkeypatch)
-    original_fn = tokenizer_cls.chunked_decode
-
-    tokenizer = tokenizer_service._load_qwen3_tokenizer(
-        "Qwen/Qwen3-TTS-Tokenizer-12Hz/",
-        allow_download=False,
-        patch_chunked_decode=False,
-    )
-    assert tokenizer.model == "Qwen/Qwen3-TTS-Tokenizer-12Hz"
-    assert tokenizer.__class__.chunked_decode is original_fn
+    assert tokenizer.local_files_only is True
 
 
 def test_load_qwen3_tokenizer_maps_model_path_error(monkeypatch):
@@ -84,9 +88,8 @@ def test_load_qwen3_tokenizer_maps_model_path_error(monkeypatch):
     module.Qwen3TTSTokenizer = BadTokenizer
     monkeypatch.setitem(sys.modules, "qwen_tts", module)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(RuntimeError, match="Repo id must be in the form 'repo_name'"):
         tokenizer_service._load_qwen3_tokenizer("Qwen/Bad-Tokenizer/", allow_download=False)
-    assert getattr(exc_info.value, "status_code", None) == 400
 
 
 def test_load_qwen3_tokenizer_maps_rope_compat_error(monkeypatch):
@@ -100,6 +103,5 @@ def test_load_qwen3_tokenizer_maps_rope_compat_error(monkeypatch):
     module.Qwen3TTSTokenizer = BadTokenizer
     monkeypatch.setitem(sys.modules, "qwen_tts", module)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(RuntimeError, match="KeyError: 'default' while setting rope"):
         tokenizer_service._load_qwen3_tokenizer("Qwen/Tokenizer", allow_download=False)
-    assert getattr(exc_info.value, "status_code", None) == 500
