@@ -147,7 +147,7 @@ Behavior changes:
 
 - remove the `max-w-3xl` cap from the desktop research search/results shells
 - remove the `max-w-4xl` cap from the desktop research inner content wrapper
-- remove the search bar’s internal `max-w-3xl` limit when used in research mode
+- remove the search bar’s internal `max-w-3xl` limit only for the desktop research-mode usage of `SearchBar`
 - keep prose-heavy answer text on a readable line length even when the surrounding workspace expands
 - preserve existing centered/narrow behavior for simple mode
 - preserve existing mobile behavior
@@ -190,6 +190,7 @@ Implementation direction:
 - reuse existing FTS normalization utilities where possible
 - keep the change localized to the media retrieval path used by RAG
 - do not change the public API contract of `/api/v1/rag/search`
+- prefer implementing the second-pass fallback in the RAG retriever layer rather than changing generic `search_media_db()` semantics for all callers
 - do not replace the current first-pass behavior globally for all `search_media_db()` callers
 - use a bounded fallback strategy that prioritizes precision:
   - first pass: existing strict query behavior
@@ -260,7 +261,7 @@ Before considering implementation complete:
 
 - run targeted frontend Knowledge QA tests
 - run targeted backend retrieval tests
-- run at least one API-level integration test covering the real `/api/v1/rag/search` endpoint for the reproduced query shape
+- run at least one API-level integration test covering the real `/api/v1/rag/search` endpoint for the reproduced query shape, including the default `fts_level="chunk"` path
 - run Bandit on the touched paths per repo policy
 - manually confirm the query against media `892` returns evidence
 - manually confirm the desktop Knowledge QA page uses the available horizontal space
