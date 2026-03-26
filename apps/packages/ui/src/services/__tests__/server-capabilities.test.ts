@@ -3,16 +3,16 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
 const cacheState = vi.hoisted(() => ({
-  value: undefined as unknown
+  values: new Map<string, unknown>()
 }))
 
 const mocks = vi.hoisted(() => ({
   getConfig: vi.fn(),
   getOpenAPISpec: vi.fn(),
   bgRequest: vi.fn(),
-  storageGet: vi.fn(async () => cacheState.value),
-  storageSet: vi.fn(async (_key: string, value: unknown) => {
-    cacheState.value = value
+  storageGet: vi.fn(async (key: string) => cacheState.values.get(key)),
+  storageSet: vi.fn(async (key: string, value: unknown) => {
+    cacheState.values.set(key, value)
   })
 }))
 
@@ -60,15 +60,17 @@ describe("server capabilities docs-info merge", () => {
   beforeEach(() => {
     vi.resetModules()
     vi.useRealTimers()
-    cacheState.value = undefined
+    cacheState.values.clear()
     mocks.getConfig.mockReset()
     mocks.getOpenAPISpec.mockReset()
     mocks.bgRequest.mockReset()
     mocks.storageGet.mockReset()
     mocks.storageSet.mockReset()
-    mocks.storageGet.mockImplementation(async () => cacheState.value)
-    mocks.storageSet.mockImplementation(async (_key: string, value: unknown) => {
-      cacheState.value = value
+    mocks.storageGet.mockImplementation(async (key: string) =>
+      cacheState.values.get(key)
+    )
+    mocks.storageSet.mockImplementation(async (key: string, value: unknown) => {
+      cacheState.values.set(key, value)
     })
     mocks.getConfig.mockResolvedValue({
       serverUrl: "http://127.0.0.1:8000",
@@ -287,6 +289,49 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.hasVoiceChat).toBe(true)
     expect(capabilities.hasVoiceConversationTransport).toBe(false)
     expect(capabilities.specSource).toBe("fallback")
+  })
+
+  it("enables strict voice conversation transport when the authoritative spec exposes the stream route", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-voice-transport" },
+      paths: {
+        "/api/v1/audio/chat/stream": {},
+        "/api/v1/audio/transcriptions": {},
+        "/api/v1/audio/speech": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasVoiceChat).toBe(true)
+    expect(capabilities.hasVoiceConversationTransport).toBe(true)
+    expect(capabilities.specSource).toBe("authoritative")
+  })
+
+  it("does not reuse persisted V1 capability payloads for the new cache contract", async () => {
+    cacheState.values.set("__tldwServerCapabilitiesCacheV1", {
+      key: "http://127.0.0.1:8000::single-user",
+      fetchedAt: Date.now(),
+      capabilities: {
+        hasChat: true
+      }
+    })
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-voice-transport-cache" },
+      paths: {
+        "/api/v1/audio/chat/stream": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(mocks.getOpenAPISpec).toHaveBeenCalledTimes(1)
+    expect(capabilities.hasVoiceConversationTransport).toBe(true)
+    expect(capabilities.specSource).toBe("authoritative")
   })
 
   it("detects presentation studio and render capability from docs-info", async () => {

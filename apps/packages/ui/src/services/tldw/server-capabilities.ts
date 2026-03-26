@@ -181,7 +181,7 @@ type DocsInfoResponse = {
 }
 
 const CAPABILITIES_CACHE_TTL_MS = 5 * 60 * 1000
-const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV1"
+const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV2"
 
 type CapabilitiesCachePayload = {
   key: string
