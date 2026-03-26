@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -300,7 +300,7 @@ def _ensure_prerequisites() -> None:
 
 
 def _run_command(cmd: list[str], cwd: Optional[Path] = None) -> None:
-    subprocess.run(cmd, cwd=cwd, check=True)
+    subprocess.run(cmd, cwd=cwd, check=True)  # nosec B603
 
 
 def clone_repository(repo_url: str, clone_dir: Path, branch: Optional[str] = None) -> Path:
