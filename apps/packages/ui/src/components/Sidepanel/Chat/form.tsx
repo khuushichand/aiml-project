@@ -101,7 +101,8 @@ import { tldwClient } from "@/services/tldw/TldwApiClient"
 import {
   normalizeVoiceConversationRuntimeError,
   resolveVoiceConversationAvailability,
-  resolveVoiceConversationTtsConfig
+  resolveVoiceConversationTtsConfig,
+  shouldProbeVoiceConversationAudioHealth
 } from "@/services/tldw/voice-conversation"
 import { fetchChatModels } from "@/services/tldw-server"
 import { getProviderDisplayName } from "@/utils/provider-registry"
@@ -520,12 +521,29 @@ export const SidepanelForm = ({
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
+  const shouldProbeAudioHealth = React.useMemo(
+    () =>
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady,
+        hasServerVoiceChat,
+        hasServerStt,
+        optionalAudioHealthEnabled: audioHealthEnabled
+      }),
+    [
+      audioHealthEnabled,
+      hasServerStt,
+      hasServerVoiceChat,
+      isConnectionReady
+    ]
+  )
   const {
     healthState: audioHealthState,
     sttHealthState,
     hasVoiceConversationTransport
   } = useTldwAudioStatus({
-    enabled: audioHealthEnabled
+    enabled: shouldProbeAudioHealth,
+    ttsProvider,
+    tldwTtsModel
   })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"

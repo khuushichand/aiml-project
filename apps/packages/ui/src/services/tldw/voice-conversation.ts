@@ -42,6 +42,13 @@ type VoiceConversationAvailabilityInput = {
   ttsConfigReady: boolean
 }
 
+type VoiceConversationAudioHealthProbeInput = {
+  isConnectionReady: boolean
+  hasServerVoiceChat: boolean
+  hasServerStt: boolean
+  optionalAudioHealthEnabled: boolean
+}
+
 type VoiceConversationPreflightInput = VoiceConversationTtsConfigInput & {
   serverUrl: string
   token: string
@@ -303,6 +310,20 @@ export const resolveVoiceConversationAvailability = (
   }
 
   return { available: true, reason: "ok", message: null }
+}
+
+export const shouldProbeVoiceConversationAudioHealth = (
+  input: VoiceConversationAudioHealthProbeInput
+): boolean => {
+  if (input.optionalAudioHealthEnabled) {
+    return true
+  }
+
+  if (!input.isConnectionReady) {
+    return false
+  }
+
+  return input.hasServerVoiceChat || input.hasServerStt
 }
 
 export const buildVoiceConversationPreflight = async (

@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.adapters.base import TTSAdapter, TTSRequest, TTSResponse, AudioFormat, ProviderStatus, TTSCapabilities
+from tldw_Server_API.app.core.TTS.circuit_breaker import CircuitBreakerManager
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
+    TTSAuthenticationError,
     TTSProviderError,
     TTSNetworkError,
     TTSTimeoutError,
@@ -26,6 +28,71 @@ class FailingAdapter(TTSAdapter):
 
     async def generate(self, request: TTSRequest) -> TTSResponse:
         raise TTSProviderError("simulated failure", provider=self.provider_id)
+
+    async def get_capabilities(self) -> TTSCapabilities:
+        from tldw_Server_API.app.core.TTS.adapters.base import VoiceInfo
+        return TTSCapabilities(
+            provider_name=self.provider_id,
+            supports_streaming=True,
+            supports_voice_cloning=False,
+            supported_languages={"en"},
+            supported_formats={AudioFormat.MP3},
+            max_text_length=5000,
+            supported_voices=[VoiceInfo(id="v1", name="V1")],
+        )
+
+
+class AuthFailingStreamAdapter(TTSAdapter):
+    PROVIDER_KEY = "openai"
+
+    def __init__(self, provider_name: str = "openai"):
+        super().__init__({})
+        self._status = ProviderStatus.AVAILABLE
+        self._initialized = True
+        self.provider_id = provider_name
+
+    async def initialize(self) -> bool:
+        self._initialized = True
+        self._status = ProviderStatus.AVAILABLE
+        return True
+
+    async def generate(self, request: TTSRequest) -> TTSResponse:
+        async def _failing_stream():
+            if False:
+                yield b""
+            raise TTSAuthenticationError("invalid api key", provider=self.provider_id)
+
+        return TTSResponse(audio_stream=_failing_stream(), format=request.format)
+
+    async def get_capabilities(self) -> TTSCapabilities:
+        from tldw_Server_API.app.core.TTS.adapters.base import VoiceInfo
+        return TTSCapabilities(
+            provider_name=self.provider_id,
+            supports_streaming=True,
+            supports_voice_cloning=False,
+            supported_languages={"en"},
+            supported_formats={AudioFormat.MP3},
+            max_text_length=5000,
+            supported_voices=[VoiceInfo(id="v1", name="V1")],
+        )
+
+
+class AuthFailingAdapter(TTSAdapter):
+    PROVIDER_KEY = "openai"
+
+    def __init__(self, provider_name: str = "openai"):
+        super().__init__({})
+        self._status = ProviderStatus.AVAILABLE
+        self._initialized = True
+        self.provider_id = provider_name
+
+    async def initialize(self) -> bool:
+        self._initialized = True
+        self._status = ProviderStatus.AVAILABLE
+        return True
+
+    async def generate(self, request: TTSRequest) -> TTSResponse:
+        raise TTSAuthenticationError("invalid api key", provider=self.provider_id)
 
     async def get_capabilities(self) -> TTSCapabilities:
         from tldw_Server_API.app.core.TTS.adapters.base import VoiceInfo
@@ -100,6 +167,66 @@ async def test_stream_errors_as_audio_false_raises_exception():
         # Consume the async generator to trigger exception
         async for _ in svc.generate_speech(req, fallback=False):
             pass
+
+
+@pytest.mark.asyncio
+async def test_streaming_auth_failure_records_authentication_breaker_category():
+    factory = MagicMock()
+    factory.get_adapter_by_model = AsyncMock(return_value=AuthFailingStreamAdapter("openai"))
+    registry = MagicMock()
+    registry.config = {"performance": {"max_concurrent_generations": 1, "stream_errors_as_audio": False}}
+    factory.registry = registry
+
+    circuit_manager = CircuitBreakerManager({})
+    svc = TTSServiceV2(factory, circuit_manager=circuit_manager)
+    svc.metrics = MetricsStub()
+
+    req = OpenAISpeechRequest(
+        input="Hello",
+        model="tts-1",
+        voice="v1",
+        response_format="mp3",
+        stream=True,
+    )
+
+    with pytest.raises(TTSAuthenticationError):
+        async for _ in svc.generate_speech(req, fallback=False):
+            pass
+
+    breaker = await circuit_manager.get_breaker("openai")
+    detailed = breaker.get_detailed_status()
+    assert detailed["stats"]["failure_count"] == 1
+    assert detailed["error_analysis"]["error_categories"]["authentication"] == 1
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_auth_failure_records_authentication_breaker_category():
+    factory = MagicMock()
+    factory.get_adapter_by_model = AsyncMock(return_value=AuthFailingAdapter("openai"))
+    registry = MagicMock()
+    registry.config = {"performance": {"max_concurrent_generations": 1, "stream_errors_as_audio": False}}
+    factory.registry = registry
+
+    circuit_manager = CircuitBreakerManager({})
+    svc = TTSServiceV2(factory, circuit_manager=circuit_manager)
+    svc.metrics = MetricsStub()
+
+    req = OpenAISpeechRequest(
+        input="Hello",
+        model="tts-1",
+        voice="v1",
+        response_format="mp3",
+        stream=False,
+    )
+
+    with pytest.raises(TTSAuthenticationError):
+        async for _ in svc.generate_speech(req, fallback=False):
+            pass
+
+    breaker = await circuit_manager.get_breaker("openai")
+    detailed = breaker.get_detailed_status()
+    assert detailed["stats"]["failure_count"] == 1
+    assert detailed["error_analysis"]["error_categories"]["authentication"] == 1
 
 
 def test_tts_service_default_stream_errors_as_audio_false(monkeypatch):

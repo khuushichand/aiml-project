@@ -67,7 +67,8 @@ import {
 import {
   normalizeVoiceConversationRuntimeError,
   resolveVoiceConversationAvailability,
-  resolveVoiceConversationTtsConfig
+  resolveVoiceConversationTtsConfig,
+  shouldProbeVoiceConversationAudioHealth
 } from "@/services/tldw/voice-conversation"
 // ChatRequestDebugSnapshot moved to usePlaygroundRawPreview
 import {
@@ -646,12 +647,29 @@ export const PlaygroundForm = ({
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt)
+  const shouldProbeAudioHealth = React.useMemo(
+    () =>
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady,
+        hasServerVoiceChat,
+        hasServerStt,
+        optionalAudioHealthEnabled: audioHealthEnabled
+      }),
+    [
+      audioHealthEnabled,
+      hasServerStt,
+      hasServerVoiceChat,
+      isConnectionReady
+    ]
+  )
   const {
     healthState: audioHealthState,
     sttHealthState,
     hasVoiceConversationTransport
   } = useTldwAudioStatus({
-    enabled: audioHealthEnabled
+    enabled: shouldProbeAudioHealth,
+    ttsProvider,
+    tldwTtsModel
   })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"

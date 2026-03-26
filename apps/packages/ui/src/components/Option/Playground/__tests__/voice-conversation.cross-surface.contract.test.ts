@@ -11,6 +11,8 @@ describe("voice conversation cross-surface contract", () => {
     const sidepanelFormSource = readSource("../../../Sidepanel/Chat/form.tsx")
     const playgroundVoiceChatSource = readSource("../hooks/usePlaygroundVoiceChat.ts")
 
+    expect(playgroundFormSource).toContain("shouldProbeVoiceConversationAudioHealth(")
+    expect(sidepanelFormSource).toContain("shouldProbeVoiceConversationAudioHealth(")
     expect(playgroundFormSource).toContain("resolveVoiceConversationAvailability(")
     expect(sidepanelFormSource).toContain("resolveVoiceConversationAvailability(")
     expect(playgroundVoiceChatSource).toContain("voiceConversationAvailability.message")

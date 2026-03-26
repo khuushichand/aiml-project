@@ -4,7 +4,8 @@ import {
   buildVoiceConversationPreflight,
   normalizeVoiceConversationRuntimeError,
   resolveVoiceConversationAvailability,
-  resolveVoiceConversationTtsConfig
+  resolveVoiceConversationTtsConfig,
+  shouldProbeVoiceConversationAudioHealth
 } from "@/services/tldw/voice-conversation"
 
 describe("voice conversation contract", () => {
@@ -90,6 +91,46 @@ describe("voice conversation contract", () => {
     expect(result.message).toBe(
       "playground:voiceChat.unavailableReasons.audioUnhealthy"
     )
+  })
+
+  it("probes audio health as soon as server voice controls are relevant", () => {
+    expect(
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady: true,
+        hasServerVoiceChat: true,
+        hasServerStt: false,
+        optionalAudioHealthEnabled: false
+      })
+    ).toBe(true)
+
+    expect(
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady: true,
+        hasServerVoiceChat: false,
+        hasServerStt: true,
+        optionalAudioHealthEnabled: false
+      })
+    ).toBe(true)
+  })
+
+  it("keeps audio health idle before connection unless the panel is explicitly engaged", () => {
+    expect(
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady: false,
+        hasServerVoiceChat: true,
+        hasServerStt: true,
+        optionalAudioHealthEnabled: false
+      })
+    ).toBe(false)
+
+    expect(
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady: false,
+        hasServerVoiceChat: false,
+        hasServerStt: false,
+        optionalAudioHealthEnabled: true
+      })
+    ).toBe(true)
   })
 
   it("requires explicit OpenAI TTS model and voice when openai is selected", () => {
