@@ -4,6 +4,8 @@
 # Imports
 import pytest
 import asyncio
+import builtins
+import sys
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
 from typing import Dict, Any
 import psutil
@@ -386,6 +388,26 @@ class TestTTSResourceManager:
         cleanup_a.assert_called_once()
         assert "a" not in manager._registered_models
         assert "b" in manager._registered_models
+
+    def test_cleanup_device_cache_does_not_import_torch_when_unloaded(self, monkeypatch):
+        """Device-cache cleanup should not import torch just to check for caches."""
+        manager = TTSResourceManager({})
+        monkeypatch.delitem(sys.modules, "torch", raising=False)
+
+        original_import = builtins.__import__
+        torch_import_attempts: list[str] = []
+
+        def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "torch":
+                torch_import_attempts.append(name)
+                raise ImportError("torch should not be imported during best-effort cleanup")
+            return original_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+        manager._cleanup_device_cache()
+
+        assert torch_import_attempts == []
 
     @pytest.mark.asyncio
     async def test_unregister_model(self, resource_manager):

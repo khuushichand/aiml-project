@@ -5,6 +5,7 @@
 import asyncio
 import gc
 import os
+import sys
 import threading
 import time
 import weakref
@@ -771,8 +772,10 @@ class TTSResourceManager:
     def _cleanup_device_cache() -> None:
         """Best-effort device cleanup after model eviction."""
         gc.collect()
+        torch = sys.modules.get("torch")
+        if torch is None:
+            return
         try:
-            import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             if hasattr(torch, "mps") and torch.backends.mps.is_available():
