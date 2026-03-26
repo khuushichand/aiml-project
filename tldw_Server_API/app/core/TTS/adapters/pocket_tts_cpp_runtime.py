@@ -12,9 +12,125 @@ from typing import Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.TTS.audio_converter import AudioConverter
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSModelNotFoundError
 
 
 PROVIDER_KEY = "pocket_tts_cpp"
+VALID_PRECISIONS = {"int8", "fp32"}
+
+
+def get_required_model_filenames(precision: str) -> list[str]:
+    suffix = "_int8" if precision == "int8" else ""
+    return [
+        f"flow_lm_main{suffix}.onnx",
+        f"flow_lm_flow{suffix}.onnx",
+        f"mimi_decoder{suffix}.onnx",
+        "mimi_encoder.onnx",
+        "text_conditioner.onnx",
+    ]
+
+
+def validate_runtime_assets(
+    *,
+    binary_path: Path,
+    model_path: Path,
+    tokenizer_path: Path,
+    precision: str,
+) -> None:
+    """Validate the PocketTTS.cpp runtime files needed for CLI execution."""
+    if not binary_path.exists() or not binary_path.is_file():
+        raise TTSModelNotFoundError(
+            f"PocketTTS.cpp binary not found at {binary_path}",
+            provider=PROVIDER_KEY,
+            details={"binary_path": str(binary_path)},
+        )
+    if not os.access(binary_path, os.X_OK):
+        raise TTSModelNotFoundError(
+            f"PocketTTS.cpp binary is not executable at {binary_path}",
+            provider=PROVIDER_KEY,
+            details={"binary_path": str(binary_path)},
+        )
+
+    if not tokenizer_path.exists():
+        raise TTSModelNotFoundError(
+            f"PocketTTS.cpp tokenizer not found at {tokenizer_path}",
+            provider=PROVIDER_KEY,
+            details={"tokenizer_path": str(tokenizer_path)},
+        )
+
+    if not model_path.exists():
+        raise TTSModelNotFoundError(
+            f"PocketTTS.cpp models directory not found at {model_path}",
+            provider=PROVIDER_KEY,
+            details={"model_path": str(model_path)},
+        )
+
+    missing = [name for name in get_required_model_filenames(precision) if not (model_path / name).exists()]
+    if missing:
+        raise TTSModelNotFoundError(
+            "PocketTTS.cpp exported ONNX assets missing",
+            provider=PROVIDER_KEY,
+            details={"model_path": str(model_path), "missing": missing},
+        )
+
+
+def build_cli_command(
+    *,
+    binary_path: Path,
+    text: str,
+    voice_path: Path,
+    model_path: Path,
+    tokenizer_path: Path,
+    output_path: Optional[Path],
+    precision: str,
+    prefer_stdout: bool,
+    enable_voice_cache: bool,
+    voices_dir: Optional[Path] = None,
+    temperature: Optional[float] = None,
+    lsd_steps: Optional[int] = None,
+    eos_threshold: Optional[float] = None,
+    eos_extra: Optional[float] = None,
+    noise_clamp: Optional[float] = None,
+    threads: Optional[int] = None,
+    verbose: bool = False,
+    profile: bool = False,
+) -> list[str]:
+    """Build a PocketTTS.cpp CLI invocation for a single synthesis request."""
+    command = [str(binary_path)]
+
+    if prefer_stdout:
+        command.append("--stdout")
+    if precision:
+        command.extend(["--precision", precision])
+    if temperature is not None:
+        command.extend(["--temperature", str(temperature)])
+    if lsd_steps is not None:
+        command.extend(["--lsd-steps", str(lsd_steps)])
+    if eos_threshold is not None:
+        command.extend(["--eos-threshold", str(eos_threshold)])
+    if eos_extra is not None:
+        command.extend(["--eos-extra", str(eos_extra)])
+    if noise_clamp is not None:
+        command.extend(["--noise-clamp", str(noise_clamp)])
+    if threads is not None:
+        command.extend(["--threads", str(threads)])
+    if model_path:
+        command.extend(["--models-dir", str(model_path)])
+    if tokenizer_path:
+        command.extend(["--tokenizer", str(tokenizer_path)])
+    if voices_dir is not None:
+        command.extend(["--voices-dir", str(voices_dir)])
+    if not enable_voice_cache:
+        command.append("--no-cache")
+    if verbose:
+        command.append("--verbose")
+    if profile:
+        command.append("--profile")
+
+    command.extend([text, str(voice_path)])
+    if output_path is not None:
+        command.append(str(output_path))
+    return command
 
 
 def get_runtime_dir(*, voice_manager, user_id: int) -> Path:
