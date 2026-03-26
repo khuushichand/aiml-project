@@ -38,3 +38,22 @@ def test_pocket_tts_cpp_config_round_trip_preserves_explicit_fields():
     assert provider_dict["cache_ttl_hours"] == 12
     assert provider_dict["cache_max_bytes_per_user"] == 2048
     assert provider_dict["persist_direct_voice_references"] is True
+
+
+@pytest.mark.asyncio
+async def test_enabled_pocket_tts_cpp_returns_unavailable_instead_of_import_error():
+    factory = TTSAdapterFactory(
+        {
+            "providers": {
+                "pocket_tts_cpp": {
+                    "enabled": True,
+                    "binary_path": "models/pocket_tts_cpp/pocket_tts_cpp",
+                    "tokenizer_path": "models/pocket_tts_cpp/tokenizer.model",
+                }
+            }
+        }
+    )
+
+    adapter = await factory.registry.get_adapter(TTSProvider.POCKET_TTS_CPP)
+
+    assert adapter is None
