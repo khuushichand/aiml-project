@@ -366,7 +366,7 @@ describe("connection store stability", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("preserves an explicit custom host during quickstart webui health checks", async () => {
+  it("canonicalizes explicit custom hosts to the webui origin in quickstart mode", async () => {
     process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
     setConnectionState({
       phase: ConnectionPhase.SEARCHING,
@@ -387,6 +387,8 @@ describe("connection store stability", () => {
       data: { status: "alive" }
     })
 
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+
     const originalWindow = globalThis.window
     Object.defineProperty(globalThis, "window", {
       value: {
@@ -406,15 +408,17 @@ describe("connection store stability", () => {
         value: originalWindow,
         configurable: true
       })
+      fetchMock.mockRestore()
     }
 
     const state = useConnectionStore.getState().state
-    expect(mockedClient.updateConfig).not.toHaveBeenCalledWith({
+    expect(mockedClient.updateConfig).toHaveBeenCalledWith({
       serverUrl: "http://192.168.5.184:3000"
     })
     expect(state.phase).toBe(ConnectionPhase.CONNECTED)
     expect(state.isConnected).toBe(true)
-    expect(state.serverUrl).toBe("https://api.example.test:9443")
+    expect(state.serverUrl).toBe("http://192.168.5.184:3000")
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("preserves persisted first-run completion when offline bypass is enabled", async () => {

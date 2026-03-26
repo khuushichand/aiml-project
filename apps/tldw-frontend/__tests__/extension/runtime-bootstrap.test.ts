@@ -153,31 +153,6 @@ describe("runtime-bootstrap chrome shim", () => {
     })
   })
 
-  it("preserves an explicit custom host in quickstart webui bootstrap", async () => {
-    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
-    delete process.env.NEXT_PUBLIC_API_URL
-    localStorage.setItem("tldw-api-host", "https://api.example.test:9443")
-    localStorage.setItem(
-      "tldwConfig",
-      JSON.stringify({
-        authMode: "single-user",
-        apiKey: "frontend-key",
-        serverUrl: "https://api.example.test:9443"
-      })
-    )
-
-    await import("@web/extension/shims/runtime-bootstrap")
-
-    expect(localStorage.getItem("tldw-api-host")).toBe("https://api.example.test:9443")
-    await vi.waitFor(() => {
-      expect(readStoredValue("tldwServerUrl")).toBe("https://api.example.test:9443")
-
-      const nextConfig = readStoredValue("tldwConfig") as Record<string, unknown>
-      expect(nextConfig.serverUrl).toBe("https://api.example.test:9443")
-      expect(nextConfig.apiKey).toBe("frontend-key")
-    })
-  })
-
   it("repairs a stale env LAN host to the current browser host during bootstrap", async () => {
     process.env.NEXT_PUBLIC_API_URL = "http://192.168.5.184:8000"
 

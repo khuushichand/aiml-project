@@ -8,6 +8,7 @@ import {
   resolveWebUiQuickstartServerUrl,
   type BrowserSurface
 } from "@/services/tldw/browser-networking"
+import { resolveBrowserRequestTransport } from "@/services/tldw/request-core"
 import {
   ConnectionPhase,
   type ConnectionState,
@@ -244,15 +245,13 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
 }
 
 const getQuickstartWebUiServerUrl = (
-  configuredServerUrl?: string | null
 ): string | null => {
   try {
     return resolveWebUiQuickstartServerUrl({
       surface: getCurrentBrowserSurface(),
       deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
       pageOrigin: getCurrentBrowserOrigin(),
-      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
-      configuredServerUrl
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
     })
   } catch {
     return null
@@ -324,7 +323,10 @@ const probeServerLiveness = async (
     if (controller) {
       timeoutId = setTimeout(() => controller.abort(), safeTimeoutMs)
     }
-    const response = await fetch(`${String(serverUrl).replace(/\/$/, "")}${HEALTH_LIVENESS_PATH}`, {
+    const response = await fetch(resolveBrowserRequestTransport({
+      config: { serverUrl },
+      path: HEALTH_LIVENESS_PATH
+    }).url, {
       method: "GET",
       credentials: "omit",
       signal: controller?.signal
@@ -437,9 +439,7 @@ const initialState: ConnectionState = {
 const getPersistedServerUrl = async (): Promise<string | null> => {
   try {
     const cfg = await tldwClient.getConfig()
-    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
-      cfg?.serverUrl ?? null
-    )
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
     if (quickstartWebUiServerUrl) {
       return quickstartWebUiServerUrl
     }
@@ -451,9 +451,7 @@ const getPersistedServerUrl = async (): Promise<string | null> => {
   try {
     const storage = createSafeStorage()
     const cfg = await storage.get<TldwConfig>("tldwConfig")
-    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
-      cfg?.serverUrl ?? null
-    )
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
     if (quickstartWebUiServerUrl) {
       return quickstartWebUiServerUrl
     }
@@ -621,9 +619,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
     try {
       let cfg = await tldwClient.getConfig()
-      const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
-        cfg?.serverUrl ?? null
-      )
+      const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
       let serverUrl = quickstartWebUiServerUrl ?? cfg?.serverUrl ?? null
 
       if (

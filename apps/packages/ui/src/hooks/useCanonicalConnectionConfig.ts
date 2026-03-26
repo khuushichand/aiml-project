@@ -30,7 +30,6 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
 }
 
 const getQuickstartWebUiServerUrl = (
-  configuredServerUrl?: string | null
 ): string | null => {
   try {
     return resolveWebUiQuickstartServerUrl({
@@ -38,8 +37,7 @@ const getQuickstartWebUiServerUrl = (
       deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
       pageOrigin:
         typeof window === "undefined" ? null : String(window.location?.origin || "").trim(),
-      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
-      configuredServerUrl
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
     })
   } catch {
     return null
@@ -50,9 +48,7 @@ const resolveCanonicalServerUrl = (
   configuredServerUrl: string | null | undefined,
   fallbackServerUrl: string
 ): string => {
-  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
-    configuredServerUrl || fallbackServerUrl
-  )
+  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
   if (quickstartWebUiServerUrl) {
     return quickstartWebUiServerUrl
   }

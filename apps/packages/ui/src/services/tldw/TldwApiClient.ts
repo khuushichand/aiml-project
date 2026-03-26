@@ -333,7 +333,6 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
 }
 
 const getQuickstartWebUiServerUrl = (
-  configuredServerUrl?: string | null
 ): string | null => {
   try {
     return resolveWebUiQuickstartServerUrl({
@@ -341,8 +340,7 @@ const getQuickstartWebUiServerUrl = (
       deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
       pageOrigin:
         typeof window === "undefined" ? null : String(window.location?.origin || "").trim(),
-      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
-      configuredServerUrl
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
     })
   } catch {
     return null
@@ -1552,9 +1550,7 @@ export class TldwApiClient {
       }
     }
     const envApiKey = this.getEnvApiKey()
-    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
-      stored?.serverUrl ?? null
-    )
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
 
     if (!stored) {
       // True first-run: leave config null so callers (like the connection

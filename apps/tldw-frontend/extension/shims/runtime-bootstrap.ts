@@ -105,15 +105,13 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
 }
 
 const getQuickstartWebUiServerUrl = (
-  configuredServerUrl?: string | null
 ): string | null => {
   try {
     return resolveWebUiQuickstartServerUrl({
       surface: getCurrentBrowserSurface(),
       deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
       pageOrigin: getCurrentBrowserOrigin(),
-      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
-      configuredServerUrl
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
     })
   } catch {
     return null
@@ -211,7 +209,7 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
   const repairedEnvDefaultServerUrl =
     deriveCurrentHostRecoveryServerUrl(envDefaultServerUrl) ||
     envDefaultServerUrl
-  const initialQuickstartWebUiServerUrl = getQuickstartWebUiServerUrl(explicitWebHost)
+  const initialQuickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
   const initialServerUrl =
     initialQuickstartWebUiServerUrl ||
     repairedExplicitWebHost ||
@@ -232,9 +230,7 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
     const existing = (await storage.get<TldwConfig>("tldwConfig").catch(() => null)) || null
     const storedServerUrl =
       (await storage.get<string>("tldwServerUrl").catch(() => null)) || null
-    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(
-      explicitWebHost || existing?.serverUrl || null
-    )
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
     const serverUrl =
       quickstartWebUiServerUrl ||
       repairedExplicitWebHost ||

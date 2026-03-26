@@ -33,7 +33,6 @@ const getCurrentBrowserSurface = (): BrowserSurface => {
 }
 
 const getQuickstartWebUiServerUrl = (
-  configuredServerUrl?: string | null
 ): string | null => {
   try {
     return resolveWebUiQuickstartServerUrl({
@@ -41,8 +40,7 @@ const getQuickstartWebUiServerUrl = (
       deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
       pageOrigin:
         typeof window === "undefined" ? null : String(window.location?.origin || "").trim(),
-      apiOrigin: process.env.NEXT_PUBLIC_API_URL,
-      configuredServerUrl
+      apiOrigin: process.env.NEXT_PUBLIC_API_URL
     })
   } catch {
     return null
@@ -76,7 +74,7 @@ export const getStoredTldwServerURL = async (): Promise<string | null> => {
 
 export const getTldwServerURL = async () => {
   const config = await tldwClient.getConfig()
-  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl(config?.serverUrl)
+  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
   if (quickstartWebUiServerUrl) {
     return quickstartWebUiServerUrl
   }
@@ -85,7 +83,7 @@ export const getTldwServerURL = async () => {
   }
   // Fallback to stored URL or default
   const stored = await getStoredTldwServerURL()
-  const quickstartStoredServerUrl = getQuickstartWebUiServerUrl(stored)
+  const quickstartStoredServerUrl = getQuickstartWebUiServerUrl()
   if (quickstartStoredServerUrl) {
     return quickstartStoredServerUrl
   }
