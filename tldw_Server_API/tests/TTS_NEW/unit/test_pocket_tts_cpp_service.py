@@ -151,6 +151,46 @@ async def test_pocket_tts_cpp_service_injects_stable_path_for_direct_voice_refer
 
 
 @pytest.mark.asyncio
+async def test_pocket_tts_cpp_invalid_direct_voice_reference_is_rejected_before_materialization(monkeypatch):
+    service = TTSServiceV2()
+    request = OpenAISpeechRequest(
+        model="pocket_tts_cpp",
+        input="hello",
+        voice="alloy",
+        response_format="wav",
+        stream=False,
+    )
+    tts_request = TTSRequest(
+        text="hello",
+        voice="alloy",
+        format=AudioFormat.WAV,
+        voice_reference=b"not-audio",
+        extra_params={},
+    )
+    materialization_calls = 0
+
+    async def _unexpected_materialization(*args, **kwargs):
+        nonlocal materialization_calls
+        materialization_calls += 1
+        raise AssertionError("invalid voice_reference should be rejected before materialization")
+
+    monkeypatch.setattr(service, "_apply_custom_voice_reference", _unexpected_materialization, raising=True)
+
+    with pytest.raises(TTSValidationError, match="Voice reference file is not a valid audio format"):
+        await service._prepare_generate_speech_request(
+            request=request,
+            tts_request=tts_request,
+            provider="pocket_tts_cpp",
+            provider_hint="pocket_tts_cpp",
+            provider_overrides=None,
+            fallback=False,
+            user_id=1,
+        )
+
+    assert materialization_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_pocket_tts_cpp_service_cleans_trust_token_after_generation(tmp_path):
     service = TTSServiceV2()
     seen_tokens: list[str] = []

@@ -102,6 +102,32 @@ def test_pocket_tts_cpp_installer_exports_binary_tokenizer_and_onnx_layout(tmp_p
 
 
 @pytest.mark.unit
+def test_pocket_tts_cpp_installer_exports_from_install_layout_when_build_tree_is_incomplete(tmp_path):
+    from Helper_Scripts.TTS_Installers.install_tts_pocket_tts_cpp import (
+        build_runtime_layout,
+        export_runtime_artifacts,
+    )
+
+    repo_root = tmp_path / "repo"
+    runtime_base = repo_root / "models" / "pocket_tts_cpp"
+    build_dir = tmp_path / "build"
+    install_dir = tmp_path / "install"
+    layout = build_runtime_layout(runtime_base, repo_root=repo_root)
+
+    (install_dir / "bin").mkdir(parents=True, exist_ok=True)
+    (install_dir / "onnx").mkdir(parents=True, exist_ok=True)
+    (install_dir / "bin" / "pocket-tts").write_text("installed-binary", encoding="utf-8")
+    (install_dir / "tokenizer.model").write_text("installed-tokenizer", encoding="utf-8")
+    (install_dir / "onnx" / "flow_lm_main_int8.onnx").write_text("installed-model", encoding="utf-8")
+
+    export_runtime_artifacts(build_dir=build_dir, install_dir=install_dir, layout=layout)
+
+    assert layout.binary_path.read_text(encoding="utf-8") == "installed-binary"
+    assert layout.tokenizer_path.read_text(encoding="utf-8") == "installed-tokenizer"
+    assert (layout.model_dir / "flow_lm_main_int8.onnx").read_text(encoding="utf-8") == "installed-model"
+
+
+@pytest.mark.unit
 def test_pocket_tts_cpp_installer_builds_windows_binary_layout():
     from Helper_Scripts.TTS_Installers.install_tts_pocket_tts_cpp import build_runtime_layout
 
@@ -113,6 +139,69 @@ def test_pocket_tts_cpp_installer_builds_windows_binary_layout():
     )
 
     assert layout.binary_path.relative_to(repo_root).as_posix() == "bin/pocket-tts.exe"
+
+
+@pytest.mark.unit
+def test_pocket_tts_cpp_installer_runs_install_step_before_export(tmp_path, monkeypatch):
+    from Helper_Scripts.TTS_Installers import install_tts_pocket_tts_cpp as installer
+
+    repo_root = tmp_path / "repo"
+    runtime_base = repo_root / "models" / "pocket_tts_cpp"
+    build_dir = tmp_path / "build"
+    source_dir = tmp_path / "src"
+    calls: list[tuple] = []
+
+    monkeypatch.setattr(installer, "_ensure_prerequisites", lambda: None, raising=True)
+    monkeypatch.setattr(installer, "resolve_repo_root", lambda start=None: repo_root, raising=True)
+    monkeypatch.setattr(
+        installer,
+        "configure_build",
+        lambda source_dir, build_dir, install_dir: calls.append(("configure", source_dir, build_dir, install_dir)),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        installer,
+        "build_project",
+        lambda build_dir: calls.append(("build", build_dir)),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_project",
+        lambda build_dir: calls.append(("install", build_dir)),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        installer,
+        "export_runtime_artifacts",
+        lambda *, build_dir, install_dir, layout: calls.append(("export", build_dir, install_dir, layout.binary_path)),
+        raising=True,
+    )
+    monkeypatch.setattr(installer, "validate_runtime_layout", lambda layout: [], raising=True)
+    monkeypatch.setattr(installer, "patch_tts_config", lambda **kwargs: True, raising=True)
+
+    exit_code = installer.main(
+        [
+            "--runtime-base",
+            str(runtime_base),
+            "--build-dir",
+            str(build_dir),
+            "--source-dir",
+            str(source_dir),
+            "--config-path",
+            str(tmp_path / "tts_providers_config.yaml"),
+            "--no-clone",
+        ]
+    )
+
+    assert exit_code == 0
+    assert [entry[0] for entry in calls] == ["configure", "build", "install", "export"]
+    assert calls[0][1] == source_dir
+    assert calls[0][2] == build_dir
+    assert calls[0][3] == runtime_base
+    assert calls[2][1] == build_dir
+    assert calls[3][1] == build_dir
+    assert calls[3][2] == runtime_base
 
 
 @pytest.mark.unit

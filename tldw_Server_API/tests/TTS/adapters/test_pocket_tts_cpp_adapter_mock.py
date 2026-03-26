@@ -89,6 +89,15 @@ def _provider_managed_extras(voice_path: Path) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
+async def test_capabilities_do_not_advertise_streaming_for_provider_selection(tmp_path):
+    adapter = _build_adapter(tmp_path)
+
+    capabilities = await adapter.get_capabilities()
+
+    assert capabilities.supports_streaming is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "missing_path",
     ["binary", "tokenizer", "onnx"],

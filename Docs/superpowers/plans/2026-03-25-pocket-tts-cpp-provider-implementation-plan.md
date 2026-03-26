@@ -8,6 +8,10 @@
 
 **Tech Stack:** Python 3, FastAPI, Pydantic, Loguru, asyncio subprocess/process management, existing TTS adapter stack, pytest, Bandit
 
+## Implementation Amendment (2026-03-26)
+
+The branch implementation deliberately narrowed the streaming scope before merge: v1 keeps the CLI probe, allows explicit streaming only when that probe succeeds on the local install, and otherwise fails closed. The adapter therefore does not advertise streaming capability for automatic provider selection yet. The loopback-only fallback server remains a deferred follow-up instead of a shipped requirement for this branch.
+
 ---
 
 ## File Map

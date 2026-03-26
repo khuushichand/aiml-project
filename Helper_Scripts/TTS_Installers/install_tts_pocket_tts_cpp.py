@@ -339,10 +339,17 @@ def build_project(build_dir: Path) -> None:
     _run_command(["cmake", "--build", str(build_dir), "--config", "Release"])
 
 
+def install_project(build_dir: Path) -> None:
+    """Install PocketTTS.cpp artifacts into the configured CMake install prefix."""
+
+    _run_command(["cmake", "--install", str(build_dir), "--config", "Release"])
+
+
 def export_runtime_artifacts(
     build_dir: Path,
     layout: PocketTTSCppRuntimeLayout,
     *,
+    install_dir: Optional[Path] = None,
     built_binary_names: Sequence[str] = ("pocket-tts", "pocket-tts.exe", "pocket_tts_cpp", "pocket_tts_cpp.exe"),
     built_tokenizer_name: str = "tokenizer.model",
 ) -> None:
@@ -352,14 +359,17 @@ def export_runtime_artifacts(
     layout.model_dir.mkdir(parents=True, exist_ok=True)
     layout.binary_path.parent.mkdir(parents=True, exist_ok=True)
 
+    candidate_roots = [root for root in (install_dir, build_dir) if root is not None]
+
     built_binary = next(
         (
             path
+            for root in candidate_roots
             for binary_name in built_binary_names
             for path in (
-                build_dir / binary_name,
-                build_dir / "Release" / binary_name,
-                build_dir / "bin" / binary_name,
+                root / binary_name,
+                root / "Release" / binary_name,
+                root / "bin" / binary_name,
             )
             if path.exists()
         ),
@@ -375,9 +385,13 @@ def export_runtime_artifacts(
         shutil.copy2(built_binary, layout.binary_path)
 
     tokenizer_candidates = [
-        build_dir / built_tokenizer_name,
-        build_dir / "assets" / built_tokenizer_name,
-        build_dir / "Release" / built_tokenizer_name,
+        candidate
+        for root in candidate_roots
+        for candidate in (
+            root / built_tokenizer_name,
+            root / "assets" / built_tokenizer_name,
+            root / "Release" / built_tokenizer_name,
+        )
     ]
     built_tokenizer = next((path for path in tokenizer_candidates if path.exists()), None)
     if built_tokenizer is not None:
@@ -386,11 +400,12 @@ def export_runtime_artifacts(
     model_source_dir = next(
         (
             path
+            for root in candidate_roots
             for path in (
-                build_dir / "onnx",
-                build_dir / "export" / "onnx",
-                build_dir / "models" / "onnx",
-                build_dir / "assets" / "onnx",
+                root / "onnx",
+                root / "export" / "onnx",
+                root / "models" / "onnx",
+                root / "assets" / "onnx",
             )
             if path.exists() and path.is_dir()
         ),
@@ -482,9 +497,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not args.no_build:
         configure_build(source_dir=source_dir, build_dir=build_dir, install_dir=runtime_base)
         build_project(build_dir=build_dir)
+        install_project(build_dir=build_dir)
 
     if not args.no_export:
-        export_runtime_artifacts(build_dir=build_dir, layout=layout)
+        export_runtime_artifacts(build_dir=build_dir, install_dir=runtime_base, layout=layout)
 
     missing_runtime = validate_runtime_layout(layout)
     if missing_runtime:

@@ -82,7 +82,8 @@ providers:
   # PocketTTS.cpp Configuration (local; voice cloning with cached stored voices)
   pocket_tts_cpp:
     enabled: false  # Disabled by default; enable after installing the native runtime
-    binary_path: "models/pocket_tts_cpp/pocket_tts_cpp"
+    binary_path: "bin/pocket-tts"
+    model_path: "models/pocket_tts_cpp/onnx"
     tokenizer_path: "models/pocket_tts_cpp/tokenizer.model"
     device: "cpu"
     sample_rate: 24000

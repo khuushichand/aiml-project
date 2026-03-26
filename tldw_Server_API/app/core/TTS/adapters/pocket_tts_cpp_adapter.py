@@ -307,7 +307,7 @@ class PocketTTSCppAdapter(TTSAdapter):
             supported_voices=[],
             supported_formats=self.SUPPORTED_FORMATS,
             max_text_length=self.MAX_TEXT_LENGTH,
-            supports_streaming=True,
+            supports_streaming=False,
             supports_voice_cloning=True,
             sample_rate=self.DEFAULT_SAMPLE_RATE,
             default_format=AudioFormat.WAV,

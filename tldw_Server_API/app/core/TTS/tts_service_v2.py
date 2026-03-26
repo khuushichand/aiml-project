@@ -427,14 +427,13 @@ class TTSServiceV2:
         """Resolve provider-managed request state before execution begins."""
         prepared = False
         try:
-            await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
             self._apply_token_defaults(tts_request)
-
             validate_tts_request(
                 tts_request,
                 provider=provider_hint,
                 config=self._get_validation_config(),
             )
+            await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
 
             adapter = await self._get_adapter(request.model, provider, overrides=provider_overrides)
             if not adapter and fallback:

@@ -4,6 +4,10 @@ Date: 2026-03-25
 Status: Approved for planning
 Owner: Codex brainstorming session
 
+## Implementation Amendment (2026-03-26)
+
+The original design kept an internal loopback-only PocketTTS.cpp server fallback available for streaming when the CLI probe was not truly incremental. The merged v1 implementation intentionally stops short of that fallback: it probes the CLI, allows explicit streaming only when the local install proves incremental, and otherwise fails closed. To avoid over-promising in provider selection, the adapter does not advertise streaming capability for automatic selection until a real fallback transport lands.
+
 ## Summary
 
 Add `pocket_tts_cpp` as a new local TTS provider backed by [PocketTTS.cpp](https://github.com/VolgaGerm/PocketTTS.cpp), while keeping the existing `pocket_tts` Python/ONNX runtime intact.
