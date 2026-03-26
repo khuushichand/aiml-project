@@ -11,6 +11,7 @@ type CompactToolbarProps = {
   onOpenSourceSelector: () => void
   onOpenSettings: () => void
   contextChangedSinceLastRun: boolean
+  className?: string
 }
 
 const ALL_SOURCES_THRESHOLD = 5
@@ -45,9 +46,10 @@ export function CompactToolbar({
   onOpenSourceSelector,
   onOpenSettings,
   contextChangedSinceLastRun,
+  className,
 }: CompactToolbarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className={cn("flex flex-wrap items-center gap-2", className)}>
       {/* Sources pill */}
       <button
         type="button"

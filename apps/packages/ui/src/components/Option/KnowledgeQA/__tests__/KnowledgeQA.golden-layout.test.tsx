@@ -118,13 +118,20 @@ vi.mock("../hooks/useLayoutMode", () => ({
 }))
 
 vi.mock("../SearchBar", () => ({
-  SearchBar: () => (
+  SearchBar: ({ widthMode }: { widthMode?: "compact" | "wide" }) => (
     <input
       id="knowledge-search-input"
       aria-label="Search your knowledge base"
       data-testid="knowledge-search-bar"
+      data-width-mode={widthMode ?? "compact"}
     />
   )
+}))
+
+vi.mock("../context/CompactToolbar", () => ({
+  CompactToolbar: ({ className }: { className?: string }) => (
+    <div data-testid="knowledge-compact-toolbar" data-class-name={className ?? ""} />
+  ),
 }))
 
 vi.mock("../HistorySidebar", () => ({
@@ -238,10 +245,12 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(screen.getByText("Ask Your Library")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-bar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("flex-1")
-    expect(screen.getByTestId("knowledge-search-shell").className).toContain("items-start")
-    expect(screen.getByTestId("knowledge-search-shell").className).not.toContain("items-center")
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("mx-auto")
-    expect(screen.getByTestId("knowledge-search-shell").className).toContain("max-w-3xl")
+    expect(screen.getByTestId("knowledge-search-shell").className).toContain("max-w-5xl")
+    expect(screen.getByTestId("knowledge-search-shell").firstElementChild?.className).toContain("items-center")
+    expect(screen.getByTestId("knowledge-search-shell").firstElementChild?.className).toContain("max-w-5xl")
+    expect(screen.getByTestId("knowledge-compact-toolbar")).toHaveAttribute("data-class-name", "justify-center")
+    expect(screen.getByTestId("knowledge-search-bar")).toHaveAttribute("data-width-mode", "wide")
     expect(
       screen.queryByTestId("knowledge-answer-panel")
     ).not.toBeInTheDocument()

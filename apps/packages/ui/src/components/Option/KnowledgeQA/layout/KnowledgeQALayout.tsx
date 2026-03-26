@@ -180,6 +180,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     settings.sources.length > 0
       ? READY_STATE_SUGGESTIONS
       : READY_STATE_ONBOARDING_SUGGESTIONS
+  const isDesktopReadyState = effectiveSimple && !isMobile && !hasVisibleResultsArea
 
   const contextChangedSinceLastRun = useMemo(() => {
     if (!lastSearchScope) return false
@@ -328,13 +329,18 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
             className={cn(
               "transition-all duration-300",
               effectiveSimple && !hasVisibleResultsArea
-                ? "mx-auto flex flex-1 w-full max-w-3xl items-start justify-center px-4 py-10 md:px-6"
+                ? "mx-auto flex flex-1 w-full max-w-5xl items-start justify-center px-4 py-10 md:px-6"
                 : effectiveSimple
                   ? "mx-auto w-full max-w-3xl px-4 pt-6 pb-4 md:px-6"
                   : "px-4 pt-6 pb-4 md:px-6"
             )}
           >
-            <div className="w-full space-y-4">
+            <div
+              className={cn(
+                "w-full space-y-4",
+                isDesktopReadyState && "mx-auto flex max-w-5xl flex-col items-center"
+              )}
+            >
               {/* Compact toolbar in Simple mode, full context bar in Research mode */}
               {effectiveSimple ? (
                 <CompactToolbar
@@ -347,6 +353,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   onOpenSourceSelector={handleOpenSourceSelector}
                   onOpenSettings={() => setSettingsPanelOpen(true)}
                   contextChangedSinceLastRun={contextChangedSinceLastRun}
+                  className={isDesktopReadyState ? "justify-center" : undefined}
                 />
               ) : (
                 <KnowledgeContextBar
@@ -389,6 +396,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                       <LazyInlineRecentSessions
                         items={recentSessions}
                         onRestore={(item) => void restoreFromHistory(item)}
+                        className={isDesktopReadyState ? "max-w-5xl" : undefined}
                       />
                     </React.Suspense>
                   )}
@@ -398,7 +406,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
               <KnowledgeComposer
                 autoFocus={!hasVisibleResultsArea}
                 showWebToggle={false}
-                widthMode={effectiveSimple ? "compact" : "wide"}
+                widthMode={isDesktopReadyState ? "wide" : effectiveSimple ? "compact" : "wide"}
               />
             </div>
           </div>

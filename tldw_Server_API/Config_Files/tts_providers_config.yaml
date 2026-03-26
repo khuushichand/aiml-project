@@ -15,6 +15,7 @@ provider_priority:
   - dia         # Dialogue specialist
   - higgs       # Advanced multi-lingual
   - index_tts   # IndexTTS2 (local, expressive zero-shot)
+  - pocket_tts_cpp # Local PocketTTS.cpp voice cloning
   - qwen3_tts   # Qwen3-TTS (local, multilingual; disabled by default)
 
 # Provider-specific configurations
@@ -77,6 +78,18 @@ providers:
     stream_target_buffer_sec: 0.2
     stream_max_chunk_frames: 15
     sample_rate: 24000
+
+  # PocketTTS.cpp Configuration (local; voice cloning with cached stored voices)
+  pocket_tts_cpp:
+    enabled: false  # Disabled by default; enable after installing the native runtime
+    binary_path: "models/pocket_tts_cpp/pocket_tts_cpp"
+    tokenizer_path: "models/pocket_tts_cpp/tokenizer.model"
+    device: "cpu"
+    sample_rate: 24000
+    enable_voice_cache: false
+    cache_ttl_hours: 24
+    cache_max_bytes_per_user: 1073741824
+    persist_direct_voice_references: false
 
   # KittenTTS ONNX Configuration (local; English single-speaker voices)
   kitten_tts:
@@ -305,6 +318,7 @@ voice_mappings:
       chatterbox: "default"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      pocket_tts_cpp: "clone_required"
       lux_tts: "clone_required"
     neutral:
       openai: "alloy"
@@ -314,6 +328,7 @@ voice_mappings:
       chatterbox: "calm"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      pocket_tts_cpp: "clone_required"
       lux_tts: "clone_required"
 
   # Emotion-based voice selection
@@ -324,6 +339,7 @@ voice_mappings:
       chatterbox: "energetic"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      pocket_tts_cpp: "clone_required"
       lux_tts: "clone_required"
     sad:
       openai: "shimmer"
@@ -331,6 +347,7 @@ voice_mappings:
       chatterbox: "calm"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      pocket_tts_cpp: "clone_required"
       lux_tts: "clone_required"
     angry:
       openai: "onyx"
@@ -338,6 +355,7 @@ voice_mappings:
       chatterbox: "default"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      pocket_tts_cpp: "clone_required"
       lux_tts: "clone_required"
     excited:
       openai: "fable"
@@ -345,6 +363,7 @@ voice_mappings:
       chatterbox: "energetic"
       index_tts: "clone_required"
       pocket_tts: "clone_required"
+      pocket_tts_cpp: "clone_required"
       lux_tts: "clone_required"
 
 # Audio format preferences by provider
@@ -358,6 +377,7 @@ format_preferences:
   neutts: ["wav", "mp3", "opus", "flac", "pcm"]
   index_tts: ["mp3", "wav"]
   pocket_tts: ["wav", "mp3", "opus", "flac", "pcm", "aac"]
+  pocket_tts_cpp: ["wav", "mp3", "opus", "flac", "pcm", "aac"]
   lux_tts: ["wav", "mp3", "opus", "flac", "pcm", "aac"]
   qwen3_tts: ["wav", "mp3", "opus", "flac", "pcm"]
 
