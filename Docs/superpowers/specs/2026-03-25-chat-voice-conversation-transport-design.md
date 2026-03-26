@@ -190,6 +190,12 @@ Keep existing `hasVoiceChat` semantics if other callers still depend on the broa
 
 This avoids solving the `/chat` issue by silently breaking legacy assumptions elsewhere in the app.
 
+Conservative capability rule:
+
+- strict voice-conversation transport capability must not be inferred solely from the optimistic bundled fallback OpenAPI spec
+- if capability discovery falls back to the bundled local spec instead of an authoritative server spec, treat strict transport support as unknown or unavailable for `/chat` voice conversation
+- do not let fallback discovery reintroduce the same over-advertising problem this design is intended to remove
+
 ### 2. Add One Shared Voice-Conversation Availability Resolver
 
 Create a shared helper or hook in the UI package that both chat surfaces must use.
@@ -236,8 +242,8 @@ Required checks:
 
 - configured server URL exists
 - auth token or API key exists for the current auth mode
-- a usable chat model is selected
-- the selected model resolves to a provider or acceptable provider-less path
+- if a client-selected model is present, it resolves to a usable provider path
+- if no client-selected model is present, the client may intentionally omit `llm.model` and defer to backend defaults rather than hard-failing preflight
 - the effective voice-chat TTS config resolves to a server-usable provider/model/voice/format combination
 
 If any preflight step fails:
@@ -355,7 +361,7 @@ Behavior:
 - if `full_transcript` has already created the user message:
   - keep the user message
   - if no assistant text has streamed yet, remove the empty assistant placeholder
-  - if assistant text has streamed, finalize the visible assistant message with the accumulated partial text and mark it as interrupted in message metadata
+  - if assistant text has streamed, finalize the visible assistant message with the accumulated partial text and mark it as interrupted using the existing interrupted-generation metadata shape
 - disable the active voice-conversation toggle
 - show the surfaced error or a normalized fallback string
 
@@ -363,6 +369,15 @@ The same status model and messages should be used by:
 
 - [`PlaygroundForm.tsx`](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Option/Playground/PlaygroundForm.tsx)
 - [`form.tsx`](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Sidepanel/Chat/form.tsx)
+
+Interruption metadata contract:
+
+- do not invent a new voice-chat-only message metadata shape
+- reuse the existing interrupted-generation pattern already used in the main chat flows:
+  - `generationInfo.interrupted`
+  - `generationInfo.interruptionReason`
+  - `generationInfo.interruptedAt`
+- apply that existing shape through the current message-variant update path so the interrupted assistant state is rendered consistently with other partial-response failures
 
 ## Testing Strategy
 
@@ -399,7 +414,8 @@ Extend:
 Add cases for:
 
 - missing auth
-- missing selected model
+- no selected client model, allowing backend defaults
+- selected model present but provider resolution fails
 - unresolved TTS config
 - browser provider without valid server fallback
 - backend disconnect after transcript begins
@@ -430,6 +446,14 @@ Required manual checks:
 
 4. Misconfigured TTS state
    - user gets a clear voice-conversation-specific failure rather than transcript-only stall
+
+5. Capability discovery falls back to bundled local spec only
+   - `/chat` voice conversation does not become available solely because the fallback spec contains `/audio/chat/stream`
+   - strict transport support stays conservative until authoritative discovery succeeds
+
+6. No selected client model
+   - voice conversation may still start if backend defaults can carry the turn
+   - if a user-selected model is present but provider resolution fails, preflight surfaces a clear model/provider error
 
 ## Implementation Notes For Planning
 
