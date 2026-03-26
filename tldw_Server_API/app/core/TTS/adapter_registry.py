@@ -69,6 +69,7 @@ class TTSProvider(Enum):
     SUPERTONIC = "supertonic"
     SUPERTONIC2 = "supertonic2"
     POCKET_TTS = "pocket_tts"
+    POCKET_TTS_CPP = "pocket_tts_cpp"
     ECHO_TTS = "echo_tts"
     QWEN3_TTS = "qwen3_tts"
     LUX_TTS = "lux_tts"
@@ -141,6 +142,7 @@ class TTSAdapterRegistry:
         TTSProvider.SUPERTONIC: "tldw_Server_API.app.core.TTS.adapters.supertonic_adapter.SupertonicOnnxAdapter",
         TTSProvider.SUPERTONIC2: "tldw_Server_API.app.core.TTS.adapters.supertonic2_adapter.Supertonic2OnnxAdapter",
         TTSProvider.POCKET_TTS: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_adapter.PocketTTSOnnxAdapter",
+        TTSProvider.POCKET_TTS_CPP: "tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_adapter.PocketTTSCppAdapter",
         TTSProvider.ECHO_TTS: "tldw_Server_API.app.core.TTS.adapters.echo_tts_adapter.EchoTTSAdapter",
         TTSProvider.QWEN3_TTS: "tldw_Server_API.app.core.TTS.adapters.qwen3_tts_adapter.Qwen3TTSAdapter",
         TTSProvider.LUX_TTS: "tldw_Server_API.app.core.TTS.adapters.luxtts_adapter.LuxTTSAdapter",
@@ -655,6 +657,15 @@ class TTSAdapterRegistry:
                     alias('stream_first_chunk_frames', 'pocket_tts_stream_first_chunk_frames')
                     alias('stream_target_buffer_sec', 'pocket_tts_stream_target_buffer_sec')
                     alias('stream_max_chunk_frames', 'pocket_tts_stream_max_chunk_frames')
+                elif p == 'pocket_tts_cpp':
+                    alias('binary_path', 'pocket_tts_cpp_binary_path')
+                    alias('tokenizer_path', 'pocket_tts_cpp_tokenizer_path')
+                    alias('device', 'pocket_tts_cpp_device')
+                    alias('sample_rate', 'pocket_tts_cpp_sample_rate')
+                    alias('enable_voice_cache', 'pocket_tts_cpp_enable_voice_cache')
+                    alias('cache_ttl_hours', 'pocket_tts_cpp_cache_ttl_hours')
+                    alias('cache_max_bytes_per_user', 'pocket_tts_cpp_cache_max_bytes_per_user')
+                    alias('persist_direct_voice_references', 'pocket_tts_cpp_persist_direct_voice_references')
                 elif p == 'echo_tts':
                     alias('model', 'echo_tts_model')
                     alias('model_path', 'echo_tts_model_path')
@@ -726,6 +737,7 @@ class TTSAdapterRegistry:
             if provider in [TTSProvider.KOKORO, TTSProvider.KITTEN_TTS, TTSProvider.HIGGS, TTSProvider.DIA,
                            TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.VIBEVOICE_REALTIME,
                            TTSProvider.SUPERTONIC, TTSProvider.SUPERTONIC2, TTSProvider.POCKET_TTS,
+                           TTSProvider.POCKET_TTS_CPP,
                            TTSProvider.QWEN3_TTS] and enabled_flag is not True:
                 continue
 
@@ -1071,6 +1083,10 @@ class TTSAdapterFactory:
         "pockettts": TTSProvider.POCKET_TTS,
         "pockettts-onnx": TTSProvider.POCKET_TTS,
         "kevinahm/pocket-tts-onnx": TTSProvider.POCKET_TTS,
+
+        # PocketTTS.cpp models
+        "pocket_tts_cpp": TTSProvider.POCKET_TTS_CPP,
+        "pocket-tts-cpp": TTSProvider.POCKET_TTS_CPP,
 
         # Echo-TTS models
         "echo-tts": TTSProvider.ECHO_TTS,

@@ -121,6 +121,13 @@ class ProviderLimits:
             "min_speed": 0.25,
             "max_speed": 4.0
         },
+        "pocket_tts_cpp": {
+            "max_text_length": 5000,
+            "languages": ["en"],
+            "valid_formats": {"mp3", "wav", "opus", "flac", "pcm", "aac"},
+            "min_speed": 0.25,
+            "max_speed": 4.0
+        },
         "kitten_tts": {
             "max_text_length": 5000,
             "languages": ["en"],
@@ -239,6 +246,7 @@ class TTSInputValidator:
         "supertonic": 15000,
         "supertonic2": 15000,
         "pocket_tts": 5000,
+        "pocket_tts_cpp": 5000,
         "kitten_tts": 5000,
         "echo_tts": 768,
         "lux_tts": 5000,
@@ -272,6 +280,7 @@ class TTSInputValidator:
         "supertonic": {"en"},
         "supertonic2": {"en", "ko", "es", "pt", "fr"},
         "pocket_tts": {"en"},
+        "pocket_tts_cpp": {"en"},
         "kitten_tts": {"en"},
         "echo_tts": {"en"},
         "lux_tts": {"en"},
@@ -293,6 +302,7 @@ class TTSInputValidator:
         "supertonic": {AudioFormat.MP3, AudioFormat.WAV},
         "supertonic2": {AudioFormat.MP3, AudioFormat.WAV},
         "pocket_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
+        "pocket_tts_cpp": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS, AudioFormat.FLAC, AudioFormat.PCM, AudioFormat.AAC},
         "kitten_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.PCM},
         "echo_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
         "lux_tts": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS, AudioFormat.AAC, AudioFormat.PCM},
@@ -624,6 +634,13 @@ class TTSInputValidator:
                         )
                     if min_duration is None:
                         min_duration = 3.0
+            elif provider == "pocket_tts_cpp":
+                voice = (request.voice or "").strip()
+                if not request.voice_reference and not voice.startswith("custom:"):
+                    raise TTSInvalidVoiceReferenceError(
+                        "PocketTTS.cpp requires a direct voice_reference or a stored custom: voice",
+                        provider=provider,
+                    )
 
             # Validate parameters (provider-aware)
             self._validate_parameters(request, provider)
@@ -920,7 +937,7 @@ class TTSInputValidator:
         elif provider == "elevenlabs":
             # ElevenLabs specific rules
             return text
-        elif provider in ["kokoro", "kitten_tts", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts", "lux_tts"]:
+        elif provider in ["kokoro", "kitten_tts", "higgs", "dia", "chatterbox", "vibevoice", "pocket_tts", "pocket_tts_cpp", "lux_tts"]:
             # Local model specific rules - more conservative
             # Remove URLs and email addresses
             text = re.sub(r'https?://\S+', '[URL]', text)
