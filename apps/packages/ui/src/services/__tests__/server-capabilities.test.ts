@@ -259,6 +259,36 @@ describe("server capabilities docs-info merge", () => {
     expect(capabilities.hasAudio).toBe(true)
   })
 
+  it("keeps strict voice conversation transport off for STT plus TTS only authoritative specs", async () => {
+    mocks.getOpenAPISpec.mockResolvedValue({
+      info: { version: "audio-split-stt-tts-authoritative" },
+      paths: {
+        "/api/v1/audio/transcriptions": {},
+        "/api/v1/audio/speech": {}
+      }
+    })
+    mocks.bgRequest.mockResolvedValue({})
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasVoiceChat).toBe(true)
+    expect(capabilities.hasVoiceConversationTransport).toBe(false)
+    expect(capabilities.specSource).toBe("authoritative")
+  })
+
+  it("keeps strict voice conversation transport off for fallback-spec-only discovery", async () => {
+    mocks.getOpenAPISpec.mockRejectedValue(new Error("openapi unavailable"))
+    mocks.bgRequest.mockRejectedValue(new Error("docs-info unavailable"))
+
+    const { getServerCapabilities } = await importCapabilitiesModule()
+    const capabilities = await getServerCapabilities()
+
+    expect(capabilities.hasVoiceChat).toBe(true)
+    expect(capabilities.hasVoiceConversationTransport).toBe(false)
+    expect(capabilities.specSource).toBe("fallback")
+  })
+
   it("detects presentation studio and render capability from docs-info", async () => {
     mocks.getOpenAPISpec.mockResolvedValue({
       info: { version: "presentation-studio-docs-info" },

@@ -25,6 +25,7 @@ export type ServerCapabilities = {
   hasStt: boolean
   hasTts: boolean
   hasVoiceChat: boolean
+  hasVoiceConversationTransport: boolean
   hasAudio: boolean
   hasEmbeddings: boolean
   hasMetrics: boolean
@@ -40,6 +41,7 @@ export type ServerCapabilities = {
   hasGuardian: boolean
   hasSelfMonitoring: boolean
   specVersion: string | null
+  specSource: "authoritative" | "fallback"
 }
 
 const defaultCapabilities: ServerCapabilities = {
@@ -65,6 +67,7 @@ const defaultCapabilities: ServerCapabilities = {
   hasStt: false,
   hasTts: false,
   hasVoiceChat: false,
+  hasVoiceConversationTransport: false,
   hasAudio: false,
   hasEmbeddings: false,
   hasMetrics: false,
@@ -79,7 +82,8 @@ const defaultCapabilities: ServerCapabilities = {
   hasPersonalization: false,
   hasGuardian: false,
   hasSelfMonitoring: false,
-  specVersion: null
+  specVersion: null,
+  specSource: "authoritative"
 }
 
 const fallbackSpec = {
@@ -374,8 +378,13 @@ const applyDocsInfoFeatureGates = (
   }
 }
 
-const computeCapabilities = (spec: any | null | undefined): ServerCapabilities => {
-  if (!spec || typeof spec !== "object") return { ...defaultCapabilities }
+const computeCapabilities = (
+  spec: any | null | undefined,
+  specSource: "authoritative" | "fallback" = "authoritative"
+): ServerCapabilities => {
+  if (!spec || typeof spec !== "object") {
+    return { ...defaultCapabilities, specSource }
+  }
   const paths = normalizePaths(spec.paths || {})
   const has = (p: string) => Boolean(paths[p])
   const hasChatSaveToDb = detectChatSaveToDb(spec)
@@ -402,6 +411,8 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
     has("/api/v1/audio/chat/stream")
   const hasVoiceChat =
     has("/api/v1/audio/chat/stream") || (hasStt && hasTts)
+  const hasVoiceConversationTransport =
+    specSource === "fallback" ? false : has("/api/v1/audio/chat/stream")
 
   return {
     hasChat: has("/api/v1/chat/completions"),
@@ -440,6 +451,7 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
     hasStt,
     hasTts,
     hasVoiceChat,
+    hasVoiceConversationTransport,
     hasAudio: hasStt || hasTts || hasVoiceChat,
     hasEmbeddings:
       has("/api/v1/embeddings/models") ||
@@ -472,7 +484,8 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
       has("/api/v1/self-monitoring/rules") ||
       has("/api/v1/self-monitoring/alerts") ||
       has("/api/v1/self-monitoring/crisis-resources"),
-    specVersion: spec?.info?.version ?? null
+    specVersion: spec?.info?.version ?? null,
+    specSource
   }
 }
 
@@ -626,19 +639,23 @@ const fetchCapabilitiesFromServer = async (): Promise<ServerCapabilities> => {
     capabilitiesDiagnostics.lastError = toErrorString(error)
     // ignore, fall back to bundled spec
   }
-  let source: ServerCapabilitiesCacheDiagnostics["lastSource"] = "network"
+  let diagnosticsSource: ServerCapabilitiesCacheDiagnostics["lastSource"] = "network"
+  let specSource: "authoritative" | "fallback" = "authoritative"
   if (!spec) {
     spec = fallbackSpec
-    source = "fallback"
+    diagnosticsSource = "fallback"
+    specSource = "fallback"
     capabilitiesDiagnostics.fallbackSpecUses += 1
   }
   capabilitiesDiagnostics.lastFetchAt = Date.now()
   capabilitiesDiagnostics.lastFetchDurationMs =
     capabilitiesDiagnostics.lastFetchAt - startedAt
-  capabilitiesDiagnostics.lastSource = source
+  capabilitiesDiagnostics.lastSource = diagnosticsSource
 
-  maybeLogDiagnostics(source === "fallback" ? "fallback-spec" : "network-fetch")
-  return applyDocsInfoFeatureGates(computeCapabilities(spec), docsInfo)
+  maybeLogDiagnostics(
+    diagnosticsSource === "fallback" ? "fallback-spec" : "network-fetch"
+  )
+  return applyDocsInfoFeatureGates(computeCapabilities(spec, specSource), docsInfo)
 }
 
 export const getServerCapabilities = async (
