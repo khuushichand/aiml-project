@@ -1,13 +1,16 @@
 import React from "react"
-import { Button, Input, Switch, Tooltip, Typography } from "antd"
+import { Button, Input, Select, Switch, Tooltip, Typography } from "antd"
 import { useTranslation } from "react-i18next"
 import { ArrowLeft, ArrowRight } from "lucide-react"
 
 import { useIngestWizard } from "./IngestWizardContext"
 import { PresetSelector } from "./PresetSelector"
 import type { CommonOptions, DetectedMediaType, TypeDefaults } from "./types"
+import { SUPPORTED_LANGUAGES } from "@/utils/supported-languages"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 
 const DRAFT_STORAGE_CAP_BYTES = 5 * 1024 * 1024
+const CUSTOM_AUDIO_LANGUAGE_SENTINEL = "__custom__"
 
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
@@ -30,7 +33,13 @@ const nextTypeDefaults = (
   return resolved ?? {}
 }
 
-export const WizardConfigureStep: React.FC = () => {
+type WizardConfigureStepProps = {
+  isStepVisible?: boolean
+}
+
+export const WizardConfigureStep: React.FC<WizardConfigureStepProps> = ({
+  isStepVisible = true,
+}) => {
   const { t } = useTranslation(["option"])
   const { state, setPreset, setCustomOptions, goNext, goBack } = useIngestWizard()
   const { queueItems, selectedPreset, presetConfig } = state
@@ -54,11 +63,84 @@ export const WizardConfigureStep: React.FC = () => {
   const hasAudioItems = detectedTypes.has("audio")
   const hasVideoItems = detectedTypes.has("video")
   const hasTranscriptionItems = hasAudioItems || hasVideoItems
+  const [transcriptionModels, setTranscriptionModels] = React.useState<string[]>([])
+  const [transcriptionModelsLoading, setTranscriptionModelsLoading] =
+    React.useState(false)
   const hasDocumentItems =
     detectedTypes.has("document") ||
     detectedTypes.has("pdf") ||
     detectedTypes.has("ebook") ||
     detectedTypes.has("image")
+
+  const normalizedTranscriptionModel =
+    presetConfig.advancedValues?.transcription_model?.trim() || ""
+  const shouldLoadTranscriptionModels =
+    hasTranscriptionItems && isStepVisible
+
+  React.useEffect(() => {
+    if (!shouldLoadTranscriptionModels) {
+      setTranscriptionModels([])
+      setTranscriptionModelsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const loadModels = async () => {
+      setTranscriptionModelsLoading(true)
+      try {
+        const result = await tldwClient.getTranscriptionModels({
+          timeoutMs: 10_000
+        })
+        const raw = Array.isArray(result?.all_models) ? result.all_models : []
+        const seen = new Set<string>()
+        const uniqueModels: string[] = []
+        for (const entry of raw) {
+          const model = String(entry).trim()
+          if (!model || seen.has(model)) {
+            continue
+          }
+          seen.add(model)
+          uniqueModels.push(model)
+        }
+        if (!cancelled) {
+          setTranscriptionModels(uniqueModels)
+        }
+      } catch {
+        // ignore model catalog fetch errors in the quick ingest flow
+      } finally {
+        if (!cancelled) {
+          setTranscriptionModelsLoading(false)
+        }
+      }
+    }
+
+    void loadModels()
+
+    return () => {
+      cancelled = true
+      setTranscriptionModelsLoading(false)
+    }
+  }, [shouldLoadTranscriptionModels])
+
+  const transcriptionModelOptions = React.useMemo(() => {
+    const uniqueModels = new Map<string, string>()
+    for (const model of transcriptionModels) {
+      const value = String(model).trim()
+      if (!value || uniqueModels.has(value)) {
+        continue
+      }
+      uniqueModels.set(value, value)
+    }
+
+    if (normalizedTranscriptionModel && !uniqueModels.has(normalizedTranscriptionModel)) {
+      uniqueModels.set(normalizedTranscriptionModel, normalizedTranscriptionModel)
+    }
+
+    return [...uniqueModels.entries()].map(([value, label]) => ({
+      value,
+      label,
+    }))
+  }, [normalizedTranscriptionModel, transcriptionModels])
 
   const setCommon = React.useCallback(
     (nextValue: React.SetStateAction<CommonOptions>) => {
@@ -79,6 +161,67 @@ export const WizardConfigureStep: React.FC = () => {
     },
     [presetConfig.typeDefaults, setCustomOptions]
   )
+
+  const normalizedAudioLanguage =
+    presetConfig.typeDefaults.audio?.language?.trim() || ""
+
+  const supportedLanguageValues = React.useMemo(
+    () => new Set(SUPPORTED_LANGUAGES.map((option) => option.value)),
+    []
+  )
+
+  const isKnownLanguage =
+    normalizedAudioLanguage !== "" &&
+    supportedLanguageValues.has(normalizedAudioLanguage)
+
+  const [audioLanguageMode, setAudioLanguageMode] = React.useState<
+    "empty" | "standard" | "custom"
+  >(() => {
+    if (normalizedAudioLanguage === "") return "empty"
+    return isKnownLanguage ? "standard" : "custom"
+  })
+
+  const savedAudioLanguageRef = React.useRef(normalizedAudioLanguage)
+
+  const [customAudioLanguage, setCustomAudioLanguage] = React.useState(
+    isKnownLanguage ? "" : normalizedAudioLanguage
+  )
+
+  React.useEffect(() => {
+    if (savedAudioLanguageRef.current === normalizedAudioLanguage) {
+      return
+    }
+
+    if (normalizedAudioLanguage === "") {
+      setAudioLanguageMode("empty")
+    } else if (isKnownLanguage) {
+      setAudioLanguageMode("standard")
+    } else {
+      setAudioLanguageMode("custom")
+      setCustomAudioLanguage(normalizedAudioLanguage)
+    }
+
+    savedAudioLanguageRef.current = normalizedAudioLanguage
+  }, [isKnownLanguage, normalizedAudioLanguage])
+
+  React.useEffect(() => {
+    if (audioLanguageMode === "custom") {
+      setCustomAudioLanguage(normalizedAudioLanguage)
+    }
+  }, [audioLanguageMode, normalizedAudioLanguage])
+
+  const shouldShowCustomAudioLanguageInput =
+    audioLanguageMode === "custom"
+
+  const audioLanguageSelectValue = React.useMemo(() => {
+    if (audioLanguageMode === "empty") {
+      return undefined
+    }
+    if (audioLanguageMode === "custom") {
+      return CUSTOM_AUDIO_LANGUAGE_SENTINEL
+    }
+    return normalizedAudioLanguage
+  }, [audioLanguageMode, normalizedAudioLanguage])
 
   const handleAnalysisToggle = React.useCallback(
     (checked: boolean) => {
@@ -101,9 +244,42 @@ export const WizardConfigureStep: React.FC = () => {
     [setCommon]
   )
 
-  const handleAudioLanguageChange = React.useCallback(
+  const handleAudioLanguageOptionChange = React.useCallback(
+    (nextValue: string) => {
+      if (nextValue === CUSTOM_AUDIO_LANGUAGE_SENTINEL) {
+        setAudioLanguageMode("custom")
+        return
+      }
+
+      setAudioLanguageMode("standard")
+
+      setTypeDefaults((previous) => ({
+        ...(previous ?? {}),
+        audio: {
+          ...(previous?.audio ?? {}),
+          language: nextValue,
+        },
+      }))
+    },
+    [setTypeDefaults]
+  )
+
+  const handleAudioLanguageClear = React.useCallback(() => {
+    setAudioLanguageMode("empty")
+    setCustomAudioLanguage("")
+    setTypeDefaults((previous) => ({
+      ...(previous ?? {}),
+      audio: {
+        ...(previous?.audio ?? {}),
+        language: undefined,
+      },
+    }))
+  }, [setTypeDefaults])
+
+  const handleCustomAudioLanguageChange = React.useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
       const nextLanguage = event.target.value.trim()
+      setCustomAudioLanguage(nextLanguage)
       setTypeDefaults((previous) => ({
         ...(previous ?? {}),
         audio: {
@@ -172,8 +348,8 @@ export const WizardConfigureStep: React.FC = () => {
   )
 
   const handleTranscriptionModelChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const nextModel = event.target.value.trim()
+    (nextValue?: string) => {
+      const nextModel = typeof nextValue === "string" ? nextValue.trim() : ""
       setCustomOptions({
         advancedValues: {
           transcription_model: nextModel || undefined,
@@ -182,6 +358,14 @@ export const WizardConfigureStep: React.FC = () => {
     },
     [setCustomOptions]
   )
+
+  const handleTranscriptionModelClear = React.useCallback(() => {
+    setCustomOptions({
+      advancedValues: {
+        transcription_model: undefined,
+      },
+    })
+  }, [setCustomOptions])
 
   const storageLabel = presetConfig.reviewBeforeStorage
     ? qi("reviewModeStorageLabel", "Review drafts locally")
@@ -278,14 +462,41 @@ export const WizardConfigureStep: React.FC = () => {
               )}
             </Typography.Title>
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
-              <Input
-                aria-label="Audio language"
-                title="Audio language"
-                placeholder={t("quickIngest.audioLanguage") || "Language (e.g., en)"}
-                value={presetConfig.typeDefaults.audio?.language || ""}
-                onChange={handleAudioLanguageChange}
-                disabled={!hasTranscriptionItems}
-              />
+              <div className="space-y-2">
+                <Select
+                  aria-label="Audio language"
+                  title="Audio language"
+                  placeholder={qi(
+                    "audioLanguagePlaceholder",
+                    "Select language"
+                  )}
+                  value={audioLanguageSelectValue}
+                  allowClear
+                  onClear={handleAudioLanguageClear}
+                  onChange={handleAudioLanguageOptionChange}
+                  options={[
+                    ...SUPPORTED_LANGUAGES,
+                    {
+                      value: CUSTOM_AUDIO_LANGUAGE_SENTINEL,
+                      label: qi("audioLanguageCustomLabel", "Custom"),
+                    },
+                  ]}
+                  disabled={!hasTranscriptionItems}
+                />
+                {shouldShowCustomAudioLanguageInput && (
+                  <Input
+                    aria-label="Custom audio language"
+                    title="Custom audio language"
+                    placeholder={qi(
+                      "audioCustomLanguagePlaceholder",
+                      "Custom language (e.g., en-US)"
+                    )}
+                    value={customAudioLanguage}
+                    onChange={handleCustomAudioLanguageChange}
+                    disabled={!hasTranscriptionItems}
+                  />
+                )}
+              </div>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm text-text">
                 <span>{qi("audioDiarizationLabel", "Diarization")}</span>
                 <Switch
@@ -296,12 +507,17 @@ export const WizardConfigureStep: React.FC = () => {
                 />
               </label>
             </div>
-            <Input
+            <Select
               aria-label={qi("transcriptionModelLabel", "Transcription model")}
               title={qi("transcriptionModelLabel", "Transcription model")}
               placeholder={qi("transcriptionModelPlaceholder", "Select model")}
-              value={String(presetConfig.advancedValues?.transcription_model || "")}
+              value={normalizedTranscriptionModel || undefined}
+              allowClear
+              showSearch
+              loading={transcriptionModelsLoading}
               onChange={handleTranscriptionModelChange}
+              onClear={handleTranscriptionModelClear}
+              options={transcriptionModelOptions}
               disabled={!hasTranscriptionItems}
             />
           </div>
