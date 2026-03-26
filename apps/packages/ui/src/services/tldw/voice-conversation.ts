@@ -119,12 +119,16 @@ const resolveSafeTldwProviderHint = (
   model: string,
   requestedProvider: VoiceConversationTtsProvider
 ): string | undefined => {
-  const inferredProvider = inferTldwProviderFromModel(model)
-  if (!inferredProvider) {
+  if (requestedProvider === "browser") {
     return undefined
   }
 
-  if (requestedProvider === "browser") {
+  if (requestedProvider === "tldw") {
+    return "tldw"
+  }
+
+  const inferredProvider = inferTldwProviderFromModel(model)
+  if (!inferredProvider) {
     return undefined
   }
 

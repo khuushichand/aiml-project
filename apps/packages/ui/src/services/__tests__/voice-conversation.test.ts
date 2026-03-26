@@ -47,6 +47,29 @@ describe("voice conversation contract", () => {
     expect(result.value?.provider).toBeUndefined()
   })
 
+  it("preserves explicit tldw provider on the voice conversation wire shape", () => {
+    const result = resolveVoiceConversationTtsConfig({
+      ttsProvider: "tldw",
+      tldwTtsModel: "kokoro",
+      tldwTtsVoice: "af_heart",
+      tldwTtsSpeed: 1.25,
+      tldwTtsResponseFormat: "mp3",
+      openAITTSModel: "tts-1",
+      openAITTSVoice: "alloy",
+      elevenLabsModel: "",
+      elevenLabsVoiceId: "",
+      speechPlaybackSpeed: 1,
+      voiceChatTtsMode: "stream"
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.value?.model).toBe("kokoro")
+    expect(result.value?.voice).toBe("af_heart")
+    expect(result.value?.speed).toBe(1.25)
+    expect(result.value?.format).toBe("mp3")
+    expect(result.value?.provider).toBe("tldw")
+  })
+
   it("rejects voice conversation availability when STT health is unhealthy", () => {
     const result = resolveVoiceConversationAvailability({
       isConnectionReady: true,
