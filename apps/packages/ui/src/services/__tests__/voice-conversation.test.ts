@@ -13,7 +13,8 @@ describe("voice conversation contract", () => {
       isConnectionReady: true,
       hasVoiceConversationTransport: false,
       authReady: true,
-      audioHealthState: "healthy",
+      sttHealthState: "healthy",
+      ttsHealthState: "healthy",
       selectedModel: "gpt-4o-mini",
       allowBackendDefaultModel: false,
       ttsConfigReady: true
@@ -39,13 +40,27 @@ describe("voice conversation contract", () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(result.value).toEqual({
-      provider: "kokoro",
-      model: "kokoro",
-      voice: "af_heart",
-      speed: 1.25,
-      format: "mp3"
+    expect(result.value?.model).toBe("kokoro")
+    expect(result.value?.voice).toBe("af_heart")
+    expect(result.value?.speed).toBe(1.25)
+    expect(result.value?.format).toBe("mp3")
+    expect(result.value?.provider).toBeUndefined()
+  })
+
+  it("rejects voice conversation availability when STT health is unhealthy", () => {
+    const result = resolveVoiceConversationAvailability({
+      isConnectionReady: true,
+      hasVoiceConversationTransport: true,
+      authReady: true,
+      sttHealthState: "unhealthy",
+      ttsHealthState: "healthy",
+      selectedModel: "gpt-4o-mini",
+      allowBackendDefaultModel: false,
+      ttsConfigReady: true
     })
+
+    expect(result.available).toBe(false)
+    expect(result.reason).toBe("audio_unhealthy")
   })
 
   it("requires explicit OpenAI TTS model and voice when openai is selected", () => {
@@ -112,7 +127,6 @@ describe("voice conversation contract", () => {
     )
     expect(result.llm).toEqual({})
     expect(result.tts).toEqual({
-      provider: "kokoro",
       model: "kokoro",
       voice: "af_heart",
       speed: 1,

@@ -1,6 +1,7 @@
 import { resolveBrowserWebSocketBase } from "@/services/tldw/browser-websocket"
 import { normalizeTldwTtsResponseFormat } from "@/services/tts"
 import { inferTldwProviderFromModel } from "@/services/tts-provider"
+import { toServerTtsProviderKey } from "@/services/tldw/tts-provider-keys"
 import type { VoiceChatTtsMode } from "@/services/settings/ui-settings"
 
 type AudioHealthStateLike =
@@ -34,7 +35,8 @@ type VoiceConversationAvailabilityInput = {
   isConnectionReady: boolean
   hasVoiceConversationTransport: boolean
   authReady: boolean
-  audioHealthState: AudioHealthStateLike
+  sttHealthState: AudioHealthStateLike
+  ttsHealthState: AudioHealthStateLike
   selectedModel?: string | null
   allowBackendDefaultModel: boolean
   ttsConfigReady: boolean
@@ -113,6 +115,22 @@ const resolveVoiceConversationFormat = (
 const hasUsableAudioHealth = (audioHealthState: AudioHealthStateLike): boolean =>
   audioHealthState !== "unhealthy" && audioHealthState !== "unavailable"
 
+const resolveSafeTldwProviderHint = (
+  model: string,
+  requestedProvider: VoiceConversationTtsProvider
+): string | undefined => {
+  const inferredProvider = inferTldwProviderFromModel(model)
+  if (!inferredProvider) {
+    return undefined
+  }
+
+  if (requestedProvider === "browser") {
+    return undefined
+  }
+
+  return toServerTtsProviderKey(inferredProvider) || undefined
+}
+
 const buildTtsConfigMissingError = () =>
   new Error("Voice conversation TTS configuration is incomplete")
 
@@ -135,7 +153,7 @@ export const resolveVoiceConversationTtsConfig = (
     return {
       ok: true,
       value: {
-        provider: inferTldwProviderFromModel(model) ?? undefined,
+        provider: resolveSafeTldwProviderHint(model, normalizedProvider),
         model,
         voice,
         speed:
@@ -211,7 +229,10 @@ export const resolveVoiceConversationAvailability = (
   if (!input.authReady) {
     return { available: false, reason: "auth_missing" }
   }
-  if (!hasUsableAudioHealth(input.audioHealthState)) {
+  if (
+    !hasUsableAudioHealth(input.sttHealthState) ||
+    !hasUsableAudioHealth(input.ttsHealthState)
+  ) {
     return { available: false, reason: "audio_unhealthy" }
   }
   if (!input.ttsConfigReady) {
