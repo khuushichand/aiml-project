@@ -22,6 +22,9 @@ describe("voice conversation contract", () => {
 
     expect(result.available).toBe(false)
     expect(result.reason).toBe("transport_missing")
+    expect(result.message).toBe(
+      "playground:voiceChat.unavailableReasons.transportMissing"
+    )
   })
 
   it("maps browser TTS to server-backed tldw settings for voice conversation", () => {
@@ -84,6 +87,9 @@ describe("voice conversation contract", () => {
 
     expect(result.available).toBe(false)
     expect(result.reason).toBe("audio_unhealthy")
+    expect(result.message).toBe(
+      "playground:voiceChat.unavailableReasons.audioUnhealthy"
+    )
   })
 
   it("requires explicit OpenAI TTS model and voice when openai is selected", () => {

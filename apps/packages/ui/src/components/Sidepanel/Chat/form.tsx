@@ -1984,16 +1984,21 @@ export const SidepanelForm = ({
     return "border-border text-text-muted"
   }, [voiceChat.state, voiceChatEnabled])
 
+  const voiceChatUnavailableMessage = React.useMemo(() => {
+    const fallback = t(
+      "playground:voiceChat.unavailableBody",
+      "Connect to a tldw server with audio chat streaming enabled."
+    )
+    return voiceConversationAvailability.message
+      ? t(voiceConversationAvailability.message, fallback)
+      : fallback
+  }, [t, voiceConversationAvailability.message])
+
   const handleVoiceChatToggle = React.useCallback(() => {
     if (!voiceChatAvailable) {
       notification.error({
         message: t("playground:voiceChat.unavailableTitle", "Voice chat unavailable"),
-        description:
-          voiceConversationAvailability.message ||
-          t(
-            "playground:voiceChat.unavailableBody",
-            "Connect to a tldw server with audio chat streaming enabled."
-          )
+        description: voiceChatUnavailableMessage
       })
       return
     }
@@ -2015,7 +2020,8 @@ export const SidepanelForm = ({
     stopListening,
     stopServerDictation,
     t,
-    voiceChatMessages
+    voiceChatMessages,
+    voiceChatUnavailableMessage
   ])
 
   const handleLiveCaptionsToggle = React.useCallback(async () => {
@@ -3163,11 +3169,7 @@ export const SidepanelForm = ({
                                         title={
                                           voiceChatAvailable
                                             ? voiceChatStatusLabel
-                                            : voiceConversationAvailability.message ||
-                                              t(
-                                                "playground:voiceChat.unavailableTitle",
-                                                "Voice chat unavailable"
-                                              )
+                                            : voiceChatUnavailableMessage
                                         }
                                       >
                                         <button
@@ -3477,11 +3479,7 @@ export const SidepanelForm = ({
                                     title={
                                       voiceChatAvailable
                                         ? voiceChatStatusLabel
-                                        : voiceConversationAvailability.message ||
-                                          t(
-                                            "playground:voiceChat.unavailableTitle",
-                                            "Voice chat unavailable"
-                                          )
+                                        : voiceChatUnavailableMessage
                                     }
                                   >
                                     <button

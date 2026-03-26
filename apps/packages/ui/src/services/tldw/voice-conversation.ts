@@ -149,27 +149,27 @@ const resolveVoiceConversationAvailabilityMessage = (
     case "ok":
       return null
     case "not_connected":
-      return "Connect to tldw before using voice conversation."
+      return "playground:voiceChat.unavailableReasons.notConnected"
     case "transport_missing":
-      return "This server does not advertise voice conversation streaming."
+      return "playground:voiceChat.unavailableReasons.transportMissing"
     case "auth_missing":
-      return "Configure tldw credentials before using voice conversation."
+      return "playground:voiceChat.unavailableReasons.authMissing"
     case "audio_unhealthy":
-      return "Audio health is not ready for voice conversation."
+      return "playground:voiceChat.unavailableReasons.audioUnhealthy"
     case "tts_config_missing":
-      return "Voice conversation needs a server TTS model and voice."
+      return "playground:voiceChat.unavailableReasons.ttsConfigMissing"
     case "tts_provider_unsupported":
-      return "Voice conversation does not support this TTS provider."
+      return "playground:voiceChat.unavailableReasons.ttsProviderUnsupported"
     case "model_missing":
-      return "Select a chat model for voice conversation."
+      return "playground:voiceChat.unavailableReasons.modelMissing"
     case "voice_chat_disconnected":
-      return "Voice chat disconnected."
+      return "playground:voiceChat.unavailableReasons.disconnected"
     case "voice_chat_tts_error":
-      return "Voice chat hit a TTS error."
+      return "playground:voiceChat.unavailableReasons.ttsError"
     case "voice_chat_error":
-      return "Voice chat hit an error."
+      return "playground:voiceChat.unavailableReasons.error"
     default:
-      return "Voice conversation is unavailable."
+      return "playground:voiceChat.unavailableBody"
   }
 }
 

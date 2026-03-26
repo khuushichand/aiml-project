@@ -462,17 +462,22 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
     }
   }, [voiceChatEnabled, voiceChat.state, voiceChatStatusLabel])
 
+  const voiceChatUnavailableMessage = React.useMemo(() => {
+    const fallback = t(
+      "playground:voiceChat.unavailableBody",
+      "Connect to a tldw server with audio chat streaming enabled."
+    )
+    return voiceConversationAvailability.message
+      ? t(voiceConversationAvailability.message, fallback)
+      : fallback
+  }, [t, voiceConversationAvailability.message])
+
   // --- Voice chat toggle ---
   const handleVoiceChatToggle = React.useCallback(() => {
     if (!voiceConversationAvailability.available) {
       notificationApi.error({
         message: t("playground:voiceChat.unavailableTitle", "Voice chat unavailable"),
-        description:
-          voiceConversationAvailability.message ||
-          t(
-            "playground:voiceChat.unavailableBody",
-            "Connect to a tldw server with audio chat streaming enabled."
-          )
+        description: voiceChatUnavailableMessage
       })
       return
     }
@@ -500,6 +505,7 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
     stopSpeechRecognition,
     stopServerDictation,
     t,
+    voiceChatUnavailableMessage,
     voiceChatMessages,
     voiceConversationAvailability
   ])
