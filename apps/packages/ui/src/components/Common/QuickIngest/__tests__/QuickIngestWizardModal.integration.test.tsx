@@ -774,9 +774,11 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     const audioLanguageInput = await screen.findByTitle("Audio language")
     const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
+    const transcriptionModelSelect = screen.getByLabelText("Transcription model")
 
     expect(audioLanguageInput).not.toBeDisabled()
     expect(diarizationToggle).not.toBeDisabled()
+    expect(transcriptionModelSelect).not.toBeDisabled()
 
     await user.click(
       screen.getByLabelText(/store ingest results on your tldw server/i)
@@ -788,6 +790,31 @@ describe("QuickIngestWizardModal — real configure step", () => {
     expect(
       screen.getByLabelText(/store ingest results on your tldw server/i)
     ).toBeChecked()
+  })
+
+  it("disables audio transcription controls for document-only batches", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/research-paper.pdf"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("https://example.com/research-paper.pdf")).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    const audioLanguageInput = await screen.findByTitle("Audio language")
+    const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
+    const transcriptionModelSelect = screen.getByLabelText("Transcription model")
+
+    expect(audioLanguageInput).toBeDisabled()
+    expect(diarizationToggle).toBeDisabled()
+    expect(transcriptionModelSelect).toBeDisabled()
   })
 
   it("stores a standard audio language option when selected", async () => {
