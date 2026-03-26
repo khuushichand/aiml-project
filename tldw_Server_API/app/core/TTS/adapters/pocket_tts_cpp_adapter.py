@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import tempfile
 import wave
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,7 +12,7 @@ import numpy as np
 from loguru import logger
 
 from ..audio_converter import AudioConverter
-from ..streaming_audio_writer import AudioNormalizer
+from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from ..tts_exceptions import (
     TTSGenerationError,
     TTSInvalidVoiceReferenceError,
@@ -27,8 +28,11 @@ from ..utils import parse_bool
 from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse
 from .pocket_tts_cpp_runtime import (
     PROVIDER_KEY,
+    PROVIDER_MANAGED_VOICE_TOKEN_KEY,
     VALID_PRECISIONS,
     build_cli_command,
+    probe_cli_streaming_incremental,
+    resolve_provider_managed_voice_path,
     validate_runtime_assets,
 )
 
@@ -87,6 +91,7 @@ class PocketTTSCppAdapter(TTSAdapter):
         self.precision = str(_cfg_value("precision", "int8")).lower()
         self.timeout = _int_value("timeout", 60) or 60
         self.stream_probe_timeout = _float_value("stream_probe_timeout", 5.0) or 5.0
+        self.streaming_transport = str(_cfg_value("streaming_transport", "auto")).strip().lower() or "auto"
         self.prefer_stdout = parse_bool(_cfg_value("prefer_stdout", True), default=True)
         self.enable_voice_cache = parse_bool(_cfg_value("enable_voice_cache", True), default=True)
         self.temperature = _float_value("temperature")
@@ -99,6 +104,9 @@ class PocketTTSCppAdapter(TTSAdapter):
         self.profile = parse_bool(_cfg_value("profile", False), default=False)
 
         self._audio_normalizer = AudioNormalizer()
+        self._cli_streaming_supported: Optional[bool] = None
+        self._cli_streaming_probe_lock = asyncio.Lock()
+        self._cli_stream_probe_voice_path: Optional[Path] = None
 
     async def initialize(self) -> bool:
         if self._initialized:
@@ -109,6 +117,13 @@ class PocketTTSCppAdapter(TTSAdapter):
                 f"Invalid precision '{self.precision}' for PocketTTS.cpp",
                 provider=self.PROVIDER_KEY,
                 details={"valid_precisions": sorted(VALID_PRECISIONS)},
+            )
+
+        if self.streaming_transport not in {"auto", "cli"}:
+            raise TTSProviderInitializationError(
+                f"Invalid streaming transport '{self.streaming_transport}' for PocketTTS.cpp",
+                provider=self.PROVIDER_KEY,
+                details={"valid_transports": ["auto", "cli"]},
             )
 
         validate_runtime_assets(
@@ -137,13 +152,6 @@ class PocketTTSCppAdapter(TTSAdapter):
                 provider=self.PROVIDER_KEY,
             )
 
-        if request.stream:
-            raise TTSValidationError(
-                "PocketTTS.cpp streaming is not implemented yet",
-                provider=self.PROVIDER_KEY,
-                details={"hint": "Use stream=false until Task 4 lands"},
-            )
-
         if request.format not in self.SUPPORTED_FORMATS:
             raise TTSUnsupportedFormatError(
                 f"Format {request.format.value} not supported by PocketTTS.cpp",
@@ -161,6 +169,11 @@ class PocketTTSCppAdapter(TTSAdapter):
             ) from exc
 
         voice_path = self._resolve_voice_path(request)
+        if request.stream:
+            return await self._generate_streaming(request, voice_path)
+        return await self._generate_non_streaming(request, voice_path)
+
+    async def _generate_non_streaming(self, request: TTSRequest, voice_path: Path) -> TTSResponse:
         use_stdout = self._should_use_stdout(request)
 
         temp_output_path: Optional[Path] = None
@@ -262,6 +275,31 @@ class PocketTTSCppAdapter(TTSAdapter):
                     with contextlib.suppress(OSError):
                         path.unlink()
 
+    async def _generate_streaming(self, request: TTSRequest, voice_path: Path) -> TTSResponse:
+        use_cli_streaming = await self._get_cli_streaming_support(voice_path)
+        if not use_cli_streaming:
+            raise TTSGenerationError(
+                "PocketTTS.cpp CLI does not provide safe incremental streaming on this installation",
+                provider=self.PROVIDER_KEY,
+                details={"transport": "cli_probe_failed"},
+            )
+
+        audio_stream = self._stream_via_cli_stdout(request, voice_path)
+        transport = "stdout_stream"
+
+        logger.info("PocketTTS.cpp streaming transport selected: {}", transport)
+        return TTSResponse(
+            audio_stream=audio_stream,
+            format=request.format,
+            sample_rate=self.DEFAULT_SAMPLE_RATE,
+            channels=1,
+            text_processed=request.text,
+            voice_used=request.voice,
+            provider=self.PROVIDER_KEY,
+            model=request.model or self.PROVIDER_KEY,
+            metadata={"transport": transport},
+        )
+
     async def get_capabilities(self) -> TTSCapabilities:
         return TTSCapabilities(
             provider_name="PocketTTS.cpp",
@@ -269,7 +307,7 @@ class PocketTTSCppAdapter(TTSAdapter):
             supported_voices=[],
             supported_formats=self.SUPPORTED_FORMATS,
             max_text_length=self.MAX_TEXT_LENGTH,
-            supports_streaming=False,
+            supports_streaming=True,
             supports_voice_cloning=True,
             sample_rate=self.DEFAULT_SAMPLE_RATE,
             default_format=AudioFormat.WAV,
@@ -286,13 +324,31 @@ class PocketTTSCppAdapter(TTSAdapter):
             )
 
         voice_path = Path(str(raw_voice_path)).expanduser()
+        trust_token = extras.get(PROVIDER_MANAGED_VOICE_TOKEN_KEY)
+        if not trust_token:
+            raise TTSInvalidVoiceReferenceError(
+                "PocketTTS.cpp requires a service-issued voice trust token",
+                provider=self.PROVIDER_KEY,
+                details={"param": f"extra_params.{PROVIDER_MANAGED_VOICE_TOKEN_KEY}"},
+            )
+
         if not voice_path.exists() or not voice_path.is_file():
             raise TTSInvalidVoiceReferenceError(
                 "PocketTTS.cpp voice path does not exist",
                 provider=self.PROVIDER_KEY,
                 details={"voice_path": str(voice_path)},
             )
-        return voice_path
+
+        try:
+            resolved_voice_path = resolve_provider_managed_voice_path(str(trust_token), voice_path)
+        except (KeyError, LookupError, ValueError, OSError) as exc:
+            raise TTSInvalidVoiceReferenceError(
+                "PocketTTS.cpp voice path is not service-managed",
+                provider=self.PROVIDER_KEY,
+                details={"voice_path": str(voice_path)},
+            ) from exc
+
+        return resolved_voice_path
 
     def _should_use_stdout(self, request: TTSRequest) -> bool:
         extras = request.extra_params if isinstance(request.extra_params, dict) else {}
@@ -301,6 +357,170 @@ class PocketTTSCppAdapter(TTSAdapter):
         else:
             prefer_stdout = self.prefer_stdout
         return prefer_stdout and request.format == AudioFormat.PCM
+
+    async def _get_cli_streaming_support(self, voice_path: Path) -> bool:
+        if self._cli_streaming_supported is not None:
+            return self._cli_streaming_supported
+
+        async with self._cli_streaming_probe_lock:
+            if self._cli_streaming_supported is not None:
+                return self._cli_streaming_supported
+
+            self._cli_stream_probe_voice_path = voice_path
+            try:
+                probe_result = await self._probe_cli_streaming_support()
+                if probe_result:
+                    self._cli_streaming_supported = True
+                return probe_result
+            except Exception as exc:
+                logger.warning("PocketTTS.cpp CLI streaming probe failed: {}", exc)
+                return False
+            finally:
+                self._cli_stream_probe_voice_path = None
+
+    async def _probe_cli_streaming_support(self) -> bool:
+        voice_path = self._cli_stream_probe_voice_path
+        if voice_path is None:
+            raise TTSValidationError(
+                "PocketTTS.cpp CLI streaming probe requires a resolved voice path",
+                provider=self.PROVIDER_KEY,
+            )
+
+        return await probe_cli_streaming_incremental(
+            binary_path=self.binary_path,
+            voice_path=voice_path,
+            model_path=self.model_path,
+            tokenizer_path=self.tokenizer_path,
+            precision=self.precision,
+            timeout=self.stream_probe_timeout,
+            enable_voice_cache=self.enable_voice_cache,
+            voices_dir=self.voices_dir,
+            temperature=self.temperature,
+            lsd_steps=self.lsd_steps,
+            eos_threshold=self.eos_threshold,
+            eos_extra=self.eos_extra,
+            noise_clamp=self.noise_clamp,
+            threads=self.threads,
+            verbose=self.verbose,
+            profile=self.profile,
+        )
+
+    def _stream_via_cli_stdout(
+        self,
+        request: TTSRequest,
+        resolved_voice_path: Path,
+    ) -> AsyncGenerator[bytes, None]:
+        async def stream() -> AsyncGenerator[bytes, None]:
+            command = build_cli_command(
+                binary_path=self.binary_path,
+                text=self.preprocess_text(request.text),
+                voice_path=resolved_voice_path,
+                model_path=self.model_path,
+                tokenizer_path=self.tokenizer_path,
+                output_path=None,
+                precision=self.precision,
+                prefer_stdout=True,
+                enable_voice_cache=self.enable_voice_cache,
+                voices_dir=self.voices_dir,
+                temperature=self.temperature,
+                lsd_steps=self.lsd_steps,
+                eos_threshold=self.eos_threshold,
+                eos_extra=self.eos_extra,
+                noise_clamp=self.noise_clamp,
+                threads=self.threads,
+                verbose=self.verbose,
+                profile=self.profile,
+            )
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            writer = StreamingAudioWriter(
+                format=request.format.value,
+                sample_rate=self.DEFAULT_SAMPLE_RATE,
+                channels=1,
+            )
+            remainder = bytearray()
+            try:
+                if process.stdout is None:
+                    raise TTSGenerationError(
+                        "PocketTTS.cpp CLI stdout stream is unavailable",
+                        provider=self.PROVIDER_KEY,
+                    )
+
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=self.timeout)
+                    except asyncio.TimeoutError as exc:
+                        raise TTSTimeoutError(
+                            "Timed out waiting for PocketTTS.cpp CLI stream chunk",
+                            provider=self.PROVIDER_KEY,
+                            details={"timeout_seconds": self.timeout},
+                        ) from exc
+                    if not chunk:
+                        break
+                    data = self._write_stream_chunk(chunk, remainder, writer)
+                    if data:
+                        yield data
+
+                try:
+                    _, stderr = await asyncio.wait_for(process.communicate(), timeout=self.timeout)
+                except asyncio.TimeoutError as exc:
+                    raise TTSTimeoutError(
+                        "Timed out waiting for PocketTTS.cpp CLI stream completion",
+                        provider=self.PROVIDER_KEY,
+                        details={"timeout_seconds": self.timeout},
+                    ) from exc
+
+                if process.returncode != 0:
+                    stderr_text = stderr.decode("utf-8", errors="ignore").strip()
+                    raise TTSGenerationError(
+                        "PocketTTS.cpp CLI streaming exited with an error",
+                        provider=self.PROVIDER_KEY,
+                        details={"returncode": process.returncode, "stderr": stderr_text},
+                    )
+
+                tail = writer.write_chunk(finalize=True)
+                if tail:
+                    yield tail
+            except asyncio.CancelledError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                raise
+            finally:
+                writer.close()
+                if process.returncode is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                    with contextlib.suppress(Exception):
+                        await process.communicate()
+
+        return stream()
+
+    def _write_stream_chunk(
+        self,
+        raw_chunk: bytes,
+        remainder: bytearray,
+        writer: StreamingAudioWriter,
+    ) -> bytes:
+        if not raw_chunk:
+            return b""
+
+        remainder.extend(raw_chunk)
+        usable = len(remainder) - (len(remainder) % 4)
+        if usable <= 0:
+            return b""
+
+        pcm_bytes = bytes(remainder[:usable])
+        del remainder[:usable]
+        audio = np.frombuffer(pcm_bytes, dtype=np.dtype("<f4")).astype(np.float32, copy=False)
+
+        if audio.size == 0:
+            return b""
+
+        audio_i16 = self._audio_normalizer.normalize(audio, target_dtype=np.int16)
+        return writer.write_chunk(audio_i16) or b""
 
     async def _convert_stdout_audio(self, stdout: bytes, target_format: AudioFormat) -> bytes:
         if not stdout:

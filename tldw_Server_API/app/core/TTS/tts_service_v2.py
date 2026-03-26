@@ -40,6 +40,9 @@ from .adapters.pocket_tts_cpp_runtime import (
     materialize_custom_voice_reference,
     materialize_direct_voice_reference,
     prune_materialized_voice_cache,
+    PROVIDER_MANAGED_VOICE_TOKEN_KEY,
+    register_provider_managed_voice_path,
+    revoke_provider_managed_voice_token,
 )
 from .audio_utils import (
     crossfade_audio,
@@ -380,7 +383,9 @@ class TTSServiceV2:
         if reference_text is None and metadata is not None:
             reference_text = getattr(metadata, "reference_text", None)
 
+        trust_token = register_provider_managed_voice_path(voice_path)
         extras["pocket_tts_cpp_voice_path"] = str(voice_path)
+        extras[PROVIDER_MANAGED_VOICE_TOKEN_KEY] = trust_token
         if reference_text:
             extras["pocket_tts_cpp_reference_text"] = reference_text
         if is_transient:
@@ -389,14 +394,24 @@ class TTSServiceV2:
             extras.pop("_pocket_tts_cpp_transient_voice_path", None)
         request.extra_params = extras
 
-    def _cleanup_transient_pocket_tts_cpp_voice_path(self, request: TTSRequest) -> None:
+    def _cleanup_transient_pocket_tts_cpp_voice_path(
+        self,
+        request: TTSRequest,
+    ) -> None:
         extras = getattr(request, "extra_params", None)
         if not isinstance(extras, dict):
             return
+        managed_voice_path_raw = extras.get("pocket_tts_cpp_voice_path")
+        trust_token = extras.pop(PROVIDER_MANAGED_VOICE_TOKEN_KEY, None)
+        revoke_provider_managed_voice_token(
+            trust_token,
+            Path(str(managed_voice_path_raw)) if managed_voice_path_raw else None,
+        )
         raw_path = extras.pop("_pocket_tts_cpp_transient_voice_path", None)
         if not raw_path:
-            return
-        cleanup_transient_voice_reference(Path(str(raw_path)), True)
+            raw_path = None
+        if raw_path:
+            cleanup_transient_voice_reference(Path(str(raw_path)), True)
 
     async def _prepare_generate_speech_request(
         self,
@@ -2004,6 +2019,7 @@ class TTSServiceV2:
                     fallback_plan[1],
                     metadata_only=True,
                     metadata_target=request,
+                    user_id=user_id,
                 ):
                     pass
                 return
@@ -2013,6 +2029,7 @@ class TTSServiceV2:
                 fallback_plan[1],
                 metadata_only=False,
                 metadata_target=request,
+                user_id=user_id,
             ):
                 yield chunk
             return
@@ -2023,14 +2040,34 @@ class TTSServiceV2:
         request: TTSRequest,
         metadata_only: bool = False,
         metadata_target: Optional[Any] = None,
+        user_id: Optional[int] = None,
     ) -> AsyncGenerator[bytes, None]:
         """Generate audio with a specific adapter"""
         provider_key = self._resolve_provider_key(adapter)
+        request_for_provider = request
+        active_requests_incremented = False
+        start_time = time.time()
+        audio_size = 0
+        success = False
+        error_message: Optional[str] = None
+        voice_metric_recorded = False
+        v2v_start: Optional[float] = None
+        v2v_route = getattr(request_for_provider, "voice_to_voice_route", "audio.speech") or "audio.speech"
         # Ensure the request is valid for the concrete adapter/provider.
         try:
+            if provider_key == "pocket_tts_cpp" and user_id is not None:
+                extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+                if not (
+                    isinstance(extras, dict)
+                    and extras.get("pocket_tts_cpp_voice_path")
+                    and extras.get(PROVIDER_MANAGED_VOICE_TOKEN_KEY)
+                ):
+                    await self._apply_custom_voice_reference(request, user_id, provider_key)
             request_for_provider = self._maybe_sanitize_request(request, provider_key)
             validate_tts_request(request_for_provider, provider=provider_key, config=self._get_validation_config())
-        except TTSValidationError as e:
+        except _TTS_NONCRITICAL_EXCEPTIONS as e:
+            if provider_key == "pocket_tts_cpp":
+                self._cleanup_transient_pocket_tts_cpp_voice_path(request)
             logger.error(f"TTS request validation failed for provider {provider_key}: {e}")
             if self._stream_errors_as_audio:
                 yield b"ERROR: Unable to generate audio."
@@ -2039,12 +2076,8 @@ class TTSServiceV2:
                 raise
 
         await self._increment_active_requests(provider_key)
+        active_requests_incremented = True
         start_time = time.time()
-        audio_size = 0
-        success = False
-        error_message: Optional[str] = None
-        voice_metric_recorded = False
-        v2v_start: Optional[float] = None
         try:
             raw = getattr(request_for_provider, "voice_to_voice_start", None)
             if raw is not None:
@@ -2053,7 +2086,6 @@ class TTSServiceV2:
                     v2v_start = parsed
         except _TTS_NONCRITICAL_EXCEPTIONS:
             v2v_start = None
-        v2v_route = getattr(request_for_provider, "voice_to_voice_route", "audio.speech") or "audio.speech"
 
         def _record_voice_to_voice() -> None:
             nonlocal voice_metric_recorded
@@ -2139,23 +2171,24 @@ class TTSServiceV2:
             raise TTSGenerationError(f"All providers failed - {str(e)}") from e
         finally:
             self._cleanup_transient_pocket_tts_cpp_voice_path(request_for_provider)
-            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
-                await self._decrement_active_requests(provider_key)
-            try:
-                duration = time.time() - start_time
-                self._record_tts_metrics(
-                    provider=provider_key,
-                    model=getattr(request_for_provider, "model", None) or provider_key,
-                    voice=request_for_provider.voice or "default",
-                    format=request_for_provider.format.value,
-                    text_length=len(request_for_provider.text),
-                    audio_size=audio_size,
-                    duration=duration if duration >= 0 else 0.0,
-                    success=success,
-                    error=error_message if not success else None
-                )
-            except _TTS_NONCRITICAL_EXCEPTIONS:
-                pass
+            if active_requests_incremented:
+                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+                    await self._decrement_active_requests(provider_key)
+                try:
+                    duration = time.time() - start_time
+                    self._record_tts_metrics(
+                        provider=provider_key,
+                        model=getattr(request_for_provider, "model", None) or provider_key,
+                        voice=request_for_provider.voice or "default",
+                        format=request_for_provider.format.value,
+                        text_length=len(request_for_provider.text),
+                        audio_size=audio_size,
+                        duration=duration if duration >= 0 else 0.0,
+                        success=success,
+                        error=error_message if not success else None
+                    )
+                except _TTS_NONCRITICAL_EXCEPTIONS:
+                    pass
 
     def _convert_request(self, request: OpenAISpeechRequest) -> TTSRequest:
         """Convert OpenAI request to unified TTS request"""
@@ -2774,6 +2807,7 @@ class TTSServiceV2:
         *,
         metadata_only: bool = False,
         metadata_target: Optional[Any] = None,
+        user_id: Optional[int] = None,
     ) -> AsyncGenerator[bytes, None]:
         """
         Try fallback providers in priority order.
@@ -2804,9 +2838,10 @@ class TTSServiceV2:
                         fallback_adapter,
                         request,
                         metadata_only=metadata_only,
-                            metadata_target=metadata_target,
-                        ):
-                            yield chunk
+                        metadata_target=metadata_target,
+                        user_id=user_id,
+                    ):
+                        yield chunk
                 finally:
                     request.model = original_model
                 logger.info(f"Successfully fell back to {fallback_provider_key}")
@@ -2852,6 +2887,7 @@ class TTSServiceV2:
                                     request,
                                     metadata_only=metadata_only,
                                     metadata_target=metadata_target,
+                                    user_id=user_id,
                                 ):
                                     yield chunk
                             finally:

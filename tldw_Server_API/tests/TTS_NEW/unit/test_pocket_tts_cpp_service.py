@@ -7,8 +7,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
-from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest
-from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError, TTSValidationError
+from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest, TTSResponse
+from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+    PROVIDER_MANAGED_VOICE_LEASE_DIRNAME,
+    PROVIDER_MANAGED_VOICE_TOKEN_KEY,
+    resolve_provider_managed_voice_path,
+)
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSTimeoutError, TTSGenerationError, TTSValidationError
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata
 
@@ -56,10 +61,25 @@ class _ServiceVoiceManager:
 async def test_pocket_tts_cpp_service_injects_stable_path_for_custom_voice(tmp_path, monkeypatch):
     service = TTSServiceV2()
     manager = _ServiceVoiceManager(tmp_path / "voices")
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+
+    converted_wav = _make_wav_bytes(b"\x00\x01" * 8)
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
         lambda: manager,
+        raising=True,
+    )
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        assert input_path.read_bytes() == b"RIFF" + b"\x00" * 32
+        output_path.write_bytes(converted_wav)
+        return True
+
+    monkeypatch.setattr(
+        runtime_module.AudioConverter,
+        "convert_to_wav",
+        _fake_convert,
         raising=True,
     )
 
@@ -75,8 +95,10 @@ async def test_pocket_tts_cpp_service_injects_stable_path_for_custom_voice(tmp_p
     expected = tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "custom_voice-1.wav"
     assert request.voice_reference == b"RIFF" + b"\x00" * 32
     assert request.extra_params["pocket_tts_cpp_voice_path"] == str(expected)
+    assert request.extra_params[PROVIDER_MANAGED_VOICE_TOKEN_KEY]
     assert request.extra_params["pocket_tts_cpp_reference_text"] == "stored reference text"
     assert expected.exists()
+    assert expected.read_bytes() == converted_wav
 
 
 @pytest.mark.asyncio
@@ -123,8 +145,234 @@ async def test_pocket_tts_cpp_service_injects_stable_path_for_direct_voice_refer
     assert voice_path.parent == tmp_path / "voices" / "providers" / "pocket_tts_cpp"
     assert voice_path.name.startswith("ref_")
     assert voice_path.suffix == ".wav"
+    assert request.extra_params[PROVIDER_MANAGED_VOICE_TOKEN_KEY]
     assert request.extra_params["pocket_tts_cpp_reference_text"] == "direct reference text"
     assert voice_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_service_cleans_trust_token_after_generation(tmp_path):
+    service = TTSServiceV2()
+    seen_tokens: list[str] = []
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+
+    converted_wav = _make_wav_bytes(b"\x00\x01" * 8)
+
+    class _FakeVoiceManager:
+        def get_user_voices_path(self, user_id: int) -> Path:
+            assert user_id == 1
+            root = tmp_path / "voices"
+            root.mkdir(parents=True, exist_ok=True)
+            return root
+
+        async def load_voice_reference_audio(self, user_id: int, voice_id: str) -> bytes:
+            assert user_id == 1
+            assert voice_id == "voice-1"
+            return b"RIFF" + b"\x00" * 32
+
+        async def load_reference_metadata(self, user_id: int, voice_id: str):
+            return None
+
+    class _FakeAdapter:
+        provider_name = "pocket_tts_cpp"
+        provider_key = "pocket_tts_cpp"
+
+        async def generate(self, request):
+            token = request.extra_params[PROVIDER_MANAGED_VOICE_TOKEN_KEY]
+            seen_tokens.append(token)
+            voice_path = Path(request.extra_params["pocket_tts_cpp_voice_path"])
+            assert resolve_provider_managed_voice_path(token, voice_path) == voice_path.resolve()
+            return TTSResponse(audio_data=b"ok", format=request.format, sample_rate=24000)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+        lambda: _FakeVoiceManager(),
+        raising=True,
+    )
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(converted_wav)
+        return True
+
+    monkeypatch.setattr(
+        runtime_module.AudioConverter,
+        "convert_to_wav",
+        _fake_convert,
+        raising=True,
+    )
+
+    class _Factory:
+        def get_provider_for_model(self, _model):
+            return "pocket_tts_cpp"
+
+    service._ensure_factory = AsyncMock(return_value=_Factory())
+    service._get_adapter = AsyncMock(return_value=_FakeAdapter())
+
+    request = OpenAISpeechRequest(
+        model="pocket_tts_cpp",
+        input="hello",
+        voice="custom:voice-1",
+        response_format="wav",
+        stream=False,
+    )
+
+    try:
+        chunks = []
+        async for chunk in service.generate_speech(request, user_id=1, fallback=False):
+            chunks.append(chunk)
+    finally:
+        monkeypatch.undo()
+
+    assert b"".join(chunks) == b"ok"
+    assert seen_tokens
+    with pytest.raises(ValueError):
+        resolve_provider_managed_voice_path(
+            seen_tokens[0],
+            Path(tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "custom_voice-1.wav"),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "voice,voice_reference,expected_fragment",
+    [
+        ("custom:voice-1", None, "custom_voice-1.wav"),
+        ("alloy", "UklGRgMDAwMDAwM=", "ref_"),
+    ],
+)
+async def test_pocket_tts_cpp_fallback_materializes_voice_for_fallback_adapter(
+    tmp_path,
+    monkeypatch,
+    voice,
+    voice_reference,
+    expected_fragment,
+):
+    service = TTSServiceV2()
+    seen: dict[str, str] = {}
+    converted_wav = _make_wav_bytes(b"\x01\x02" * 8)
+
+    class _FailingAdapter:
+        provider_name = "openai"
+        provider_key = "openai"
+
+        async def generate(self, request):
+            raise TTSTimeoutError("primary provider failed", provider="openai")
+
+    class _FallbackFactory:
+        def get_provider_for_model(self, _model):
+            return "openai"
+
+    class _FallbackAdapter:
+        provider_name = "pocket_tts_cpp"
+        provider_key = "pocket_tts_cpp"
+
+        async def generate(self, request):
+            token = request.extra_params[PROVIDER_MANAGED_VOICE_TOKEN_KEY]
+            voice_path = Path(request.extra_params["pocket_tts_cpp_voice_path"])
+            seen["token"] = token
+            seen["voice_path"] = str(voice_path)
+            assert resolve_provider_managed_voice_path(token, voice_path) == voice_path.resolve()
+            return TTSResponse(audio_data=b"fallback", format=request.format, sample_rate=24000)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+        lambda: _ServiceVoiceManager(tmp_path / "voices"),
+        raising=True,
+    )
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(converted_wav)
+        return True
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime.AudioConverter.convert_to_wav",
+        _fake_convert,
+        raising=True,
+    )
+
+    service._ensure_factory = AsyncMock(return_value=_FallbackFactory())
+    service._get_adapter = AsyncMock(return_value=_FailingAdapter())
+    service._get_fallback_adapter = AsyncMock(return_value=_FallbackAdapter())
+
+    request = OpenAISpeechRequest(
+        model="openai",
+        input="hello",
+        voice=voice,
+        response_format="wav",
+        stream=False,
+        voice_reference=voice_reference,
+        extra_params={"reference_text": "fallback reference text"},
+    )
+
+    chunks = []
+    async for chunk in service.generate_speech(request, user_id=1, fallback=True):
+        chunks.append(chunk)
+
+    assert b"".join(chunks) == b"fallback"
+    assert "/voices/providers/pocket_tts_cpp/" in seen["voice_path"]
+    assert expected_fragment in seen["voice_path"]
+    with pytest.raises(ValueError):
+        resolve_provider_managed_voice_path(seen["token"], Path(seen["voice_path"]))
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_fallback_validation_failure_revokes_lease_but_keeps_stable_materialized_voice(
+    tmp_path,
+    monkeypatch,
+):
+    service = TTSServiceV2()
+    seen: dict[str, str] = {}
+    converted_wav = _make_wav_bytes(b"\x05\x06" * 8)
+
+    class _PocketAdapter:
+        provider_name = "pocket_tts_cpp"
+        provider_key = "pocket_tts_cpp"
+
+        async def generate(self, request):  # noqa: ARG002
+            raise AssertionError("adapter.generate should not be reached on validation failure")
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(converted_wav)
+        return True
+
+    def _raise_validation(request, provider_key):  # noqa: ARG001
+        extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+        seen["token"] = extras.get(PROVIDER_MANAGED_VOICE_TOKEN_KEY)
+        seen["voice_path"] = extras.get("pocket_tts_cpp_voice_path")
+        raise TTSValidationError("synthetic validation failure", provider="pocket_tts_cpp")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+        lambda: _ServiceVoiceManager(tmp_path / "voices"),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime.AudioConverter.convert_to_wav",
+        _fake_convert,
+        raising=True,
+    )
+    monkeypatch.setattr(service, "_maybe_sanitize_request", _raise_validation, raising=True)
+
+    request = TTSRequest(
+        text="hello",
+        voice="custom:voice-1",
+        format=AudioFormat.WAV,
+        stream=False,
+        extra_params={"reference_text": "fallback reference text"},
+    )
+
+    with pytest.raises(TTSValidationError):
+        async for _ in service._generate_with_adapter(_PocketAdapter(), request, user_id=1):
+            pass
+
+    runtime_dir = tmp_path / "voices" / "providers" / "pocket_tts_cpp"
+    assert seen["token"]
+    assert seen["voice_path"].endswith("custom_voice-1.wav")
+    assert (runtime_dir / "custom_voice-1.wav").exists()
+    assert not list((runtime_dir / PROVIDER_MANAGED_VOICE_LEASE_DIRNAME).glob("*.json"))
+    with pytest.raises(ValueError):
+        resolve_provider_managed_voice_path(seen["token"], Path(seen["voice_path"]))
 
 
 @pytest.mark.asyncio

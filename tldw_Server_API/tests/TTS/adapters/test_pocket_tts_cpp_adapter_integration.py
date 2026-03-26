@@ -8,6 +8,10 @@ import pytest
 
 from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest
 from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_adapter import PocketTTSCppAdapter
+from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+    PROVIDER_MANAGED_VOICE_TOKEN_KEY,
+    register_provider_managed_voice_path,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -37,7 +41,7 @@ def _resolve_assets() -> tuple[Path, Path, Path] | None:
 
 
 @pytest.mark.asyncio
-async def test_pocket_tts_cpp_initialize_and_synthesize_short_request():
+async def test_pocket_tts_cpp_initialize_and_synthesize_short_request(tmp_path):
     assets = _resolve_assets()
     if assets is None:
         pytest.skip("PocketTTS.cpp binary or models are not available")
@@ -46,6 +50,11 @@ async def test_pocket_tts_cpp_initialize_and_synthesize_short_request():
     sample_voice = _repo_root() / "Helper_Scripts" / "Audio" / "Sample_Voices" / "Sample_Voice_1.wav"
     if not sample_voice.exists():
         pytest.skip("PocketTTS.cpp sample voice file is not available")
+
+    provider_root = tmp_path / "voices" / "providers" / "pocket_tts_cpp"
+    provider_root.mkdir(parents=True, exist_ok=True)
+    managed_voice = provider_root / sample_voice.name
+    managed_voice.write_bytes(sample_voice.read_bytes())
 
     adapter = PocketTTSCppAdapter(
         {
@@ -64,8 +73,11 @@ async def test_pocket_tts_cpp_initialize_and_synthesize_short_request():
         voice="custom:sample",
         format=AudioFormat.PCM,
         stream=False,
-        voice_reference=sample_voice.read_bytes(),
-        extra_params={"pocket_tts_cpp_voice_path": str(sample_voice)},
+        voice_reference=managed_voice.read_bytes(),
+        extra_params={
+            "pocket_tts_cpp_voice_path": str(managed_voice),
+            PROVIDER_MANAGED_VOICE_TOKEN_KEY: register_provider_managed_voice_path(managed_voice),
+        },
     )
 
     response = await adapter.generate(request)

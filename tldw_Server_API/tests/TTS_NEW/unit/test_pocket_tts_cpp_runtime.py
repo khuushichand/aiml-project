@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 import time
@@ -42,24 +43,268 @@ def _make_wav_bytes(
     return buffer.getvalue()
 
 
+class _TimedProbeStdout:
+    def __init__(self, chunks: list[tuple[float, bytes]]):
+        self._chunks = chunks
+        self._read_calls = 0
+
+    async def read(self, _n: int) -> bytes:
+        if self._read_calls >= len(self._chunks):
+            return b""
+
+        delay, chunk = self._chunks[self._read_calls]
+        if delay:
+            await asyncio.sleep(delay)
+        self._read_calls += 1
+        return chunk
+
+
+class _TimedProbeProcess:
+    def __init__(
+        self,
+        *,
+        chunks: list[tuple[float, bytes]],
+        returncode: int = 0,
+        stderr_bytes: bytes = b"",
+    ):
+        self.stdout = _TimedProbeStdout(chunks)
+        self.stderr_bytes = stderr_bytes
+        self.returncode = None
+        self._returncode = returncode
+
+    async def communicate(self):
+        self.returncode = self._returncode
+        return b"", self.stderr_bytes
+
+    def kill(self):
+        self.returncode = -9
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_probe_accepts_only_when_later_stdout_progress_arrives(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import probe_cli_streaming_incremental
+
+    fake_process = _TimedProbeProcess(
+        chunks=[
+            (0.0, b"probe-bytes"),
+            (0.03, b"later-bytes"),
+        ]
+    )
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):  # noqa: ARG001
+        return fake_process
+
+    monkeypatch.setattr(runtime_module.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec, raising=True)
+
+    result = await probe_cli_streaming_incremental(
+        binary_path=Path("/tmp/pocket-tts"),
+        voice_path=Path("/tmp/voice.wav"),
+        model_path=Path("/tmp/models"),
+        tokenizer_path=Path("/tmp/tokenizer.model"),
+        precision="int8",
+        timeout=0.1,
+        enable_voice_cache=True,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_probe_rejects_stdout_bytes_when_process_exits_immediately_after_first_output(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import probe_cli_streaming_incremental
+
+    fake_process = _TimedProbeProcess(
+        chunks=[
+            (0.0, b"probe-bytes"),
+        ]
+    )
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):  # noqa: ARG001
+        return fake_process
+
+    monkeypatch.setattr(runtime_module.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec, raising=True)
+
+    result = await probe_cli_streaming_incremental(
+        binary_path=Path("/tmp/pocket-tts"),
+        voice_path=Path("/tmp/voice.wav"),
+        model_path=Path("/tmp/models"),
+        tokenizer_path=Path("/tmp/tokenizer.model"),
+        precision="int8",
+        timeout=0.1,
+        enable_voice_cache=True,
+    )
+
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_probe_rejects_early_burst_without_later_stdout_progress(
+    monkeypatch,
+):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import probe_cli_streaming_incremental
+
+    fake_process = _TimedProbeProcess(
+        chunks=[
+            (0.0, b"probe-bytes"),
+            (0.0, b"burst-bytes"),
+        ],
+    )
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):  # noqa: ARG001
+        return fake_process
+
+    monkeypatch.setattr(runtime_module.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec, raising=True)
+
+    result = await probe_cli_streaming_incremental(
+        binary_path=Path("/tmp/pocket-tts"),
+        voice_path=Path("/tmp/voice.wav"),
+        model_path=Path("/tmp/models"),
+        tokenizer_path=Path("/tmp/tokenizer.model"),
+        precision="int8",
+        timeout=0.1,
+        enable_voice_cache=True,
+    )
+
+    assert result is False
+
+
+def test_pocket_tts_cpp_trust_token_binds_to_registered_voice_path(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        PROVIDER_MANAGED_VOICE_TOKEN_KEY,
+        register_provider_managed_voice_path,
+        resolve_provider_managed_voice_path,
+        revoke_provider_managed_voice_token,
+    )
+
+    voice_path = tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "voice.wav"
+    voice_path.parent.mkdir(parents=True, exist_ok=True)
+    voice_path.write_bytes(b"RIFF" + b"\x00" * 32)
+
+    token = register_provider_managed_voice_path(voice_path)
+    assert token
+    assert isinstance(token, str)
+    assert token != str(voice_path)
+    assert len(token) > 16
+    assert PROVIDER_MANAGED_VOICE_TOKEN_KEY.startswith("_")
+
+    resolved = resolve_provider_managed_voice_path(token, voice_path)
+    assert resolved == voice_path.resolve()
+
+    revoke_provider_managed_voice_token(token)
+
+    with pytest.raises(ValueError):
+        resolve_provider_managed_voice_path(token, voice_path)
+
+
+def test_pocket_tts_cpp_trust_token_rejects_forged_voice_path(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        register_provider_managed_voice_path,
+        resolve_provider_managed_voice_path,
+        revoke_provider_managed_voice_token,
+    )
+
+    managed_path = tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "managed.wav"
+    forged_path = tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "forged.wav"
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_path.write_bytes(b"RIFF" + b"\x00" * 32)
+    forged_path.write_bytes(b"RIFF" + b"\x01" * 32)
+
+    token = register_provider_managed_voice_path(managed_path)
+
+    with pytest.raises(ValueError):
+        resolve_provider_managed_voice_path(token, forged_path)
+
+    revoke_provider_managed_voice_token(token)
+
+
+def test_pocket_tts_cpp_trust_token_rejects_paths_outside_provider_runtime_dir(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        register_provider_managed_voice_path,
+    )
+
+    unmanaged_path = tmp_path / "voices" / "shared" / "voice.wav"
+    unmanaged_path.parent.mkdir(parents=True, exist_ok=True)
+    unmanaged_path.write_bytes(b"RIFF" + b"\x00" * 32)
+
+    with pytest.raises(ValueError):
+        register_provider_managed_voice_path(unmanaged_path)
+
+
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_materializes_stored_voice_to_stable_custom_path(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         materialize_custom_voice_reference,
     )
 
     runtime_root = tmp_path / "voices"
     manager = _RuntimeVoiceManager(runtime_root)
+    normalized = _make_wav_bytes(b"\x00\x01" * 8)
 
-    materialized = await materialize_custom_voice_reference(
-        voice_manager=manager,
-        user_id=7,
-        voice_id="voice-123",
-    )
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        assert input_path.read_bytes() == manager.voice_bytes
+        assert sample_rate == 24000
+        assert channels == 1
+        assert bit_depth == 16
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
+    try:
+        materialized = await materialize_custom_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_id="voice-123",
+        )
+    finally:
+        monkeypatch.undo()
 
     assert materialized == runtime_root / "providers" / "pocket_tts_cpp" / "custom_voice-123.wav"
     assert materialized.exists()
-    assert materialized.read_bytes() == manager.voice_bytes
+    assert materialized.read_bytes() == normalized
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_normalizes_stored_custom_voice_before_materialization(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        materialize_custom_voice_reference,
+    )
+
+    runtime_root = tmp_path / "voices"
+    stored_bytes = b"ID3" + b"\x06" * 20
+    manager = _RuntimeVoiceManager(runtime_root, voice_bytes=stored_bytes)
+    normalized = _make_wav_bytes(b"\x06\x07" * 8)
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        assert input_path.read_bytes() == stored_bytes
+        assert sample_rate == 24000
+        assert channels == 1
+        assert bit_depth == 16
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
+    try:
+        materialized = await materialize_custom_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_id="voice-123",
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert materialized.exists()
+    assert materialized.read_bytes() == normalized
 
 
 @pytest.mark.asyncio
@@ -267,6 +512,7 @@ async def test_pocket_tts_cpp_post_write_pruning_never_returns_deleted_active_pa
 
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_custom_voice_materialization_enforces_max_bytes_immediately(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         materialize_custom_voice_reference,
     )
@@ -277,17 +523,29 @@ async def test_pocket_tts_cpp_custom_voice_materialization_enforces_max_bytes_im
     runtime_dir.mkdir(parents=True, exist_ok=True)
     old_file = runtime_dir / "ref_old.wav"
     old_file.write_bytes(b"old-old")
+    normalized = _make_wav_bytes(b"\x05\x06" * 8)
 
-    materialized = await materialize_custom_voice_reference(
-        voice_manager=manager,
-        user_id=7,
-        voice_id="voice-123",
-        cache_max_bytes=20,
-    )
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        assert input_path.read_bytes() == manager.voice_bytes
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
+    try:
+        materialized = await materialize_custom_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_id="voice-123",
+            cache_max_bytes=20,
+        )
+    finally:
+        monkeypatch.undo()
 
     assert materialized.exists()
     assert not old_file.exists()
     assert materialized in runtime_dir.glob("*.wav")
+    assert materialized.read_bytes() == normalized
     assert sum(path.stat().st_size for path in runtime_dir.glob("*.wav")) <= 20 or list(runtime_dir.glob("*.wav")) == [materialized]
 
 
@@ -356,6 +614,48 @@ def test_pocket_tts_cpp_prunes_provider_cache_for_ttl_and_oversize_files(tmp_pat
     assert not expired.exists()
     assert not oldest.exists()
     assert newest.exists()
+
+
+def test_pocket_tts_cpp_prune_keeps_active_registered_voice_path(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        PROVIDER_MANAGED_VOICE_LEASE_DIRNAME,
+        prune_materialized_voice_cache,
+        resolve_provider_managed_voice_path,
+        register_provider_managed_voice_path,
+    )
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+
+    runtime_dir = tmp_path / "voices" / "providers" / "pocket_tts_cpp"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    active = runtime_dir / "active.wav"
+    stale = runtime_dir / "stale.wav"
+    active.write_bytes(b"a" * 7)
+    stale.write_bytes(b"b" * 7)
+
+    now = time.time()
+    os.utime(active, (now - 120, now - 120))
+    os.utime(stale, (now - 60, now - 60))
+
+    token = register_provider_managed_voice_path(active)
+    runtime_module._PROVIDER_MANAGED_VOICE_TOKENS.clear()
+
+    assert resolve_provider_managed_voice_path(token, active) == active.resolve()
+
+    runtime_module._PROVIDER_MANAGED_VOICE_TOKENS.clear()
+    removed = prune_materialized_voice_cache(
+        runtime_dir,
+        cache_ttl_hours=None,
+        cache_max_bytes=8,
+    )
+
+    removed_names = {path.name for path in removed}
+    assert removed_names == {"stale.wav"}
+    assert active.exists()
+    assert not stale.exists()
+    lease_files = list((runtime_dir / PROVIDER_MANAGED_VOICE_LEASE_DIRNAME).glob("*.json"))
+    assert len(lease_files) == 1
+    assert lease_files[0].stem == token
 
 
 @pytest.mark.asyncio
