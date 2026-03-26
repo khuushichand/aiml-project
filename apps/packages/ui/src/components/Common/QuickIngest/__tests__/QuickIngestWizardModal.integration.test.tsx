@@ -58,6 +58,7 @@ vi.mock("antd", () => ({
     options,
     placeholder,
     allowClear,
+    popupMatchSelectWidth,
     ...props
   }: any) => {
     const selectProps: any = { ...props }
@@ -66,6 +67,11 @@ vi.mock("antd", () => ({
       : "Clear"
     if (value !== undefined) {
       selectProps.value = value
+    }
+    if (popupMatchSelectWidth !== undefined) {
+      selectProps["data-popup-match-select-width"] = String(
+        popupMatchSelectWidth
+      )
     }
 
     return (
@@ -1088,6 +1094,10 @@ describe("QuickIngestWizardModal — real configure step", () => {
       expect(screen.getByRole("option", { name: "whisper-large-v3" })).toBeTruthy()
       expect(screen.getByRole("option", { name: "parakeet-standard" })).toBeTruthy()
     })
+    expect(transcriptionModelSelect).toHaveAttribute(
+      "data-popup-match-select-width",
+      "false"
+    )
 
     await user.selectOptions(
       transcriptionModelSelect,

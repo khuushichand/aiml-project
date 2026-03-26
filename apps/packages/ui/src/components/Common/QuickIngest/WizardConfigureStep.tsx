@@ -515,6 +515,15 @@ export const WizardConfigureStep: React.FC<WizardConfigureStepProps> = ({
               allowClear
               showSearch
               loading={transcriptionModelsLoading}
+              popupMatchSelectWidth={false}
+              styles={{
+                popup: {
+                  root: {
+                    width: "max-content",
+                    maxWidth: "min(90vw, 960px)",
+                  },
+                },
+              }}
               onChange={handleTranscriptionModelChange}
               onClear={handleTranscriptionModelClear}
               options={transcriptionModelOptions}
