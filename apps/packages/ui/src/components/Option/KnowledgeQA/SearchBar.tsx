@@ -33,6 +33,7 @@ type SearchBarProps = {
   className?: string
   autoFocus?: boolean
   showWebToggle?: boolean
+  widthMode?: "compact" | "wide"
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -75,6 +76,7 @@ export function SearchBar({
   className,
   autoFocus = true,
   showWebToggle = true,
+  widthMode = "compact",
 }: SearchBarProps) {
   const {
     query,
@@ -252,7 +254,10 @@ export function SearchBar({
   }, [clearResults, setQuery])
 
   return (
-    <form onSubmit={handleSubmit} className={cn("w-full max-w-3xl mx-auto", className)}>
+    <form
+      onSubmit={handleSubmit}
+      className={cn("mx-auto w-full", widthMode === "compact" && "max-w-3xl", className)}
+    >
       <p id="knowledge-qa-search-description" className="sr-only">
         Ask questions about your documents and get AI-powered answers with citations from your knowledge base.
       </p>

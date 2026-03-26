@@ -258,6 +258,10 @@ describe("KnowledgeQA golden layout guardrails", () => {
 
     expect(await screen.findByTestId("knowledge-history-sidebar")).toBeInTheDocument()
     expect(screen.getByText("Ask Your Library")).toBeInTheDocument()
+    expect(screen.getByTestId("knowledge-search-shell").className).not.toContain("max-w-3xl")
+    expect(screen.getByTestId("knowledge-search-shell").firstElementChild?.className).not.toContain(
+      "max-w-4xl"
+    )
   })
 
   it("shows onboarding guide and no-source recovery copy on first run", () => {
@@ -410,6 +414,10 @@ describe("KnowledgeQA golden layout guardrails", () => {
 
     expect(await screen.findByTestId("knowledge-history-sidebar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-answer-panel")).toBeInTheDocument()
+    expect(screen.getByTestId("knowledge-results-shell").className).not.toContain("max-w-3xl")
+    expect(
+      screen.getByTestId("knowledge-results-shell").firstElementChild?.className
+    ).not.toContain("max-w-4xl")
   })
 
   it("shows explicit no-results guidance after an empty completed search", async () => {

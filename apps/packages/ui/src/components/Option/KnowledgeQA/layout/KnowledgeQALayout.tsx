@@ -334,10 +334,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   : "px-4 pt-6 pb-4 md:px-6"
             )}
           >
-            <div className={cn(
-              "w-full space-y-4",
-              effectiveSimple ? "" : "mx-auto max-w-4xl"
-            )}>
+            <div className="w-full space-y-4">
               {/* Compact toolbar in Simple mode, full context bar in Research mode */}
               {effectiveSimple ? (
                 <CompactToolbar
@@ -401,6 +398,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
               <KnowledgeComposer
                 autoFocus={!hasVisibleResultsArea}
                 showWebToggle={false}
+                widthMode={effectiveSimple ? "compact" : "wide"}
               />
             </div>
           </div>
@@ -415,10 +413,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   : "px-4 md:px-6"
               )}
             >
-              <div className={cn(
-                "w-full space-y-6",
-                effectiveSimple ? "" : "mx-auto max-w-4xl"
-              )}>
+              <div className="w-full space-y-6">
                 {hasResults ? (
                   <div className="flex justify-end">
                     <button
