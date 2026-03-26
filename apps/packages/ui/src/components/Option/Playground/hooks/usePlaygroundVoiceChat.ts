@@ -15,14 +15,15 @@ import type { SttSettings } from "@/hooks/useSttSettings"
 import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
 import { emitDictationDiagnostics } from "@/utils/dictation-diagnostics"
 import { withTemplateFallback } from "@/utils/template-guards"
+import type { VoiceConversationAvailability } from "@/services/tldw/voice-conversation"
 
 // ---------------------------------------------------------------------------
 // Deps interface
 // ---------------------------------------------------------------------------
 
 export interface UsePlaygroundVoiceChatDeps {
-  /** Whether voice chat is available (server supports audio) */
-  voiceChatAvailable: boolean
+  /** Shared voice conversation availability contract */
+  voiceConversationAvailability: VoiceConversationAvailability
   /** Voice chat enabled toggle */
   voiceChatEnabled: boolean
   setVoiceChatEnabled: (enabled: boolean) => void
@@ -76,7 +77,7 @@ export interface UsePlaygroundVoiceChatDeps {
 
 export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
   const {
-    voiceChatAvailable,
+    voiceConversationAvailability,
     voiceChatEnabled,
     setVoiceChatEnabled,
     voiceChat,
@@ -463,13 +464,15 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
 
   // --- Voice chat toggle ---
   const handleVoiceChatToggle = React.useCallback(() => {
-    if (!voiceChatAvailable) {
+    if (!voiceConversationAvailability.available) {
       notificationApi.error({
         message: t("playground:voiceChat.unavailableTitle", "Voice chat unavailable"),
-        description: t(
-          "playground:voiceChat.unavailableBody",
-          "Connect to a tldw server with audio chat streaming enabled."
-        )
+        description:
+          voiceConversationAvailability.message ||
+          t(
+            "playground:voiceChat.unavailableBody",
+            "Connect to a tldw server with audio chat streaming enabled."
+          )
       })
       return
     }
@@ -489,7 +492,6 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
     }
     setVoiceChatEnabled(!voiceChatEnabled)
   }, [
-    voiceChatAvailable,
     voiceChatEnabled,
     isListening,
     isServerDictating,
@@ -498,7 +500,8 @@ export function usePlaygroundVoiceChat(deps: UsePlaygroundVoiceChatDeps) {
     stopSpeechRecognition,
     stopServerDictation,
     t,
-    voiceChatMessages
+    voiceChatMessages,
+    voiceConversationAvailability
   ])
 
   // --- Dictation toggle ---

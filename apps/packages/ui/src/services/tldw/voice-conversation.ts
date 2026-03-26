@@ -79,6 +79,7 @@ export type VoiceConversationReason =
 export type VoiceConversationAvailability = {
   available: boolean
   reason: VoiceConversationReason
+  message: string | null
 }
 
 type VoiceConversationTtsResolution =
@@ -140,6 +141,37 @@ const buildTtsConfigMissingError = () =>
 
 const buildTtsProviderUnsupportedError = () =>
   new Error("Voice conversation TTS provider is unsupported")
+
+const resolveVoiceConversationAvailabilityMessage = (
+  reason: VoiceConversationReason
+): string | null => {
+  switch (reason) {
+    case "ok":
+      return null
+    case "not_connected":
+      return "Connect to tldw before using voice conversation."
+    case "transport_missing":
+      return "This server does not advertise voice conversation streaming."
+    case "auth_missing":
+      return "Configure tldw credentials before using voice conversation."
+    case "audio_unhealthy":
+      return "Audio health is not ready for voice conversation."
+    case "tts_config_missing":
+      return "Voice conversation needs a server TTS model and voice."
+    case "tts_provider_unsupported":
+      return "Voice conversation does not support this TTS provider."
+    case "model_missing":
+      return "Select a chat model for voice conversation."
+    case "voice_chat_disconnected":
+      return "Voice chat disconnected."
+    case "voice_chat_tts_error":
+      return "Voice chat hit a TTS error."
+    case "voice_chat_error":
+      return "Voice chat hit an error."
+    default:
+      return "Voice conversation is unavailable."
+  }
+}
 
 export const resolveVoiceConversationTtsConfig = (
   input: VoiceConversationTtsConfigInput
@@ -225,28 +257,52 @@ export const resolveVoiceConversationAvailability = (
   input: VoiceConversationAvailabilityInput
 ): VoiceConversationAvailability => {
   if (!input.isConnectionReady) {
-    return { available: false, reason: "not_connected" }
+    return {
+      available: false,
+      reason: "not_connected",
+      message: resolveVoiceConversationAvailabilityMessage("not_connected")
+    }
   }
   if (!input.hasVoiceConversationTransport) {
-    return { available: false, reason: "transport_missing" }
+    return {
+      available: false,
+      reason: "transport_missing",
+      message: resolveVoiceConversationAvailabilityMessage("transport_missing")
+    }
   }
   if (!input.authReady) {
-    return { available: false, reason: "auth_missing" }
+    return {
+      available: false,
+      reason: "auth_missing",
+      message: resolveVoiceConversationAvailabilityMessage("auth_missing")
+    }
   }
   if (
     !hasUsableAudioHealth(input.sttHealthState) ||
     !hasUsableAudioHealth(input.ttsHealthState)
   ) {
-    return { available: false, reason: "audio_unhealthy" }
+    return {
+      available: false,
+      reason: "audio_unhealthy",
+      message: resolveVoiceConversationAvailabilityMessage("audio_unhealthy")
+    }
   }
   if (!input.ttsConfigReady) {
-    return { available: false, reason: "tts_config_missing" }
+    return {
+      available: false,
+      reason: "tts_config_missing",
+      message: resolveVoiceConversationAvailabilityMessage("tts_config_missing")
+    }
   }
   if (!trimString(input.selectedModel) && !input.allowBackendDefaultModel) {
-    return { available: false, reason: "model_missing" }
+    return {
+      available: false,
+      reason: "model_missing",
+      message: resolveVoiceConversationAvailabilityMessage("model_missing")
+    }
   }
 
-  return { available: true, reason: "ok" }
+  return { available: true, reason: "ok", message: null }
 }
 
 export const buildVoiceConversationPreflight = async (
@@ -263,13 +319,14 @@ export const buildVoiceConversationPreflight = async (
   }
 
   const ttsResolution = resolveVoiceConversationTtsConfig(input)
-  if (!ttsResolution.ok) {
-    throw (
+  if ("reason" in ttsResolution) {
+    const error =
       ttsResolution.reason === "tts_provider_unsupported"
         ? buildTtsProviderUnsupportedError()
         : buildTtsConfigMissingError()
-    )
+    throw error
   }
+  const ttsConfig = ttsResolution.value
 
   const requestedModel = trimString(input.requestedModel)
   const llm = requestedModel
@@ -282,7 +339,7 @@ export const buildVoiceConversationPreflight = async (
   return {
     websocketUrl: `${resolveBrowserWebSocketBase(serverUrl)}/api/v1/audio/chat/stream?token=${encodeURIComponent(token)}`,
     llm,
-    tts: ttsResolution.value
+    tts: ttsConfig
   }
 }
 
