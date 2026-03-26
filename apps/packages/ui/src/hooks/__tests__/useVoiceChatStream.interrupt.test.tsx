@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 
@@ -139,6 +139,9 @@ class MockWebSocket {
 }
 
 describe("useVoiceChatStream interrupt handling", () => {
+  const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+  const originalWindow = globalThis.window
+
   beforeEach(() => {
     MockWebSocket.instances = []
     micState.callback = null
@@ -166,6 +169,7 @@ describe("useVoiceChatStream interrupt handling", () => {
     storageValues.set("elevenLabsModel", "")
     storageValues.set("elevenLabsVoiceId", "")
     storageValues.set("speechPlaybackSpeed", 1)
+    delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
     useStorageMock.mockReset()
     useStorageMock.mockImplementation((key: string, defaultValue: unknown) => [
       storageValues.has(key) ? storageValues.get(key) : defaultValue,
@@ -173,6 +177,49 @@ describe("useVoiceChatStream interrupt handling", () => {
       { isLoading: key === "liveVoiceAudioSourcePreference" ? false : false }
     ])
     ;(globalThis as any).WebSocket = MockWebSocket
+    const mockWindow = Object.create(originalWindow)
+    Object.defineProperty(mockWindow, "location", {
+      value: {
+        origin: "http://127.0.0.1:8080",
+        protocol: "http:"
+      },
+      configurable: true
+    })
+    Object.defineProperty(globalThis, "window", {
+      value: mockWindow,
+      configurable: true
+    })
+  })
+
+  afterEach(() => {
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+    }
+    Object.defineProperty(globalThis, "window", {
+      value: originalWindow,
+      configurable: true
+    })
+  })
+
+  it("uses the webui origin for quickstart voice chat websocket urls", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+
+    renderHook(() =>
+      useVoiceChatStream({
+        active: true
+      })
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(MockWebSocket.instances[0]?.url).toBe(
+      "ws://127.0.0.1:8080/api/v1/audio/chat/stream?token=test-key"
+    )
   })
 
   it("starts live voice with the remembered live_voice mic device", async () => {

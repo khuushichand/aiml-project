@@ -8,6 +8,7 @@ import { useSelectedModel } from "@/hooks/chat/useSelectedModel"
 import { useMicStream } from "@/hooks/useMicStream"
 import { arrayBufferToBase64 } from "@/utils/compress"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { resolveBrowserWebSocketBase } from "@/services/tldw/browser-websocket"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { useStreamingAudioPlayer } from "@/hooks/useStreamingAudioPlayer"
 
@@ -479,7 +480,7 @@ export const useVoiceChatStream = ({
         throw new Error("Not authenticated. Configure tldw credentials in Settings.")
       }
 
-      const base = serverUrl.replace(/^http/i, "ws").replace(/\/$/, "")
+      const base = resolveBrowserWebSocketBase(serverUrl)
       const url = `${base}/api/v1/audio/chat/stream?token=${encodeURIComponent(token)}`
       const ws = new WebSocket(url)
       ws.binaryType = "arraybuffer"

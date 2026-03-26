@@ -350,7 +350,12 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         configured_model_id = str(stt_cfg.get("parakeet_onnx_model_id", "")).strip()
         model_path = configured_model_id or "istupakov/parakeet-tdt-0.6b-v3-onnx"
 
-    configured_revision = str(stt_cfg.get("parakeet_onnx_revision", "")).strip()
+    raw_configured_revision = stt_cfg.get("parakeet_onnx_revision", "")
+    configured_revision = (
+        str(raw_configured_revision).strip()
+        if raw_configured_revision is not None
+        else None
+    )
     revision = configured_revision or os.getenv("PARAKEET_ONNX_REVISION")
 
     cache_key = f"{model_path}_{revision or ''}_{device}"

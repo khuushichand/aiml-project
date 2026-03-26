@@ -210,6 +210,9 @@ describe("ACPWebSocketClient", () => {
     }
   }
 
+  const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+  const originalWindow = globalThis.window
+
   const createClient = () =>
     new ACPWebSocketClient({
       serverUrl: "http://localhost:8000",
@@ -221,12 +224,42 @@ describe("ACPWebSocketClient", () => {
     vi.useFakeTimers()
     MockWebSocket.instances = []
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket)
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "http://127.0.0.1:8080",
+          protocol: "http:"
+        }
+      },
+      configurable: true
+    })
   })
 
   afterEach(() => {
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
     vi.unstubAllGlobals()
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+    }
+    Object.defineProperty(globalThis, "window", {
+      value: originalWindow,
+      configurable: true
+    })
+  })
+
+  it("uses the webui origin for quickstart websocket sessions", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+
+    const client = createClient()
+    await client.connect("sess-1")
+
+    expect(MockWebSocket.instances).toHaveLength(1)
+    expect(MockWebSocket.instances[0].url).toBe(
+      "ws://127.0.0.1:8080/api/v1/acp/sessions/sess-1/stream?api_key=test-key"
+    )
   })
 
   it.each([4401, 4404, 4429])("does not reconnect for fatal close code %s", async (code) => {

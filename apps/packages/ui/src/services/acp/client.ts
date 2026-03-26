@@ -18,6 +18,7 @@ import type {
 } from "./types"
 import { shouldRetryACPWebSocketClose } from "./constants"
 import { resolveBrowserRequestTransport } from "@/services/tldw/request-core"
+import { resolveBrowserWebSocketBase } from "@/services/tldw/browser-websocket"
 
 // -----------------------------------------------------------------------------
 // Configuration
@@ -221,7 +222,7 @@ export class ACPWebSocketClient {
     const authParams = await this.config.getAuthParams()
 
     // Build WebSocket URL
-    const wsUrl = this.config.serverUrl.replace(/^http/i, "ws")
+    const wsUrl = resolveBrowserWebSocketBase(this.config.serverUrl)
     const params = new URLSearchParams()
     if (authParams.token) params.set("token", authParams.token)
     if (authParams.api_key) params.set("api_key", authParams.api_key)
