@@ -2,7 +2,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app as fastapi_app
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.media_database import (
+    MediaDatabase,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.core.RAG.rag_service.query_classifier import QueryClassification

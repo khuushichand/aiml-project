@@ -6,7 +6,10 @@ from typing import Iterable
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
+from tldw_Server_API.app.core.DB_Management.media_db.media_database import (
+    MediaDatabase,
+)
 from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
     MediaDatabaseError,
     MediaDBRetriever,
@@ -119,15 +122,15 @@ class TestMediaDBRetriever:
         )
 
         calls: list[dict[str, object]] = []
-        real_search_media_db = db.search_media_db
+        real_search_media = retr_mod.search_media
 
-        def _spy_search_media_db(*args, **kwargs):
+        def _spy_search_media(*args, **kwargs):
             calls.append({"args": args, "kwargs": kwargs})
             if len(calls) == 1:
                 return [], 0
-            return real_search_media_db(*args, **kwargs)
+            return real_search_media(*args, **kwargs)
 
-        monkeypatch.setattr(db, "search_media_db", _spy_search_media_db)
+        monkeypatch.setattr(retr_mod, "search_media", _spy_search_media)
 
         docs = await retriever.retrieve(query)
 
@@ -161,7 +164,7 @@ class TestMediaDBRetriever:
 
         calls: list[dict[str, object]] = []
 
-        def _spy_search_media_db(*args, **kwargs):
+        def _spy_search_media(*args, **kwargs):
             calls.append({"args": args, "kwargs": kwargs})
             return ([{
                 "id": 1,
@@ -175,7 +178,7 @@ class TestMediaDBRetriever:
                 "relevance_score": 0.0,
             }], 1)
 
-        monkeypatch.setattr(db, "search_media_db", _spy_search_media_db)
+        monkeypatch.setattr(retr_mod, "search_media", _spy_search_media)
         monkeypatch.setattr(
             MediaDBRetriever,
             "_build_media_documents",
@@ -220,15 +223,15 @@ class TestMediaDBRetriever:
         )
 
         calls: list[dict[str, object]] = []
-        real_search_media_db = db.search_media_db
+        real_search_media = retr_mod.search_media
 
-        def _spy_search_media_db(*args, **kwargs):
+        def _spy_search_media(*args, **kwargs):
             calls.append({"args": args, "kwargs": kwargs})
             if len(calls) == 1:
                 return [], 0
-            return real_search_media_db(*args, **kwargs)
+            return real_search_media(*args, **kwargs)
 
-        monkeypatch.setattr(db, "search_media_db", _spy_search_media_db)
+        monkeypatch.setattr(retr_mod, "search_media", _spy_search_media)
 
         docs = await retriever.retrieve(
             query,
