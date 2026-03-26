@@ -598,128 +598,130 @@ export function AnswerPanel({ className }: AnswerPanelProps) {
 
       {/* Answer content */}
       <div className="p-6">
-        {citations.length > 0 ? (
-          <p id="knowledge-answer-citation-guidance" className="sr-only">
-            This answer includes inline citation buttons. Press Tab to move between
-            citation controls and source links.
-          </p>
-        ) : null}
-        <div
-          id="knowledge-answer-content"
-          data-testid="knowledge-answer-content"
-          aria-describedby={
-            citations.length > 0 ? "knowledge-answer-citation-guidance" : undefined
-          }
-          className={cn(
-            "prose prose-sm dark:prose-invert max-w-none",
-            isLongAnswer && !isExpanded && "relative max-h-[28rem] overflow-hidden"
-          )}
-        >
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkCitationLinks]}
-            components={{
-              a({ href, children, ...props }) {
-                const citationMatch =
-                  typeof href === "string"
-                    ? href.match(/^citation:\/\/(\d+)$/)
-                    : null
-                const childText =
-                  typeof children === "string"
-                    ? children
-                    : Array.isArray(children) && children.length === 1
-                      ? typeof children[0] === "string"
-                        ? children[0]
-                        : null
+        <div className="mx-auto w-full max-w-3xl xl:max-w-4xl">
+          {citations.length > 0 ? (
+            <p id="knowledge-answer-citation-guidance" className="sr-only">
+              This answer includes inline citation buttons. Press Tab to move between
+              citation controls and source links.
+            </p>
+          ) : null}
+          <div
+            id="knowledge-answer-content"
+            data-testid="knowledge-answer-content"
+            aria-describedby={
+              citations.length > 0 ? "knowledge-answer-citation-guidance" : undefined
+            }
+            className={cn(
+              "prose prose-sm dark:prose-invert max-w-none",
+              isLongAnswer && !isExpanded && "relative max-h-[28rem] overflow-hidden"
+            )}
+          >
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkCitationLinks]}
+              components={{
+                a({ href, children, ...props }) {
+                  const citationMatch =
+                    typeof href === "string"
+                      ? href.match(/^citation:\/\/(\d+)$/)
                       : null
-                const childCitationMatch =
-                  typeof childText === "string"
-                    ? childText.match(/^\[(\d+)\]$/)
-                    : null
-                const citationNum = citationMatch
-                  ? Number.parseInt(citationMatch[1], 10)
-                  : childCitationMatch
-                    ? Number.parseInt(childCitationMatch[1], 10)
-                    : NaN
-                if (Number.isFinite(citationNum)) {
-                  return renderCitationButton(
-                    citationNum,
-                    getNextCitationOccurrence(citationNum)
-                  )
-                }
-                return (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                    {...props}
-                  >
-                    {children}
-                  </a>
-                )
-              },
-              code({ className: codeClassName, children, ...props }) {
-                const isInline = !String(codeClassName || "").includes("language-")
-                if (isInline) {
+                  const childText =
+                    typeof children === "string"
+                      ? children
+                      : Array.isArray(children) && children.length === 1
+                        ? typeof children[0] === "string"
+                          ? children[0]
+                          : null
+                        : null
+                  const childCitationMatch =
+                    typeof childText === "string"
+                      ? childText.match(/^\[(\d+)\]$/)
+                      : null
+                  const citationNum = citationMatch
+                    ? Number.parseInt(citationMatch[1], 10)
+                    : childCitationMatch
+                      ? Number.parseInt(childCitationMatch[1], 10)
+                      : NaN
+                  if (Number.isFinite(citationNum)) {
+                    return renderCitationButton(
+                      citationNum,
+                      getNextCitationOccurrence(citationNum)
+                    )
+                  }
                   return (
-                    <code
-                      className="rounded bg-muted px-1 py-0.5 text-[0.9em]"
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
                       {...props}
                     >
                       {children}
+                    </a>
+                  )
+                },
+                code({ className: codeClassName, children, ...props }) {
+                  const isInline = !String(codeClassName || "").includes("language-")
+                  if (isInline) {
+                    return (
+                      <code
+                        className="rounded bg-muted px-1 py-0.5 text-[0.9em]"
+                        {...props}
+                      >
+                        {children}
+                      </code>
+                    )
+                  }
+                  return (
+                    <code className={codeClassName} {...props}>
+                      {children}
                     </code>
                   )
-                }
-                return (
-                  <code className={codeClassName} {...props}>
-                    {children}
-                  </code>
-                )
-              },
-              pre({ children, ...props }) {
-                return (
-                  <pre
-                    className="overflow-x-auto rounded-md border border-border bg-surface2/70 p-3"
-                    {...props}
-                  >
-                    {children}
-                  </pre>
-                )
-              },
-              table({ children, ...props }) {
-                return (
-                  <table className="block overflow-x-auto text-sm" {...props}>
-                    {children}
-                  </table>
-                )
-              },
-              p({ children, ...props }) {
-                const paragraphText = extractTextFromNode(children)
-                const paragraphHasCitation = /\[\d+\]/.test(paragraphText)
-                const shouldHighlightUncited =
-                  Boolean(citations.length) &&
-                  paragraphText.trim().length > 0 &&
-                  !paragraphHasCitation
-                return (
-                  <p
-                    className={cn(
-                      "leading-relaxed whitespace-pre-wrap",
-                      shouldHighlightUncited &&
-                        "rounded-md bg-amber-500/10 px-2 py-1"
-                    )}
-                    {...props}
-                  >
-                    {children}
-                  </p>
-                )
-              },
-            }}
-          >
-            {normalizedAnswer}
-          </ReactMarkdown>
-          {isLongAnswer && !isExpanded && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary/10 to-transparent" />
-          )}
+                },
+                pre({ children, ...props }) {
+                  return (
+                    <pre
+                      className="overflow-x-auto rounded-md border border-border bg-surface2/70 p-3"
+                      {...props}
+                    >
+                      {children}
+                    </pre>
+                  )
+                },
+                table({ children, ...props }) {
+                  return (
+                    <table className="block overflow-x-auto text-sm" {...props}>
+                      {children}
+                    </table>
+                  )
+                },
+                p({ children, ...props }) {
+                  const paragraphText = extractTextFromNode(children)
+                  const paragraphHasCitation = /\[\d+\]/.test(paragraphText)
+                  const shouldHighlightUncited =
+                    Boolean(citations.length) &&
+                    paragraphText.trim().length > 0 &&
+                    !paragraphHasCitation
+                  return (
+                    <p
+                      className={cn(
+                        "leading-relaxed whitespace-pre-wrap",
+                        shouldHighlightUncited &&
+                          "rounded-md bg-amber-500/10 px-2 py-1"
+                      )}
+                      {...props}
+                    >
+                      {children}
+                    </p>
+                  )
+                },
+              }}
+            >
+              {normalizedAnswer}
+            </ReactMarkdown>
+            {isLongAnswer && !isExpanded && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-primary/10 to-transparent" />
+            )}
+          </div>
         </div>
         {isLongAnswer && (
           <button
