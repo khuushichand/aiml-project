@@ -19,7 +19,7 @@ DatabaseFactory = Callable[..., object]
 
 
 def _load_default_media_database_factory() -> DatabaseFactory:
-    """Load the default legacy-compatible Media DB constructor on demand."""
+    """Load the default Media DB constructor on demand."""
     from tldw_Server_API.app.core.DB_Management.media_db.runtime.factory import (
         _load_media_database_cls,
     )

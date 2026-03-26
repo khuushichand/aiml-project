@@ -1,25 +1,22 @@
-"""FTS schema helpers."""
+"""FTS schema feature wrappers."""
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
+
+from tldw_Server_API.app.core.DB_Management.media_db.schema.fts_structures import (
+    ensure_fts_structures as _ensure_fts_structures,
+    ensure_postgres_fts as _ensure_postgres_fts,
+)
 
 
-class _SQLiteFtsOwner(Protocol):
-    def _ensure_fts_structures(self, conn: Any) -> None: ...
+def ensure_sqlite_fts_structures(db: Any, conn: Any) -> None:
+    """Ensure the SQLite FTS structures through the package helper."""
+
+    _ensure_fts_structures(db, conn)
 
 
-class _PostgresFtsOwner(Protocol):
-    def _ensure_postgres_fts(self, conn: Any) -> None: ...
+def ensure_postgres_fts(db: Any, conn: Any) -> None:
+    """Ensure the PostgreSQL FTS structures through the package helper."""
 
-
-def ensure_sqlite_fts_structures(db: _SQLiteFtsOwner, conn: Any) -> None:
-    """Ensure the SQLite FTS structures owned by the legacy Media DB object."""
-
-    db._ensure_fts_structures(conn)
-
-
-def ensure_postgres_fts(db: _PostgresFtsOwner, conn: Any) -> None:
-    """Ensure the PostgreSQL FTS structures owned by the legacy Media DB object."""
-
-    db._ensure_postgres_fts(conn)
+    _ensure_postgres_fts(db, conn)

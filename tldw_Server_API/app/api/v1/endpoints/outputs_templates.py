@@ -26,6 +26,7 @@ from tldw_Server_API.app.api.v1.schemas.outputs_templates_schemas import (
     TemplatePreviewRequest,
     TemplatePreviewResponse,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.api import search_media
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.services.outputs_service import (
     build_items_context_from_content_items,
@@ -178,7 +179,8 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
         return []
     # Leverage search_media_db to fetch multiple items at once
     try:
-        rows, total = media_db.search_media_db(
+        rows, total = search_media(
+            media_db,
             search_query=None,
             media_ids_filter=item_ids[:limit],
             page=1,
@@ -198,14 +200,12 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
         # Latest version to get analysis/safe_metadata
         latest = None
         try:
-            from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+            from tldw_Server_API.app.core.DB_Management.media_db.api import (
+                fetch_keywords_for_media,
                 get_document_version,
             )
-            from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
-                fetch_keywords_for_media,
-            )
             latest = get_document_version(media_db, media_id=mid, version_number=None, include_content=False)
-            tags = fetch_keywords_for_media(media_id=mid, db_instance=media_db) or []
+            tags = fetch_keywords_for_media(db=media_db, media_id=mid) or []
         except (ImportError, AttributeError, ValueError, TypeError, KeyError, RuntimeError):
             tags = []
         published_at = None

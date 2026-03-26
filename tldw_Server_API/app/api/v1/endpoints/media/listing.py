@@ -28,19 +28,16 @@ from tldw_Server_API.app.api.v1.schemas.media_response_models import (
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    get_paginated_files,
-    get_paginated_trash_files,
-)
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError,
     InputError,
 )
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_content_queries import (
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
     fetch_keywords_for_media_batch,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
+    get_paginated_files,
+    get_paginated_trash_files,
     permanently_delete_item,
+    search_media,
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
@@ -218,7 +215,7 @@ async def list_media_endpoint(
             pass
 
         rows, total_pages, current_page, total_items = get_paginated_files(
-            db_instance=db,
+            db,
             page=page,
             results_per_page=results_per_page,
         )
@@ -277,8 +274,8 @@ async def list_media_endpoint(
         if include_keywords and media_ids:
             try:
                 keywords_map = fetch_keywords_for_media_batch(
-                    media_ids=media_ids,
-                    db_instance=db,
+                    db,
+                    media_ids,
                 )
                 keywords_available = True
             except (TypeError, InputError, DatabaseError) as exc:
@@ -395,7 +392,7 @@ async def list_media_trash_endpoint(
             pass
 
         rows, total_pages, current_page, total_items = get_paginated_trash_files(
-            db_instance=db,
+            db,
             page=page,
             results_per_page=results_per_page,
         )
@@ -446,8 +443,8 @@ async def list_media_trash_endpoint(
         if include_keywords and media_ids:
             try:
                 keywords_map = fetch_keywords_for_media_batch(
-                    media_ids=media_ids,
-                    db_instance=db,
+                    db,
+                    media_ids,
                 )
                 keywords_available = True
             except (TypeError, InputError, DatabaseError) as exc:
@@ -1001,7 +998,8 @@ async def search_media_items(
                     }
                 )
         else:
-            items_data, total_items = db.search_media_db(
+            items_data, total_items = search_media(
+                db,
                 search_query=query_text_for_match,
                 search_fields=search_params.fields,
                 media_types=search_params.media_types,

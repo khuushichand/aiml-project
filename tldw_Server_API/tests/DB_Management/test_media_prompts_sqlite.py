@@ -1,9 +1,7 @@
 import uuid
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
-    get_media_prompts,
-)
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_prompts
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 def _insert_minimal_media(db: MediaDatabase) -> int:

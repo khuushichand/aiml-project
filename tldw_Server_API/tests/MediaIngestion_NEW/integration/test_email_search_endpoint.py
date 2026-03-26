@@ -10,7 +10,7 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.endpoints import email as email_endpoint
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.config import API_V1_PREFIX
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import InputError
+from tldw_Server_API.app.core.DB_Management.media_db.errors import InputError
 
 pytestmark = pytest.mark.integration
 

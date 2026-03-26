@@ -184,10 +184,10 @@ documents = await retriever.retrieve(
 
 ### MediaDatabase Integration
 
-The RAG module integrates with the Media_DB_v2 system:
+The RAG module integrates with the package-native MediaDatabase class:
 
 ```python
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 # Initialize database connection
 media_db = MediaDatabase(db_path="user_media_library.sqlite", client_id="rag_service")

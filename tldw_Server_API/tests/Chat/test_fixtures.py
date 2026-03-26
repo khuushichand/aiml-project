@@ -8,7 +8,6 @@ import shutil
 from pathlib import Path
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.main import app
@@ -97,22 +96,21 @@ def real_test_db():
 
 
 @pytest.fixture(scope="function")
-def real_media_db():
+def real_media_db(managed_test_media_db):
     """Create a real temporary Media database for testing."""
     # Create a temporary directory for the test database
     temp_dir = tempfile.mkdtemp(prefix="test_media_")
     db_path = os.path.join(temp_dir, "test_media.db")
 
-    # Initialize real database
-    db = MediaDatabase(db_path, client_id="test_client")
-
-    yield db
+    with managed_test_media_db(
+        "test_client",
+        db_path=db_path,
+        initialize=False,
+    ) as db:
+        yield db
 
     # Cleanup
     try:
-        # Close any open connections
-        if hasattr(db, 'close_connection'):
-            db.close_connection()
         # Remove the temporary directory
         shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception as e:

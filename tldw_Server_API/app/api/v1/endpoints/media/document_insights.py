@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
     get_latest_transcription,
 )
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry

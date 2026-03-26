@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import router as vs_router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 class FakeCollection:

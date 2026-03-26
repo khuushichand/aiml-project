@@ -73,8 +73,8 @@ Routers are mounted in `main.py` with prefix `/api/v1`.
 - LLM Calls: `core/LLM_Calls/` (providers, routing, streaming)
 - MCP Unified: `core/MCP_unified/` (production-ready server + tooling)
 - TTS: `core/TTS/` (OpenAI-compatible and local adapters)
-- DB Management: `core/DB_Management/` (Media_DB_v2, migrations)
-  - Media DB v2 docs: Docs/Code_Documentation/Databases/Media_DB_v2.md (Claims API, Chunking Templates API, Troubleshooting)
+- DB Management: `core/DB_Management/` (media_db package, migrations)
+  - MediaDatabase docs: Docs/Code_Documentation/Databases/Media_DB_v2.md (Claims API, Chunking Templates API, Troubleshooting)
 - Metrics: `core/Metrics/` (Prometheus/OpenTelemetry)
 
 ## Databases & Stores

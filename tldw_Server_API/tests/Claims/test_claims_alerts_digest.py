@@ -6,7 +6,7 @@ import tempfile
 from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
     send_claims_alert_email_digest_for_scheduler,
 )
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.config import settings
 
 

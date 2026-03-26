@@ -13,7 +13,8 @@ import pytest
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.endpoints.sync import ServerSyncProcessor
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 #
 #######################################################################################################################

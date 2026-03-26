@@ -7,11 +7,13 @@ from typing import Any, Callable
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
     get_media_transcripts,
+)
+from tldw_Server_API.app.core.DB_Management.media_db.legacy_transcripts import (
     upsert_transcript,
 )
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 class CloneService:

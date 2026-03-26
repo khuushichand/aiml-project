@@ -17,7 +17,6 @@ def test_import_xml_handler_reports_malformed_input(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("db should not be opened for malformed XML")),
         raising=False,
     )
-    monkeypatch.setattr(xml_lib, "add_media_with_keywords", lambda **kwargs: {"status": "ok"})
 
     malformed_xml = io.BytesIO(b"<root><unclosed>")
 
@@ -73,11 +72,14 @@ def test_import_xml_handler_uses_managed_media_database(monkeypatch):
     monkeypatch.setattr(xml_lib, "managed_media_database", _fake_managed_media_database, raising=False)
     monkeypatch.setattr(
         xml_lib,
-        "create_media_database",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        "get_media_repository",
+        lambda db_instance: type(
+            "_FakeWriter",
+            (),
+            {"add_media_with_keywords": staticmethod(_fake_add_media_with_keywords)},
+        )(),
         raising=False,
     )
-    monkeypatch.setattr(xml_lib, "add_media_with_keywords", _fake_add_media_with_keywords)
 
     xml_file = io.BytesIO(b"<root><item>Hello</item><item>World</item></root>")
 

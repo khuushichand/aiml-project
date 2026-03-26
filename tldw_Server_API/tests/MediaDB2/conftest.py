@@ -12,7 +12,7 @@ sys.path.insert(0, str(src_path))
 
 # Now import after modifying path
 try:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+    from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 except ImportError as e:
     print(f"ERROR in conftest: Could not import Database from sqlite_db. Error: {e}")
     # Define dummy class if import fails to avoid crashing pytest collection

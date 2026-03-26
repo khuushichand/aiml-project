@@ -540,7 +540,6 @@ class TestUnifiedPipelineFeatures:
                 },
             ),
             patch.object(up, "managed_media_database", _managed_media_database, create=True),
-            patch("tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase", side_effect=_legacy_media_db),
             patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SemanticCache", return_value=NullCache()),
             patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever") as mock_retriever,
             patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.ClaimsEngine", StubClaimsEngine),

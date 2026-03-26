@@ -7,7 +7,7 @@ from pathlib import Path
 import aiosqlite
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.runtime.validation import MediaDbLike
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import get_document_version
 from tldw_Server_API.app.core.External_Sources import connectors_service as svc
 from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncChange
@@ -29,8 +29,8 @@ async def connectors_db(tmp_path: Path):
 
 
 @pytest.fixture
-def media_db(tmp_path: Path) -> MediaDatabase:
-    return MediaDatabase(db_path=str(tmp_path / "media.sqlite3"), client_id="sync-test")
+def media_db(tmp_path: Path, test_media_db_factory) -> MediaDbLike:
+    return test_media_db_factory(tmp_path / "media.sqlite3", client_id="sync-test")
 
 
 async def _create_account_and_source(db: aiosqlite.Connection) -> tuple[dict, dict]:
@@ -66,7 +66,7 @@ async def _create_account_and_source_for_provider(
 @pytest.mark.unit
 async def test_reconcile_created_change_creates_media_binding_and_initial_version(
     connectors_db: aiosqlite.Connection,
-    media_db: MediaDatabase,
+    media_db: MediaDbLike,
 ) -> None:
     _, source = await _create_account_and_source(connectors_db)
 
@@ -238,7 +238,7 @@ async def test_reconcile_created_change_uses_media_repository_api(
 @pytest.mark.unit
 async def test_reconcile_content_update_updates_media_fts_versions_and_binding(
     connectors_db: aiosqlite.Connection,
-    media_db: MediaDatabase,
+    media_db: MediaDbLike,
 ) -> None:
     _, source = await _create_account_and_source(connectors_db)
     media_id, _, _ = media_db.add_media_with_keywords(
@@ -299,13 +299,11 @@ async def test_reconcile_content_update_updates_media_fts_versions_and_binding(
     event_rows = await (await connectors_db.execute(
         "SELECT event_type, payload_json FROM external_item_events ORDER BY id ASC"
     )).fetchall()
-    updated_results, updated_total = MediaDatabase.search_media_db(
-        media_db,
+    updated_results, updated_total = media_db.search_media_db(
         search_query='"Updated"',
         search_fields=["content"],
     )
-    original_results, original_total = MediaDatabase.search_media_db(
-        media_db,
+    original_results, original_total = media_db.search_media_db(
         search_query='"Original"',
         search_fields=["content"],
     )
@@ -354,7 +352,7 @@ async def test_reconcile_content_update_updates_media_fts_versions_and_binding(
 @pytest.mark.unit
 async def test_reconcile_created_change_uses_provider_modified_timestamp_aliases(
     connectors_db: aiosqlite.Connection,
-    media_db: MediaDatabase,
+    media_db: MediaDbLike,
 ) -> None:
     _, source = await _create_account_and_source_for_provider(connectors_db, provider="onedrive")
 
@@ -393,7 +391,7 @@ async def test_reconcile_created_change_uses_provider_modified_timestamp_aliases
 @pytest.mark.unit
 async def test_reconcile_deleted_change_archives_media_and_binding(
     connectors_db: aiosqlite.Connection,
-    media_db: MediaDatabase,
+    media_db: MediaDbLike,
 ) -> None:
     _, source = await _create_account_and_source(connectors_db)
     media_id, _, _ = media_db.add_media_with_keywords(
@@ -454,7 +452,7 @@ async def test_reconcile_deleted_change_archives_media_and_binding(
 @pytest.mark.unit
 async def test_reconcile_restored_change_restores_media_and_binding(
     connectors_db: aiosqlite.Connection,
-    media_db: MediaDatabase,
+    media_db: MediaDbLike,
 ) -> None:
     _, source = await _create_account_and_source(connectors_db)
     media_id, _, _ = media_db.add_media_with_keywords(

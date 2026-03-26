@@ -822,8 +822,54 @@ def client_user_only(client_with_single_user):
     return client
 
 
+def _reset_test_media_db_runtime():
+    """Restore canonical Media DB runtime defaults before seam-backed test DB creation."""
+    from tldw_Server_API.app.core.config import load_comprehensive_config
+    from tldw_Server_API.app.core.DB_Management import DB_Manager
+
+    cfg = load_comprehensive_config()
+    DB_Manager.reset_content_backend(config=cfg, reload=False)
+    return cfg
+
+
 @pytest.fixture()
-def data_tables_app_factory(monkeypatch) -> Callable[[Path], tuple["FastAPI", Path]]:
+def test_media_db_factory() -> Callable[[Path | str], object]:
+    """Create temporary Media DB handles through the refactor seam and close them after the test."""
+    from tldw_Server_API.app.core.DB_Management.media_db.api import create_media_database
+
+    open_databases: list[object] = []
+
+    def _build(db_path: Path | str, *, client_id: str = "test_client") -> object:
+        cfg = _reset_test_media_db_runtime()
+        db = create_media_database(client_id=client_id, db_path=str(db_path), config=cfg)
+        open_databases.append(db)
+        return db
+
+    yield _build
+
+    for db in reversed(open_databases):
+        close_connection = getattr(db, "close_connection", None)
+        if callable(close_connection):
+            close_connection()
+
+
+@pytest.fixture()
+def managed_test_media_db():
+    """Expose the seam-backed Media DB context manager for test overrides."""
+    from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
+
+    def _managed(client_id: str, **kwargs):
+        cfg = kwargs.pop("config", None) or _reset_test_media_db_runtime()
+        return managed_media_database(client_id, config=cfg, **kwargs)
+
+    return _managed
+
+
+@pytest.fixture()
+def data_tables_app_factory(
+    monkeypatch,
+    managed_test_media_db,
+) -> Callable[[Path], tuple["FastAPI", Path]]:
     """Create FastAPI apps wired for data table endpoints with test auth and DB overrides."""
     from fastapi import FastAPI
 
@@ -832,7 +878,6 @@ def data_tables_app_factory(monkeypatch) -> Callable[[Path], tuple["FastAPI", Pa
     from tldw_Server_API.app.api.v1.endpoints.data_tables import router as data_tables_router
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
     from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
     apps: list[FastAPI] = []
 
@@ -871,11 +916,12 @@ def data_tables_app_factory(monkeypatch) -> Callable[[Path], tuple["FastAPI", Pa
         app.include_router(data_tables_router, prefix="/api/v1", tags=["data-tables"])
 
         async def _override_db():
-            override_db = MediaDatabase(db_path=str(db_path), client_id="test_client")
-            try:
+            with managed_test_media_db(
+                "test_client",
+                db_path=str(db_path),
+                initialize=False,
+            ) as override_db:
                 yield override_db
-            finally:
-                override_db.close_connection()
 
         app.dependency_overrides[get_request_user] = _override_user
         app.dependency_overrides[get_auth_principal] = _override_principal

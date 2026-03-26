@@ -48,14 +48,11 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_chacha_db_path,
     get_user_media_db_path,
 )
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_reads import (
-    get_latest_transcription,
-)
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     create_media_database,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version,
+    get_latest_transcription,
+    get_media_by_id,
 )
 from tldw_Server_API.app.core.exceptions import DataTablesJobError
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -684,7 +681,7 @@ def _get_chacha_db(user_id: str) -> CharactersRAGDB:
 
 
 def _extract_media_text(db: Any, media_id: int) -> str:
-    media_item = db.get_media_by_id(media_id)
+    media_item = get_media_by_id(db, media_id)
     if not media_item:
         raise DataTablesJobError(f"media_not_found:{media_id}", retryable=False)
     content = media_item.get("content")

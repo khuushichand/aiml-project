@@ -25,14 +25,14 @@ from urllib.parse import urlsplit
 from loguru import logger
 
 from ....DB_Management.db_path_utils import DatabasePaths
-from ....DB_Management.media_db.api import create_media_database
-from ....DB_Management.media_db.legacy_reads import (
+from ....DB_Management.media_db.api import (
+    create_media_database,
+    get_document_version,
     get_latest_transcription,
+    get_media_by_id,
     get_media_transcripts,
-)
-from ....DB_Management.media_db.legacy_wrappers import get_document_version
-from ....DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item,
+    search_media,
 )
 from ...persona_scope import get_explicit_scope_ids, merge_requested_ids_with_scope
 from ..base import BaseModule, create_resource_definition, create_tool_definition
@@ -605,7 +605,7 @@ class MediaModule(BaseModule):
     def _get_latest_description(self, dbi: MediaDbLike, media_id: int) -> Optional[str]:
         try:
             latest = get_document_version(
-                db_instance=dbi,
+                dbi,
                 media_id=media_id,
                 version_number=None,
                 include_content=False,
@@ -719,7 +719,8 @@ class MediaModule(BaseModule):
                 "total_estimated": 0,
             }
         dbi = self._open_media_db(context)
-        results, total = dbi.search_media_db(
+        results, total = search_media(
+            dbi,
             search_query=query,
             search_fields=["title", "content"],
             media_types=media_types or None,
@@ -733,7 +734,8 @@ class MediaModule(BaseModule):
         )
         if local_offset:
             if len(results) == page_size and (offset + limit) < total:
-                more_results, _ = dbi.search_media_db(
+                more_results, _ = search_media(
+                    dbi,
                     search_query=query,
                     search_fields=["title", "content"],
                     media_types=media_types or None,
@@ -831,7 +833,7 @@ class MediaModule(BaseModule):
 
         dbi = self._open_media_db(context)
         # Use active media row for metadata + content
-        meta = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+        meta = get_media_by_id(dbi, media_id, include_deleted=False, include_trash=False)
         if not meta:
             raise ValueError(f"Media not found: {media_id}")
         # Ownership check
@@ -1224,7 +1226,8 @@ class MediaModule(BaseModule):
         page_size = max(1, limit)
         page = (offset // page_size) + 1
         local_offset = offset % page_size
-        rows, total = dbi.search_media_db(
+        rows, total = search_media(
+            dbi,
             search_query=query,
             search_fields=search_fields,
             media_types=media_types,
@@ -1240,7 +1243,8 @@ class MediaModule(BaseModule):
         )
         if local_offset:
             if len(rows) == page_size and (offset + limit) < total:
-                more_rows, _ = dbi.search_media_db(
+                more_rows, _ = search_media(
+                    dbi,
                     search_query=query,
                     search_fields=search_fields,
                     media_types=media_types,
@@ -1278,7 +1282,8 @@ class MediaModule(BaseModule):
     ) -> tuple[list[dict[str, Any]], int]:
         fetch_ceiling = int(self.config.settings.get("hybrid_fetch_ceiling", 200))
         fetch_size = max(1, min(int(size), fetch_ceiling))
-        rows, total = dbi.search_media_db(
+        rows, total = search_media(
+            dbi,
             search_query=query,
             search_fields=search_fields,
             media_types=media_types,
@@ -1570,7 +1575,12 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Get basic metadata
-            metadata = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+            metadata = get_media_by_id(
+                dbi,
+                media_id,
+                include_deleted=False,
+                include_trash=False,
+            )
 
             if not metadata:
                 raise ValueError(f"Media not found: {media_id}")
@@ -1668,7 +1678,12 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Validate media exists
-            existing = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+            existing = get_media_by_id(
+                dbi,
+                media_id,
+                include_deleted=False,
+                include_trash=False,
+            )
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
@@ -1775,7 +1790,12 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Validate media exists
-            existing = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+            existing = get_media_by_id(
+                dbi,
+                media_id,
+                include_deleted=False,
+                include_trash=False,
+            )
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
@@ -1852,7 +1872,8 @@ class MediaModule(BaseModule):
             return items
 
         if uri == "media://recent":
-            rows, _ = dbi.search_media_db(
+            rows, _ = search_media(
+                dbi,
                 search_query=None,
                 search_fields=None,
                 media_types=None,
@@ -1873,7 +1894,8 @@ class MediaModule(BaseModule):
             }
 
         if uri == "media://popular":
-            rows, _ = dbi.search_media_db(
+            rows, _ = search_media(
+                dbi,
                 search_query=None,
                 search_fields=None,
                 media_types=None,
@@ -2013,7 +2035,12 @@ class MediaModule(BaseModule):
             return
         dbi = dbi or self._open_media_db(context)
         try:
-            row = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+            row = get_media_by_id(
+                dbi,
+                media_id,
+                include_deleted=False,
+                include_trash=False,
+            )
         except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as exc:
             if strict_ownership:
                 raise PermissionError("Access denied: ownership lookup failed") from exc
