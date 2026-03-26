@@ -359,6 +359,7 @@ class TTSServiceV2:
                     voice_manager=voice_manager,
                     user_id=user_id,
                     voice_id=voice_id,
+                    cache_max_bytes=provider_cfg.get("cache_max_bytes_per_user"),
                 )
         elif request.voice_reference:
             voice_path, is_transient = await materialize_direct_voice_reference(

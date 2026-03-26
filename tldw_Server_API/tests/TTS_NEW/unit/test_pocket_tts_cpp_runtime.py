@@ -1,6 +1,7 @@
 import hashlib
 import os
 import time
+import wave
 from pathlib import Path
 
 import pytest
@@ -48,11 +49,13 @@ async def test_pocket_tts_cpp_materializes_stored_voice_to_stable_custom_path(tm
 async def test_pocket_tts_cpp_materializes_direct_reference_to_deterministic_ref_path(tmp_path):
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         materialize_direct_voice_reference,
+        normalize_reference_audio_to_wav,
     )
 
     voice_reference = b"RIFF" + b"\x01" * 32
     runtime_root = tmp_path / "voices"
     manager = _RuntimeVoiceManager(runtime_root)
+    normalized = normalize_reference_audio_to_wav(voice_reference)
 
     materialized, is_transient = await materialize_direct_voice_reference(
         voice_manager=manager,
@@ -61,11 +64,70 @@ async def test_pocket_tts_cpp_materializes_direct_reference_to_deterministic_ref
         persist_direct_voice_references=True,
     )
 
-    expected_name = f"ref_{hashlib.sha256(voice_reference).hexdigest()}.wav"
+    expected_name = f"ref_{hashlib.sha256(normalized).hexdigest()}.wav"
     assert materialized == runtime_root / "providers" / "pocket_tts_cpp" / expected_name
     assert materialized.exists()
-    assert materialized.read_bytes() == voice_reference
+    assert materialized.read_bytes() == normalized
     assert is_transient is False
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_normalizes_non_wav_direct_reference_before_materialization(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        materialize_direct_voice_reference,
+        normalize_reference_audio_to_wav,
+    )
+
+    runtime_root = tmp_path / "voices"
+    manager = _RuntimeVoiceManager(runtime_root)
+    mp3_like_bytes = b"ID3" + b"\x04" * 17
+    normalized = normalize_reference_audio_to_wav(mp3_like_bytes)
+
+    materialized, is_transient = await materialize_direct_voice_reference(
+        voice_manager=manager,
+        user_id=7,
+        voice_reference=mp3_like_bytes,
+        persist_direct_voice_references=True,
+    )
+
+    expected_name = f"ref_{hashlib.sha256(normalized).hexdigest()}.wav"
+    assert materialized == runtime_root / "providers" / "pocket_tts_cpp" / expected_name
+    assert is_transient is False
+    assert materialized.read_bytes() == normalized
+    with wave.open(str(materialized), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == 24000
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_transient_direct_references_use_unique_request_scoped_paths(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        materialize_direct_voice_reference,
+    )
+
+    runtime_root = tmp_path / "voices"
+    manager = _RuntimeVoiceManager(runtime_root)
+    voice_reference = b"RIFF" + b"\x07" * 32
+
+    first_path, first_transient = await materialize_direct_voice_reference(
+        voice_manager=manager,
+        user_id=7,
+        voice_reference=voice_reference,
+        persist_direct_voice_references=False,
+    )
+    second_path, second_transient = await materialize_direct_voice_reference(
+        voice_manager=manager,
+        user_id=7,
+        voice_reference=voice_reference,
+        persist_direct_voice_references=False,
+    )
+
+    assert first_transient is True
+    assert second_transient is True
+    assert first_path != second_path
+    assert first_path.exists()
+    assert second_path.exists()
 
 
 @pytest.mark.asyncio
@@ -94,7 +156,60 @@ async def test_pocket_tts_cpp_materialized_direct_reference_enforces_max_bytes_i
     assert not old_file.exists()
     remaining_files = list(runtime_dir.glob("*.wav"))
     assert remaining_files == [materialized]
-    assert sum(path.stat().st_size for path in remaining_files) <= 12
+    assert sum(path.stat().st_size for path in remaining_files) == materialized.stat().st_size
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_post_write_pruning_never_returns_deleted_active_path(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        materialize_direct_voice_reference,
+    )
+
+    runtime_root = tmp_path / "voices"
+    manager = _RuntimeVoiceManager(runtime_root)
+    runtime_dir = runtime_root / "providers" / "pocket_tts_cpp"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    stale_file = runtime_dir / "ref_stale.wav"
+    stale_file.write_bytes(b"old-old-old-old")
+
+    materialized, is_transient = await materialize_direct_voice_reference(
+        voice_manager=manager,
+        user_id=7,
+        voice_reference=b"RIFF" + b"\x09" * 20,
+        persist_direct_voice_references=True,
+        cache_max_bytes=8,
+    )
+
+    assert is_transient is False
+    assert materialized.exists()
+    assert not stale_file.exists()
+    assert materialized in runtime_dir.glob("*.wav")
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_custom_voice_materialization_enforces_max_bytes_immediately(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        materialize_custom_voice_reference,
+    )
+
+    runtime_root = tmp_path / "voices"
+    manager = _RuntimeVoiceManager(runtime_root, voice_bytes=b"RIFF" + b"\x05" * 12)
+    runtime_dir = runtime_root / "providers" / "pocket_tts_cpp"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    old_file = runtime_dir / "ref_old.wav"
+    old_file.write_bytes(b"old-old")
+
+    materialized = await materialize_custom_voice_reference(
+        voice_manager=manager,
+        user_id=7,
+        voice_id="voice-123",
+        cache_max_bytes=20,
+    )
+
+    assert materialized.exists()
+    assert not old_file.exists()
+    assert materialized in runtime_dir.glob("*.wav")
+    assert sum(path.stat().st_size for path in runtime_dir.glob("*.wav")) <= 20 or list(runtime_dir.glob("*.wav")) == [materialized]
 
 
 @pytest.mark.asyncio
