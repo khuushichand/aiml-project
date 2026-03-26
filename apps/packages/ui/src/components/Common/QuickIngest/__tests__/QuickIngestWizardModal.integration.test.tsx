@@ -48,19 +48,30 @@ vi.mock("antd", () => ({
       {...props}
     />
   ),
-  Select: ({ value, onChange, options, ...props }: any) => (
-    <select
-      value={value}
-      onChange={(e: any) => onChange?.(e.target.value)}
-      {...props}
-    >
-      {options?.map((o: any) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  ),
+  Select: ({ value, onChange, options, placeholder, ...props }: any) => {
+    const selectProps: any = { ...props }
+    if (value !== undefined) {
+      selectProps.value = value
+    }
+
+    return (
+      <select
+        onChange={(e: any) => onChange?.(e.target.value)}
+        {...selectProps}
+      >
+        {placeholder ? (
+          <option value="" disabled hidden>
+            {placeholder}
+          </option>
+        ) : null}
+        {options?.map((o: any) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    )
+  },
   Radio: Object.assign(
     ({ children, value, ...props }: any) => (
       <label>
@@ -828,6 +839,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     await waitFor(() => {
       expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("")
     })
+    expect(screen.getByText("Select language")).toBeInTheDocument()
+    expect(audioLanguageSelect).not.toHaveAttribute("value")
     expect(screen.queryByLabelText("Custom audio language")).toBeNull()
   })
 

@@ -129,7 +129,7 @@ export const WizardConfigureStep: React.FC = () => {
 
   const audioLanguageSelectValue = React.useMemo(() => {
     if (audioLanguageMode === "empty") {
-      return ""
+      return undefined
     }
     if (audioLanguageMode === "custom") {
       return CUSTOM_AUDIO_LANGUAGE_SENTINEL
@@ -356,35 +356,39 @@ export const WizardConfigureStep: React.FC = () => {
               )}
             </Typography.Title>
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
-              <Select
-                aria-label="Audio language"
-                title="Audio language"
-                value={
-                  audioLanguageSelectValue
-                }
-                onChange={handleAudioLanguageOptionChange}
-                options={[
-                  ...SUPPORTED_LANGUAGES,
-                  {
-                    value: CUSTOM_AUDIO_LANGUAGE_SENTINEL,
-                    label: qi("audioLanguageCustomLabel", "Custom"),
-                  },
-                ]}
-                disabled={!hasTranscriptionItems}
-              />
-              {shouldShowCustomAudioLanguageInput && (
-                <Input
-                  aria-label="Custom audio language"
-                  title="Custom audio language"
+              <div className="space-y-2">
+                <Select
+                  aria-label="Audio language"
+                  title="Audio language"
                   placeholder={qi(
-                    "audioCustomLanguagePlaceholder",
-                    "Custom language (e.g., en-US)"
+                    "audioLanguagePlaceholder",
+                    "Select language"
                   )}
-                  value={customAudioLanguage}
-                  onChange={handleCustomAudioLanguageChange}
+                  value={audioLanguageSelectValue}
+                  onChange={handleAudioLanguageOptionChange}
+                  options={[
+                    ...SUPPORTED_LANGUAGES,
+                    {
+                      value: CUSTOM_AUDIO_LANGUAGE_SENTINEL,
+                      label: qi("audioLanguageCustomLabel", "Custom"),
+                    },
+                  ]}
                   disabled={!hasTranscriptionItems}
                 />
-              )}
+                {shouldShowCustomAudioLanguageInput && (
+                  <Input
+                    aria-label="Custom audio language"
+                    title="Custom audio language"
+                    placeholder={qi(
+                      "audioCustomLanguagePlaceholder",
+                      "Custom language (e.g., en-US)"
+                    )}
+                    value={customAudioLanguage}
+                    onChange={handleCustomAudioLanguageChange}
+                    disabled={!hasTranscriptionItems}
+                  />
+                )}
+              </div>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm text-text">
                 <span>{qi("audioDiarizationLabel", "Diarization")}</span>
                 <Switch
