@@ -108,7 +108,7 @@ Primary behavior:
 
 - non-streaming requests use the PocketTTS.cpp CLI directly
 - streaming requests try CLI streaming first
-- if CLI streaming is not truly incremental, the adapter may internally use a short-lived PocketTTS.cpp server process for streaming only
+- if CLI streaming is not truly incremental, the adapter may internally use a loopback-only PocketTTS.cpp server process for streaming only
 
 The public tldw interface must remain unchanged regardless of which internal transport is used.
 
@@ -138,6 +138,7 @@ Rules:
 - provider-managed files are user-scoped
 - upstream `.cache/` remains user-scoped
 - the adapter never relies on unstable random filenames for cacheable references
+- provider-managed cache artifacts are operational runtime files, not user-authored voice assets
 
 This keeps cache behavior predictable in multi-user mode, avoids cross-user cache mixing, and stays aligned with existing `DatabasePaths.get_user_voices_dir(...)` storage conventions.
 
@@ -166,6 +167,41 @@ When the request contains raw `voice_reference` bytes:
 
 This approach avoids repeated random temp files and lets repeated direct-reference requests benefit from upstream voice/KV caching.
 
+### 5a. Retention, Privacy, And Quota Policy
+
+Persisting normalized direct `voice_reference` files changes request semantics. A caller may reasonably expect a one-off reference clip to be transient unless the system explicitly opts into cache persistence.
+
+The provider design should therefore define the following rules:
+
+- stored `custom:<voice_id>` materializations may persist as stable provider-managed files
+- direct `voice_reference` materializations may persist only when provider caching is enabled
+- when provider caching is disabled, direct `voice_reference` files must be request-scoped and cleaned up immediately after generation
+- when provider caching is enabled, direct `voice_reference` files and upstream `.cache/` artifacts must have a dedicated retention policy
+
+Recommended config additions:
+
+```yaml
+providers:
+  pocket_tts_cpp:
+    enable_voice_cache: true
+    cache_ttl_hours: 168
+    cache_max_bytes_per_user: 1073741824
+    persist_direct_voice_references: true
+```
+
+Operational requirements:
+
+- provider-managed cache artifacts must not be treated as uploaded voice clones
+- provider-managed cache artifacts must not silently consume the user's voice-upload quota budget
+- cleanup rules for `providers/pocket_tts_cpp/` must be explicit in the implementation plan
+
+The implementation may satisfy the quota rule by either:
+
+- excluding the provider runtime subtree from voice-upload quota accounting
+- or introducing a separate provider-cache storage budget and cleanup path
+
+The implementation plan should choose one approach explicitly.
+
 ### 6. Streaming Strategy
 
 Streaming has the highest technical risk in this design.
@@ -184,11 +220,19 @@ If the CLI stream is truly incremental:
 
 If the CLI stream is not truly incremental:
 
-- allow a short-lived internal PocketTTS.cpp server process for streaming only
+- allow an internal PocketTTS.cpp server transport for streaming only
 - keep non-streaming on the CLI path
 - do not change the public tldw API contract
 
 This fallback is allowed because the user explicitly approved it during design review.
+
+Server-fallback operational rules:
+
+- bind to loopback only, never a public interface
+- prefer an ephemeral OS-assigned port instead of a fixed port
+- keep lifecycle ownership inside the adapter
+- serialize or otherwise coordinate fallback server startup so concurrent requests do not race for the same process state
+- capture and log the selected transport so streaming diagnostics stay understandable
 
 ### 7. Non-Streaming Strategy
 
