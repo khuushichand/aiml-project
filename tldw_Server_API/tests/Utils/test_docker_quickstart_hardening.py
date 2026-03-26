@@ -103,12 +103,32 @@ def test_webui_dockerfile_installs_only_frontend_and_ui_workspaces():
     text = _read_text("Dockerfiles/Dockerfile.webui")
 
     _require(
-        "npm install --workspace tldw-frontend --workspace packages/ui --include-workspace-root" in text,
-        "Expected Dockerfile.webui to scope npm install to frontend and shared ui workspaces",
+        "COPY apps /app/apps" not in text,
+        "Expected Dockerfile.webui to avoid copying the full apps monorepo into the WebUI image build context",
     )
     _require(
-        "npm install --workspaces --include-workspace-root" not in text,
-        "Expected Dockerfile.webui to avoid installing all workspaces",
+        "COPY apps/package.json /app/apps/package.json" in text,
+        "Expected Dockerfile.webui to copy the workspace package manifest explicitly",
+    )
+    _require(
+        "COPY apps/bun.lock /app/apps/bun.lock" in text,
+        "Expected Dockerfile.webui to copy the Bun lockfile explicitly",
+    )
+    _require(
+        "COPY apps/tldw-frontend /app/apps/tldw-frontend" in text,
+        "Expected Dockerfile.webui to copy the frontend workspace explicitly",
+    )
+    _require(
+        "COPY apps/packages/ui /app/apps/packages/ui" in text,
+        "Expected Dockerfile.webui to copy the shared ui workspace explicitly",
+    )
+    _require(
+        "pkg.workspaces=['tldw-frontend','packages/ui']" in text,
+        "Expected Dockerfile.webui to rewrite the workspace manifest down to the frontend and shared ui workspaces",
+    )
+    _require(
+        "RUN bun install --cwd /app/apps" in text,
+        "Expected Dockerfile.webui to install the narrowed Bun workspace set",
     )
 
 

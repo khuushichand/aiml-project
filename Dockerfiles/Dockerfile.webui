@@ -8,8 +8,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app/apps
 
-# Copy monorepo frontend workspace
-COPY apps /app/apps
+# Copy only the manifests and workspace sources needed for the WebUI build.
+COPY apps/package.json /app/apps/package.json
+COPY apps/bun.lock /app/apps/bun.lock
+COPY apps/tldw-frontend /app/apps/tldw-frontend
+COPY apps/packages/ui /app/apps/packages/ui
+
+# Narrow the workspace manifest so the image install does not pull unrelated workspaces.
+RUN node -e "const fs=require('fs');const path='/app/apps/package.json';const pkg=JSON.parse(fs.readFileSync(path,'utf8'));pkg.workspaces=['tldw-frontend','packages/ui'];fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');"
 
 # Install the frontend monorepo with Bun so workspace:* dependencies resolve correctly.
 RUN bun install --cwd /app/apps

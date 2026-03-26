@@ -61,6 +61,34 @@ def test_getting_started_guides_treat_lan_custom_host_as_advanced() -> None:
     )
 
 
+def test_single_user_profile_runs_webui_quickstart_and_verifies_webui() -> None:
+    """Docker single-user profile should launch and verify the WebUI quickstart path."""
+    profile_text = _read("Docs/Getting_Started/Profile_Docker_Single_User.md")
+
+    _require(
+        "make quickstart" in profile_text or "docker-compose.webui.yml" in profile_text,
+        "Docker single-user profile should launch the WebUI quickstart path instead of the API-only compose stack",
+    )
+    _require(
+        "http://127.0.0.1:8080" in profile_text,
+        "Docker single-user profile should verify the WebUI endpoint on 127.0.0.1:8080",
+    )
+
+
+def test_root_readme_no_make_webui_example_uses_full_advanced_override_pair() -> None:
+    """README no-make WebUI example should show the full advanced/custom-host override pair."""
+    text = _read("README.md")
+
+    _require(
+        '# $env:NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE="advanced"' in text,
+        "README no-make WebUI example should set NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced for non-localhost browser access",
+    )
+    _require(
+        '# $env:NEXT_PUBLIC_API_URL="http://YOUR_HOST_OR_DOMAIN:8000"' in text,
+        "README no-make WebUI example should set NEXT_PUBLIC_API_URL for non-localhost browser access",
+    )
+
+
 def test_website_and_frontend_readmes_match_same_origin_quickstart_story() -> None:
     """Website quick start and frontend README should mirror the default networking story."""
     website_text = _read("Docs/Website/index.html")

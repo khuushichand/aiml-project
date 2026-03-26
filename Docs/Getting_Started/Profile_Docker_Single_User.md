@@ -26,7 +26,12 @@ SINGLE_USER_API_KEY=replace-with-strong-key
 ## Run
 
 ```bash
-docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml up -d --build
+make quickstart
+
+# Manual equivalent if you are not using make:
+# docker compose --env-file tldw_Server_API/Config_Files/.env \
+#   -f Dockerfiles/docker-compose.yml \
+#   -f Dockerfiles/docker-compose.webui.yml up -d --build
 ```
 
 The default Docker + WebUI quickstart keeps same-origin browser API requests through the WebUI proxy. Treat LAN/custom-host browser access as advanced configuration and leave that off unless you specifically need another device, hostname, or proxy in front of the browser.
@@ -44,7 +49,9 @@ Keep `tldw_Server_API/Config_Files/.env` with your backups, because it stores th
 If you prefer host-visible storage for manual backups or inspection, use `Dockerfiles/docker-compose.host-storage.yml` instead of the default compose file:
 
 ```bash
-docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.host-storage.yml up -d --build
+docker compose --env-file tldw_Server_API/Config_Files/.env \
+  -f Dockerfiles/docker-compose.host-storage.yml \
+  -f Dockerfiles/docker-compose.webui.yml up -d --build
 ```
 
 That optional variant writes data under `docker-data/` at the repo root and preserves the default quickstart behavior for existing users.
@@ -55,6 +62,7 @@ That optional variant writes data under `docker-data/` at the repo root and pres
 curl -sS http://127.0.0.1:8000/health
 curl -sS http://127.0.0.1:8000/docs > /dev/null && echo "docs-ok"
 curl -sS http://127.0.0.1:8000/api/v1/config/quickstart
+curl -sS http://127.0.0.1:8080 > /dev/null && echo "webui-ok"
 ```
 
 If you later need LAN/custom-host browser access as advanced configuration, switch to the root README WebUI guidance and use the advanced override pair: `NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=advanced` plus `NEXT_PUBLIC_API_URL=...`.

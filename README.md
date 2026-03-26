@@ -308,6 +308,7 @@ API + WebUI (Docker):
 # from repo root
 if (!(Test-Path "tldw_Server_API/Config_Files/.env")) { Copy-Item "tldw_Server_API/Config_Files/.env.example" "tldw_Server_API/Config_Files/.env" }
 # Optional for non-localhost deployments:
+# $env:NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE="advanced"
 # $env:NEXT_PUBLIC_API_URL="http://YOUR_HOST_OR_DOMAIN:8000"
 docker compose --env-file tldw_Server_API/Config_Files/.env -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.webui.yml up -d --build
 ```
