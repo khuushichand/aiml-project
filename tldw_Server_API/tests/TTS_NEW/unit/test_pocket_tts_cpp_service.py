@@ -8,7 +8,7 @@ import pytest
 
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest
-from tldw_Server_API.app.core.TTS.tts_exceptions import TTSValidationError
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSGenerationError, TTSValidationError
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata
 
@@ -283,3 +283,75 @@ async def test_pocket_tts_cpp_cancellation_during_adapter_acquisition_cleans_tra
 
     runtime_dir = tmp_path / "voices" / "providers" / "pocket_tts_cpp"
     assert list(runtime_dir.glob("ref_*.wav")) == []
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_cpp_materialization_failure_surfaces_explicit_error(tmp_path, monkeypatch):
+    service = TTSServiceV2()
+
+    class _DirectReferenceVoiceManager:
+        def get_user_voices_path(self, user_id: int) -> Path:
+            assert user_id == 1
+            root = tmp_path / "voices"
+            root.mkdir(parents=True, exist_ok=True)
+            return root
+
+        async def load_reference_metadata(self, user_id: int, voice_id: str):
+            return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+        lambda: _DirectReferenceVoiceManager(),
+        raising=True,
+    )
+
+    class _FactoryWithPocketRuntimeConfig:
+        registry = type(
+            "_Registry",
+            (),
+            {
+                "config": {
+                    "providers": {
+                        "pocket_tts_cpp": {
+                            "persist_direct_voice_references": False,
+                            "cache_ttl_hours": None,
+                            "cache_max_bytes_per_user": None,
+                        }
+                    }
+                }
+            },
+        )()
+
+        def get_provider_for_model(self, _model):
+            return "pocket_tts_cpp"
+
+    service._ensure_factory = AsyncMock(return_value=_FactoryWithPocketRuntimeConfig())
+    service._get_adapter = AsyncMock()
+
+    async def _raise_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        raise RuntimeError("ffmpeg missing")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime.AudioConverter.convert_to_wav",
+        _raise_convert,
+        raising=True,
+    )
+
+    request = OpenAISpeechRequest(
+        model="pocket_tts_cpp",
+        input="hello",
+        voice="alloy",
+        response_format="wav",
+        stream=False,
+        voice_reference="UklGRgMDAwMDAwM=",
+        extra_params={"reference_text": "direct reference text"},
+    )
+
+    with pytest.raises(TTSGenerationError) as exc_info:
+        async for _ in service.generate_speech(request, user_id=1, fallback=False):
+            pass
+
+    assert exc_info.value.provider == "pocket_tts_cpp"
+    assert exc_info.value.error_code == "pocket_tts_cpp_voice_materialization_failed"
+    assert "ffmpeg missing" in exc_info.value.details["reason"]
+    service._get_adapter.assert_not_called()

@@ -2284,6 +2284,7 @@ class TTSServiceV2:
         voice_id = request.voice or ""
         is_custom_voice = isinstance(voice_id, str) and voice_id.startswith("custom:")
         raw_id = voice_id.split("custom:", 1)[-1].strip() if is_custom_voice else ""
+        provider_key = (provider_hint or "").lower()
         try:
             from tldw_Server_API.app.core.TTS.voice_manager import VoiceProcessingError, get_voice_manager
 
@@ -2302,7 +2303,6 @@ class TTSServiceV2:
                 has_ref_text = any(extras.get(key) for key in ref_text_keys)
 
                 if metadata:
-                    provider_key = (provider_hint or "").lower()
                     artifacts = metadata.provider_artifacts.get(provider_key) if provider_key else None
                     if artifacts:
                         if "ref_codes" not in extras and artifacts.get("ref_codes") is not None:
@@ -2334,6 +2334,16 @@ class TTSServiceV2:
                 extras = request.extra_params if isinstance(request.extra_params, dict) else extras
             request.extra_params = extras
         except VoiceProcessingError as e:
+            if provider_key == "pocket_tts_cpp":
+                raise TTSValidationError(
+                    "PocketTTS.cpp voice reference preparation failed",
+                    provider="pocket_tts_cpp",
+                    error_code="pocket_tts_cpp_voice_materialization_failed",
+                    details={
+                        "voice_id": raw_id or None,
+                        "reason": str(e),
+                    },
+                ) from e
             request_id, _ = self._get_tts_request_observability(request)
             logger.warning(
                 "Custom voice resolution failed for {} (request_id={}): {}",
@@ -2342,6 +2352,16 @@ class TTSServiceV2:
                 e,
             )
         except _TTS_NONCRITICAL_EXCEPTIONS as e:
+            if provider_key == "pocket_tts_cpp":
+                raise TTSGenerationError(
+                    "PocketTTS.cpp voice reference preparation failed",
+                    provider="pocket_tts_cpp",
+                    error_code="pocket_tts_cpp_voice_materialization_failed",
+                    details={
+                        "voice_id": raw_id or None,
+                        "reason": str(e),
+                    },
+                ) from e
             request_id, _ = self._get_tts_request_observability(request)
             logger.warning(
                 "Custom voice resolution error for {} (request_id={}): {}",
