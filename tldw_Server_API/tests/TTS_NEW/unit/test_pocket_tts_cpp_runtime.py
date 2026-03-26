@@ -2,6 +2,7 @@ import hashlib
 import os
 import time
 import wave
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,22 @@ class _RuntimeVoiceManager:
         assert user_id == 7
         assert voice_id == "voice-123"
         return self.voice_bytes
+
+
+def _make_wav_bytes(
+    payload: bytes = b"\x00\x01" * 8,
+    *,
+    sample_rate: int = 24000,
+    channels: int = 1,
+    sample_width: int = 2,
+) -> bytes:
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sample_width)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(payload)
+    return buffer.getvalue()
 
 
 @pytest.mark.asyncio
@@ -47,22 +64,35 @@ async def test_pocket_tts_cpp_materializes_stored_voice_to_stable_custom_path(tm
 
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_materializes_direct_reference_to_deterministic_ref_path(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         materialize_direct_voice_reference,
-        normalize_reference_audio_to_wav,
     )
 
     voice_reference = b"RIFF" + b"\x01" * 32
     runtime_root = tmp_path / "voices"
     manager = _RuntimeVoiceManager(runtime_root)
-    normalized = normalize_reference_audio_to_wav(voice_reference)
+    normalized = _make_wav_bytes(b"\x01\x02" * 8)
 
-    materialized, is_transient = await materialize_direct_voice_reference(
-        voice_manager=manager,
-        user_id=7,
-        voice_reference=voice_reference,
-        persist_direct_voice_references=True,
-    )
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        assert input_path.read_bytes() == voice_reference
+        assert sample_rate == 24000
+        assert channels == 1
+        assert bit_depth == 16
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
+    try:
+        materialized, is_transient = await materialize_direct_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_reference=voice_reference,
+            persist_direct_voice_references=True,
+        )
+    finally:
+        monkeypatch.undo()
 
     expected_name = f"ref_{hashlib.sha256(normalized).hexdigest()}.wav"
     assert materialized == runtime_root / "providers" / "pocket_tts_cpp" / expected_name
@@ -73,26 +103,42 @@ async def test_pocket_tts_cpp_materializes_direct_reference_to_deterministic_ref
 
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_normalizes_non_wav_direct_reference_before_materialization(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         materialize_direct_voice_reference,
-        normalize_reference_audio_to_wav,
     )
 
     runtime_root = tmp_path / "voices"
     manager = _RuntimeVoiceManager(runtime_root)
     mp3_like_bytes = b"ID3" + b"\x04" * 17
-    normalized = normalize_reference_audio_to_wav(mp3_like_bytes)
+    normalized = _make_wav_bytes(b"\x04\x05" * 12)
+    converter_calls: list[tuple[Path, Path]] = []
 
-    materialized, is_transient = await materialize_direct_voice_reference(
-        voice_manager=manager,
-        user_id=7,
-        voice_reference=mp3_like_bytes,
-        persist_direct_voice_references=True,
-    )
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        converter_calls.append((input_path, output_path))
+        assert input_path.read_bytes() == mp3_like_bytes
+        assert sample_rate == 24000
+        assert channels == 1
+        assert bit_depth == 16
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
+    try:
+        materialized, is_transient = await materialize_direct_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_reference=mp3_like_bytes,
+            persist_direct_voice_references=True,
+        )
+    finally:
+        monkeypatch.undo()
 
     expected_name = f"ref_{hashlib.sha256(normalized).hexdigest()}.wav"
     assert materialized == runtime_root / "providers" / "pocket_tts_cpp" / expected_name
     assert is_transient is False
+    assert len(converter_calls) == 1
     assert materialized.read_bytes() == normalized
     with wave.open(str(materialized), "rb") as wav_file:
         assert wav_file.getnchannels() == 1
@@ -102,6 +148,7 @@ async def test_pocket_tts_cpp_normalizes_non_wav_direct_reference_before_materia
 
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_transient_direct_references_use_unique_request_scoped_paths(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         materialize_direct_voice_reference,
     )
@@ -109,19 +156,29 @@ async def test_pocket_tts_cpp_transient_direct_references_use_unique_request_sco
     runtime_root = tmp_path / "voices"
     manager = _RuntimeVoiceManager(runtime_root)
     voice_reference = b"RIFF" + b"\x07" * 32
+    normalized = _make_wav_bytes(b"\x07\x08" * 10)
 
-    first_path, first_transient = await materialize_direct_voice_reference(
-        voice_manager=manager,
-        user_id=7,
-        voice_reference=voice_reference,
-        persist_direct_voice_references=False,
-    )
-    second_path, second_transient = await materialize_direct_voice_reference(
-        voice_manager=manager,
-        user_id=7,
-        voice_reference=voice_reference,
-        persist_direct_voice_references=False,
-    )
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
+    try:
+        first_path, first_transient = await materialize_direct_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_reference=voice_reference,
+            persist_direct_voice_references=False,
+        )
+        second_path, second_transient = await materialize_direct_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_reference=voice_reference,
+            persist_direct_voice_references=False,
+        )
+    finally:
+        monkeypatch.undo()
 
     assert first_transient is True
     assert second_transient is True
@@ -132,6 +189,7 @@ async def test_pocket_tts_cpp_transient_direct_references_use_unique_request_sco
 
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_materialized_direct_reference_enforces_max_bytes_immediately(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         materialize_direct_voice_reference,
     )
@@ -142,14 +200,24 @@ async def test_pocket_tts_cpp_materialized_direct_reference_enforces_max_bytes_i
     runtime_dir.mkdir(parents=True, exist_ok=True)
     old_file = runtime_dir / "ref_old.wav"
     old_file.write_bytes(b"old-old")
+    normalized = _make_wav_bytes(b"\x03\x03")
 
-    materialized, is_transient = await materialize_direct_voice_reference(
-        voice_manager=manager,
-        user_id=7,
-        voice_reference=b"RIFF" + b"\x03" * 8,
-        persist_direct_voice_references=True,
-        cache_max_bytes=12,
-    )
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
+    try:
+        materialized, is_transient = await materialize_direct_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_reference=b"RIFF" + b"\x03" * 8,
+            persist_direct_voice_references=True,
+            cache_max_bytes=12,
+        )
+    finally:
+        monkeypatch.undo()
 
     assert is_transient is False
     assert materialized.exists()
@@ -161,6 +229,7 @@ async def test_pocket_tts_cpp_materialized_direct_reference_enforces_max_bytes_i
 
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_post_write_pruning_never_returns_deleted_active_path(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         materialize_direct_voice_reference,
     )
@@ -171,14 +240,24 @@ async def test_pocket_tts_cpp_post_write_pruning_never_returns_deleted_active_pa
     runtime_dir.mkdir(parents=True, exist_ok=True)
     stale_file = runtime_dir / "ref_stale.wav"
     stale_file.write_bytes(b"old-old-old-old")
+    normalized = _make_wav_bytes(b"\x09\x09" * 2)
 
-    materialized, is_transient = await materialize_direct_voice_reference(
-        voice_manager=manager,
-        user_id=7,
-        voice_reference=b"RIFF" + b"\x09" * 20,
-        persist_direct_voice_references=True,
-        cache_max_bytes=8,
-    )
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
+    try:
+        materialized, is_transient = await materialize_direct_voice_reference(
+            voice_manager=manager,
+            user_id=7,
+            voice_reference=b"RIFF" + b"\x09" * 20,
+            persist_direct_voice_references=True,
+            cache_max_bytes=8,
+        )
+    finally:
+        monkeypatch.undo()
 
     assert is_transient is False
     assert materialized.exists()
@@ -214,6 +293,7 @@ async def test_pocket_tts_cpp_custom_voice_materialization_enforces_max_bytes_im
 
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_deletes_transient_direct_reference_when_persistence_disabled(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         cleanup_transient_voice_reference,
         materialize_direct_voice_reference,
@@ -221,12 +301,21 @@ async def test_pocket_tts_cpp_deletes_transient_direct_reference_when_persistenc
 
     runtime_root = tmp_path / "voices"
     manager = _RuntimeVoiceManager(runtime_root)
+    normalized = _make_wav_bytes(b"\x02\x02" * 8)
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(normalized)
+        return True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(runtime_module.AudioConverter, "convert_to_wav", _fake_convert)
     materialized, is_transient = await materialize_direct_voice_reference(
         voice_manager=manager,
         user_id=7,
         voice_reference=b"RIFF" + b"\x02" * 16,
         persist_direct_voice_references=False,
     )
+    monkeypatch.undo()
 
     assert is_transient is True
     assert materialized.exists()

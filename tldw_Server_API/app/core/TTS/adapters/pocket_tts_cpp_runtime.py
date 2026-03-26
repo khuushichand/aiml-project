@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-import io
+import contextlib
 import time
+import tempfile
 import uuid
-import wave
+import os
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
+
+from tldw_Server_API.app.core.TTS.audio_converter import AudioConverter
 
 
 PROVIDER_KEY = "pocket_tts_cpp"
@@ -22,28 +25,57 @@ def get_runtime_dir(*, voice_manager, user_id: int) -> Path:
     return runtime_dir
 
 
-def normalize_reference_audio_to_wav(
+def _infer_audio_suffix(audio_bytes: bytes) -> str:
+    """Infer a likely file suffix so the shared conversion path can decode bytes correctly."""
+    if audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
+        return ".wav"
+    if audio_bytes[:3] == b"ID3" or (len(audio_bytes) > 1 and audio_bytes[0] == 0xFF and (audio_bytes[1] & 0xE0) == 0xE0):
+        return ".mp3"
+    if audio_bytes[:4] == b"fLaC":
+        return ".flac"
+    if audio_bytes[:4] == b"OggS":
+        return ".ogg"
+    if len(audio_bytes) >= 8 and audio_bytes[4:8] == b"ftyp":
+        return ".m4a"
+    return ".wav"
+
+
+async def normalize_reference_audio_to_wav(
     audio_bytes: bytes,
     *,
     sample_rate: int = 24000,
     channels: int = 1,
-    sample_width: int = 2,
 ) -> bytes:
-    """Normalize incoming reference audio bytes into a WAV-compatible payload."""
-    if audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
-        return audio_bytes
+    """Normalize incoming reference audio bytes into a provider-safe WAV payload."""
+    suffix = _infer_audio_suffix(audio_bytes)
+    input_fd, input_name = tempfile.mkstemp(prefix="pocket_tts_cpp_ref_", suffix=suffix)
+    output_fd, output_name = tempfile.mkstemp(prefix="pocket_tts_cpp_ref_", suffix=".wav")
+    try:
+        with os.fdopen(input_fd, "wb") as input_file:
+            input_file.write(audio_bytes)
+        with os.fdopen(output_fd, "wb"):
+            pass
 
-    pcm_bytes = audio_bytes
-    if sample_width > 0 and len(pcm_bytes) % sample_width:
-        pcm_bytes += b"\x00" * (sample_width - (len(pcm_bytes) % sample_width))
-
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav_file:
-        wav_file.setnchannels(channels)
-        wav_file.setsampwidth(sample_width)
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(pcm_bytes)
-    return buffer.getvalue()
+        input_path = Path(input_name)
+        output_path = Path(output_name)
+        converted = await AudioConverter.convert_to_wav(
+            input_path,
+            output_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            bit_depth=16,
+        )
+        if not converted or not output_path.exists():
+            raise RuntimeError("Failed to normalize PocketTTS.cpp reference audio to WAV")
+        normalized = output_path.read_bytes()
+        if normalized[:4] != b"RIFF" or normalized[8:12] != b"WAVE":
+            raise RuntimeError("PocketTTS.cpp reference normalization did not produce WAV bytes")
+        return normalized
+    finally:
+        with contextlib.suppress(OSError):
+            Path(input_name).unlink()
+        with contextlib.suppress(OSError):
+            Path(output_name).unlink()
 
 
 def _write_runtime_file(path: Path, payload: bytes) -> None:
@@ -83,7 +115,7 @@ async def materialize_direct_voice_reference(
 ) -> tuple[Path, bool]:
     """Materialize a direct voice reference into the provider runtime cache."""
     runtime_dir = get_runtime_dir(voice_manager=voice_manager, user_id=user_id)
-    normalized_bytes = normalize_reference_audio_to_wav(voice_reference)
+    normalized_bytes = await normalize_reference_audio_to_wav(voice_reference)
     digest = hashlib.sha256(normalized_bytes).hexdigest()
     if persist_direct_voice_references:
         target_path = runtime_dir / f"ref_{digest}.wav"

@@ -1,4 +1,6 @@
 import asyncio
+import wave
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -9,6 +11,22 @@ from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest
 from tldw_Server_API.app.core.TTS.tts_exceptions import TTSValidationError
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata
+
+
+def _make_wav_bytes(
+    payload: bytes = b"\x00\x01" * 8,
+    *,
+    sample_rate: int = 24000,
+    channels: int = 1,
+    sample_width: int = 2,
+) -> bytes:
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sample_width)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(payload)
+    return buffer.getvalue()
 
 
 class _ServiceVoiceManager:
@@ -83,13 +101,23 @@ async def test_pocket_tts_cpp_service_injects_stable_path_for_direct_voice_refer
             return None
 
     from tldw_Server_API.app.core.TTS import voice_manager as voice_manager_module
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+
+    converted_wav = _make_wav_bytes(b"\x01\x02" * 8)
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(converted_wav)
+        return True
 
     original_get_voice_manager = voice_manager_module.get_voice_manager
     voice_manager_module.get_voice_manager = lambda: _DirectReferenceVoiceManager()
+    original_convert = runtime_module.AudioConverter.convert_to_wav
+    runtime_module.AudioConverter.convert_to_wav = _fake_convert
     try:
         await service._apply_custom_voice_reference(request, user_id=1, provider_hint="pocket_tts_cpp")
     finally:
         voice_manager_module.get_voice_manager = original_get_voice_manager
+        runtime_module.AudioConverter.convert_to_wav = original_convert
 
     voice_path = Path(request.extra_params["pocket_tts_cpp_voice_path"])
     assert voice_path.parent == tmp_path / "voices" / "providers" / "pocket_tts_cpp"
@@ -141,6 +169,11 @@ async def test_pocket_tts_cpp_validation_failure_cleans_transient_direct_referen
 
     service._ensure_factory = AsyncMock(return_value=_FactoryWithPocketRuntimeConfig())
     service._get_adapter = AsyncMock()
+    converted_wav = _make_wav_bytes(b"\x02\x03" * 8)
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(converted_wav)
+        return True
 
     def _raise_validation(*args, **kwargs):
         raise TTSValidationError("synthetic validation failure", provider="pocket_tts_cpp")
@@ -148,6 +181,11 @@ async def test_pocket_tts_cpp_validation_failure_cleans_transient_direct_referen
     monkeypatch.setattr(
         "tldw_Server_API.app.core.TTS.tts_service_v2.validate_tts_request",
         _raise_validation,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime.AudioConverter.convert_to_wav",
+        _fake_convert,
         raising=True,
     )
 
@@ -213,11 +251,21 @@ async def test_pocket_tts_cpp_cancellation_during_adapter_acquisition_cleans_tra
             return "pocket_tts_cpp"
 
     service._ensure_factory = AsyncMock(return_value=_FactoryWithPocketRuntimeConfig())
+    converted_wav = _make_wav_bytes(b"\x04\x05" * 8)
+
+    async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
+        output_path.write_bytes(converted_wav)
+        return True
 
     async def _cancel_adapter(*args, **kwargs):
         raise asyncio.CancelledError()
 
     service._get_adapter = AsyncMock(side_effect=_cancel_adapter)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime.AudioConverter.convert_to_wav",
+        _fake_convert,
+        raising=True,
+    )
 
     request = OpenAISpeechRequest(
         model="pocket_tts_cpp",
