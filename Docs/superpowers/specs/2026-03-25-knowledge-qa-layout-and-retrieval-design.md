@@ -148,6 +148,7 @@ Behavior changes:
 - remove the `max-w-3xl` cap from the desktop research search/results shells
 - remove the `max-w-4xl` cap from the desktop research inner content wrapper
 - remove the search bar’s internal `max-w-3xl` limit when used in research mode
+- keep prose-heavy answer text on a readable line length even when the surrounding workspace expands
 - preserve existing centered/narrow behavior for simple mode
 - preserve existing mobile behavior
 - keep the evidence rail width approximately unchanged
@@ -156,6 +157,7 @@ Result:
 
 - the main workspace uses the available width left by the history pane and evidence rail
 - the page still feels structured because the evidence rail remains a fixed side column
+- long-form answer content does not stretch into an unreadably wide measure on large displays
 
 ### 2. Keep media-page search broad, but let the current media stay competitive
 
@@ -171,14 +173,16 @@ This matches the approved product direction and avoids suppressing useful nearby
 
 ### 3. Improve media retrieval query normalization for natural-language questions
 
-Adjust the media-level retrieval path so natural-language questions are transformed into a broader FTS-friendly query instead of being treated as one exact sentence.
+Adjust the media-level retrieval path so natural-language questions can fall back to a broader FTS-friendly query instead of always being treated as one exact sentence.
 
 Desired behavior:
 
 - preserve explicit phrases only when the incoming query is already explicitly quoted
-- otherwise break sentence-like queries into usable search terms
-- drop or downweight obvious stop words such as `what`, `was`, `the`, `with`
-- prefer a term-based query for media-level FTS instead of one exact quoted sentence
+- keep the current strict sentence-like query as the first attempt
+- only if that strict media-level attempt returns zero results, derive a second-pass fallback query
+- build the fallback query from extracted search terms rather than the full sentence string
+- discard obvious filler words such as `what`, `was`, `the`, `with`
+- keep high-signal terms such as entities and domain words like `frieza`, `golden`, `form`, `weakness`
 - avoid requiring the full sentence to appear verbatim in `title` or `content`
 
 Implementation direction:
@@ -186,6 +190,11 @@ Implementation direction:
 - reuse existing FTS normalization utilities where possible
 - keep the change localized to the media retrieval path used by RAG
 - do not change the public API contract of `/api/v1/rag/search`
+- do not replace the current first-pass behavior globally for all `search_media_db()` callers
+- use a bounded fallback strategy that prioritizes precision:
+  - first pass: existing strict query behavior
+  - second pass on zero results only: term-based media-level FTS fallback
+  - respect current limits, ranking, and explicit media filters
 
 ### 4. Add an explicit fallback from chunk-level media retrieval to media-level retrieval
 
@@ -193,6 +202,7 @@ For Media DB retrieval only:
 
 - if `fts_level == "chunk"` and chunk-level FTS returns no results
 - fall back to media-level retrieval against `Media.content`
+- if the media-level strict query also returns no results, allow the second-pass term-based fallback described above
 
 This fallback should still respect:
 
@@ -221,6 +231,7 @@ The current media item should be able to surface strongly because it matches the
 Update Knowledge QA layout coverage to assert:
 
 - desktop research mode no longer applies the narrow width caps to the main workspace
+- desktop research mode still keeps answer prose within a readable content width
 - simple mode still keeps the compact centered layout
 - mobile remains unchanged
 
@@ -233,9 +244,10 @@ Likely touchpoints:
 Add focused retrieval tests to cover:
 
 - an ingested media item with transcript text in `Media.content` but no chunk rows is still retrievable through the media retriever fallback
-- a natural-language query like the Frieza example is normalized into a broader media search and produces a hit
+- a natural-language query like the Frieza example first misses under the strict media-level phrase path, then succeeds through the bounded term-based fallback
 - explicit `include_media_ids` filtering still limits results correctly
 - chunk-level retrieval still works normally when chunk rows do exist
+- broadening remains bounded enough that the fallback does not ignore explicit filters or return an unbounded noisy set
 
 Likely touchpoints:
 
@@ -248,6 +260,7 @@ Before considering implementation complete:
 
 - run targeted frontend Knowledge QA tests
 - run targeted backend retrieval tests
+- run at least one API-level integration test covering the real `/api/v1/rag/search` endpoint for the reproduced query shape
 - run Bandit on the touched paths per repo policy
 - manually confirm the query against media `892` returns evidence
 - manually confirm the desktop Knowledge QA page uses the available horizontal space
