@@ -6,6 +6,9 @@ import userEvent from "@testing-library/user-event"
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before any imports that reference them
 // ---------------------------------------------------------------------------
+const getTranscriptionModelsMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ all_models: [] })
+)
 
 // react-i18next
 vi.mock("react-i18next", () => ({
@@ -58,6 +61,9 @@ vi.mock("antd", () => ({
     ...props
   }: any) => {
     const selectProps: any = { ...props }
+    const clearAriaLabel = props["aria-label"]
+      ? `Clear ${String(props["aria-label"])}`
+      : "Clear"
     if (value !== undefined) {
       selectProps.value = value
     }
@@ -82,7 +88,7 @@ vi.mock("antd", () => ({
         {allowClear ? (
           <button
             type="button"
-            aria-label="Clear audio language"
+            aria-label={clearAriaLabel}
             onClick={() => onClear?.()}
           >
             Clear
@@ -223,6 +229,7 @@ vi.mock("@/services/tldw/quick-ingest-batch", () => ({
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     initialize: vi.fn().mockResolvedValue(undefined),
+    getTranscriptionModels: getTranscriptionModelsMock,
   },
 }))
 
@@ -234,6 +241,7 @@ vi.mock("@/components/Common/QuickIngest/FloatingProgressWidget", () => ({
 let uuidCounter = 0
 beforeEach(() => {
   uuidCounter = 0
+  getTranscriptionModelsMock.mockReset().mockResolvedValue({ all_models: [] })
 })
 vi.stubGlobal(
   "crypto",
@@ -690,7 +698,7 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
   it("shows the full inline options surface without forcing the old full-modal placeholder", async () => {
     const user = userEvent.setup()
-    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+    render(<WizardTestHarness onClose={vi.fn()} />)
 
     await user.type(
       screen.getByPlaceholderText(/https:\/\/example\.com/i),
@@ -730,7 +738,7 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
   it("keeps review mode anchored to remote storage and leaves audio defaults available for video-only batches", async () => {
     const user = userEvent.setup()
-    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+    render(<WizardTestHarness onClose={vi.fn()} />)
 
     await user.type(
       screen.getByPlaceholderText(/https:\/\/example\.com/i),
@@ -991,5 +999,114 @@ describe("QuickIngestWizardModal — real configure step", () => {
     expect(customInput).toBeInTheDocument()
 
     expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("en-US")
+  })
+
+  it("loads transcription models from the backend catalog", async () => {
+    const user = userEvent.setup()
+    getTranscriptionModelsMock.mockResolvedValue({
+      all_models: ["whisper-large-v3", "parakeet-standard"],
+    })
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    const transcriptionModelSelect = await screen.findByLabelText(
+      "Transcription model"
+    )
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "whisper-large-v3" })).toBeTruthy()
+      expect(screen.getByRole("option", { name: "parakeet-standard" })).toBeTruthy()
+    })
+
+    await user.selectOptions(
+      transcriptionModelSelect,
+      "whisper-large-v3"
+    )
+
+    await waitFor(() => {
+      expect(transcriptionModelSelect).toHaveValue("whisper-large-v3")
+    })
+  })
+
+  it("preserves a current transcription model not returned by the backend catalog", async () => {
+    const user = userEvent.setup()
+    getTranscriptionModelsMock.mockResolvedValue({
+      all_models: ["whisper-large-v3"],
+    })
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      advancedValues: {
+        transcription_model: "provider/custom-model",
+      },
+    })
+
+    const transcriptionModelSelect = await screen.findByLabelText(
+      "Transcription model"
+    )
+    await waitFor(() => {
+      expect(transcriptionModelSelect).toHaveValue("provider/custom-model")
+      expect(screen.getByRole("option", { name: "provider/custom-model" })).toBeTruthy()
+    })
+  })
+
+  it("clears transcription model selection via clear action", async () => {
+    const user = userEvent.setup()
+    getTranscriptionModelsMock.mockResolvedValue({
+      all_models: ["whisper-large-v3"],
+    })
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      advancedValues: {
+        transcription_model: "provider/custom-model",
+      },
+    })
+
+    await screen.findByLabelText("Transcription model")
+
+    await user.click(await screen.findByRole("button", { name: /clear transcription model/i }))
+    expect(ctxRef!.state.advancedValues?.transcription_model).toBeUndefined()
   })
 })

@@ -7,6 +7,7 @@ import { useIngestWizard } from "./IngestWizardContext"
 import { PresetSelector } from "./PresetSelector"
 import type { CommonOptions, DetectedMediaType, TypeDefaults } from "./types"
 import { SUPPORTED_LANGUAGES } from "@/utils/supported-languages"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
 
 const DRAFT_STORAGE_CAP_BYTES = 5 * 1024 * 1024
 const CUSTOM_AUDIO_LANGUAGE_SENTINEL = "__custom__"
@@ -56,11 +57,82 @@ export const WizardConfigureStep: React.FC = () => {
   const hasAudioItems = detectedTypes.has("audio")
   const hasVideoItems = detectedTypes.has("video")
   const hasTranscriptionItems = hasAudioItems || hasVideoItems
+  const [transcriptionModels, setTranscriptionModels] = React.useState<string[]>([])
+  const [transcriptionModelsLoading, setTranscriptionModelsLoading] =
+    React.useState(false)
   const hasDocumentItems =
     detectedTypes.has("document") ||
     detectedTypes.has("pdf") ||
     detectedTypes.has("ebook") ||
     detectedTypes.has("image")
+
+  const normalizedTranscriptionModel =
+    presetConfig.advancedValues?.transcription_model?.trim() || ""
+
+  React.useEffect(() => {
+    if (!hasTranscriptionItems) {
+      setTranscriptionModels([])
+      setTranscriptionModelsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const loadModels = async () => {
+      setTranscriptionModelsLoading(true)
+      try {
+        const result = await tldwClient.getTranscriptionModels({
+          timeoutMs: 10_000
+        })
+        const raw = Array.isArray(result?.all_models) ? result.all_models : []
+        const seen = new Set<string>()
+        const uniqueModels: string[] = []
+        for (const entry of raw) {
+          const model = String(entry).trim()
+          if (!model || seen.has(model)) {
+            continue
+          }
+          seen.add(model)
+          uniqueModels.push(model)
+        }
+        if (!cancelled) {
+          setTranscriptionModels(uniqueModels)
+        }
+      } catch {
+        // ignore model catalog fetch errors in the quick ingest flow
+      } finally {
+        if (!cancelled) {
+          setTranscriptionModelsLoading(false)
+        }
+      }
+    }
+
+    void loadModels()
+
+    return () => {
+      cancelled = true
+      setTranscriptionModelsLoading(false)
+    }
+  }, [hasTranscriptionItems])
+
+  const transcriptionModelOptions = React.useMemo(() => {
+    const uniqueModels = new Map<string, string>()
+    for (const model of transcriptionModels) {
+      const value = String(model).trim()
+      if (!value || uniqueModels.has(value)) {
+        continue
+      }
+      uniqueModels.set(value, value)
+    }
+
+    if (normalizedTranscriptionModel && !uniqueModels.has(normalizedTranscriptionModel)) {
+      uniqueModels.set(normalizedTranscriptionModel, normalizedTranscriptionModel)
+    }
+
+    return [...uniqueModels.entries()].map(([value, label]) => ({
+      value,
+      label,
+    }))
+  }, [normalizedTranscriptionModel, transcriptionModels])
 
   const setCommon = React.useCallback(
     (nextValue: React.SetStateAction<CommonOptions>) => {
@@ -268,8 +340,8 @@ export const WizardConfigureStep: React.FC = () => {
   )
 
   const handleTranscriptionModelChange = React.useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const nextModel = event.target.value.trim()
+    (nextValue?: string) => {
+      const nextModel = typeof nextValue === "string" ? nextValue.trim() : ""
       setCustomOptions({
         advancedValues: {
           transcription_model: nextModel || undefined,
@@ -278,6 +350,14 @@ export const WizardConfigureStep: React.FC = () => {
     },
     [setCustomOptions]
   )
+
+  const handleTranscriptionModelClear = React.useCallback(() => {
+    setCustomOptions({
+      advancedValues: {
+        transcription_model: undefined,
+      },
+    })
+  }, [setCustomOptions])
 
   const storageLabel = presetConfig.reviewBeforeStorage
     ? qi("reviewModeStorageLabel", "Review drafts locally")
@@ -419,12 +499,17 @@ export const WizardConfigureStep: React.FC = () => {
                 />
               </label>
             </div>
-            <Input
+            <Select
               aria-label={qi("transcriptionModelLabel", "Transcription model")}
               title={qi("transcriptionModelLabel", "Transcription model")}
               placeholder={qi("transcriptionModelPlaceholder", "Select model")}
-              value={String(presetConfig.advancedValues?.transcription_model || "")}
+              value={normalizedTranscriptionModel || undefined}
+              allowClear
+              showSearch
+              loading={transcriptionModelsLoading}
               onChange={handleTranscriptionModelChange}
+              onClear={handleTranscriptionModelClear}
+              options={transcriptionModelOptions}
               disabled={!hasTranscriptionItems}
             />
           </div>
