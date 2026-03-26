@@ -368,6 +368,7 @@ class TTSServiceV2:
                 persist_direct_voice_references=bool(
                     provider_cfg.get("persist_direct_voice_references", False)
                 ),
+                cache_max_bytes=provider_cfg.get("cache_max_bytes_per_user"),
             )
 
         if voice_path is None:
@@ -395,6 +396,55 @@ class TTSServiceV2:
         if not raw_path:
             return
         cleanup_transient_voice_reference(Path(str(raw_path)), True)
+
+    async def _prepare_generate_speech_request(
+        self,
+        *,
+        request: OpenAISpeechRequest,
+        tts_request: TTSRequest,
+        provider: Optional[str],
+        provider_hint: Optional[str],
+        provider_overrides: Optional[dict[str, Any]],
+        fallback: bool,
+        user_id: Optional[int],
+    ) -> tuple[TTSAdapter, str, TTSRequest]:
+        """Resolve provider-managed request state before execution begins."""
+        try:
+            await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
+            self._apply_token_defaults(tts_request)
+
+            validate_tts_request(
+                tts_request,
+                provider=provider_hint,
+                config=self._get_validation_config(),
+            )
+
+            adapter = await self._get_adapter(request.model, provider, overrides=provider_overrides)
+            if not adapter and fallback:
+                adapter = await self._get_fallback_adapter(tts_request)
+            if not adapter:
+                raise TTSProviderNotConfiguredError(
+                    f"No TTS adapter available for model '{request.model}'",
+                    provider=provider,
+                )
+
+            provider_key = self._resolve_provider_key(adapter)
+            try:
+                resource_mgr = await get_resource_manager()
+                resource_mgr.touch_model(provider_key, getattr(tts_request, "model", None))
+            except _TTS_NONCRITICAL_EXCEPTIONS:
+                pass
+
+            request_for_provider = self._maybe_sanitize_request(tts_request, provider_key)
+            validate_tts_request(
+                request_for_provider,
+                provider=provider_key,
+                config=self._get_validation_config(),
+            )
+            return adapter, provider_key, request_for_provider
+        except Exception:
+            self._cleanup_transient_pocket_tts_cpp_voice_path(tts_request)
+            raise
 
     def _get_tts_request_observability(
         self,
@@ -1617,12 +1667,16 @@ class TTSServiceV2:
             except _TTS_NONCRITICAL_EXCEPTIONS:
                 provider_hint = None
 
-        await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
-        self._apply_token_defaults(tts_request)
-
-        # Validate the request first
         try:
-            validate_tts_request(tts_request, provider=provider_hint, config=self._get_validation_config())
+            adapter, provider_key, request_for_provider = await self._prepare_generate_speech_request(
+                request=request,
+                tts_request=tts_request,
+                provider=provider,
+                provider_hint=provider_hint,
+                provider_overrides=provider_overrides,
+                fallback=fallback,
+                user_id=user_id,
+            )
         except TTSValidationError as e:
             logger.error(f"TTS request validation failed: {e}")
             if self._stream_errors_as_audio:
@@ -1630,31 +1684,12 @@ class TTSServiceV2:
                 return
             else:
                 raise
-
-        # Get adapter
-        adapter = await self._get_adapter(request.model, provider, overrides=provider_overrides)
-        if not adapter and fallback:
-            # Try to find any available adapter
-            adapter = await self._get_fallback_adapter(tts_request)
-
-        if not adapter:
-            error = TTSProviderNotConfiguredError(
-                f"No TTS adapter available for model '{request.model}'",
-                provider=provider,
-            )
+        except TTSProviderNotConfiguredError as error:
             logger.error(str(error))
             if self._stream_errors_as_audio:
                 yield f"ERROR: {str(error)}".encode()
                 return
             raise error
-
-        provider_key = self._resolve_provider_key(adapter)
-        # Update model usage for LRU cache tracking (best-effort)
-        try:
-            resource_mgr = await get_resource_manager()
-            resource_mgr.touch_model(provider_key, getattr(tts_request, "model", None))
-        except _TTS_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Track metrics
         start_time = time.time()
@@ -1679,19 +1714,6 @@ class TTSServiceV2:
                 tts_request.voice_to_voice_route = voice_to_voice_route_label
             except _TTS_NONCRITICAL_EXCEPTIONS:
                 pass
-
-        # Re-validate against the concrete adapter's provider (important for fallback providers)
-        try:
-            request_for_provider = tts_request
-            request_for_provider = self._maybe_sanitize_request(tts_request, provider_key)
-            validate_tts_request(request_for_provider, provider=provider_key, config=self._get_validation_config())
-        except TTSValidationError as e:
-            logger.error(f"TTS request validation failed for provider {provider_key}: {e}")
-            if self._stream_errors_as_audio:
-                yield b"ERROR: Unable to generate audio."
-                return
-            else:
-                raise
 
         def _record_voice_to_voice(provider_name: str) -> None:
             nonlocal voice_to_voice_recorded

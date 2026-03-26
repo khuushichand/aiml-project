@@ -34,12 +34,19 @@ async def materialize_direct_voice_reference(
     user_id: int,
     voice_reference: bytes,
     persist_direct_voice_references: bool,
+    cache_max_bytes: Optional[int] = None,
 ) -> tuple[Path, bool]:
     """Materialize a direct voice reference into the provider runtime cache."""
     runtime_dir = get_runtime_dir(voice_manager=voice_manager, user_id=user_id)
     digest = hashlib.sha256(voice_reference).hexdigest()
     target_path = runtime_dir / f"ref_{digest}.wav"
     target_path.write_bytes(voice_reference)
+    if persist_direct_voice_references and cache_max_bytes is not None:
+        prune_materialized_voice_cache(
+            runtime_dir,
+            cache_ttl_hours=None,
+            cache_max_bytes=cache_max_bytes,
+        )
     return target_path, not persist_direct_voice_references
 
 

@@ -69,6 +69,35 @@ async def test_pocket_tts_cpp_materializes_direct_reference_to_deterministic_ref
 
 
 @pytest.mark.asyncio
+async def test_pocket_tts_cpp_materialized_direct_reference_enforces_max_bytes_immediately(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+        materialize_direct_voice_reference,
+    )
+
+    runtime_root = tmp_path / "voices"
+    manager = _RuntimeVoiceManager(runtime_root)
+    runtime_dir = runtime_root / "providers" / "pocket_tts_cpp"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    old_file = runtime_dir / "ref_old.wav"
+    old_file.write_bytes(b"old-old")
+
+    materialized, is_transient = await materialize_direct_voice_reference(
+        voice_manager=manager,
+        user_id=7,
+        voice_reference=b"RIFF" + b"\x03" * 8,
+        persist_direct_voice_references=True,
+        cache_max_bytes=12,
+    )
+
+    assert is_transient is False
+    assert materialized.exists()
+    assert not old_file.exists()
+    remaining_files = list(runtime_dir.glob("*.wav"))
+    assert remaining_files == [materialized]
+    assert sum(path.stat().st_size for path in remaining_files) <= 12
+
+
+@pytest.mark.asyncio
 async def test_pocket_tts_cpp_deletes_transient_direct_reference_when_persistence_disabled(tmp_path):
     from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
         cleanup_transient_voice_reference,
