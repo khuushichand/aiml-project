@@ -4,6 +4,11 @@ import { UploadCloud } from "lucide-react"
 import { useQuickIngestStore } from "@/store/quick-ingest"
 import { useQuickIngestSessionStore } from "@/store/quick-ingest-session"
 import { createEventHost } from "@/utils/create-event-host"
+import {
+  consumePendingQuickIngestOpen,
+  rememberQuickIngestOpenRequest,
+  type QuickIngestPendingOpenOptions,
+} from "@/utils/quick-ingest-open"
 
 const QuickIngestModal = lazy(() =>
   import("../Common/QuickIngestWizardModal").then((m) => ({
@@ -19,10 +24,7 @@ interface QuickIngestButtonProps {
   className?: string
 }
 
-type QuickIngestOpenOptions = {
-  autoProcessQueued?: boolean
-  focusTrigger?: boolean
-}
+type QuickIngestOpenOptions = QuickIngestPendingOpenOptions
 
 type QuickIngestEventsOptions = {
   focusTriggerRef?: React.RefObject<HTMLElement>
@@ -32,6 +34,9 @@ export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
   const focusTriggerRef = options?.focusTriggerRef
   const [quickIngestAutoProcessQueued, setQuickIngestAutoProcessQueued] =
     useState(false)
+  const [quickIngestSessionHydrated, setQuickIngestSessionHydrated] = useState(
+    () => useQuickIngestSessionStore.persist?.hasHydrated?.() ?? true
+  )
   const quickIngestReadyRef = useRef(false)
   const pendingQuickIngestIntroRef = useRef(false)
   const { session, createDraftSession, showSession, hideSession } =
@@ -44,11 +49,25 @@ export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
   const quickIngestOpen = session?.visibility === "visible"
   const hasQuickIngestSession = Boolean(session)
 
-  const openQuickIngest = useCallback(
+  const rehydrateQuickIngestSession = useCallback(async () => {
+    const persistApi = useQuickIngestSessionStore.persist
+    if (!persistApi) {
+      return
+    }
+    if (persistApi.hasHydrated?.()) {
+      setQuickIngestSessionHydrated(true)
+      return
+    }
+    await persistApi.rehydrate?.()
+    setQuickIngestSessionHydrated(persistApi.hasHydrated?.() ?? true)
+  }, [])
+
+  const performOpenQuickIngest = useCallback(
     (options?: QuickIngestOpenOptions) => {
       const { autoProcessQueued = false, focusTrigger = true } = options || {}
       setQuickIngestAutoProcessQueued(autoProcessQueued)
-      if (session) {
+      const currentSession = useQuickIngestSessionStore.getState().session
+      if (currentSession) {
         showSession()
       } else {
         createDraftSession()
@@ -59,7 +78,44 @@ export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
         })
       }
     },
-    [createDraftSession, focusTriggerRef, session, showSession]
+    [createDraftSession, focusTriggerRef, showSession]
+  )
+
+  const performOpenQuickIngestIntro = useCallback(
+    (options?: QuickIngestOpenOptions) => {
+      performOpenQuickIngest({ ...options, focusTrigger: false })
+      if (quickIngestReadyRef.current) {
+        window.dispatchEvent(new CustomEvent("tldw:quick-ingest-force-intro"))
+      } else {
+        pendingQuickIngestIntroRef.current = true
+      }
+    },
+    [performOpenQuickIngest]
+  )
+
+  const consumePendingOpenRequest = useCallback(() => {
+    const pending = consumePendingQuickIngestOpen()
+    if (!pending) {
+      return false
+    }
+    if (pending.mode === "intro") {
+      performOpenQuickIngestIntro(pending.options)
+      return true
+    }
+    performOpenQuickIngest(pending.options)
+    return true
+  }, [performOpenQuickIngest, performOpenQuickIngestIntro])
+
+  const openQuickIngest = useCallback(
+    (nextOptions?: QuickIngestOpenOptions) => {
+      if (!quickIngestSessionHydrated) {
+        rememberQuickIngestOpenRequest("normal", undefined, nextOptions)
+        void rehydrateQuickIngestSession()
+        return
+      }
+      performOpenQuickIngest(nextOptions)
+    },
+    [performOpenQuickIngest, quickIngestSessionHydrated, rehydrateQuickIngestSession]
   )
 
   const closeQuickIngest = useCallback(
@@ -87,6 +143,41 @@ export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
   }, [openQuickIngest])
 
   useEffect(() => {
+    const persistApi = useQuickIngestSessionStore.persist
+    if (!persistApi) {
+      return
+    }
+
+    const syncHydrationState = () => {
+      setQuickIngestSessionHydrated(persistApi.hasHydrated?.() ?? true)
+    }
+
+    syncHydrationState()
+    const unsubscribeHydrate = persistApi.onHydrate?.(() => {
+      setQuickIngestSessionHydrated(false)
+    })
+    const unsubscribeFinishHydration = persistApi.onFinishHydration?.(() => {
+      setQuickIngestSessionHydrated(true)
+    })
+
+    if (!(persistApi.hasHydrated?.() ?? true)) {
+      void persistApi.rehydrate?.().then(syncHydrationState)
+    }
+
+    return () => {
+      unsubscribeHydrate?.()
+      unsubscribeFinishHydration?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!quickIngestSessionHydrated) {
+      return
+    }
+    consumePendingOpenRequest()
+  }, [consumePendingOpenRequest, quickIngestSessionHydrated])
+
+  useEffect(() => {
     const markQuickIngestReady = () => {
       quickIngestReadyRef.current = true
       if (pendingQuickIngestIntroRef.current) {
@@ -105,18 +196,24 @@ export const useQuickIngestEvents = (options?: QuickIngestEventsOptions) => {
 
   useEffect(() => {
     const handler = () => {
-      openQuickIngest({ focusTrigger: false })
-      if (quickIngestReadyRef.current) {
-        window.dispatchEvent(new CustomEvent("tldw:quick-ingest-force-intro"))
-      } else {
-        pendingQuickIngestIntroRef.current = true
+      if (!quickIngestSessionHydrated) {
+        rememberQuickIngestOpenRequest("intro", undefined, {
+          focusTrigger: false,
+        })
+        void rehydrateQuickIngestSession()
+        return
       }
+      performOpenQuickIngestIntro({ focusTrigger: false })
     }
     window.addEventListener("tldw:open-quick-ingest-intro", handler)
     return () => {
       window.removeEventListener("tldw:open-quick-ingest-intro", handler)
     }
-  }, [openQuickIngest])
+  }, [
+    performOpenQuickIngestIntro,
+    quickIngestSessionHydrated,
+    rehydrateQuickIngestSession,
+  ])
 
   return {
     quickIngestOpen,

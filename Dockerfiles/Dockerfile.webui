@@ -2,7 +2,7 @@
 # - Builds the WebUI in monorepo workspace mode
 # - Ships a standalone Next.js runtime artifact
 
-FROM node:20-bookworm-slim AS builder
+FROM oven/bun:1.3.2-debian AS builder
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -11,8 +11,8 @@ WORKDIR /app/apps
 # Copy monorepo frontend workspace
 COPY apps /app/apps
 
-# Install only WebUI + shared UI workspaces to avoid extension dependency conflicts.
-RUN npm install --workspace tldw-frontend --workspace packages/ui --include-workspace-root
+# Install the frontend monorepo with Bun so workspace:* dependencies resolve correctly.
+RUN bun install --cwd /app/apps
 
 # Build-time API config baked into client bundle
 ARG NEXT_PUBLIC_API_URL=
@@ -30,7 +30,7 @@ ENV NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=${NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE}
 ENV TLDW_INTERNAL_API_ORIGIN=${TLDW_INTERNAL_API_ORIGIN}
 
 RUN node /app/apps/tldw-frontend/scripts/validate-networking-config.mjs
-RUN npm --workspace tldw-frontend run build
+RUN cd /app/apps/tldw-frontend && bun run build
 
 
 FROM node:20-bookworm-slim AS runtime

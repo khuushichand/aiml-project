@@ -21,6 +21,7 @@ import { useMcpTools } from "@/hooks/useMcpTools"
 import { browser } from "wxt/browser"
 import { useStorage } from "@plasmohq/storage/hook"
 import { fetchChatModels } from "@/services/tldw-server"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import type { ToolChoice } from "@/store/option"
 import { DEFAULT_CHAT_SETTINGS } from "@/types/chat-settings"
 
@@ -215,7 +216,7 @@ const ControlRowBase: React.FC<ControlRowProps> = ({
   const moreToolsHintSeen = useFeatureHintSeen("more-tools")
 
   const openQuickIngest = () => {
-    window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
+    requestQuickIngestOpen()
     setMoreOpen(false)
     requestAnimationFrame(() => moreBtnRef.current?.focus())
   }

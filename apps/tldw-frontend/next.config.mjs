@@ -1,12 +1,16 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { validateNetworkingConfig } from './scripts/validate-networking-config.mjs';
 
 /** @type {import('next').NextConfig} */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const paTesseractPath = path.resolve(__dirname, 'node_modules/pa-tesseract.js');
-const deploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE;
-const internalApiOrigin = (process.env.TLDW_INTERNAL_API_ORIGIN?.trim() || 'http://app:8000').replace(/\/$/, '');
+const {
+  deploymentMode,
+  internalApiOrigin: validatedInternalApiOrigin
+} = validateNetworkingConfig(process.env);
+const internalApiOrigin = validatedInternalApiOrigin.replace(/\/$/, '');
 
 const nextConfig = {
   reactStrictMode: true,

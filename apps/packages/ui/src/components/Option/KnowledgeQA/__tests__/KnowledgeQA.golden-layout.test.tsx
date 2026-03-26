@@ -234,7 +234,8 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(screen.getByText("Ask Your Library")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-bar")).toBeInTheDocument()
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("flex-1")
-    expect(screen.getByTestId("knowledge-search-shell").className).toContain("justify-center")
+    expect(screen.getByTestId("knowledge-search-shell").className).toContain("items-start")
+    expect(screen.getByTestId("knowledge-search-shell").className).not.toContain("items-center")
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("mx-auto")
     expect(screen.getByTestId("knowledge-search-shell").className).toContain("max-w-3xl")
     expect(

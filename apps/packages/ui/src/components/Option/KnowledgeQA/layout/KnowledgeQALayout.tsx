@@ -328,7 +328,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
             className={cn(
               "transition-all duration-300",
               effectiveSimple && !hasVisibleResultsArea
-                ? "mx-auto flex flex-1 w-full max-w-3xl items-center justify-center px-4 py-10 md:px-6"
+                ? "mx-auto flex flex-1 w-full max-w-3xl items-start justify-center px-4 py-10 md:px-6"
                 : effectiveSimple
                   ? "mx-auto w-full max-w-3xl px-4 pt-6 pb-4 md:px-6"
                   : "px-4 pt-6 pb-4 md:px-6"

@@ -49,13 +49,58 @@ const findQuickIngestFileInput = (dialog: Locator): Locator =>
   dialog.locator('[data-testid="qi-file-input"], input[type="file"]').first()
 
 const clickQuickIngestTrigger = async (page: Page): Promise<void> => {
-  const quickIngestBtn = page.getByTestId("open-quick-ingest")
-  if (await quickIngestBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await quickIngestBtn.click()
-    return
+  const dialog = page.getByRole("dialog", { name: /quick ingest/i }).first()
+  const triggers = [
+    page.getByTestId("open-quick-ingest").first(),
+    page.getByRole("button", { name: /^quick ingest$/i }).first(),
+    page.getByRole("button", { name: /open quick ingest/i }).first(),
+  ]
+
+  for (const trigger of triggers) {
+    if (await trigger.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      try {
+        await trigger.click({ timeout: 2_000 })
+      } catch {
+        if (await dialog.isVisible({ timeout: 1_000 }).catch(() => false)) {
+          return
+        }
+        continue
+      }
+      if (await dialog.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        return
+      }
+    }
   }
 
   await page.evaluate(() => {
+    ;(
+      window as Window & {
+        __tldwPendingQuickIngestOpen?: {
+          mode: "normal"
+          at: number
+        }
+      }
+    ).__tldwPendingQuickIngestOpen = {
+      mode: "normal",
+      at: Date.now(),
+    }
+    window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
+  })
+}
+
+const requestQuickIngestDialogFromPage = async (page: Page): Promise<void> => {
+  await page.evaluate(() => {
+    ;(
+      window as Window & {
+        __tldwPendingQuickIngestOpen?: {
+          mode: "normal"
+          at: number
+        }
+      }
+    ).__tldwPendingQuickIngestOpen = {
+      mode: "normal",
+      at: Date.now(),
+    }
     window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
   })
 }
@@ -210,7 +255,12 @@ export async function openQuickIngestDialog(
   timeoutMs = 30_000
 ): Promise<Locator> {
   const dialog = page.getByRole("dialog", { name: /quick ingest/i }).first()
-  if (await dialog.isVisible({ timeout: 1_000 }).catch(() => false)) {
+  if (await dialog.isVisible({ timeout: Math.min(timeoutMs, 5_000) }).catch(() => false)) {
+    return dialog
+  }
+
+  await waitForConnection(page, Math.min(timeoutMs, 20_000))
+  if (await dialog.isVisible({ timeout: Math.min(timeoutMs, 5_000) }).catch(() => false)) {
     return dialog
   }
 
@@ -218,9 +268,17 @@ export async function openQuickIngestDialog(
   if (!(await quickIngestBtn.isVisible({ timeout: 1_000 }).catch(() => false))) {
     await page.goto("/media", { waitUntil: "domcontentloaded" })
     await waitForConnection(page)
+    if (await dialog.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      return dialog
+    }
   }
 
   await clickQuickIngestTrigger(page)
+  if (await dialog.isVisible({ timeout: Math.min(timeoutMs, 5_000) }).catch(() => false)) {
+    return dialog
+  }
+
+  await requestQuickIngestDialogFromPage(page)
   await expect(dialog).toBeVisible({ timeout: timeoutMs })
   return dialog
 }

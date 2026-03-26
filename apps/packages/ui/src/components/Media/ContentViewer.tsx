@@ -30,6 +30,7 @@ import type { MenuProps } from 'antd'
 import type { MediaResultItem } from './types'
 import type { MediaNavigationFormat } from '@/utils/media-navigation-scope'
 import { parseLeadingTranscriptTiming } from '@/utils/media-transcript-display'
+import { requestQuickIngestOpen } from '@/utils/quick-ingest-open'
 import { useSetting } from '@/hooks/useSetting'
 import {
   MEDIA_COLLAPSED_SECTIONS_SETTING,
@@ -441,9 +442,7 @@ export function ContentViewer({
               <button
                 type="button"
                 onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    window.dispatchEvent(new CustomEvent('tldw:open-quick-ingest'))
-                  }
+                  requestQuickIngestOpen()
                 }}
                 className="mt-4 inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2"
               >

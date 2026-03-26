@@ -27,6 +27,7 @@ import {
 } from "@/utils/content-review-ai"
 import { getTextStats } from "@/utils/text-stats"
 import { getProviderDisplayName } from "@/utils/provider-registry"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import { bgRequest, bgUpload } from "@/services/background-proxy"
 import { getServerCapabilities } from "@/services/tldw/server-capabilities"
 import { normalizeMediaTypeForUpload } from "@/services/tldw/media-routing"
@@ -1029,7 +1030,7 @@ export const ContentReviewPage: React.FC = () => {
   }
 
   const openQuickIngest = () => {
-    window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
+    requestQuickIngestOpen()
   }
 
   const { wordCount, charCount } = getTextStats(draftContent?.content || "")

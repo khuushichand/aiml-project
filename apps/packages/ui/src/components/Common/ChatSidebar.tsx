@@ -32,6 +32,7 @@ import {
   useChatSurfaceCoordinatorStore
 } from "@/store/chat-surface-coordinator"
 import { cn } from "@/libs/utils"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import { ServerChatList } from "./ChatSidebar/ServerChatList"
 import { FolderChatList } from "./ChatSidebar/FolderChatList"
 import {
@@ -191,9 +192,7 @@ export function ChatSidebar({
   }
 
   const handleIngest = () => {
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
-    }
+    requestQuickIngestOpen()
   }
 
   const navigateWithLoading = React.useCallback(

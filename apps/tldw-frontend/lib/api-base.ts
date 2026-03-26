@@ -1,46 +1,37 @@
-export type DeploymentMode = "quickstart" | "advanced"
+import {
+  buildBrowserHttpBase,
+  detectBrowserNetworkingIssue,
+  resolveBrowserTransport,
+  resolveBrowserTransportMode,
+  type BrowserNetworkingIssue,
+  type BrowserTransportMode
+} from "@/services/tldw/browser-networking"
+
+export type DeploymentMode = BrowserTransportMode
 
 export type DeploymentEnv = {
   NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE?: string
   NEXT_PUBLIC_API_URL?: string
 }
 
-export type NetworkingIssue =
-  | {
-      kind: "loopback_api_not_browser_reachable"
-      apiOrigin: string
-      pageOrigin: string
-    }
+export type NetworkingIssue = BrowserNetworkingIssue
 
 const DEFAULT_API_VERSION = "v1"
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, "")
 
-const isLoopbackHost = (hostname: string): boolean =>
-  hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
-
-const parseOrigin = (origin: string): URL | null => {
-  try {
-    return new URL(origin)
-  } catch {
-    return null
-  }
-}
-
 export const resolveDeploymentMode = (env: DeploymentEnv): DeploymentMode =>
-  env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE === "quickstart" ? "quickstart" : "advanced"
+  resolveBrowserTransportMode(env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE)
 
 export const resolvePublicApiOrigin = (env: DeploymentEnv, pageOrigin?: string): string => {
-  if (resolveDeploymentMode(env) === "quickstart") {
-    return ""
-  }
-
-  const apiOrigin = env.NEXT_PUBLIC_API_URL?.trim()
-  if (apiOrigin) {
-    return trimTrailingSlash(apiOrigin)
-  }
-
-  return pageOrigin ? trimTrailingSlash(pageOrigin) : ""
+  return buildBrowserHttpBase(
+    resolveBrowserTransport({
+      surface: "webui-page",
+      deploymentMode: env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+      pageOrigin,
+      apiOrigin: env.NEXT_PUBLIC_API_URL
+    })
+  )
 }
 
 export const buildApiBaseUrl = (origin: string, version: string = DEFAULT_API_VERSION): string =>
@@ -52,25 +43,10 @@ export const detectNetworkingIssue = (
   env: DeploymentEnv,
   pageOrigin?: string
 ): NetworkingIssue | undefined => {
-  const apiOrigin = resolvePublicApiOrigin(env, pageOrigin)
-  if (!apiOrigin || !pageOrigin) {
-    return undefined
-  }
-
-  const apiUrl = parseOrigin(apiOrigin)
-  const pageUrl = parseOrigin(pageOrigin)
-
-  if (!apiUrl || !pageUrl) {
-    return undefined
-  }
-
-  if (isLoopbackHost(apiUrl.hostname) && !isLoopbackHost(pageUrl.hostname)) {
-    return {
-      kind: "loopback_api_not_browser_reachable",
-      apiOrigin,
-      pageOrigin: trimTrailingSlash(pageOrigin)
-    }
-  }
-
-  return undefined
+  return detectBrowserNetworkingIssue({
+    surface: "webui-page",
+    deploymentMode: env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+    pageOrigin,
+    apiOrigin: env.NEXT_PUBLIC_API_URL
+  })
 }

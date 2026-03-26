@@ -451,6 +451,33 @@ test.describe("Media Ingestion Workflow", () => {
       })
     }
 
+    test("quick ingest opens from the visible media page triggers without helper fallback", async ({
+      authedPage,
+      diagnostics
+    }) => {
+      await authedPage.goto("/media", { waitUntil: "domcontentloaded" })
+      await waitForConnection(authedPage)
+
+      const dialog = authedPage.getByRole("dialog", { name: /quick ingest/i }).first()
+      await expect(dialog).toBeHidden()
+
+      const sidebarTrigger = authedPage.getByRole("button", { name: /^quick ingest$/i }).first()
+      if (await sidebarTrigger.isVisible().catch(() => false)) {
+        await sidebarTrigger.click()
+        await expect(dialog).toBeVisible({ timeout: 15_000 })
+        await dismissQuickIngest(authedPage)
+      }
+
+      const emptyStateTrigger = authedPage
+        .getByRole("button", { name: /open quick ingest/i })
+        .first()
+      await expect(emptyStateTrigger).toBeVisible({ timeout: 15_000 })
+      await emptyStateTrigger.click()
+      await expect(dialog).toBeVisible({ timeout: 15_000 })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
     test("quick ingest accepts a real .mkv upload through completion and reopen", async ({
       authedPage,
       serverInfo,

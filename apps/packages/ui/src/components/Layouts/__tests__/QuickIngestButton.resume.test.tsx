@@ -173,4 +173,20 @@ describe("QuickIngestButton resume behavior", () => {
       "false"
     )
   })
+
+  it("opens when a pending quick-ingest request exists before the host mounts", () => {
+    ;(window as typeof window & {
+      __tldwPendingQuickIngestOpen?: { mode: "normal" | "intro"; at: number }
+    }).__tldwPendingQuickIngestOpen = {
+      mode: "normal",
+      at: Date.now(),
+    }
+
+    render(<QuickIngestModalHost />)
+
+    expect(screen.getByTestId("quick-ingest-modal-mock")).toHaveAttribute(
+      "data-open",
+      "true"
+    )
+  })
 })

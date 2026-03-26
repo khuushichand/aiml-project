@@ -2,7 +2,8 @@ const QUICKSTART_MODE = "quickstart"
 
 function isAbsoluteUrl(value) {
   try {
-    return new URL(value).origin.length > 0
+    const parsed = new URL(value)
+    return /^https?:$/i.test(parsed.protocol) && parsed.origin.length > 0
   } catch {
     return false
   }
@@ -30,6 +31,15 @@ export function validateNetworkingConfig(env = process.env) {
   ) {
     throw new Error(
       "Invalid WebUI networking config: quickstart mode must not set NEXT_PUBLIC_API_URL to an absolute browser API URL."
+    )
+  }
+
+  if (
+    deploymentMode !== QUICKSTART_MODE &&
+    !isAbsoluteUrl(publicApiUrl)
+  ) {
+    throw new Error(
+      "Invalid WebUI networking config: advanced mode requires NEXT_PUBLIC_API_URL to be an absolute browser API URL."
     )
   }
 

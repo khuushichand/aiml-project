@@ -16,6 +16,7 @@ const makefilePath = path.join(repoRoot, "Makefile")
 const ORIGINAL_ENV = {
   NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
   TLDW_INTERNAL_API_ORIGIN: process.env.TLDW_INTERNAL_API_ORIGIN,
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL
 }
 
 const restoreEnv = () => {
@@ -31,11 +32,18 @@ const restoreEnv = () => {
   } else {
     process.env.TLDW_INTERNAL_API_ORIGIN = ORIGINAL_ENV.TLDW_INTERNAL_API_ORIGIN
   }
+
+  if (ORIGINAL_ENV.NEXT_PUBLIC_API_URL === undefined) {
+    delete process.env.NEXT_PUBLIC_API_URL
+  } else {
+    process.env.NEXT_PUBLIC_API_URL = ORIGINAL_ENV.NEXT_PUBLIC_API_URL
+  }
 }
 
 const loadNextConfig = async (env: {
   NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE?: string
   TLDW_INTERNAL_API_ORIGIN?: string
+  NEXT_PUBLIC_API_URL?: string
 }) => {
   if (env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE === undefined) {
     delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
@@ -48,6 +56,12 @@ const loadNextConfig = async (env: {
     delete process.env.TLDW_INTERNAL_API_ORIGIN
   } else {
     process.env.TLDW_INTERNAL_API_ORIGIN = env.TLDW_INTERNAL_API_ORIGIN
+  }
+
+  if (env.NEXT_PUBLIC_API_URL === undefined) {
+    delete process.env.NEXT_PUBLIC_API_URL
+  } else {
+    process.env.NEXT_PUBLIC_API_URL = env.NEXT_PUBLIC_API_URL
   }
 
   const moduleUrl = pathToFileURL(nextConfigPath)
@@ -107,10 +121,58 @@ describe("frontend quickstart networking", () => {
     ).toThrow(/TLDW_INTERNAL_API_ORIGIN/i)
   })
 
+  it("rejects an absolute NEXT_PUBLIC_API_URL in quickstart mode", async () => {
+    const validateNetworkingConfig = await loadValidateNetworkingConfig()
+
+    expect(() =>
+      validateNetworkingConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "quickstart",
+        TLDW_INTERNAL_API_ORIGIN: "http://app:8000",
+        NEXT_PUBLIC_API_URL: "http://127.0.0.1:8000"
+      })
+    ).toThrow(/NEXT_PUBLIC_API_URL/i)
+  })
+
+  it("requires a valid absolute NEXT_PUBLIC_API_URL in advanced mode", async () => {
+    const validateNetworkingConfig = await loadValidateNetworkingConfig()
+
+    expect(() =>
+      validateNetworkingConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "advanced",
+        NEXT_PUBLIC_API_URL: ""
+      })
+    ).toThrow(/NEXT_PUBLIC_API_URL/i)
+
+    expect(() =>
+      validateNetworkingConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "advanced",
+        NEXT_PUBLIC_API_URL: "/api"
+      })
+    ).toThrow(/NEXT_PUBLIC_API_URL/i)
+
+    expect(() =>
+      validateNetworkingConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "advanced",
+        NEXT_PUBLIC_API_URL: "ftp://api.example.test"
+      })
+    ).toThrow(/NEXT_PUBLIC_API_URL/i)
+
+    expect(
+      validateNetworkingConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "advanced",
+        NEXT_PUBLIC_API_URL: "https://api.example.test"
+      })
+    ).toMatchObject({
+      deploymentMode: "advanced",
+      publicApiUrl: "https://api.example.test"
+    })
+  })
+
   it("does not add the quickstart proxy rewrite outside quickstart mode", async () => {
     const nextConfig = await loadNextConfig({
       NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "advanced",
       TLDW_INTERNAL_API_ORIGIN: "http://app:8000",
+      NEXT_PUBLIC_API_URL: "https://api.example.test",
     })
 
     const rewrites = await nextConfig.rewrites()
@@ -123,6 +185,15 @@ describe("frontend quickstart networking", () => {
         }),
       ])
     )
+  })
+
+  it("fails next config loading when advanced mode omits NEXT_PUBLIC_API_URL", async () => {
+    await expect(
+      loadNextConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "advanced",
+        TLDW_INTERNAL_API_ORIGIN: "http://app:8000",
+      })
+    ).rejects.toThrow(/NEXT_PUBLIC_API_URL/i)
   })
 
   it("normalizes a trailing slash from the internal quickstart API origin", async () => {

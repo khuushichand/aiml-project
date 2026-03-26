@@ -15,6 +15,23 @@ type DocsInfoPayload = {
   supported_features?: Record<string, unknown> | null
 }
 
+type PersonaCatalogEntry = {
+  id?: string | null
+}
+
+type PersonaProfilePayload = {
+  version?: number | null
+}
+
+const DEFAULT_PERSONA_ID = "research_assistant"
+const COMPLETED_SETUP_STEPS = [
+  "persona",
+  "voice",
+  "commands",
+  "safety",
+  "test",
+] as const
+
 const parseBooleanish = (value: unknown): boolean | null => {
   if (typeof value === "boolean") return value
   if (typeof value === "number") return value !== 0
@@ -38,12 +55,95 @@ const isPersonaAdvertised = (docsInfo: DocsInfoPayload): boolean => {
   return false
 }
 
+const resolvePersonaIdForLiveProof = (
+  catalog: PersonaCatalogEntry[] | null
+): string => {
+  const entries = Array.isArray(catalog) ? catalog : []
+  const preferred = entries.find(
+    (entry) => String(entry?.id || "").trim() === DEFAULT_PERSONA_ID
+  )
+  if (preferred) {
+    return DEFAULT_PERSONA_ID
+  }
+
+  const fallback = entries.find((entry) => String(entry?.id || "").trim().length > 0)
+  return String(fallback?.id || DEFAULT_PERSONA_ID).trim() || DEFAULT_PERSONA_ID
+}
+
+const ensurePersonaSetupCompleted = async (personaId: string): Promise<void> => {
+  const normalizedPersonaId = String(personaId || "").trim()
+  if (!normalizedPersonaId) {
+    throw new Error("Persona live proof requires a persona id")
+  }
+
+  const profileUrl = `${TEST_CONFIG.serverUrl}/api/v1/persona/profiles/${encodeURIComponent(
+    normalizedPersonaId
+  )}`
+  const profileResp = await fetchWithApiKey(profileUrl, TEST_CONFIG.apiKey).catch(
+    () => null
+  )
+
+  if (!profileResp?.ok) {
+    throw new Error(
+      `Failed to load persona profile for live proof (${normalizedPersonaId})`
+    )
+  }
+
+  const profilePayload = (await profileResp.json().catch(() => null)) as
+    | PersonaProfilePayload
+    | null
+  const expectedVersion =
+    typeof profilePayload?.version === "number" ? profilePayload.version : null
+  const updateUrl = expectedVersion
+    ? `${profileUrl}?expected_version=${encodeURIComponent(String(expectedVersion))}`
+    : profileUrl
+  const completedSetup = {
+    status: "completed",
+    version: 1,
+    run_id: `e2e-live-${Date.now()}`,
+    current_step: "test",
+    completed_steps: [...COMPLETED_SETUP_STEPS],
+    completed_at: new Date().toISOString(),
+    last_test_type: "live_session",
+  }
+  const updateResp = await fetchWithApiKey(updateUrl, TEST_CONFIG.apiKey, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      setup: completedSetup,
+    }),
+  }).catch(() => null)
+
+  if (!updateResp?.ok) {
+    throw new Error(
+      `Failed to mark persona setup complete for live proof (${normalizedPersonaId})`
+    )
+  }
+}
+
 test.describe("Persona Live Workflow", () => {
   test.beforeEach(async ({ authedPage }) => {
     await seedAuth(authedPage, {
       serverUrl: TEST_CONFIG.webUrl,
       webUrl: TEST_CONFIG.webUrl,
       apiKey: TEST_CONFIG.apiKey,
+    })
+    await authedPage.route("**/api/**", async (route, request) => {
+      const headers = {
+        ...request.headers(),
+      }
+
+      if (
+        TEST_CONFIG.apiKey &&
+        !headers["x-api-key"] &&
+        !headers["authorization"]
+      ) {
+        headers["x-api-key"] = TEST_CONFIG.apiKey
+      }
+
+      await route.continue({ headers })
     })
     await authedPage.addInitScript(() => {
       const OriginalWebSocket = window.WebSocket
@@ -58,7 +158,7 @@ test.describe("Persona Live Workflow", () => {
     })
   })
 
-  test("shows setup gate or connects to live persona websocket and receives a plan/cancel notice", async ({
+  test("connects to live persona websocket and receives a plan/cancel notice", async ({
     authedPage,
     serverInfo,
     diagnostics
@@ -81,7 +181,21 @@ test.describe("Persona Live Workflow", () => {
       test.skip(true, "persona capability disabled on backend")
     }
 
-    await authedPage.goto("/persona", { waitUntil: "domcontentloaded" })
+    const catalogResp = await fetchWithApiKey(
+      `${TEST_CONFIG.serverUrl}/api/v1/persona/catalog`,
+      TEST_CONFIG.apiKey
+    ).catch(() => null)
+    const personaCatalog = (await catalogResp?.json().catch(() => null)) as
+      | PersonaCatalogEntry[]
+      | null
+    const livePersonaId = resolvePersonaIdForLiveProof(personaCatalog)
+
+    await ensurePersonaSetupCompleted(livePersonaId)
+
+    await authedPage.goto(
+      `/persona?persona_id=${encodeURIComponent(livePersonaId)}`,
+      { waitUntil: "domcontentloaded" }
+    )
 
     const personaUnavailableVisible = await authedPage
       .getByText("Persona unavailable")
@@ -92,29 +206,29 @@ test.describe("Persona Live Workflow", () => {
     }
 
     const setupOverlay = authedPage.getByTestId("assistant-setup-overlay")
-    const setupHeading = authedPage.getByText("Assistant Setup").first()
-    const setupRequired =
-      (await setupHeading.isVisible().catch(() => false)) ||
-      (await setupHeading.waitFor({ state: "visible", timeout: 5_000 }).then(() => true).catch(() => false))
-    if (setupRequired) {
-      await expect(setupOverlay).toBeVisible()
-      await expect(setupHeading).toBeVisible()
-      await expect(
-        authedPage.getByText("Choose a persona")
-      ).toBeVisible()
-      expect(diagnostics.pageErrors).toHaveLength(0)
-      return
+    const connectButton = authedPage.getByRole("button", { name: /^Connect$/ })
+    const disconnectButton = authedPage.getByRole("button", { name: /^Disconnect$/ })
+
+    await expect(setupOverlay).toBeHidden({ timeout: 15_000 })
+
+    const liveControlsState = await Promise.any([
+      connectButton.waitFor({ state: "visible", timeout: 30_000 }).then(
+        () => "connect" as const
+      ),
+      disconnectButton.waitFor({ state: "visible", timeout: 30_000 }).then(
+        () => "disconnect" as const
+      ),
+    ]).catch(() => {
+      throw new Error("Persona live proof did not reach connect or disconnect controls")
+    })
+
+    if (liveControlsState === "connect") {
+      await connectButton.evaluate((el: HTMLElement) => el.click())
     }
 
-    await authedPage
-      .getByRole("button", { name: /^Connect$/ })
-      .evaluate((el: HTMLElement) => el.click())
-
+    await expect(disconnectButton).toBeVisible({ timeout: 30000 })
     await expect(
-      authedPage.getByRole("button", { name: /^Disconnect$/ })
-    ).toBeVisible({ timeout: 30000 })
-    await expect(
-      authedPage.getByText("Persona stream connected")
+      authedPage.getByText(/^Persona stream connected$/)
     ).toBeVisible({ timeout: 30000 })
 
     await authedPage
@@ -128,9 +242,18 @@ test.describe("Persona Live Workflow", () => {
 
     await authedPage.getByRole("button", { name: /^Cancel$/ }).click()
 
-    await expect(
-      authedPage.getByText(/Cancelled pending work|Cancelled pending plan/i)
-    ).toBeVisible({ timeout: 30000 })
+    await Promise.any([
+      authedPage.getByText(/^Cancelled pending plan$/).waitFor({
+        state: "visible",
+        timeout: 30_000
+      }),
+      authedPage.getByText(/^Cancelled pending work\b/i).waitFor({
+        state: "visible",
+        timeout: 30_000
+      }),
+    ]).catch(() => {
+      throw new Error("Expected a cancelled pending-work notice")
+    })
 
     const seenWsUrls = await authedPage.evaluate(
       () => (window as Window & { __tldwSeenWsUrls?: string[] }).__tldwSeenWsUrls || []

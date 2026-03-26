@@ -30,6 +30,7 @@ import {
   useMediaNavigation
 } from '@/hooks/useMediaNavigation'
 import { bgRequest } from '@/services/background-proxy'
+import { requestQuickIngestOpen } from '@/utils/quick-ingest-open'
 import { setSetting } from '@/services/settings/registry'
 import {
   DISCUSS_MEDIA_PROMPT_SETTING,
@@ -1385,9 +1386,7 @@ const MediaPageContent: React.FC = () => {
                 }}
                 onClearFilters={resetAllFilters}
                 onOpenQuickIngest={() => {
-                  if (typeof window !== 'undefined') {
-                    window.dispatchEvent(new CustomEvent('tldw:open-quick-ingest'))
-                  }
+                  requestQuickIngestOpen()
                 }}
                 favorites={selection.favoritesSet}
                 onToggleFavorite={selection.toggleFavorite}

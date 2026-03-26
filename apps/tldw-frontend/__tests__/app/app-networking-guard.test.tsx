@@ -156,6 +156,32 @@ describe("app networking guard", () => {
     ).toThrow(/NEXT_PUBLIC_API_URL/i)
   })
 
+  it("requires an absolute NEXT_PUBLIC_API_URL in advanced mode", async () => {
+    const validatorPath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "scripts",
+      "validate-networking-config.mjs"
+    )
+    const moduleUrl = pathToFileURL(validatorPath)
+    moduleUrl.searchParams.set("t", `${Date.now()}-${Math.random()}`)
+    const { validateNetworkingConfig } = await import(moduleUrl.href)
+
+    expect(() =>
+      validateNetworkingConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "advanced"
+      })
+    ).toThrow(/NEXT_PUBLIC_API_URL/i)
+
+    expect(() =>
+      validateNetworkingConfig({
+        NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE: "advanced",
+        NEXT_PUBLIC_API_URL: "/api"
+      })
+    ).toThrow(/NEXT_PUBLIC_API_URL/i)
+  })
+
   it("does not render app content during server rendering before the guard resolves", () => {
     const originalWindow = globalThis.window
     vi.stubGlobal("window", undefined)

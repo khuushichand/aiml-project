@@ -28,6 +28,7 @@ import { copilotResumeLastChat } from "@/services/app"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { ServerChatMessage as ApiServerChatMessage } from "@/services/tldw/TldwApiClient"
 import { createSafeStorage } from "@/utils/safe-storage"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
 import { useStorage } from "@plasmohq/storage/hook"
 import { ChevronDown } from "lucide-react"
@@ -2474,9 +2475,7 @@ const SidepanelChat = () => {
           onToggleRag: toggleChatMode,
           onToggleWebSearch: toggleWebSearchMode,
           onIngestPage: () => {
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
-            }
+            requestQuickIngestOpen()
           },
           onSwitchModel: () => {
             if (typeof window !== "undefined") {

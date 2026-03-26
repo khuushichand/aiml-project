@@ -245,6 +245,7 @@ export async function seedAuth(
     try {
       localStorage.setItem("serverUrl", cfg.serverUrl);
       localStorage.setItem("tldwServerUrl", cfg.serverUrl);
+      localStorage.setItem("tldw-api-host", cfg.serverUrl);
       localStorage.setItem("authMode", "single-user");
       localStorage.setItem("apiKey", cfg.apiKey);
     } catch {}

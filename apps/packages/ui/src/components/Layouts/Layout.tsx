@@ -33,6 +33,7 @@ import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { useMobile } from "@/hooks/useMediaQuery"
 import { setSettingsReturnTo } from "@/utils/settings-return"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import {
   VIEWPORT_CONSTRAINED_PATHS,
 } from "@/routes/route-paths"
@@ -212,9 +213,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   }, [hideSidebar, isMobile, setChatSidebarCollapsed, showChatSidebar])
 
   const handleIngestPage = () => {
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
-    }
+    requestQuickIngestOpen()
   }
 
   const promptPaletteCommands = usePromptPaletteCommands()

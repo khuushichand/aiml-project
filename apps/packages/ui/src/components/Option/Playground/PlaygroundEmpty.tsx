@@ -14,6 +14,7 @@ import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useDemoMode } from "@/context/demo-mode"
 import { useHelpModal } from "@/store/tutorials"
 import { buildResearchLaunchPath } from "@/routes/route-paths"
+import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 
 /** Clickable example prompts that populate the composer */
 const ExamplePromptChips: React.FC<{
@@ -82,7 +83,7 @@ export const PlaygroundEmpty = () => {
       trigger.click()
       return
     }
-    window.dispatchEvent(new CustomEvent("tldw:open-quick-ingest"))
+    requestQuickIngestOpen()
   }, [])
 
   const handleExampleSelect = React.useCallback((prompt: string) => {
