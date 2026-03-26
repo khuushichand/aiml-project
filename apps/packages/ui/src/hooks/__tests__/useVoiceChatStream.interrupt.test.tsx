@@ -281,6 +281,10 @@ describe("useVoiceChatStream interrupt handling", () => {
       await Promise.resolve()
     })
 
+    await waitFor(() => {
+      expect(ws.sent[0]).toBeDefined()
+    })
+
     const configFrame = JSON.parse(ws.sent[0]!)
     expect(configFrame.llm.model).toBeUndefined()
     expect(configFrame.llm.provider).toBeUndefined()
@@ -333,6 +337,44 @@ describe("useVoiceChatStream interrupt handling", () => {
     )
   })
 
+  it("does not open a websocket or restart the mic when startup is canceled before preflight resolves", async () => {
+    let resolveConfig: ((value: any) => void) | null = null
+    vi.mocked(tldwClient.getConfig).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveConfig = resolve
+        }) as any
+    )
+
+    const { rerender } = renderHook(
+      ({ active }) =>
+        useVoiceChatStream({
+          active
+        }),
+      {
+        initialProps: { active: true }
+      }
+    )
+
+    await act(async () => {
+      rerender({ active: false })
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      resolveConfig?.({
+        serverUrl: "http://localhost:8000",
+        authMode: "single_user",
+        apiKey: "test-key"
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(MockWebSocket.instances).toHaveLength(0)
+    expect(micState.start).not.toHaveBeenCalled()
+  })
+
   it("starts live voice with the remembered live_voice mic device", async () => {
     storageValues.set("liveVoiceAudioSourcePreference", {
       featureGroup: "live_voice",
@@ -362,7 +404,9 @@ describe("useVoiceChatStream interrupt handling", () => {
       await Promise.resolve()
     })
 
-    expect(micState.start).toHaveBeenCalledWith({ deviceId: "usb-1" })
+    await waitFor(() => {
+      expect(micState.start).toHaveBeenCalledWith({ deviceId: "usb-1" })
+    })
   })
 
   it("waits for the live_voice preference to hydrate before starting", async () => {

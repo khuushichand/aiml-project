@@ -142,6 +142,9 @@ export const useVoiceChatStream = ({
   const pendingResumeRef = React.useRef(false)
   const resolvedTtsFormatRef = React.useRef<string | null>(null)
   const errorRef = React.useRef<string | null>(null)
+  const startAttemptRef = React.useRef(0)
+  const didRunActiveEffectRef = React.useRef(false)
+  const manualSessionRef = React.useRef(false)
 
   const [state, setState] = React.useState<VoiceChatState>("idle")
   const [error, setError] = React.useState<string | null>(null)
@@ -191,6 +194,11 @@ export const useVoiceChatStream = ({
     setState(next)
     callbacksRef.current.onStateChange?.(next)
   }, [])
+
+  const isStartAttemptCurrent = React.useCallback(
+    (attemptId: number) => startAttemptRef.current === attemptId,
+    []
+  )
 
   const {
     start: audioStart,
@@ -252,6 +260,8 @@ export const useVoiceChatStream = ({
       : null
 
   const cleanupSession = React.useCallback(() => {
+    manualSessionRef.current = false
+    startAttemptRef.current += 1
     try {
       micStop()
     } catch {}
@@ -267,7 +277,9 @@ export const useVoiceChatStream = ({
   }, [audioStop, micStop])
 
   const stop = React.useCallback(() => {
+    manualSessionRef.current = false
     const ws = wsRef.current
+    startAttemptRef.current += 1
     closingRef.current = Boolean(ws)
     if (ws && ws.readyState === WebSocket.OPEN) {
       try {
@@ -414,6 +426,9 @@ export const useVoiceChatStream = ({
   const start = React.useCallback(async () => {
     if (!liveVoiceSourceReady) return
     if (connectingRef.current || wsRef.current) return
+    manualSessionRef.current = !activeRef.current
+    const attemptId = startAttemptRef.current + 1
+    startAttemptRef.current = attemptId
     connectingRef.current = true
     errorRef.current = null
     setError(null)
@@ -446,6 +461,9 @@ export const useVoiceChatStream = ({
             modelId
           })
       })
+      if (!isStartAttemptCurrent(attemptId)) {
+        return
+      }
       resolvedTtsFormatRef.current = isPlayableFormat(preflight.tts.format)
         ? preflight.tts.format
         : "mp3"
@@ -489,6 +507,12 @@ export const useVoiceChatStream = ({
       ws.onopen = () => {
         void (async () => {
           try {
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
             const sttConfig: Record<string, any> = {
               enable_vad: true,
               min_silence_ms: voiceChatPauseMs,
@@ -548,7 +572,23 @@ export const useVoiceChatStream = ({
               })
             )
 
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
+
             await micStart({ deviceId: liveVoiceDeviceId })
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                micStop()
+              } catch {}
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
             setConnected(true)
             connectingRef.current = false
             updateState("listening")
@@ -565,7 +605,9 @@ export const useVoiceChatStream = ({
     cleanupSession,
     handleError,
     handleMessage,
+    isStartAttemptCurrent,
     micStart,
+    micStop,
     normalizeStartupErrorMessage,
     normalizeVoiceConversationRuntimeError,
     ttsProvider,
@@ -603,12 +645,33 @@ export const useVoiceChatStream = ({
   ])
 
   React.useEffect(() => {
+    if (!didRunActiveEffectRef.current) {
+      didRunActiveEffectRef.current = true
+      if (!active) {
+        errorRef.current = null
+        setError(null)
+        updateState("idle")
+        return
+      }
+    }
+
     if (active) {
+      manualSessionRef.current = false
       if (!liveVoiceSourceReady) return
       void start()
       return
     }
-    stop()
+    if (manualSessionRef.current) {
+      return
+    }
+    if (
+      wsRef.current ||
+      connectingRef.current ||
+      stateRef.current !== "idle" ||
+      errorRef.current
+    ) {
+      stop()
+    }
     errorRef.current = null
     setError(null)
     updateState("idle")
