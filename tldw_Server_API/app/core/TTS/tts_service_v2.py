@@ -409,6 +409,7 @@ class TTSServiceV2:
         user_id: Optional[int],
     ) -> tuple[TTSAdapter, str, TTSRequest]:
         """Resolve provider-managed request state before execution begins."""
+        prepared = False
         try:
             await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
             self._apply_token_defaults(tts_request)
@@ -441,10 +442,11 @@ class TTSServiceV2:
                 provider=provider_key,
                 config=self._get_validation_config(),
             )
+            prepared = True
             return adapter, provider_key, request_for_provider
-        except Exception:
-            self._cleanup_transient_pocket_tts_cpp_voice_path(tts_request)
-            raise
+        finally:
+            if not prepared:
+                self._cleanup_transient_pocket_tts_cpp_voice_path(tts_request)
 
     def _get_tts_request_observability(
         self,
