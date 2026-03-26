@@ -1,6 +1,6 @@
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.services.claims_alerts_scheduler import run_claims_alerts_once

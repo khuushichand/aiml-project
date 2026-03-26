@@ -7,9 +7,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError
+from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as media_db_mod
+from tldw_Server_API.app.core.DB_Management.media_db.runtime import execution_ops as media_db_execution_ops
 
 
 class _FailingCursor:
@@ -77,9 +78,20 @@ def test_postgres_get_connection_reapplies_scope() -> None:
 def test_execute_query_closes_ephemeral_connection_on_error(tmp_path: Path, monkeypatch) -> None:
     db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="cleanup-test")
     failing_conn = _FailingConnection(sqlite3.OperationalError("boom"))
-    monkeypatch.setattr(media_db_mod.sqlite3, "connect", lambda *args, **kwargs: failing_conn)
+    monkeypatch.setattr(media_db_execution_ops.sqlite3, "connect", lambda *args, **kwargs: failing_conn)
 
     with pytest.raises(DatabaseError):
+        db.execute_query("SELECT 1")
+
+    assert failing_conn.closed is True
+
+
+def test_execute_query_passthroughs_sync_integrity_error(tmp_path: Path, monkeypatch) -> None:
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="cleanup-test")
+    failing_conn = _FailingConnection(sqlite3.IntegrityError("sync error: boom"))
+    monkeypatch.setattr(media_db_execution_ops.sqlite3, "connect", lambda *args, **kwargs: failing_conn)
+
+    with pytest.raises(sqlite3.IntegrityError, match="sync error"):
         db.execute_query("SELECT 1")
 
     assert failing_conn.closed is True
@@ -88,7 +100,7 @@ def test_execute_query_closes_ephemeral_connection_on_error(tmp_path: Path, monk
 def test_execute_many_closes_ephemeral_connection_on_error(tmp_path: Path, monkeypatch) -> None:
     db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="cleanup-test")
     failing_conn = _FailingConnection(sqlite3.OperationalError("boom"))
-    monkeypatch.setattr(media_db_mod.sqlite3, "connect", lambda *args, **kwargs: failing_conn)
+    monkeypatch.setattr(media_db_execution_ops.sqlite3, "connect", lambda *args, **kwargs: failing_conn)
 
     with pytest.raises(DatabaseError):
         db.execute_many(
@@ -98,3 +110,26 @@ def test_execute_many_closes_ephemeral_connection_on_error(tmp_path: Path, monke
         )
 
     assert failing_conn.closed is True
+
+
+def test_execute_many_returns_none_for_empty_params_list(tmp_path: Path) -> None:
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="cleanup-test")
+
+    result = db.execute_many(
+        "INSERT INTO Media (uuid, title, type, content_hash, last_modified, version, client_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [],
+    )
+
+    assert result is None
+
+
+def test_execute_many_rejects_non_list_params_list(tmp_path: Path) -> None:
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="cleanup-test")
+
+    with pytest.raises(TypeError, match="params_list must be a list"):
+        db.execute_many(
+            "INSERT INTO Media (uuid, title, type, content_hash, last_modified, version, client_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("uuid", "title"),
+        )

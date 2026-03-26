@@ -18,7 +18,7 @@ import numpy as np
 from uuid import uuid4
 from datetime import datetime
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
 from tldw_Server_API.app.core.RAG.rag_service.types import Document, SearchResult, DataSource

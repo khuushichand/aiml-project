@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.tests.test_utils import create_test_media
 
 

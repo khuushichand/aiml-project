@@ -10,7 +10,7 @@ from tldw_Server_API.app.api.v1.endpoints.data_tables import (
 )
 from tldw_Server_API.app.api.v1.schemas.data_tables_schemas import DATA_TABLES_MAX_ROWS_LIMIT
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 pytestmark = pytest.mark.integration

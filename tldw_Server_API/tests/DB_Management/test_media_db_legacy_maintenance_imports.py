@@ -1,5 +1,6 @@
 import importlib
 
+from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.media_db.legacy_maintenance import (
     permanently_delete_item,
 )
@@ -26,4 +27,4 @@ def test_legacy_maintenance_callers_no_longer_depend_on_media_db_v2_exports() ->
 
     assert media_item.permanently_delete_item is permanently_delete_item
     assert media_listing.permanently_delete_item is permanently_delete_item
-    assert media_module_impl.permanently_delete_item is permanently_delete_item
+    assert media_module_impl.permanently_delete_item is media_db_api.permanently_delete_item

@@ -53,6 +53,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
 )
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
 from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_media_by_id
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
@@ -180,13 +181,13 @@ def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
         db_path=db_path,
         initialize=False,
     ) as db:
-        media_item = db.get_media_by_id(media_id)
+        media_item = get_media_by_id(db, media_id)
         if not media_item:
             raise EmbeddingsJobError(f"Media item {media_id} not found", retryable=False)
 
         try:
             if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
-                from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
+                from tldw_Server_API.app.core.DB_Management.media_db.api import (
                     get_document_version,
                 )
 

@@ -13,7 +13,12 @@ import time
 import sqlite3
 from datetime import datetime, timezone, timedelta
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, ConflictError, DatabaseError
+from tldw_Server_API.app.core.DB_Management.media_db.errors import ConflictError, DatabaseError
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
+from tldw_Server_API.app.core.DB_Management.media_db.repositories.document_versions_repository import (
+    DocumentVersionsRepository,
+)
 
 
 #
@@ -264,6 +269,15 @@ class TestDatabaseCRUDAndSync:
         assert log_entry['version'] == initial_version + 1
         payload = json.loads(log_entry['payload'])
         assert payload['uuid'] == kw_uuid # Delete payload is minimal
+
+    def test_fetch_all_keywords_returns_only_active_keywords_in_order(self, db_instance):
+
+        db_instance.add_keyword("Zulu")
+        db_instance.add_keyword("alpha")
+        db_instance.add_keyword("beta")
+        assert db_instance.soft_delete_keyword("beta") is True
+
+        assert db_instance.fetch_all_keywords() == ["alpha", "zulu"]
 
     def test_undelete_keyword(self, db_instance):
 
@@ -996,3 +1010,72 @@ class TestDatabaseFTS:
         assert len(page_two_rows) == 1
         assert page_one_rows[0]["title"] == "Alpha Study"
         assert page_two_rows[0]["title"] == "Zulu Study"
+
+
+def test_document_versions_repository_lists_versions(memory_db_factory):
+    db = memory_db_factory("version_repo")
+    media_id, _, _ = db.add_media_with_keywords(
+        title="Repository Version Test",
+        content="Version one",
+        media_type="document",
+        keywords=[],
+    )
+    db.create_document_version(
+        media_id,
+        "Version two",
+        prompt="Second prompt",
+        analysis_content="Second analysis",
+    )
+
+    repo = DocumentVersionsRepository.from_legacy_db(db)
+    versions = repo.list(
+        media_id=media_id,
+        include_content=False,
+        include_deleted=False,
+    )
+
+    assert len(versions) >= 2
+    assert [row["version_number"] for row in versions[:2]] == [2, 1]
+    assert "safe_metadata" in versions[0]
+
+
+def test_media_db_v2_get_media_by_id_delegates(monkeypatch, memory_db_factory):
+    db = memory_db_factory("delegate_lookup")
+    called: dict[str, int] = {}
+
+    def _fake_get_media_by_id(_db, media_id, **kwargs):
+        called["media_id"] = media_id
+        return {"id": media_id, "kwargs": kwargs}
+
+    monkeypatch.setattr(
+        media_db_api,
+        "get_media_by_id",
+        _fake_get_media_by_id,
+    )
+
+    assert db.get_media_by_id(9) == {
+        "id": 9,
+        "kwargs": {"include_deleted": False, "include_trash": False},
+    }
+    assert called["media_id"] == 9
+
+
+def test_media_db_v2_get_media_by_uuid_delegates(monkeypatch, memory_db_factory):
+    db = memory_db_factory("delegate_lookup_uuid")
+    called: dict[str, str] = {}
+
+    def _fake_get_media_by_uuid(_db, media_uuid, **kwargs):
+        called["media_uuid"] = media_uuid
+        return {"uuid": media_uuid, "kwargs": kwargs}
+
+    monkeypatch.setattr(
+        media_db_api,
+        "get_media_by_uuid",
+        _fake_get_media_by_uuid,
+    )
+
+    assert db.get_media_by_uuid("uuid-9") == {
+        "uuid": "uuid-9",
+        "kwargs": {"include_deleted": False, "include_trash": False},
+    }
+    assert called["media_uuid"] == "uuid-9"

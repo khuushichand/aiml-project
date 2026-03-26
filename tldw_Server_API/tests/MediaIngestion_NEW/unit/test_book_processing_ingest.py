@@ -52,11 +52,14 @@ def test_ingest_text_file_uses_managed_media_database(
     )
     monkeypatch.setattr(
         books,
-        "create_media_database",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy raw factory should not be used")),
+        "get_media_repository",
+        lambda db_instance: type(
+            "_FakeWriter",
+            (),
+            {"add_media_with_keywords": staticmethod(_fake_add_media_with_keywords)},
+        )(),
         raising=False,
     )
-    monkeypatch.setattr(books, "add_media_with_keywords", _fake_add_media_with_keywords)
 
     result = books.ingest_text_file(
         str(text_file),

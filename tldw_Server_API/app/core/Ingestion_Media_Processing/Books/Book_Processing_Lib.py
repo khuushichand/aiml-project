@@ -57,8 +57,10 @@ from tldw_Server_API.app.core.Chunking import ChunkingError, InvalidChunkingMeth
 
 #
 # Import Local
-from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
-from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    get_media_repository,
+    managed_media_database,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
@@ -1591,7 +1593,7 @@ def ingest_text_file(file_path, title=None, author=None, keywords=None, base_dir
             client_id="book_ingest",
             initialize=False,
         ) as db_instance:
-            add_media_with_keywords(
+            get_media_repository(db_instance).add_media_with_keywords(
                 db_instance=db_instance,
                 url="its_a_book",
                 title=title,

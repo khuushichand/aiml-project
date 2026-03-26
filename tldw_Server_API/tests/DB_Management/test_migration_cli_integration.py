@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.DB_Management import migration_tools
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig

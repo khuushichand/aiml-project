@@ -6,10 +6,8 @@ from pathlib import Path
 import aiosqlite
 import pytest
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase,
-    get_document_version,
-)
+from tldw_Server_API.app.core.DB_Management.media_db.api import get_document_version
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.External_Sources import connectors_service as svc
 from tldw_Server_API.app.core.External_Sources.sync_adapter import FileSyncChange
 

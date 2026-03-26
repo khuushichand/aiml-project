@@ -82,7 +82,7 @@ def test_chacha_db(test_user):
 @pytest.fixture
 def test_media_db(test_user):
     """Create a real test media database."""
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+    from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name

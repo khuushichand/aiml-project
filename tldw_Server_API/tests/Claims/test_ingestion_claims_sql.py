@@ -1,7 +1,7 @@
 import os
 import tempfile
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,

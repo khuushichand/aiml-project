@@ -14,7 +14,8 @@ import pytest
 
 #
 # Local Imports
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError
+from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 #

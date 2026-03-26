@@ -372,12 +372,6 @@ class TestMediaIngestAdapter:
             yield object()
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("workflow ingest should not construct MediaDatabase directly")
-            ),
-        )
-        monkeypatch.setattr(
             ingest_module,
             "managed_media_database",
             _fake_managed_media_database,

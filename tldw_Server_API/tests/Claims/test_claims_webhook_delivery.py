@@ -3,7 +3,7 @@ import types
 from contextlib import contextmanager
 
 from tldw_Server_API.app.core.Claims_Extraction import claims_service
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 
 
 def test_claims_webhook_delivery_retries_and_records(monkeypatch, tmp_path):

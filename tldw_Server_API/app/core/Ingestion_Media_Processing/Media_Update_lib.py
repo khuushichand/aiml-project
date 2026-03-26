@@ -4,10 +4,8 @@
 from typing import Any, Optional
 
 # Local Imports
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_state import (
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
     check_media_exists as _check_media_exists,
-)
-from tldw_Server_API.app.core.DB_Management.media_db.legacy_wrappers import (
     get_document_version as _get_document_version,
 )
 

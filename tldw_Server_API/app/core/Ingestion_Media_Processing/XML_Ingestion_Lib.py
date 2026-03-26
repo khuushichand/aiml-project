@@ -15,8 +15,10 @@ except Exception:  # pragma: no cover - defusedxml is an optional dependency
 #
 # Local Imports
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords
-from tldw_Server_API.app.core.DB_Management.media_db.api import managed_media_database
+from tldw_Server_API.app.core.DB_Management.media_db.api import (
+    get_media_repository,
+    managed_media_database,
+)
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import logging
 
@@ -159,7 +161,7 @@ def import_xml_handler(import_file, title, author, keywords, system_prompt,
             client_id="xml_import",
             initialize=False,
         ) as db_instance:
-            result = add_media_with_keywords(
+            result = get_media_repository(db_instance).add_media_with_keywords(
                 db_instance=db_instance,
                 url=display_name,  # Using filename as URL
                 info_dict=info_dict,

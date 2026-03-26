@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from tldw_Server_API.app.core.DB_Management.media_db.schema.backends import (
+    postgres_helpers as postgres_helpers_module,
+)
 
 
-class _PostgresSchemaInitializable(Protocol):
-    def _initialize_schema_postgres(self) -> None: ...
+def initialize_postgres_schema(
+    db: postgres_helpers_module.SupportsPostgresPostCoreStructures,
+) -> None:
+    """Initialize or migrate the PostgreSQL schema through the package coordinator."""
 
-
-def initialize_postgres_schema(db: _PostgresSchemaInitializable) -> None:
-    """Initialize or migrate the PostgreSQL schema using the legacy implementation."""
-
-    db._initialize_schema_postgres()
+    postgres_helpers_module.bootstrap_postgres_schema(db)

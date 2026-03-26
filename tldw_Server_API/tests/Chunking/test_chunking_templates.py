@@ -18,7 +18,7 @@ os.environ["SINGLE_USER_API_KEY"] = "test-api-key-that-is-long-enough"
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
 from tldw_Server_API.app.core.Chunking import template_initialization as template_init

@@ -1,8 +1,11 @@
+import inspect
+
 import pytest
 
 from tldw_Server_API.app.core.DB_Management import DB_Manager
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.media_db.native_class import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.media_db import api as media_db_api
 from tldw_Server_API.app.core.DB_Management.media_db.runtime.session import MediaDbSession
 
 
@@ -12,6 +15,11 @@ def test_add_media_with_keywords_requires_db_instance():
         # Intentionally omit db_instance to ensure the wrapper enforces it
         DB_Manager.add_media_with_keywords(url="https://example.com", title="T", media_type="text")
     assert "requires 'db_instance'" in str(excinfo.value)
+
+
+def test_db_manager_source_no_longer_routes_media_surface_through_media_db_v2():
+
+    assert "Media_DB_v2" not in inspect.getsource(DB_Manager)
 
 
 def test_get_paginated_files_requires_db_instance():
@@ -187,7 +195,12 @@ def test_add_media_with_keywords_routes_wrapper_objects_through_repository_facto
 
 def test_create_media_database_delegates_to_runtime_factory(monkeypatch, tmp_path):
     captured = {}
-    default_db_path = str(tmp_path / "default-media.db")
+    runtime = DB_Manager.media_db_runtime_defaults.MediaDbRuntimeConfig(
+        default_db_path=str(tmp_path / "default-media.db"),
+        default_config=DB_Manager.single_user_config,
+        postgres_content_mode=True,
+        backend_loader=lambda: "backend-sentinel",
+    )
 
     def _fake_runtime_create_media_database(client_id, **kwargs):
         captured["client_id"] = client_id
@@ -202,20 +215,8 @@ def test_create_media_database_delegates_to_runtime_factory(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(
         DB_Manager,
-        "_POSTGRES_CONTENT_MODE",
-        True,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        DB_Manager,
-        "_ensure_content_backend_loaded",
-        lambda: "backend-sentinel",
-        raising=False,
-    )
-    monkeypatch.setattr(
-        DB_Manager,
-        "single_user_db_path",
-        default_db_path,
+        "build_media_runtime_config",
+        lambda: runtime,
         raising=False,
     )
 
@@ -226,7 +227,7 @@ def test_create_media_database_delegates_to_runtime_factory(monkeypatch, tmp_pat
 
     assert result == "db-instance"
     assert captured["client_id"] == "client-9"
-    assert captured["runtime"].default_db_path == default_db_path
+    assert captured["runtime"] is runtime
     assert captured["runtime"].postgres_content_mode is True
     assert captured["config"] is DB_Manager.single_user_config
 
@@ -378,6 +379,61 @@ def test_full_media_detail_wrappers_return_expected_shapes():
     assert rich["versions"]
 
 
+def test_full_media_detail_wrappers_delegate_to_media_db_api(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    def _fake_get_full_media_details(*args, **kwargs):
+        calls.append(("full", kwargs))
+        return {"media": {"id": kwargs["media_id"]}, "latest_version": {"content": "c"}, "keywords": []}
+
+    def _fake_get_full_media_details_rich(*args, **kwargs):
+        calls.append(("rich", kwargs))
+        return {"media": {"id": kwargs["media_id"]}, "latest_version": {"content": "c"}, "versions": []}
+
+    monkeypatch.setattr(media_db_api, "get_full_media_details", _fake_get_full_media_details)
+    monkeypatch.setattr(media_db_api, "get_full_media_details_rich", _fake_get_full_media_details_rich)
+
+    db = _make_memory_db()
+    mid, _, _ = DB_Manager.add_media_with_keywords(
+        db_instance=db,
+        title="Doc Detail Delegation",
+        media_type="text",
+        content="detail content",
+    )
+
+    DB_Manager.get_full_media_details(db_instance=db, media_id=mid, include_content=True)
+    DB_Manager.get_full_media_details_rich(db_instance=db, media_id=mid, include_content=True)
+    DB_Manager.fetch_item_details(db_instance=db, media_id=mid)
+
+    assert calls == [
+        ("full", {"db": db, "media_id": mid, "include_content": True}),
+        (
+            "rich",
+            {
+                "db": db,
+                "media_id": mid,
+                "include_content": True,
+                "include_versions": True,
+                "include_version_content": False,
+            },
+        ),
+        (
+            "rich",
+            {
+                "db": db,
+                "media_id": mid,
+                "include_content": True,
+                "include_versions": True,
+                "include_version_content": False,
+            },
+        ),
+    ]
+
+
+def test_db_manager_media_surface_is_explicit_deprecated_compat_surface():
+    assert "DEPRECATED MEDIA COMPATIBILITY SURFACE" in inspect.getsource(DB_Manager)
+
+
 def test_validate_postgres_content_backend_delegates_to_runtime_factory(monkeypatch):
     captured = {}
 
@@ -393,8 +449,24 @@ def test_validate_postgres_content_backend_delegates_to_runtime_factory(monkeypa
         captured["runtime"] = runtime
 
     stub_backend = StubBackend()
-    monkeypatch.setattr(DB_Manager, "_CONTENT_DB_BACKEND", stub_backend, raising=False)
-    monkeypatch.setattr(DB_Manager, "_POSTGRES_CONTENT_MODE", True, raising=False)
+    runtime = DB_Manager.media_db_runtime_defaults.MediaDbRuntimeConfig(
+        default_db_path=str(DB_Manager.single_user_db_path),
+        default_config=DB_Manager.single_user_config,
+        postgres_content_mode=True,
+        backend_loader=lambda: stub_backend,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "get_content_backend_instance",
+        lambda: stub_backend,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        DB_Manager,
+        "build_media_runtime_config",
+        lambda: runtime,
+        raising=False,
+    )
     monkeypatch.setattr(
         DB_Manager,
         "runtime_validate_postgres_content_backend",
@@ -405,6 +477,5 @@ def test_validate_postgres_content_backend_delegates_to_runtime_factory(monkeypa
     DB_Manager.validate_postgres_content_backend()
 
     assert captured["backend"] is stub_backend
-    assert captured["runtime"].default_db_path == str(DB_Manager.single_user_db_path)
-    assert captured["runtime"].default_config is DB_Manager.single_user_config
+    assert captured["runtime"] is runtime
     assert captured["runtime"].postgres_content_mode is True

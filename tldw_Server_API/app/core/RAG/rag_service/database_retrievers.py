@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQu
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     create_media_database,
+    search_media,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.errors import (
     DatabaseError as MediaDatabaseError,
@@ -817,7 +818,8 @@ class MediaDBRetriever(BaseRetriever):
             search_query = _sanitize_media_fts_query(query) or query
         try:
             allowed_media_ids = kwargs.get("allowed_media_ids")
-            results, _total = self.media_db.search_media_db(
+            results, _total = search_media(
+                self.media_db,
                 search_query=search_query,
                 search_fields=['title', 'content'],
                 media_types=media_types,
