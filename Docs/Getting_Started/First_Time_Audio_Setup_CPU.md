@@ -21,7 +21,8 @@ For a local-first CPU setup in the current repo:
 | Goal | STT | TTS | Why |
 | --- | --- | --- | --- |
 | Recommended first local stack | `parakeet-onnx` | `supertonic` | Keeps the stack local-first and avoids mandatory voice-cloning input on every TTS request |
-| If you need local voice cloning immediately | `parakeet-onnx` | `pocket_tts` | Still local-first, but every request needs reference audio |
+| If you need local voice cloning immediately | `parakeet-onnx` | `pocket_tts` | Python/ONNX runtime; still local-first, but every request needs reference audio |
+| If you want the native compiled runtime | `parakeet-onnx` | `pocket_tts_cpp` | Separate installer and runtime layout; streaming only works when the local CLI probe proves incremental |
 | Better but more demanding | `parakeet-onnx` or `faster-whisper` | `qwen3_tts` | Strong upgrade path after the basic stack already works |
 
 Important current-repo realities:
@@ -345,19 +346,21 @@ Success means:
 - the `text` field is close to `This is the CPU audio setup smoke test`
 - the server does not silently switch to the wrong provider/model
 
-## Optional Alternative: `pocket_tts` When Voice Cloning Matters More
+## Optional Alternatives: PocketTTS Runtimes
 
-Choose `pocket_tts` instead of `supertonic` if you specifically need local voice cloning on day one.
+Choose a PocketTTS runtime instead of `supertonic` if you specifically need local voice cloning on day one.
 
 Use:
 
-- [PocketTTS Voice Cloning Guide](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/User_Guides/WebUI_Extension/PocketTTS_Voice_Cloning_Guide.md)
+- [PocketTTS Voice Cloning Guide](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/User_Guides/WebUI_Extension/PocketTTS_Voice_Cloning_Guide.md) for `pocket_tts` (Python/ONNX)
+- `python Helper_Scripts/TTS_Installers/install_tts_pocket_tts_cpp.py` for `pocket_tts_cpp` (compiled native runtime)
 
-Important tradeoff:
+Important tradeoffs:
 
-- `pocket_tts` is not a better "first sound out of the box" default
-- it is a better local-first choice when cloning is mandatory
-- every request needs a reference clip or a previously prepared voice path
+- `pocket_tts` is the Python/ONNX runtime and keeps the model packaging straightforward.
+- `pocket_tts_cpp` is a separate compiled runtime with its own installer and runtime layout.
+- Both are local-first, but every request still needs either a direct `voice_reference` clip or a stored `custom:<voice_id>` voice.
+- `pocket_tts_cpp` streaming is only available when the local CLI probe proves incremental on this install; otherwise streaming requests fail closed.
 
 ## Better But More Demanding: `qwen3_tts`
 
@@ -419,4 +422,5 @@ Then come back to this guide if you want to move from the bundle defaults to:
 - `parakeet-onnx`
 - `supertonic`
 - `pocket_tts`
+- `pocket_tts_cpp`
 - `qwen3_tts`

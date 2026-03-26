@@ -174,7 +174,7 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
 - Media ingestion & processing: video, audio, PDFs, EPUB, DOCX, HTML, Markdown, XML, MediaWiki dumps; OCR for PDFs/images; metadata extraction; configurable chunking.
 - Custom-built Chunking library, tldw_Chunker, supporting token, word, sentence, paragraph, semantic, hierarchical and template chunking approaches.
-- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; diarization/VAD; TTS backends — commercial: OpenAI, ElevenLabs; local: Kokoro, PocketTTS, LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, NeuTTS, IndexTTS2, Supertonic, Supertonic2, Qwen3-TTS, EchoTTS; voice catalog + audio jobs queue.
+- Audio & speech: real-time and file STT via faster_whisper, NVIDIA NeMo (Canary/Parakeet), Qwen2Audio; diarization/VAD; TTS backends — commercial: OpenAI, ElevenLabs; local: Kokoro, PocketTTS (Python/ONNX), PocketTTS.cpp (native binary), LuxTTS, Higgs, Chatterbox, Dia, VibeVoice, VibeVoice Realtime, NeuTTS, IndexTTS2, Supertonic, Supertonic2, Qwen3-TTS, EchoTTS; voice catalog + audio jobs queue.
 - Audiobooks: parse + chapter detection, per-chapter voice settings, optional TTS provider overrides (alignment/subtitles Kokoro-only), and M4B packaging (API-only).
 - Search & retrieval (RAG): hybrid BM25 + vector (ChromaDB/pgvector), re-ranking, contextual retrieval, OpenAI-compatible embeddings, vector stores API, and media embeddings ingestion. 50+ optional parameters available for tuning.
 - Chat & providers: `/api/v1/chat/completions` (OpenAI-compatible), 16+ providers (commercial + self-hosted), character chat, budgets/allowlists, moderation endpoint.
