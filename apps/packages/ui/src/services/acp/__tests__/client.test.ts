@@ -3,8 +3,33 @@ import { ACPRestClient, ACPWebSocketClient } from "@/services/acp/client"
 import type { ACPWSPermissionRequestMessage } from "@/services/acp/types"
 
 describe("ACPRestClient", () => {
+  const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+  const originalWindow = globalThis.window
+
   beforeEach(() => {
     vi.restoreAllMocks()
+    delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "https://webui.example.test",
+          protocol: "https:"
+        }
+      },
+      configurable: true
+    })
+  })
+
+  afterEach(() => {
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+    }
+    Object.defineProperty(globalThis, "window", {
+      value: originalWindow,
+      configurable: true
+    })
   })
 
   const createClient = () =>
@@ -98,6 +123,28 @@ describe("ACPRestClient", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ message_index: 3, name: "Forked" }),
+      })
+    )
+  })
+
+  it("uses the shared quickstart http base for rest calls", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ sessions: [], total: 0 }),
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const client = createClient()
+    await client.listSessions({ limit: 10 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/acp/sessions?limit=10",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "X-API-KEY": "test-key",
+        }),
       })
     )
   })

@@ -421,6 +421,69 @@ describe("connection store stability", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it("uses the shared quickstart liveness path for recovery probes", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+    setConnectionState({
+      phase: ConnectionPhase.SEARCHING,
+      serverUrl: "http://192.168.5.186:8000",
+      isConnected: false,
+      isChecking: false,
+      lastCheckedAt: Date.now() - 60_000,
+      consecutiveFailures: 0
+    })
+    mockedClient.getConfig.mockResolvedValue({
+      serverUrl: "http://192.168.5.186:8000",
+      authMode: "single-user",
+      apiKey: "test-key"
+    } as any)
+    mockedApiSend
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 0,
+        error: "NetworkError when attempting to fetch resource."
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        data: { status: "alive" }
+      })
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200
+    } as Response)
+
+    const originalWindow = globalThis.window
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "http://192.168.5.184:3000",
+          hostname: "192.168.5.184",
+          protocol: "http:"
+        }
+      },
+      configurable: true
+    })
+
+    try {
+      await useConnectionStore.getState().checkOnce()
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/health/live",
+        expect.objectContaining({
+          method: "GET",
+          credentials: "omit"
+        })
+      )
+    } finally {
+      Object.defineProperty(globalThis, "window", {
+        value: originalWindow,
+        configurable: true
+      })
+      fetchMock.mockRestore()
+    }
+  })
+
   it("preserves persisted first-run completion when offline bypass is enabled", async () => {
     setConnectionState({
       hasCompletedFirstRun: false,

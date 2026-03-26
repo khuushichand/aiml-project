@@ -620,6 +620,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
     try {
       let cfg = await tldwClient.getConfig()
       const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+      const recoveryProbeSourceServerUrl = cfg?.serverUrl ?? currentState.serverUrl ?? null
       let serverUrl = quickstartWebUiServerUrl ?? cfg?.serverUrl ?? null
 
       if (
@@ -741,7 +742,9 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         )
       ])
 
-      const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(serverUrl)
+      const fallbackServerUrl = deriveCurrentHostRecoveryServerUrl(
+        quickstartWebUiServerUrl ? recoveryProbeSourceServerUrl : serverUrl
+      )
       if (
         !healthResult.ok &&
         healthResult.status === 0 &&
@@ -753,12 +756,14 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           Math.min(5_000, CONNECTION_TIMEOUT_MS)
         )
         if (probeOk) {
-          await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
-          serverUrl = fallbackServerUrl
-          cfg = {
-            ...(cfg || {}),
-            serverUrl: fallbackServerUrl
-          } as TldwConfig
+          if (!quickstartWebUiServerUrl) {
+            await tldwClient.updateConfig({ serverUrl: fallbackServerUrl })
+            serverUrl = fallbackServerUrl
+            cfg = {
+              ...(cfg || {}),
+              serverUrl: fallbackServerUrl
+            } as TldwConfig
+          }
           const fallbackNoAuth = !cfg ||
             (!cfg.apiKey &&
               !cfg.accessToken &&

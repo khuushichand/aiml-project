@@ -3,6 +3,11 @@ import { isPlaceholderApiKey } from "@/utils/api-key"
 import type { PathOrUrl } from "@/services/tldw/openapi-guard"
 import type { ApiSendResponse } from "@/services/api-send"
 import { isHostedTldwDeployment } from "@/services/tldw/deployment-mode"
+import {
+  buildBrowserHttpBase,
+  resolveBrowserTransport,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
 
 export type TldwRequestPayload = {
   path: PathOrUrl
@@ -21,6 +26,12 @@ type TldwRequestRuntime = {
   getConfig: () => Promise<TldwConfigLike>
   refreshAuth?: () => Promise<void>
   fetchFn?: typeof fetch
+}
+
+export type BrowserRequestTransport = {
+  mode: "hosted" | "quickstart" | "advanced"
+  kind: "same-origin" | "absolute"
+  url: string
 }
 
 const ABSOLUTE_URL_BLOCK_ERROR =
@@ -47,6 +58,29 @@ const normalizeKnownPathQuirks = (path: PathOrUrl): PathOrUrl => {
 
 const isMediaApiPath = (path: string): boolean => /\/api\/v1\/media(?:\/|\?|$)/.test(path)
 const isFilesApiPath = (path: string): boolean => /\/api\/v1\/files(?:\/|\?|$)/.test(path)
+
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const joinOriginAndPath = (origin: string, path: string): string =>
+  `${origin.replace(/\/$/, "")}${path.startsWith("/") ? "" : "/"}${path}`
 
 export const deriveRequestTimeout = (
   cfg: TldwConfigLike,
@@ -210,6 +244,65 @@ const isAbsoluteUrlAllowlisted = (
   }
 }
 
+export const resolveBrowserRequestTransport = ({
+  config,
+  path,
+  pageOrigin
+}: {
+  config: TldwConfigLike
+  path: string
+  pageOrigin?: string | null
+}): BrowserRequestTransport => {
+  if (isHostedTldwDeployment()) {
+    return {
+      mode: "hosted",
+      kind: "same-origin",
+      url: toHostedProxyPath(path)
+    }
+  }
+
+  const configuredServerUrl = String(
+    (config as Record<string, unknown> | null)?.serverUrl || ""
+  ).trim()
+  const surface = getCurrentBrowserSurface()
+  if (surface === "webui-page") {
+    try {
+      const resolved = resolveBrowserTransport({
+        surface,
+        deploymentMode: process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE,
+        pageOrigin:
+          pageOrigin ??
+          (typeof window === "undefined"
+            ? null
+            : String(window.location?.origin || "").trim()),
+        apiOrigin: configuredServerUrl || process.env.NEXT_PUBLIC_API_URL
+      })
+      const browserHttpBase = buildBrowserHttpBase(resolved)
+      if (!browserHttpBase) {
+        return {
+          mode: "quickstart",
+          kind: "same-origin",
+          url: path
+        }
+      }
+
+      return {
+        mode: "advanced",
+        kind: "absolute",
+        url: joinOriginAndPath(browserHttpBase, path)
+      }
+    } catch {
+      // Fall through to explicit configured server handling below.
+    }
+  }
+
+  return {
+    mode: "advanced",
+    kind: "absolute",
+    url: joinOriginAndPath(configuredServerUrl, path)
+  }
+}
+
 export const tldwRequest = async (
   payload: TldwRequestPayload,
   runtime: TldwRequestRuntime
@@ -227,9 +320,16 @@ export const tldwRequest = async (
   const normalizedPath = normalizeKnownPathQuirks(path)
   const fetchFn = runtime.fetchFn || fetch
   const cfg = await runtime.getConfig()
-  const hostedMode = isHostedTldwDeployment()
   const isAbsolute = typeof normalizedPath === "string" && /^https?:/i.test(normalizedPath)
   const absolutePath = isAbsolute ? String(normalizedPath) : ""
+  const transport =
+    !isAbsolute && typeof normalizedPath === "string"
+      ? resolveBrowserRequestTransport({
+          config: cfg,
+          path: String(normalizedPath)
+        })
+      : null
+  const hostedMode = transport?.mode === "hosted"
   if (isAbsolute && !isAbsoluteUrlAllowlisted(absolutePath, cfg)) {
     return {
       ok: false,
@@ -237,18 +337,15 @@ export const tldwRequest = async (
       error: ABSOLUTE_URL_BLOCK_ERROR
     }
   }
-  if (!cfg?.serverUrl && !isAbsolute && !hostedMode) {
+  if (!cfg?.serverUrl && !isAbsolute && transport?.mode === "advanced") {
     return { ok: false, status: 400, error: "tldw server not configured" }
   }
   if (!normalizedPath) {
     return { ok: false, status: 400, error: "Request path is required" }
   }
-  const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
   const url = isAbsolute
     ? normalizedPath
-    : hostedMode
-      ? toHostedProxyPath(String(normalizedPath))
-    : `${baseUrl}${normalizedPath.startsWith("/") ? "" : "/"}${normalizedPath}`
+    : transport?.url || String(normalizedPath)
   const sameOriginAbsoluteUrl =
     isAbsolute && isSameOriginAbsoluteUrlForConfiguredServer(absolutePath, cfg)
   const shouldSkipAuth = noAuth || (isAbsolute && !sameOriginAbsoluteUrl)

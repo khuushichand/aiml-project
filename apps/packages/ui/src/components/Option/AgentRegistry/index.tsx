@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { ACPRestClient } from "@/services/acp/client"
+import { resolveBrowserRequestTransport } from "@/services/tldw/request-core"
 
 type AgentEntry = {
   type: string
@@ -177,17 +178,28 @@ export const AgentRegistryPage: React.FC = () => {
     if (!connectionConfig) return
     setHealthLoading(true)
     try {
-      const url = `${connectionConfig.serverUrl}/api/v1/acp/health`
+      const transport = resolveBrowserRequestTransport({
+        config: connectionConfig,
+        path: "/api/v1/acp/health"
+      })
       const headers: Record<string, string> = { "Content-Type": "application/json" }
-      if (connectionConfig.authMode === "single-user" && connectionConfig.apiKey) {
+      if (
+        transport.mode !== "hosted" &&
+        connectionConfig.authMode === "single-user" &&
+        connectionConfig.apiKey
+      ) {
         headers["X-API-KEY"] = connectionConfig.apiKey
-      } else if (connectionConfig.authMode === "multi-user" && connectionConfig.accessToken) {
+      } else if (
+        transport.mode !== "hosted" &&
+        connectionConfig.authMode === "multi-user" &&
+        connectionConfig.accessToken
+      ) {
         headers.Authorization = `Bearer ${connectionConfig.accessToken}`
       }
-      if (typeof connectionConfig.orgId === "number") {
+      if (transport.mode !== "hosted" && typeof connectionConfig.orgId === "number") {
         headers["X-TLDW-Org-Id"] = String(connectionConfig.orgId)
       }
-      const res = await fetch(url, { headers })
+      const res = await fetch(transport.url, { headers })
       if (res.ok) {
         setHealth(normalizeHealthStatus(await res.json()))
       }
