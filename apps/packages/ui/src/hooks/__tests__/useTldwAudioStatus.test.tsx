@@ -10,7 +10,8 @@ const state = vi.hoisted(() => ({
     hasAudio: true,
     hasStt: true,
     hasTts: true,
-    hasVoiceChat: true
+    hasVoiceChat: true,
+    hasVoiceConversationTransport: true
   } as any,
   loading: false,
   apiSend: vi.fn(),
@@ -62,7 +63,8 @@ describe("useTldwAudioStatus", () => {
       hasAudio: true,
       hasStt: true,
       hasTts: true,
-      hasVoiceChat: true
+      hasVoiceChat: true,
+      hasVoiceConversationTransport: true
     }
     state.loading = false
     state.apiSend.mockReset()
@@ -98,6 +100,7 @@ describe("useTldwAudioStatus", () => {
     expect(result.current.hasStt).toBe(true)
     expect(result.current.hasTts).toBe(true)
     expect(result.current.hasVoiceChat).toBe(true)
+    expect(result.current.hasVoiceConversationTransport).toBe(true)
     expect(result.current.hasAudio).toBe(true)
     expect(result.current.healthState).toBe("healthy")
     expect(state.apiSend).toHaveBeenCalledWith(
@@ -241,7 +244,27 @@ describe("useTldwAudioStatus", () => {
 
     expect(result.current.hasStt).toBe(true)
     expect(result.current.hasTts).toBe(true)
+    expect(result.current.hasVoiceConversationTransport).toBe(false)
     expect(result.current.hasAudio).toBe(true)
+  })
+
+  it("keeps strict voice conversation transport disabled when only broad voice flags exist", async () => {
+    state.capabilities = {
+      hasAudio: true,
+      hasVoiceChat: true
+    }
+
+    const { result } = renderHook(() => useTldwAudioStatus(), {
+      wrapper: buildWrapper()
+    })
+
+    await waitFor(() => {
+      expect(result.current.sttHealthLoading).toBe(false)
+      expect(result.current.ttsHealthLoading).toBe(false)
+    })
+
+    expect(result.current.hasVoiceChat).toBe(true)
+    expect(result.current.hasVoiceConversationTransport).toBe(false)
   })
 
   it("treats provider catalog voices as available before falling back to custom voices", async () => {

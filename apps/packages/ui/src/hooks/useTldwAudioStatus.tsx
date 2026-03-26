@@ -26,6 +26,7 @@ type AudioStatus = {
   hasStt: boolean
   hasTts: boolean
   hasVoiceChat: boolean
+  hasVoiceConversationTransport: boolean
   healthState: AudioHealthState
   healthLoading: boolean
   sttHealthState: AudioHealthState
@@ -73,6 +74,8 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
           ? capabilities.hasStt && capabilities.hasTts
           : capabilities?.hasAudio)
     )
+  const hasVoiceConversationTransport =
+    !loading && Boolean(capabilities?.hasVoiceConversationTransport)
   const hasAudio =
     !loading &&
     Boolean(capabilities?.hasAudio ?? (hasStt || hasTts || hasVoiceChat))
@@ -188,6 +191,7 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
     hasStt,
     hasTts,
     hasVoiceChat,
+    hasVoiceConversationTransport,
     healthState: ttsHealthState,
     healthLoading: probeEnabled ? ttsHealthQuery.isLoading : false,
     sttHealthState,
