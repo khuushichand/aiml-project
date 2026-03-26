@@ -793,4 +793,90 @@ describe("QuickIngestWizardModal — real configure step", () => {
       expect(customInput).toHaveValue("zz-Unknown")
     })
   })
+
+  it("keeps audio language unselected when no value is saved", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      common: {
+        perform_analysis: false,
+      },
+      typeDefaults: {
+        audio: {
+          language: "",
+        },
+      },
+    })
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await waitFor(() => {
+      expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("")
+    })
+    expect(screen.queryByLabelText("Custom audio language")).toBeNull()
+  })
+
+  it("selecting the custom option keeps stored language until custom input is edited", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    expect(ctxRef).not.toBeNull()
+    ctxRef!.setCustomOptions({
+      typeDefaults: {
+        audio: {
+          language: "en-US",
+        },
+      },
+    })
+
+    const audioLanguageSelect = await screen.findByLabelText("Audio language")
+    await waitFor(() => {
+      expect(audioLanguageSelect).toHaveValue("en-US")
+      expect(screen.queryByLabelText("Custom audio language")).toBeNull()
+    })
+
+    await user.selectOptions(audioLanguageSelect, "__custom__")
+
+    const customInput = await screen.findByLabelText("Custom audio language")
+    expect(customInput).toBeInTheDocument()
+
+    expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe("en-US")
+
+    await user.clear(customInput)
+    await user.type(customInput, "zz-Unknown")
+    await waitFor(() => {
+      expect(ctxRef!.state.presetConfig.typeDefaults.audio?.language).toBe(
+        "zz-Unknown"
+      )
+    })
+  })
 })

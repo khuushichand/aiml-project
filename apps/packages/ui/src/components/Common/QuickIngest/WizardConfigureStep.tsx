@@ -94,17 +94,48 @@ export const WizardConfigureStep: React.FC = () => {
     normalizedAudioLanguage !== "" &&
     supportedLanguageValues.has(normalizedAudioLanguage)
 
+  const [audioLanguageMode, setAudioLanguageMode] = React.useState<
+    "empty" | "standard" | "custom"
+  >(() => {
+    if (normalizedAudioLanguage === "") return "empty"
+    return isKnownLanguage ? "standard" : "custom"
+  })
+
+  const savedAudioLanguageRef = React.useRef(normalizedAudioLanguage)
+
   const [customAudioLanguage, setCustomAudioLanguage] = React.useState(
     isKnownLanguage ? "" : normalizedAudioLanguage
   )
 
   React.useEffect(() => {
-    if (isKnownLanguage) {
-      setCustomAudioLanguage("")
+    if (savedAudioLanguageRef.current === normalizedAudioLanguage) {
+      return
+    }
+
+    if (normalizedAudioLanguage === "") {
+      setAudioLanguageMode("empty")
+    } else if (isKnownLanguage) {
+      setAudioLanguageMode("standard")
     } else {
+      setAudioLanguageMode("custom")
       setCustomAudioLanguage(normalizedAudioLanguage)
     }
+
+    savedAudioLanguageRef.current = normalizedAudioLanguage
   }, [isKnownLanguage, normalizedAudioLanguage])
+
+  const shouldShowCustomAudioLanguageInput =
+    audioLanguageMode === "custom"
+
+  const audioLanguageSelectValue = React.useMemo(() => {
+    if (audioLanguageMode === "empty") {
+      return ""
+    }
+    if (audioLanguageMode === "custom") {
+      return CUSTOM_AUDIO_LANGUAGE_SENTINEL
+    }
+    return normalizedAudioLanguage
+  }, [audioLanguageMode, normalizedAudioLanguage])
 
   const handleAnalysisToggle = React.useCallback(
     (checked: boolean) => {
@@ -130,8 +161,11 @@ export const WizardConfigureStep: React.FC = () => {
   const handleAudioLanguageOptionChange = React.useCallback(
     (nextValue: string) => {
       if (nextValue === CUSTOM_AUDIO_LANGUAGE_SENTINEL) {
+        setAudioLanguageMode("custom")
         return
       }
+
+      setAudioLanguageMode("standard")
 
       setTypeDefaults((previous) => ({
         ...(previous ?? {}),
@@ -326,9 +360,7 @@ export const WizardConfigureStep: React.FC = () => {
                 aria-label="Audio language"
                 title="Audio language"
                 value={
-                  isKnownLanguage
-                    ? normalizedAudioLanguage
-                    : CUSTOM_AUDIO_LANGUAGE_SENTINEL
+                  audioLanguageSelectValue
                 }
                 onChange={handleAudioLanguageOptionChange}
                 options={[
@@ -340,8 +372,7 @@ export const WizardConfigureStep: React.FC = () => {
                 ]}
                 disabled={!hasTranscriptionItems}
               />
-              {(!isKnownLanguage ||
-                normalizedAudioLanguage === CUSTOM_AUDIO_LANGUAGE_SENTINEL) && (
+              {shouldShowCustomAudioLanguageInput && (
                 <Input
                   aria-label="Custom audio language"
                   title="Custom audio language"
