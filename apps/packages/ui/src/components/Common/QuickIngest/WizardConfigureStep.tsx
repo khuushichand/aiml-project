@@ -33,7 +33,13 @@ const nextTypeDefaults = (
   return resolved ?? {}
 }
 
-export const WizardConfigureStep: React.FC = () => {
+type WizardConfigureStepProps = {
+  isStepVisible?: boolean
+}
+
+export const WizardConfigureStep: React.FC<WizardConfigureStepProps> = ({
+  isStepVisible = true,
+}) => {
   const { t } = useTranslation(["option"])
   const { state, setPreset, setCustomOptions, goNext, goBack } = useIngestWizard()
   const { queueItems, selectedPreset, presetConfig } = state
@@ -68,9 +74,11 @@ export const WizardConfigureStep: React.FC = () => {
 
   const normalizedTranscriptionModel =
     presetConfig.advancedValues?.transcription_model?.trim() || ""
+  const shouldLoadTranscriptionModels =
+    hasTranscriptionItems && isStepVisible
 
   React.useEffect(() => {
-    if (!hasTranscriptionItems) {
+    if (!shouldLoadTranscriptionModels) {
       setTranscriptionModels([])
       setTranscriptionModelsLoading(false)
       return
@@ -112,7 +120,7 @@ export const WizardConfigureStep: React.FC = () => {
       cancelled = true
       setTranscriptionModelsLoading(false)
     }
-  }, [hasTranscriptionItems])
+  }, [shouldLoadTranscriptionModels])
 
   const transcriptionModelOptions = React.useMemo(() => {
     const uniqueModels = new Map<string, string>()

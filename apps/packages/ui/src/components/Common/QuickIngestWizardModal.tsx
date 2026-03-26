@@ -1242,7 +1242,11 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       case 1:
         return <AddContentStep onQuickProcess={handleQuickProcess} />
       case 2:
-        return <WizardConfigureStep />
+        return (
+          <WizardConfigureStep
+            isStepVisible={open && !state.isMinimized && currentStep === 2}
+          />
+        )
       case 3:
         return <ReviewStep />
       case 4:
@@ -1252,7 +1256,7 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       default:
         return null
     }
-  }, [currentStep, handleQuickProcess, onClose])
+  }, [currentStep, handleQuickProcess, onClose, open, state.isMinimized])
 
   return (
     <>

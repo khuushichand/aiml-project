@@ -280,9 +280,10 @@ const ContextSpy: React.FC = () => {
   return null
 }
 
-const InnerWizardContent: React.FC<{ onClose: () => void }> = ({
-  onClose,
-}) => {
+const InnerWizardContent: React.FC<{
+  onClose: () => void
+  isStepVisible?: boolean
+}> = ({ onClose, isStepVisible = true }) => {
   const ctx = useIngestWizard()
   const { currentStep } = ctx.state
 
@@ -298,7 +299,9 @@ const InnerWizardContent: React.FC<{ onClose: () => void }> = ({
         <span>Results</span>
       </nav>
       {currentStep === 1 && <AddContentStep />}
-      {currentStep === 2 && <WizardConfigureStep />}
+      {currentStep === 2 && (
+        <WizardConfigureStep isStepVisible={isStepVisible} />
+      )}
       {currentStep === 3 && <ReviewStep />}
       {currentStep === 4 && <ProcessingStep />}
       {currentStep === 5 && <WizardResultsStep onClose={onClose} />}
@@ -314,6 +317,28 @@ const WizardTestHarness: React.FC<{ onClose: () => void }> = ({
     <IngestWizardProvider>
       <ContextSpy />
       <InnerWizardContent onClose={onClose} />
+    </IngestWizardProvider>
+  )
+}
+
+const ReopenableConfigStepHarness: React.FC<{ onClose: () => void }> = ({
+  onClose,
+}) => {
+  const [stepVisible, setStepVisible] = React.useState(true)
+
+  return (
+    <IngestWizardProvider>
+      <ContextSpy />
+      <button type="button" onClick={() => setStepVisible(false)}>
+        Hide configure step
+      </button>
+      <button type="button" onClick={() => setStepVisible(true)}>
+        Show configure step
+      </button>
+      <InnerWizardContent
+        onClose={onClose}
+        isStepVisible={stepVisible}
+      />
     </IngestWizardProvider>
   )
 }
@@ -1034,8 +1059,11 @@ describe("QuickIngestWizardModal — real configure step", () => {
       "whisper-large-v3"
     )
 
+    expect(ctxRef).not.toBeNull()
     await waitFor(() => {
-      expect(transcriptionModelSelect).toHaveValue("whisper-large-v3")
+      expect(
+        ctxRef!.state.presetConfig.advancedValues?.transcription_model
+      ).toBe("whisper-large-v3")
     })
   })
 
@@ -1074,6 +1102,12 @@ describe("QuickIngestWizardModal — real configure step", () => {
       expect(transcriptionModelSelect).toHaveValue("provider/custom-model")
       expect(screen.getByRole("option", { name: "provider/custom-model" })).toBeTruthy()
     })
+    expect(ctxRef).not.toBeNull()
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.advancedValues?.transcription_model
+      ).toBe("provider/custom-model")
+    })
   })
 
   it("clears transcription model selection via clear action", async () => {
@@ -1107,6 +1141,49 @@ describe("QuickIngestWizardModal — real configure step", () => {
     await screen.findByLabelText("Transcription model")
 
     await user.click(await screen.findByRole("button", { name: /clear transcription model/i }))
-    expect(ctxRef!.state.advancedValues?.transcription_model).toBeUndefined()
+    await waitFor(() => {
+      expect(
+        ctxRef!.state.presetConfig.advancedValues?.transcription_model
+      ).toBeUndefined()
+    })
+  })
+
+  it("refetches transcription model catalog when the configure step is hidden then shown again", async () => {
+    const user = userEvent.setup()
+    getTranscriptionModelsMock
+      .mockResolvedValueOnce({
+        all_models: ["whisper-large-v3"],
+      })
+      .mockResolvedValueOnce({
+        all_models: ["parakeet-standard"],
+      })
+    render(<ReopenableConfigStepHarness onClose={vi.fn()} />)
+
+    await user.type(
+      screen.getByPlaceholderText(/https:\/\/example\.com/i),
+      "https://example.com/library/video.mkv"
+    )
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("https://example.com/library/video.mkv")
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "whisper-large-v3" })).toBeTruthy()
+    })
+    expect(getTranscriptionModelsMock).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole("button", { name: /hide configure step/i }))
+    await user.click(screen.getByRole("button", { name: /show configure step/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "parakeet-standard" })).toBeTruthy()
+      expect(getTranscriptionModelsMock).toHaveBeenCalledTimes(2)
+    })
   })
 })
