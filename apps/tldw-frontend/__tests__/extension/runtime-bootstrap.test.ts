@@ -11,6 +11,7 @@ type GlobalWithExtensionRuntime = typeof globalThis & {
 const chromeDescriptor = Object.getOwnPropertyDescriptor(globalThis, "chrome")
 const browserDescriptor = Object.getOwnPropertyDescriptor(globalThis, "browser")
 const originalApiUrl = process.env.NEXT_PUBLIC_API_URL
+const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
 
 const setGlobal = (key: "chrome" | "browser", value: unknown) => {
   Object.defineProperty(globalThis, key, {
@@ -60,6 +61,11 @@ describe("runtime-bootstrap chrome shim", () => {
       delete process.env.NEXT_PUBLIC_API_URL
     } else {
       process.env.NEXT_PUBLIC_API_URL = originalApiUrl
+    }
+    if (originalDeploymentMode === undefined) {
+      delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    } else {
+      process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
     }
     localStorage.clear()
   })
@@ -123,25 +129,26 @@ describe("runtime-bootstrap chrome shim", () => {
     ).toBe("true")
   })
 
-  it("repairs a stale stored server URL from the web default host", async () => {
-    process.env.NEXT_PUBLIC_API_URL = "http://127.0.0.1:8000"
+  it("canonicalizes quickstart webui bootstrap to the current page origin", async () => {
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "quickstart"
+    delete process.env.NEXT_PUBLIC_API_URL
     localStorage.setItem(
       "tldwConfig",
       JSON.stringify({
         authMode: "single-user",
         apiKey: "frontend-key",
-        serverUrl: "http://192.168.5.186:8000"
+        serverUrl: "http://127.0.0.1:8000"
       })
     )
 
     await import("@web/extension/shims/runtime-bootstrap")
 
-    expect(localStorage.getItem("tldw-api-host")).toBe("http://127.0.0.1:8000")
+    expect(localStorage.getItem("tldw-api-host")).toBe(window.location.origin)
     await vi.waitFor(() => {
-      expect(readStoredValue("tldwServerUrl")).toBe("http://127.0.0.1:8000")
+      expect(readStoredValue("tldwServerUrl")).toBe(window.location.origin)
 
       const nextConfig = readStoredValue("tldwConfig") as Record<string, unknown>
-      expect(nextConfig.serverUrl).toBe("http://127.0.0.1:8000")
+      expect(nextConfig.serverUrl).toBe(window.location.origin)
       expect(nextConfig.apiKey).toBe("frontend-key")
     })
   })

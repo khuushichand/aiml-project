@@ -5,6 +5,10 @@ import { getStoredTldwServerURL } from "@/services/tldw-server"
 import { apiSend } from "@/services/api-send"
 import { createSafeStorage } from "@/utils/safe-storage"
 import {
+  resolveBrowserTransportMode,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
+import {
   ConnectionPhase,
   type ConnectionState,
   type KnowledgeStatus,
@@ -219,6 +223,41 @@ const getCurrentBrowserOrigin = (): string | null => {
   }
 }
 
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (): string | null => {
+  if (getCurrentBrowserSurface() !== "webui-page") {
+    return null
+  }
+
+  if (
+    resolveBrowserTransportMode(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE) !==
+    "quickstart"
+  ) {
+    return null
+  }
+
+  return getCurrentBrowserOrigin()
+}
+
 const getCurrentBrowserHostname = (): string | null => {
   if (typeof window === "undefined") return null
   try {
@@ -395,6 +434,11 @@ const initialState: ConnectionState = {
 }
 
 const getPersistedServerUrl = async (): Promise<string | null> => {
+  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+  if (quickstartWebUiServerUrl) {
+    return quickstartWebUiServerUrl
+  }
+
   try {
     const cfg = await tldwClient.getConfig()
     if (cfg?.serverUrl) return cfg.serverUrl
@@ -569,7 +613,21 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
 
     try {
       let cfg = await tldwClient.getConfig()
-      let serverUrl = cfg?.serverUrl ?? null
+      const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
+      let serverUrl = quickstartWebUiServerUrl ?? cfg?.serverUrl ?? null
+
+      if (
+        quickstartWebUiServerUrl &&
+        cfg?.serverUrl !== quickstartWebUiServerUrl
+      ) {
+        await tldwClient.updateConfig({ serverUrl: quickstartWebUiServerUrl })
+        cfg = {
+          ...(cfg || {}),
+          serverUrl: quickstartWebUiServerUrl,
+          authMode: cfg?.authMode || "single-user"
+        } as TldwConfig
+        serverUrl = quickstartWebUiServerUrl
+      }
 
       if (!serverUrl) {
         try {

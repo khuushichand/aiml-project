@@ -13,6 +13,10 @@ import {
   THEME_SETTING,
   UI_MODE_SETTING
 } from "@/services/settings/ui-settings"
+import {
+  resolveBrowserTransportMode,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null
@@ -69,6 +73,50 @@ const normalizeBaseUrl = (value?: string | null): string | null => {
   const raw = (value || "").trim()
   if (!raw) return null
   return raw.replace(/\/$/, "")
+}
+
+const getCurrentBrowserOrigin = (): string | null => {
+  if (typeof window === "undefined") return null
+  try {
+    return normalizeBaseUrl(window.location?.origin)
+  } catch {
+    return null
+  }
+}
+
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (): string | null => {
+  if (getCurrentBrowserSurface() !== "webui-page") {
+    return null
+  }
+
+  if (
+    resolveBrowserTransportMode(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE) !==
+    "quickstart"
+  ) {
+    return null
+  }
+
+  return getCurrentBrowserOrigin()
 }
 
 const getCurrentBrowserHostname = (): string | null => {
@@ -148,6 +196,7 @@ const DEFAULT_TLDW_SERVER_URL = "http://127.0.0.1:8000"
 const seedTldwConfigFromEnv = async (): Promise<void> => {
   if (typeof window === "undefined") return
 
+  const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
   const explicitWebHost = (() => {
     try {
       return normalizeBaseUrl(window.localStorage.getItem("tldw-api-host"))
@@ -163,7 +212,9 @@ const seedTldwConfigFromEnv = async (): Promise<void> => {
     deriveCurrentHostRecoveryServerUrl(envDefaultServerUrl) ||
     envDefaultServerUrl
   const serverUrl =
-    repairedExplicitWebHost || repairedEnvDefaultServerUrl
+    quickstartWebUiServerUrl ||
+    repairedExplicitWebHost ||
+    repairedEnvDefaultServerUrl
   const apiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || null
   const apiBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim() || null
 

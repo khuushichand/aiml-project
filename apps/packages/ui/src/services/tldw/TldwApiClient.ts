@@ -16,6 +16,10 @@ import {
   normalizeDefaultCharacterPreferenceId
 } from "@/utils/default-character-preference"
 import {
+  resolveBrowserTransportMode,
+  type BrowserSurface
+} from "@/services/tldw/browser-networking"
+import {
   buildContentPayload,
   mapApiDetailToUi,
   mapApiListToUi,
@@ -306,6 +310,46 @@ export interface OpenAICredentialSourceSwitchResponse {
   provider: "openai"
   auth_source: "api_key" | "oauth"
   updated_at?: string | null
+}
+
+const getCurrentBrowserSurface = (): BrowserSurface => {
+  if (typeof window === "undefined") {
+    return "extension"
+  }
+
+  try {
+    const protocol = String(window.location?.protocol || "").trim().toLowerCase()
+    if (protocol === "chrome-extension:" || protocol === "moz-extension:") {
+      return "extension"
+    }
+    if (protocol === "http:" || protocol === "https:") {
+      return "webui-page"
+    }
+  } catch {
+    // Fall through to the browser-app default.
+  }
+
+  return "browser-app"
+}
+
+const getQuickstartWebUiServerUrl = (): string | null => {
+  if (getCurrentBrowserSurface() !== "webui-page") {
+    return null
+  }
+
+  if (
+    resolveBrowserTransportMode(process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE) !==
+    "quickstart"
+  ) {
+    return null
+  }
+
+  try {
+    const origin = String(window.location?.origin || "").trim()
+    return origin || null
+  } catch {
+    return null
+  }
 }
 
 export type PresentationStudioSlide = {
@@ -1511,6 +1555,7 @@ export class TldwApiClient {
       }
     }
     const envApiKey = this.getEnvApiKey()
+    const quickstartWebUiServerUrl = getQuickstartWebUiServerUrl()
 
     if (!stored) {
       // True first-run: leave config null so callers (like the connection
@@ -1523,7 +1568,7 @@ export class TldwApiClient {
         // Default authMode but do not silently inject a server URL if none
         // has been configured yet.
         authMode: stored.authMode || "single-user",
-        serverUrl: stored.serverUrl || ""
+        serverUrl: quickstartWebUiServerUrl || stored.serverUrl || ""
       }
       if (!hydrated.apiKey && envApiKey) {
         hydrated.apiKey = envApiKey
@@ -1536,7 +1581,7 @@ export class TldwApiClient {
     const hostedMode = isHostedTldwDeployment()
     const nextBaseUrl = hostedMode
       ? String(config?.serverUrl || "").replace(/\/$/, "")
-      : (config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
+      : (quickstartWebUiServerUrl || config?.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, "")
     if (this.baseUrl && this.baseUrl !== nextBaseUrl) {
       this.openApiPathSet = null
       this.openApiPathSetPromise = null
