@@ -414,6 +414,14 @@ class TTSServiceV2:
         if raw_path:
             cleanup_transient_voice_reference(Path(str(raw_path)), True)
 
+    async def _close_response_audio_stream(self, response: Optional[TTSResponse]) -> None:
+        if response is None:
+            return
+        audio_stream = getattr(response, "audio_stream", None)
+        if audio_stream and hasattr(audio_stream, "aclose"):
+            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+                await audio_stream.aclose()
+
     async def _prepare_generate_speech_request(
         self,
         *,
@@ -1723,6 +1731,7 @@ class TTSServiceV2:
         voice_to_voice_recorded = False
         voice_to_voice_route_label = voice_to_voice_route or "audio.speech"
         voice_to_voice_start_ts: Optional[float] = None
+        response: Optional[TTSResponse] = None
         try:
             if voice_to_voice_start is not None:
                 start_val = float(voice_to_voice_start)
@@ -1766,9 +1775,6 @@ class TTSServiceV2:
                     if self.circuit_manager:
                         breaker_provider_key = self._resolve_circuit_breaker_key(provider_key, adapter)
                         circuit_breaker = await self.circuit_manager.get_breaker(breaker_provider_key)
-
-                    # Generate response (with or without circuit breaker)
-                    response: Optional[TTSResponse] = None
 
                     async def _generate_with_adapter() -> TTSResponse:
                         should_chunk, target_chars, max_chars, min_chars, crossfade_ms = self._should_service_chunk(
@@ -1823,9 +1829,7 @@ class TTSServiceV2:
                             request_for_provider,
                         )
                         if metadata_only:
-                            if response.audio_stream and hasattr(response.audio_stream, "aclose"):
-                                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
-                                    await response.audio_stream.aclose()
+                            await self._close_response_audio_stream(response)
                             with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 self._record_tts_metrics(
                                     provider=provider_key,
@@ -2009,6 +2013,7 @@ class TTSServiceV2:
                 else:
                     raise tts_error from e
         finally:
+            await self._close_response_audio_stream(response)
             self._cleanup_transient_pocket_tts_cpp_voice_path(request_for_provider)
             try:
                 if not released_active_slot:
@@ -2058,6 +2063,7 @@ class TTSServiceV2:
         voice_metric_recorded = False
         v2v_start: Optional[float] = None
         v2v_route = getattr(request_for_provider, "voice_to_voice_route", "audio.speech") or "audio.speech"
+        response: Optional[TTSResponse] = None
         # Ensure the request is valid for the concrete adapter/provider.
         try:
             if provider_key == "pocket_tts_cpp" and user_id is not None:
@@ -2175,6 +2181,7 @@ class TTSServiceV2:
                 yield f"ERROR: All providers failed - {str(e)}".encode()
             raise TTSGenerationError(f"All providers failed - {str(e)}") from e
         finally:
+            await self._close_response_audio_stream(response)
             self._cleanup_transient_pocket_tts_cpp_voice_path(request_for_provider)
             if active_requests_incremented:
                 with suppress(_TTS_NONCRITICAL_EXCEPTIONS):

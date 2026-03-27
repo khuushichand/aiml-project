@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import AudioFormat, TTSRequest, 
 from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
     PROVIDER_MANAGED_VOICE_LEASE_DIRNAME,
     PROVIDER_MANAGED_VOICE_TOKEN_KEY,
+    register_provider_managed_voice_path,
     resolve_provider_managed_voice_path,
 )
 from tldw_Server_API.app.core.TTS.tts_exceptions import TTSTimeoutError, TTSGenerationError, TTSValidationError
@@ -282,6 +283,132 @@ async def test_pocket_tts_cpp_service_cleans_trust_token_after_generation(tmp_pa
             seen_tokens[0],
             Path(tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "custom_voice-1.wav"),
         )
+
+
+@pytest.mark.asyncio
+async def test_generate_speech_closes_stream_before_pocket_tts_cpp_cleanup(tmp_path, monkeypatch):
+    service = TTSServiceV2()
+    events: list[tuple[str, bool] | str] = []
+    stream_closed = False
+
+    voice_path = tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "custom_voice-stream.wav"
+    voice_path.parent.mkdir(parents=True, exist_ok=True)
+    voice_path.write_bytes(_make_wav_bytes())
+    token = register_provider_managed_voice_path(voice_path)
+    provider_request = TTSRequest(
+        text="hello",
+        voice="custom:voice-stream",
+        format=AudioFormat.WAV,
+        stream=True,
+        extra_params={
+            "pocket_tts_cpp_voice_path": str(voice_path),
+            PROVIDER_MANAGED_VOICE_TOKEN_KEY: token,
+            "_pocket_tts_cpp_transient_voice_path": str(voice_path),
+        },
+    )
+
+    class _StreamingAdapter:
+        provider_name = "pocket_tts_cpp"
+        provider_key = "pocket_tts_cpp"
+
+        async def generate(self, request):  # noqa: ARG002
+            async def _stream():
+                nonlocal stream_closed
+                try:
+                    yield b"chunk-1"
+                    yield b"chunk-2"
+                finally:
+                    stream_closed = True
+                    events.append("stream_closed")
+
+            return TTSResponse(audio_stream=_stream(), format=AudioFormat.WAV, sample_rate=24000)
+
+    service._prepare_generate_speech_request = AsyncMock(
+        return_value=(_StreamingAdapter(), "pocket_tts_cpp", provider_request)
+    )
+
+    def _record_cleanup(request):
+        assert request is provider_request
+        events.append(("cleanup", stream_closed))
+
+    monkeypatch.setattr(
+        service,
+        "_cleanup_transient_pocket_tts_cpp_voice_path",
+        _record_cleanup,
+        raising=True,
+    )
+
+    request = OpenAISpeechRequest(
+        model="pocket_tts_cpp",
+        input="hello",
+        voice="custom:voice-stream",
+        response_format="wav",
+        stream=True,
+    )
+
+    generator = service.generate_speech(request, user_id=1, fallback=False)
+
+    assert await anext(generator) == b"chunk-1"
+    await generator.aclose()
+
+    assert events == ["stream_closed", ("cleanup", True)]
+
+
+@pytest.mark.asyncio
+async def test_generate_with_adapter_closes_stream_before_pocket_tts_cpp_cleanup(tmp_path, monkeypatch):
+    service = TTSServiceV2()
+    events: list[tuple[str, bool] | str] = []
+    stream_closed = False
+
+    voice_path = tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "custom_voice-helper.wav"
+    voice_path.parent.mkdir(parents=True, exist_ok=True)
+    voice_path.write_bytes(_make_wav_bytes())
+    token = register_provider_managed_voice_path(voice_path)
+    request = TTSRequest(
+        text="hello",
+        voice="custom:voice-helper",
+        format=AudioFormat.WAV,
+        stream=True,
+        extra_params={
+            "pocket_tts_cpp_voice_path": str(voice_path),
+            PROVIDER_MANAGED_VOICE_TOKEN_KEY: token,
+            "_pocket_tts_cpp_transient_voice_path": str(voice_path),
+        },
+    )
+
+    class _StreamingAdapter:
+        provider_name = "pocket_tts_cpp"
+        provider_key = "pocket_tts_cpp"
+
+        async def generate(self, stream_request):  # noqa: ARG002
+            async def _stream():
+                nonlocal stream_closed
+                try:
+                    yield b"chunk-1"
+                    yield b"chunk-2"
+                finally:
+                    stream_closed = True
+                    events.append("stream_closed")
+
+            return TTSResponse(audio_stream=_stream(), format=AudioFormat.WAV, sample_rate=24000)
+
+    def _record_cleanup(cleanup_request):
+        assert cleanup_request is request
+        events.append(("cleanup", stream_closed))
+
+    monkeypatch.setattr(
+        service,
+        "_cleanup_transient_pocket_tts_cpp_voice_path",
+        _record_cleanup,
+        raising=True,
+    )
+
+    generator = service._generate_with_adapter(_StreamingAdapter(), request, user_id=1)
+
+    assert await anext(generator) == b"chunk-1"
+    await generator.aclose()
+
+    assert events == ["stream_closed", ("cleanup", True)]
 
 
 @pytest.mark.asyncio
