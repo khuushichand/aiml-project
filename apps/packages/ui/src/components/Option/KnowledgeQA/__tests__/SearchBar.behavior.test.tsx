@@ -77,6 +77,20 @@ describe("SearchBar behavior", () => {
     )
   })
 
+  it("keeps the compact width cap by default", () => {
+    render(<SearchBar autoFocus={false} />)
+
+    expect(screen.getByRole("textbox", { name: "Search your knowledge base" }).closest("form"))
+      .toHaveClass("max-w-3xl")
+  })
+
+  it("removes the compact width cap when wide mode is enabled", () => {
+    render(<SearchBar autoFocus={false} widthMode="wide" />)
+
+    expect(screen.getByRole("textbox", { name: "Search your knowledge base" }).closest("form"))
+      .not.toHaveClass("max-w-3xl")
+  })
+
   it("uses explicit searching label and loading indicator", () => {
     state.query = "active query"
     state.isSearching = true

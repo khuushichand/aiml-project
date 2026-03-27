@@ -244,6 +244,18 @@
     "warningTitle": "Voice chat warning",
     "unavailableTitle": "Voice chat unavailable",
     "unavailableBody": "Connect to a tldw server with audio chat streaming enabled.",
+    "unavailableReasons": {
+      "notConnected": "Connect to tldw before using voice conversation.",
+      "transportMissing": "This server does not advertise voice conversation streaming.",
+      "authMissing": "Configure tldw credentials before using voice conversation.",
+      "audioUnhealthy": "Audio health is not ready for voice conversation.",
+      "ttsConfigMissing": "Voice conversation needs a server TTS model and voice.",
+      "ttsProviderUnsupported": "Voice conversation does not support this TTS provider.",
+      "modelMissing": "Select a chat model for voice conversation.",
+      "disconnected": "Voice chat disconnected.",
+      "ttsError": "Voice chat hit a TTS error.",
+      "error": "Voice chat hit an error."
+    },
     "settingsTitle": "Voice chat settings",
     "settingsButton": "Voice chat settings",
     "modelLabel": "Voice model",

@@ -41,6 +41,7 @@ import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
 import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import { AttachedResearchContextChip } from "./AttachedResearchContextChip"
 import { MentionsDropdown } from "./MentionsDropdown"
 import { ComposerTextarea } from "./ComposerTextarea"
@@ -63,6 +64,12 @@ import {
   type ResearchRunCreateRequest,
   type ResearchRunFollowUpBackground
 } from "@/services/tldw/TldwApiClient"
+import {
+  normalizeVoiceConversationRuntimeError,
+  resolveVoiceConversationAvailability,
+  resolveVoiceConversationTtsConfig,
+  shouldProbeVoiceConversationAudioHealth
+} from "@/services/tldw/voice-conversation"
 // ChatRequestDebugSnapshot moved to usePlaygroundRawPreview
 import {
   buildDiscussMediaHint,
@@ -550,6 +557,18 @@ export const PlaygroundForm = ({
   } = useVoiceChatSettings()
   const voiceChatMessages = useVoiceChatMessages()
   const { devices: audioInputDevices } = useAudioSourceCatalog()
+  const { config: canonicalConnectionConfig, loading: canonicalConnectionLoading } =
+    useCanonicalConnectionConfig()
+  const [ttsProvider] = useStorage("ttsProvider", "browser")
+  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
+  const [tldwTtsVoice] = useStorage("tldwTtsVoice", "af_heart")
+  const [tldwTtsSpeed] = useStorage("tldwTtsSpeed", 1)
+  const [tldwTtsResponseFormat] = useStorage("tldwTtsResponseFormat", "mp3")
+  const [openAITTSModel] = useStorage("openAITTSModel", "tts-1")
+  const [openAITTSVoice] = useStorage("openAITTSVoice", "alloy")
+  const [elevenLabsModel] = useStorage("elevenLabsModel", "")
+  const [elevenLabsVoiceId] = useStorage("elevenLabsVoiceId", "")
+  const [speechPlaybackSpeed] = useStorage("speechPlaybackSpeed", 1)
   const [voiceChatTriggerInput, setVoiceChatTriggerInput] = React.useState(
     voiceChatTriggerPhrases.join(", ")
   )
@@ -628,13 +647,94 @@ export const PlaygroundForm = ({
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt)
-  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus({
-    enabled: audioHealthEnabled
+  const shouldProbeAudioHealth = React.useMemo(
+    () =>
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady,
+        hasServerVoiceChat,
+        hasServerStt,
+        optionalAudioHealthEnabled: audioHealthEnabled
+      }),
+    [
+      audioHealthEnabled,
+      hasServerStt,
+      hasServerVoiceChat,
+      isConnectionReady
+    ]
+  )
+  const {
+    healthState: audioHealthState,
+    sttHealthState,
+    hasVoiceConversationTransport
+  } = useTldwAudioStatus({
+    enabled: shouldProbeAudioHealth,
+    ttsProvider,
+    tldwTtsModel
   })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"
   const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
-  const voiceChatAvailable = canUseServerAudio
+  const voiceConversationTtsConfig = React.useMemo(
+    () =>
+      resolveVoiceConversationTtsConfig({
+        ttsProvider,
+        tldwTtsModel,
+        tldwTtsVoice,
+        tldwTtsSpeed,
+        tldwTtsResponseFormat,
+        openAITTSModel,
+        openAITTSVoice,
+        elevenLabsModel,
+        elevenLabsVoiceId,
+        speechPlaybackSpeed,
+        voiceChatTtsMode
+      }),
+    [
+      elevenLabsModel,
+      elevenLabsVoiceId,
+      openAITTSModel,
+      openAITTSVoice,
+      speechPlaybackSpeed,
+      tldwTtsModel,
+      tldwTtsResponseFormat,
+      tldwTtsSpeed,
+      tldwTtsVoice,
+      ttsProvider,
+      voiceChatTtsMode
+    ]
+  )
+  const voiceConversationAvailability = React.useMemo(
+    () =>
+      resolveVoiceConversationAvailability({
+        isConnectionReady: isConnectionReady && !canonicalConnectionLoading,
+        hasVoiceConversationTransport,
+        authReady: Boolean(
+          canonicalConnectionConfig?.serverUrl &&
+            (canonicalConnectionConfig?.authMode === "multi-user"
+              ? canonicalConnectionConfig.accessToken
+              : canonicalConnectionConfig.apiKey)
+        ),
+        sttHealthState,
+        ttsHealthState: audioHealthState,
+        selectedModel,
+        allowBackendDefaultModel: true,
+        ttsConfigReady: voiceConversationTtsConfig.ok
+      }),
+    [
+      audioHealthState,
+      canonicalConnectionConfig?.apiKey,
+      canonicalConnectionConfig?.authMode,
+      canonicalConnectionConfig?.accessToken,
+      canonicalConnectionConfig?.serverUrl,
+      canonicalConnectionLoading,
+      hasVoiceConversationTransport,
+      isConnectionReady,
+      selectedModel,
+      sttHealthState,
+      voiceConversationTtsConfig.ok
+    ]
+  )
+  const voiceChatAvailable = voiceConversationAvailability.available
   const voiceChat = useVoiceChatStream({
     active: voiceChatEnabled && voiceChatAvailable,
     onTranscript: (text) => {
@@ -647,11 +747,12 @@ export const PlaygroundForm = ({
       void voiceChatMessages.finalizeAssistant(text)
     },
     onError: (msg) => {
+      const runtimeError = normalizeVoiceConversationRuntimeError(msg)
       notificationApi.error({
         message: t("playground:voiceChat.errorTitle", "Voice chat error"),
-        description: msg
+        description: runtimeError.message
       })
-      voiceChatMessages.abandonTurn()
+      void voiceChatMessages.failTurn(runtimeError.reason)
       setVoiceChatEnabled(false)
     },
     onWarning: (msg) => {
@@ -2111,7 +2212,7 @@ export const PlaygroundForm = ({
   }, [])
 
   const voiceChatHook = usePlaygroundVoiceChat({
-    voiceChatAvailable,
+    voiceConversationAvailability,
     voiceChatEnabled,
     setVoiceChatEnabled,
     voiceChat,

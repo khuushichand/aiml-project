@@ -18,6 +18,7 @@ export type AudioHealthState =
 type Options = {
   enabled?: boolean
   requireVoices?: boolean
+  ttsProvider?: string | null
   tldwTtsModel?: string | null
 }
 
@@ -26,6 +27,7 @@ type AudioStatus = {
   hasStt: boolean
   hasTts: boolean
   hasVoiceChat: boolean
+  hasVoiceConversationTransport: boolean
   healthState: AudioHealthState
   healthLoading: boolean
   sttHealthState: AudioHealthState
@@ -41,11 +43,41 @@ type AudioHealthResponse = {
   ok?: boolean
   status?: number
   data?: {
+    status?: string
     available?: boolean
     usable?: boolean
     on_demand?: boolean
     provider?: string
+    providers?: {
+      details?: Record<
+        string,
+        {
+          status?: string
+          availability?: string
+          runtime?: string
+        }
+      >
+    }
+    capabilities_envelope?: Array<{
+      provider?: string
+      availability?: string
+      runtime?: string | null
+    }>
   }
+}
+
+const READY_TTS_STATUSES = new Set(["enabled", "available", "ready", "healthy", "ok"])
+
+const normalizeHealthStatus = (value?: string | null): string => {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-")
+}
+
+const isReadyHealthStatus = (value?: string | null): boolean => {
+  const normalized = normalizeHealthStatus(value)
+  return normalized.length > 0 && READY_TTS_STATUSES.has(normalized)
 }
 
 const TTS_HEALTH_PROBE_INTERVAL_MS = 60_000
@@ -57,6 +89,25 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
   const { capabilities, loading } = useServerCapabilities()
   const probeEnabled = options.enabled ?? true
   const shouldProbeVoices = probeEnabled && Boolean(options.requireVoices)
+  const requestedTtsProvider = String(options.ttsProvider || "")
+    .trim()
+    .toLowerCase()
+  const inferredSelectedTtsProvider =
+    !requestedTtsProvider ||
+    requestedTtsProvider === "browser" ||
+    requestedTtsProvider === "tldw"
+      ? inferTldwProviderFromModel(options.tldwTtsModel)
+      : null
+  const selectedTtsProvider =
+    requestedTtsProvider === "openai" || requestedTtsProvider === "elevenlabs"
+      ? requestedTtsProvider
+      : requestedTtsProvider &&
+            requestedTtsProvider !== "browser" &&
+            requestedTtsProvider !== "tldw"
+        ? toServerTtsProviderKey(requestedTtsProvider)
+        : inferredSelectedTtsProvider
+          ? toServerTtsProviderKey(inferredSelectedTtsProvider)
+          : null
   const inferredTldwProvider = options.requireVoices
     ? inferTldwProviderFromModel(options.tldwTtsModel)
     : null
@@ -73,6 +124,8 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
           ? capabilities.hasStt && capabilities.hasTts
           : capabilities?.hasAudio)
     )
+  const hasVoiceConversationTransport =
+    !loading && Boolean(capabilities?.hasVoiceConversationTransport)
   const hasAudio =
     !loading &&
     Boolean(capabilities?.hasAudio ?? (hasStt || hasTts || hasVoiceChat))
@@ -176,7 +229,31 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
     // Probe errors should not hard-disable audio features.
     ttsHealthState = "unknown"
   } else if (ttsHealthQuery.data?.ok) {
-    ttsHealthState = "healthy"
+    const healthPayload = ttsHealthQuery.data.data
+    const selectedProviderDetail =
+      selectedTtsProvider && healthPayload?.providers?.details
+        ? healthPayload.providers.details[selectedTtsProvider]
+        : undefined
+    const selectedProviderEnvelope = selectedTtsProvider
+      ? healthPayload?.capabilities_envelope?.find(
+          (entry) => toServerTtsProviderKey(entry.provider) === selectedTtsProvider
+        )
+      : undefined
+    const selectedProviderStatus = normalizeHealthStatus(
+      selectedProviderDetail?.availability ??
+        selectedProviderDetail?.status ??
+        selectedProviderEnvelope?.availability
+    )
+    const overallStatus = normalizeHealthStatus(healthPayload?.status)
+    const overallReady = overallStatus ? isReadyHealthStatus(overallStatus) : true
+    const selectedProviderReady =
+      selectedTtsProvider == null
+        ? overallReady
+        : selectedProviderStatus
+          ? isReadyHealthStatus(selectedProviderStatus)
+          : overallReady
+
+    ttsHealthState = selectedProviderReady ? "healthy" : "unhealthy"
   } else if (ttsHealthQuery.data?.status === 404) {
     ttsHealthState = "unknown"
   } else {
@@ -188,6 +265,7 @@ export const useTldwAudioStatus = (options: Options = {}): AudioStatus => {
     hasStt,
     hasTts,
     hasVoiceChat,
+    hasVoiceConversationTransport,
     healthState: ttsHealthState,
     healthLoading: probeEnabled ? ttsHealthQuery.isLoading : false,
     sttHealthState,

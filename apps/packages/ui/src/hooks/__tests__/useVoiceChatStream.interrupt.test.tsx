@@ -2,6 +2,9 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
+import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { useStoreMessageOption } from "@/store/option"
+import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 
 const micState = vi.hoisted(() => ({
   callback: null as ((chunk: ArrayBuffer) => void) | null,
@@ -55,7 +58,7 @@ vi.mock("@/hooks/useAudioSourceCatalog", () => ({
 
 vi.mock("@/hooks/useVoiceChatSettings", () => ({
   useVoiceChatSettings: () => ({
-    voiceChatModel: "test-model",
+    voiceChatModel: "",
     voiceChatPauseMs: 700,
     voiceChatTriggerPhrases: [],
     voiceChatAutoResume: true,
@@ -143,6 +146,15 @@ describe("useVoiceChatStream interrupt handling", () => {
   const originalWindow = globalThis.window
 
   beforeEach(() => {
+    useStoreMessageOption.setState({ selectedModel: null })
+    vi.mocked(tldwClient.getConfig).mockReset()
+    vi.mocked(tldwClient.getConfig).mockResolvedValue({
+      serverUrl: "http://localhost:8000",
+      authMode: "single_user",
+      apiKey: "test-key"
+    } as any)
+    vi.mocked(resolveApiProviderForModel).mockReset()
+    vi.mocked(resolveApiProviderForModel).mockResolvedValue("stub")
     MockWebSocket.instances = []
     micState.callback = null
     micState.start.mockClear()
@@ -222,6 +234,147 @@ describe("useVoiceChatStream interrupt handling", () => {
     )
   })
 
+  it("does not open a websocket when auth is missing", async () => {
+    vi.mocked(tldwClient.getConfig).mockResolvedValue({
+      serverUrl: "http://localhost:8000",
+      authMode: "single_user",
+      apiKey: ""
+    } as any)
+
+    const onError = vi.fn()
+    const { result } = renderHook(() =>
+      useVoiceChatStream({
+        active: false,
+        onError
+      })
+    )
+
+    await act(async () => {
+      await result.current.start()
+    })
+
+    expect(MockWebSocket.instances).toHaveLength(0)
+    expect(onError).toHaveBeenCalledWith(
+      "Not authenticated. Configure tldw credentials in Settings."
+    )
+  })
+
+  it("allows backend-default model selection by omitting llm.model when no client model is selected", async () => {
+    storageValues.set("selectedModel", "")
+    vi.mocked(resolveApiProviderForModel).mockResolvedValue("stub")
+
+    const { result } = renderHook(() =>
+      useVoiceChatStream({
+        active: false
+      })
+    )
+
+    await act(async () => {
+      await result.current.start()
+    })
+
+    const ws = MockWebSocket.instances[0]
+    expect(ws).toBeDefined()
+
+    await act(async () => {
+      ws.triggerOpen()
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(ws.sent[0]).toBeDefined()
+    })
+
+    const configFrame = JSON.parse(ws.sent[0]!)
+    expect(configFrame.llm.model).toBeUndefined()
+    expect(configFrame.llm.provider).toBeUndefined()
+  })
+
+  it("fails fast when the selected model cannot be resolved to a provider", async () => {
+    storageValues.set("selectedModel", "bad-model")
+    vi.mocked(resolveApiProviderForModel).mockRejectedValue(
+      new Error('Unable to resolve provider for model "bad-model".')
+    )
+
+    const onError = vi.fn()
+    const { result } = renderHook(() =>
+      useVoiceChatStream({
+        active: false,
+        onError
+      })
+    )
+
+    await act(async () => {
+      await result.current.start()
+    })
+
+    expect(MockWebSocket.instances).toHaveLength(0)
+    expect(onError).toHaveBeenCalledWith(
+      'Unable to resolve provider for model "bad-model".'
+    )
+  })
+
+  it("fails fast when browser TTS has no server-backed fallback model", async () => {
+    storageValues.set("ttsProvider", "browser")
+    storageValues.set("tldwTtsModel", "")
+    storageValues.set("tldwTtsVoice", "")
+
+    const onError = vi.fn()
+    const { result } = renderHook(() =>
+      useVoiceChatStream({
+        active: false,
+        onError
+      })
+    )
+
+    await act(async () => {
+      await result.current.start()
+    })
+
+    expect(MockWebSocket.instances).toHaveLength(0)
+    expect(onError).toHaveBeenCalledWith(
+      "Voice conversation needs a server TTS model and voice."
+    )
+  })
+
+  it("does not open a websocket or restart the mic when startup is canceled before preflight resolves", async () => {
+    let resolveConfig: ((value: any) => void) | null = null
+    vi.mocked(tldwClient.getConfig).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveConfig = resolve
+        }) as any
+    )
+
+    const { rerender } = renderHook(
+      ({ active }) =>
+        useVoiceChatStream({
+          active
+        }),
+      {
+        initialProps: { active: true }
+      }
+    )
+
+    await act(async () => {
+      rerender({ active: false })
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      resolveConfig?.({
+        serverUrl: "http://localhost:8000",
+        authMode: "single_user",
+        apiKey: "test-key"
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(MockWebSocket.instances).toHaveLength(0)
+    expect(micState.start).not.toHaveBeenCalled()
+  })
+
   it("starts live voice with the remembered live_voice mic device", async () => {
     storageValues.set("liveVoiceAudioSourcePreference", {
       featureGroup: "live_voice",
@@ -251,7 +404,9 @@ describe("useVoiceChatStream interrupt handling", () => {
       await Promise.resolve()
     })
 
-    expect(micState.start).toHaveBeenCalledWith({ deviceId: "usb-1" })
+    await waitFor(() => {
+      expect(micState.start).toHaveBeenCalledWith({ deviceId: "usb-1" })
+    })
   })
 
   it("waits for the live_voice preference to hydrate before starting", async () => {
@@ -401,5 +556,48 @@ describe("useVoiceChatStream interrupt handling", () => {
     })
 
     expect(onStateChange).toHaveBeenLastCalledWith("listening")
+  })
+
+  it("surfaces a stable disconnect error after the first transcript has started", async () => {
+    const onTranscript = vi.fn()
+    const onError = vi.fn()
+
+    renderHook(() =>
+      useVoiceChatStream({
+        active: true,
+        onTranscript,
+        onError
+      })
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const ws = MockWebSocket.instances[0]
+    expect(ws).toBeDefined()
+
+    await act(async () => {
+      ws.triggerOpen()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      ws.triggerJson({ type: "full_transcript", text: "hello there" })
+      await Promise.resolve()
+    })
+
+    expect(onTranscript).toHaveBeenCalledWith(
+      "hello there",
+      expect.objectContaining({ autoCommit: false })
+    )
+
+    await act(async () => {
+      ws.onclose?.()
+      await Promise.resolve()
+    })
+
+    expect(onError).toHaveBeenCalledWith("Voice chat disconnected")
   })
 })

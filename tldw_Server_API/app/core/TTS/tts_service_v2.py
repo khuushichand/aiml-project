@@ -1772,6 +1772,8 @@ class TTSServiceV2:
                     # Get circuit breaker if available
                     circuit_breaker = None
                     breaker_provider_key = provider_key
+                    manual_stream_breaker = False
+                    manual_stream_breaker_recorded = False
                     if self.circuit_manager:
                         breaker_provider_key = self._resolve_circuit_breaker_key(provider_key, adapter)
                         circuit_breaker = await self.circuit_manager.get_breaker(breaker_provider_key)
@@ -1796,28 +1798,58 @@ class TTSServiceV2:
                         return await adapter.generate(request_for_provider)
 
                     if circuit_breaker:
-                        try:
-                            response = await circuit_breaker.call(_generate_with_adapter)
-                        except CircuitOpenError as e:
-                            logger.warning(f"Circuit open for {provider_key}: {e}")
-                            if fallback:
-                                self._record_fallback_event(
-                                    from_provider=provider_key,
-                                    to_provider="any",
-                                    success="pending",
-                                    outcome="initiated",
-                                    error=e,
-                                    request_id=request_id_ctx,
-                                )
-                                await self._decrement_active_requests(provider_key)
-                                released_active_slot = True
-                                fallback_plan = (self._build_exclude_tokens(adapter), provider_key)
-                            else:
-                                raise TTSProviderError(
-                                    f"Circuit open for {provider_key}",
-                                    provider=provider_key,
-                                    details={"circuit_state": "open"}
-                                ) from e
+                        if request_for_provider.stream and not metadata_only:
+                            try:
+                                await circuit_breaker.guard()
+                                response = await _generate_with_adapter()
+                                manual_stream_breaker = True
+                            except CircuitOpenError as e:
+                                logger.warning(f"Circuit open for {provider_key}: {e}")
+                                if fallback:
+                                    self._record_fallback_event(
+                                        from_provider=provider_key,
+                                        to_provider="any",
+                                        success="pending",
+                                        outcome="initiated",
+                                        error=e,
+                                        request_id=request_id_ctx,
+                                    )
+                                    await self._decrement_active_requests(provider_key)
+                                    released_active_slot = True
+                                    fallback_plan = (self._build_exclude_tokens(adapter), provider_key)
+                                else:
+                                    raise TTSProviderError(
+                                        f"Circuit open for {provider_key}",
+                                        provider=provider_key,
+                                        details={"circuit_state": "open"}
+                                    ) from e
+                            except Exception as e:
+                                await circuit_breaker.record_manual_failure(e)
+                                manual_stream_breaker_recorded = True
+                                raise
+                        else:
+                            try:
+                                response = await circuit_breaker.call(_generate_with_adapter)
+                            except CircuitOpenError as e:
+                                logger.warning(f"Circuit open for {provider_key}: {e}")
+                                if fallback:
+                                    self._record_fallback_event(
+                                        from_provider=provider_key,
+                                        to_provider="any",
+                                        success="pending",
+                                        outcome="initiated",
+                                        error=e,
+                                        request_id=request_id_ctx,
+                                    )
+                                    await self._decrement_active_requests(provider_key)
+                                    released_active_slot = True
+                                    fallback_plan = (self._build_exclude_tokens(adapter), provider_key)
+                                else:
+                                    raise TTSProviderError(
+                                        f"Circuit open for {provider_key}",
+                                        provider=provider_key,
+                                        details={"circuit_state": "open"}
+                                    ) from e
                     else:
                         response = await _generate_with_adapter()
 
@@ -1843,25 +1875,35 @@ class TTSServiceV2:
                                 )
                             return
                         if response.audio_stream:
-                            async for chunk in response.audio_stream:
-                                # Record TTFB on first emitted chunk
-                                if chunks_count == 0:
-                                    try:
-                                        self.metrics.observe(
-                                            "tts_ttfb_seconds",
-                                            max(0.0, time.time() - start_time),
-                                            labels={
-                                                "provider": provider_key,
-                                                "voice": request_for_provider.voice or "default",
-                                                "format": request_for_provider.format.value,
-                                            },
-                                        )
-                                        _record_voice_to_voice(provider_key)
-                                    except _TTS_NONCRITICAL_EXCEPTIONS:
-                                        pass
-                                chunks_count += 1
-                                audio_size += len(chunk)
-                                yield chunk
+                            try:
+                                async for chunk in response.audio_stream:
+                                    # Record TTFB on first emitted chunk
+                                    if chunks_count == 0:
+                                        try:
+                                            self.metrics.observe(
+                                                "tts_ttfb_seconds",
+                                                max(0.0, time.time() - start_time),
+                                                labels={
+                                                    "provider": provider_key,
+                                                    "voice": request_for_provider.voice or "default",
+                                                    "format": request_for_provider.format.value,
+                                                },
+                                            )
+                                            _record_voice_to_voice(provider_key)
+                                        except _TTS_NONCRITICAL_EXCEPTIONS:
+                                            pass
+                                    chunks_count += 1
+                                    audio_size += len(chunk)
+                                    yield chunk
+                            except Exception as stream_error:
+                                if manual_stream_breaker and circuit_breaker and not manual_stream_breaker_recorded:
+                                    await circuit_breaker.record_manual_failure(stream_error)
+                                    manual_stream_breaker_recorded = True
+                                raise
+                            else:
+                                if manual_stream_breaker and circuit_breaker and not manual_stream_breaker_recorded:
+                                    await circuit_breaker.record_manual_success()
+                                    manual_stream_breaker_recorded = True
                             with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 await self._maybe_store_qwen3_voice_prompt(
                                     request_for_provider, user_id, provider_key
@@ -1884,6 +1926,9 @@ class TTSServiceV2:
                                 pass
                             audio_size = len(response.audio_data)
                             yield response.audio_data
+                            if manual_stream_breaker and circuit_breaker and not manual_stream_breaker_recorded:
+                                await circuit_breaker.record_manual_success()
+                                manual_stream_breaker_recorded = True
                             with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 await self._maybe_store_qwen3_voice_prompt(
                                     request_for_provider, user_id, provider_key
@@ -1936,6 +1981,10 @@ class TTSServiceV2:
             error_msg = f"Error generating speech with {provider_key}: {str(e)}"
             logger.error(error_msg)
 
+            if manual_stream_breaker and circuit_breaker and not manual_stream_breaker_recorded:
+                await circuit_breaker.record_manual_failure(e)
+                manual_stream_breaker_recorded = True
+
             # Record failure metrics
             self._record_tts_metrics(
                 provider=provider_key,
@@ -1973,6 +2022,10 @@ class TTSServiceV2:
             # Handle unexpected errors
             error_msg = f"Unexpected error generating speech with {provider_key}: {str(e)}"
             logger.error(error_msg, exc_info=True)
+
+            if manual_stream_breaker and circuit_breaker and not manual_stream_breaker_recorded:
+                await circuit_breaker.record_manual_failure(e)
+                manual_stream_breaker_recorded = True
 
             # Record failure metrics
             self._record_tts_metrics(

@@ -6,9 +6,12 @@ import { useSttSettings } from "@/hooks/useSttSettings"
 import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useSelectedModel } from "@/hooks/chat/useSelectedModel"
 import { useMicStream } from "@/hooks/useMicStream"
+import {
+  buildVoiceConversationPreflight,
+  normalizeVoiceConversationRuntimeError
+} from "@/services/tldw/voice-conversation"
 import { arrayBufferToBase64 } from "@/utils/compress"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
-import { resolveBrowserWebSocketBase } from "@/services/tldw/browser-websocket"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { useStreamingAudioPlayer } from "@/hooks/useStreamingAudioPlayer"
 
@@ -139,6 +142,9 @@ export const useVoiceChatStream = ({
   const pendingResumeRef = React.useRef(false)
   const resolvedTtsFormatRef = React.useRef<string | null>(null)
   const errorRef = React.useRef<string | null>(null)
+  const startAttemptRef = React.useRef(0)
+  const didRunActiveEffectRef = React.useRef(false)
+  const manualSessionRef = React.useRef(false)
 
   const [state, setState] = React.useState<VoiceChatState>("idle")
   const [error, setError] = React.useState<string | null>(null)
@@ -188,6 +194,11 @@ export const useVoiceChatStream = ({
     setState(next)
     callbacksRef.current.onStateChange?.(next)
   }, [])
+
+  const isStartAttemptCurrent = React.useCallback(
+    (attemptId: number) => startAttemptRef.current === attemptId,
+    []
+  )
 
   const {
     start: audioStart,
@@ -248,66 +259,9 @@ export const useVoiceChatStream = ({
       ? liveVoiceResolvedSource.deviceId
       : null
 
-  const resolveTtsFormat = React.useCallback((): string => {
-    const preferred = String(tldwTtsResponseFormat || "mp3").toLowerCase()
-    if (!isPlayableFormat(preferred)) return "mp3"
-    if (voiceChatTtsMode === "stream" && preferred === "pcm") return "mp3"
-    return preferred
-  }, [tldwTtsResponseFormat, voiceChatTtsMode])
-
-  const buildTtsConfig = React.useCallback(() => {
-    const provider = String(ttsProvider || "").toLowerCase()
-    let model = ""
-    let voice = ""
-    let speed = 1
-    let format = "mp3"
-
-    if (!provider || provider === "browser") {
-      model = tldwTtsModel
-      voice = tldwTtsVoice
-      speed = tldwTtsSpeed
-      format = resolveTtsFormat()
-    } else if (provider === "tldw") {
-      model = tldwTtsModel
-      voice = tldwTtsVoice
-      speed = tldwTtsSpeed
-      format = resolveTtsFormat()
-    } else if (provider === "openai") {
-      model = openAITTSModel
-      voice = openAITTSVoice
-      speed = speechPlaybackSpeed
-      format = "mp3"
-    } else if (provider === "elevenlabs") {
-      model = elevenLabsModel
-      voice = elevenLabsVoiceId
-      speed = speechPlaybackSpeed
-      format = "mp3"
-    }
-
-    const resolvedFormat = format || "mp3"
-    resolvedTtsFormatRef.current = resolvedFormat
-
-    return {
-      provider: provider && provider !== "browser" ? provider : undefined,
-      model,
-      voice,
-      speed,
-      format: resolvedFormat
-    }
-  }, [
-    ttsProvider,
-    tldwTtsModel,
-    tldwTtsVoice,
-    tldwTtsSpeed,
-    openAITTSModel,
-    openAITTSVoice,
-    elevenLabsModel,
-    elevenLabsVoiceId,
-    speechPlaybackSpeed,
-    resolveTtsFormat
-  ])
-
   const cleanupSession = React.useCallback(() => {
+    manualSessionRef.current = false
+    startAttemptRef.current += 1
     try {
       micStop()
     } catch {}
@@ -323,7 +277,9 @@ export const useVoiceChatStream = ({
   }, [audioStop, micStop])
 
   const stop = React.useCallback(() => {
+    manualSessionRef.current = false
     const ws = wsRef.current
+    startAttemptRef.current += 1
     closingRef.current = Boolean(ws)
     if (ws && ws.readyState === WebSocket.OPEN) {
       try {
@@ -349,6 +305,15 @@ export const useVoiceChatStream = ({
     },
     [stop, updateState]
   )
+
+  const normalizeStartupErrorMessage = React.useCallback((error: unknown): string => {
+    const message =
+      error instanceof Error ? String(error.message || "").trim() : String(error || "").trim()
+    if (message === "Voice conversation TTS configuration is incomplete") {
+      return "Voice conversation needs a server TTS model and voice."
+    }
+    return message || "Voice chat failed to start"
+  }, [])
 
   const sendCommit = React.useCallback(() => {
     const ws = wsRef.current
@@ -461,6 +426,9 @@ export const useVoiceChatStream = ({
   const start = React.useCallback(async () => {
     if (!liveVoiceSourceReady) return
     if (connectingRef.current || wsRef.current) return
+    manualSessionRef.current = !activeRef.current
+    const attemptId = startAttemptRef.current + 1
+    startAttemptRef.current = attemptId
     connectingRef.current = true
     errorRef.current = null
     setError(null)
@@ -468,21 +436,39 @@ export const useVoiceChatStream = ({
 
     try {
       const config = await tldwClient.getConfig()
-      const serverUrl = String(config?.serverUrl || "").trim()
-      if (!serverUrl) {
-        throw new Error("tldw server not configured")
-      }
       const token =
         config?.authMode === "multi-user"
           ? String(config?.accessToken || "").trim()
           : String(config?.apiKey || "").trim()
-      if (!token) {
-        throw new Error("Not authenticated. Configure tldw credentials in Settings.")
+      const requestedModel = String(voiceChatModel || selectedModel || "").trim()
+      const preflight = await buildVoiceConversationPreflight({
+        serverUrl: String(config?.serverUrl || ""),
+        token,
+        requestedModel,
+        ttsProvider,
+        tldwTtsModel,
+        tldwTtsVoice,
+        tldwTtsSpeed,
+        tldwTtsResponseFormat,
+        openAITTSModel,
+        openAITTSVoice,
+        elevenLabsModel,
+        elevenLabsVoiceId,
+        speechPlaybackSpeed,
+        voiceChatTtsMode,
+        resolveProvider: ({ modelId }) =>
+          resolveApiProviderForModel({
+            modelId
+          })
+      })
+      if (!isStartAttemptCurrent(attemptId)) {
+        return
       }
+      resolvedTtsFormatRef.current = isPlayableFormat(preflight.tts.format)
+        ? preflight.tts.format
+        : "mp3"
 
-      const base = resolveBrowserWebSocketBase(serverUrl)
-      const url = `${base}/api/v1/audio/chat/stream?token=${encodeURIComponent(token)}`
-      const ws = new WebSocket(url)
+      const ws = new WebSocket(preflight.websocketUrl)
       ws.binaryType = "arraybuffer"
       wsRef.current = ws
 
@@ -506,7 +492,9 @@ export const useVoiceChatStream = ({
         closingRef.current = false
         cleanupSession()
         if (!wasClosing && activeRef.current && !errorRef.current) {
-          const message = "Voice chat disconnected"
+          const message = normalizeVoiceConversationRuntimeError(
+            new Error("websocket disconnected")
+          ).message
           errorRef.current = message
           setError(message)
           callbacksRef.current.onError?.(message)
@@ -519,12 +507,12 @@ export const useVoiceChatStream = ({
       ws.onopen = () => {
         void (async () => {
           try {
-            const model = String(voiceChatModel || selectedModel || "").trim()
-            const llmProvider = await resolveApiProviderForModel({
-              modelId: model
-            })
-            const ttsConfig = buildTtsConfig()
-
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
             const sttConfig: Record<string, any> = {
               enable_vad: true,
               min_silence_ms: voiceChatPauseMs,
@@ -579,33 +567,59 @@ export const useVoiceChatStream = ({
               JSON.stringify({
                 type: "config",
                 stt: sttConfig,
-                llm: {
-                  model,
-                  provider: llmProvider
-                },
-                tts: ttsConfig
+                llm: preflight.llm,
+                tts: preflight.tts
               })
             )
 
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
+
             await micStart({ deviceId: liveVoiceDeviceId })
+            if (!isStartAttemptCurrent(attemptId)) {
+              try {
+                micStop()
+              } catch {}
+              try {
+                ws.close()
+              } catch {}
+              return
+            }
             setConnected(true)
             connectingRef.current = false
             updateState("listening")
           } catch (err: any) {
-            handleError(err?.message || "Voice chat failed to start")
+            handleError(normalizeStartupErrorMessage(err))
           }
         })()
       }
     } catch (err: any) {
-      handleError(err?.message || "Unable to connect to voice chat")
+      handleError(normalizeStartupErrorMessage(err))
     }
   }, [
     audioAppend,
-    buildTtsConfig,
     cleanupSession,
     handleError,
     handleMessage,
+    isStartAttemptCurrent,
     micStart,
+    micStop,
+    normalizeStartupErrorMessage,
+    normalizeVoiceConversationRuntimeError,
+    ttsProvider,
+    tldwTtsModel,
+    tldwTtsVoice,
+    tldwTtsSpeed,
+    tldwTtsResponseFormat,
+    openAITTSModel,
+    openAITTSVoice,
+    elevenLabsModel,
+    elevenLabsVoiceId,
+    speechPlaybackSpeed,
     resolveApiProviderForModel,
     selectedModel,
     speechToTextLanguage,
@@ -626,16 +640,38 @@ export const useVoiceChatStream = ({
     liveVoiceSourceReady,
     updateState,
     voiceChatModel,
-    voiceChatPauseMs
+    voiceChatPauseMs,
+    voiceChatTtsMode
   ])
 
   React.useEffect(() => {
+    if (!didRunActiveEffectRef.current) {
+      didRunActiveEffectRef.current = true
+      if (!active) {
+        errorRef.current = null
+        setError(null)
+        updateState("idle")
+        return
+      }
+    }
+
     if (active) {
+      manualSessionRef.current = false
       if (!liveVoiceSourceReady) return
       void start()
       return
     }
-    stop()
+    if (manualSessionRef.current) {
+      return
+    }
+    if (
+      wsRef.current ||
+      connectingRef.current ||
+      stateRef.current !== "idle" ||
+      errorRef.current
+    ) {
+      stop()
+    }
     errorRef.current = null
     setError(null)
     updateState("idle")

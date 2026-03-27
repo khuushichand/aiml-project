@@ -52,6 +52,9 @@ if "transformers" not in sys.modules:
 
 from tldw_Server_API.app.api.v1.endpoints import audio
 from tldw_Server_API.app.api.v1.endpoints.audio import audio_streaming as audio_streaming_module
+from tldw_Server_API.app.core.Audio.transcription_service import (
+    _map_openai_audio_model_to_whisper,
+)
 
 
 class DummyWebSocket:
@@ -306,6 +309,71 @@ async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch
     assert any(msg.get("type") == "tts_done" for msg in ws.sent_json)
     assert ws.sent_bytes == [b"tts1", b"tts2"]
     assert ws.closed is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audio_chat_ws_normalizes_whisper_alias_before_transcriber_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "whisper-1"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+            },
+            {"type": "stop"},
+        ]
+    )
+    captured: Dict[str, Any] = {}
+
+    class _CapturingTranscriber(_DummyTranscriber):
+        def __init__(self, config: Any) -> None:
+            captured["model"] = getattr(config, "model", None)
+            captured["variant"] = getattr(config, "model_variant", None)
+            captured["whisper_model_size"] = getattr(config, "whisper_model_size", None)
+            super().__init__(config)
+
+    monkeypatch.setattr(audio, "UnifiedStreamingTranscriber", _CapturingTranscriber)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    assert captured["model"] == "whisper"
+    assert captured["whisper_model_size"] == _map_openai_audio_model_to_whisper("whisper-1")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audio_chat_ws_normalizes_parakeet_variant_before_transcriber_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "parakeet-onnx"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+            },
+            {"type": "stop"},
+        ]
+    )
+    captured: Dict[str, Any] = {}
+
+    class _CapturingTranscriber(_DummyTranscriber):
+        def __init__(self, config: Any) -> None:
+            captured["model"] = getattr(config, "model", None)
+            captured["variant"] = getattr(config, "model_variant", None)
+            super().__init__(config)
+
+    monkeypatch.setattr(audio, "UnifiedStreamingTranscriber", _CapturingTranscriber)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    assert captured["model"] == "parakeet"
+    assert captured["variant"] == "onnx"
 
 
 @pytest.mark.integration

@@ -60,6 +60,7 @@ import { useTemporaryChatToggle } from "@/hooks/useTemporaryChatToggle"
 import { useSelectedCharacter } from "@/hooks/useSelectedCharacter"
 import { useAudioSourceCatalog } from "@/hooks/useAudioSourceCatalog"
 import { useAudioSourcePreferences } from "@/hooks/useAudioSourcePreferences"
+import { useCanonicalConnectionConfig } from "@/hooks/useCanonicalConnectionConfig"
 import {
   COMPOSER_CONSTANTS,
   SPACING,
@@ -97,6 +98,12 @@ import { ConnectionPhase } from "@/types/connection"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import {
+  normalizeVoiceConversationRuntimeError,
+  resolveVoiceConversationAvailability,
+  resolveVoiceConversationTtsConfig,
+  shouldProbeVoiceConversationAudioHealth
+} from "@/services/tldw/voice-conversation"
 import { fetchChatModels } from "@/services/tldw-server"
 import { getProviderDisplayName } from "@/utils/provider-registry"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
@@ -263,6 +270,18 @@ export const SidepanelForm = ({
     setVoiceChatTtsMode
   } = useVoiceChatSettings()
   const voiceChatMessages = useVoiceChatMessages()
+  const { config: canonicalConnectionConfig, loading: canonicalConnectionLoading } =
+    useCanonicalConnectionConfig()
+  const [ttsProvider] = useStorage("ttsProvider", "browser")
+  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
+  const [tldwTtsVoice] = useStorage("tldwTtsVoice", "af_heart")
+  const [tldwTtsSpeed] = useStorage("tldwTtsSpeed", 1)
+  const [tldwTtsResponseFormat] = useStorage("tldwTtsResponseFormat", "mp3")
+  const [openAITTSModel] = useStorage("openAITTSModel", "tts-1")
+  const [openAITTSVoice] = useStorage("openAITTSVoice", "alloy")
+  const [elevenLabsModel] = useStorage("elevenLabsModel", "")
+  const [elevenLabsVoiceId] = useStorage("elevenLabsVoiceId", "")
+  const [speechPlaybackSpeed] = useStorage("speechPlaybackSpeed", 1)
   const [voiceChatTriggerInput, setVoiceChatTriggerInput] = React.useState(
     voiceChatTriggerPhrases.join(", ")
   )
@@ -502,15 +521,96 @@ export const SidepanelForm = ({
     isConnectionReady &&
     !capsLoading &&
     Boolean(capabilities?.hasStt ?? capabilities?.hasAudio)
-  const { healthState: audioHealthState, sttHealthState } = useTldwAudioStatus({
-    enabled: audioHealthEnabled
+  const shouldProbeAudioHealth = React.useMemo(
+    () =>
+      shouldProbeVoiceConversationAudioHealth({
+        isConnectionReady,
+        hasServerVoiceChat,
+        hasServerStt,
+        optionalAudioHealthEnabled: audioHealthEnabled
+      }),
+    [
+      audioHealthEnabled,
+      hasServerStt,
+      hasServerVoiceChat,
+      isConnectionReady
+    ]
+  )
+  const {
+    healthState: audioHealthState,
+    sttHealthState,
+    hasVoiceConversationTransport
+  } = useTldwAudioStatus({
+    enabled: shouldProbeAudioHealth,
+    ttsProvider,
+    tldwTtsModel
   })
   const canUseServerAudio =
     hasServerVoiceChat && audioHealthState !== "unhealthy"
   const canUseServerStt = hasServerStt && sttHealthState !== "unhealthy"
   const hasVoiceInputControls =
     browserSupportsSpeechRecognition || hasServerStt || hasServerVoiceChat
-  const voiceChatAvailable = canUseServerAudio
+  const voiceConversationTtsConfig = React.useMemo(
+    () =>
+      resolveVoiceConversationTtsConfig({
+        ttsProvider,
+        tldwTtsModel,
+        tldwTtsVoice,
+        tldwTtsSpeed,
+        tldwTtsResponseFormat,
+        openAITTSModel,
+        openAITTSVoice,
+        elevenLabsModel,
+        elevenLabsVoiceId,
+        speechPlaybackSpeed,
+        voiceChatTtsMode
+      }),
+    [
+      elevenLabsModel,
+      elevenLabsVoiceId,
+      openAITTSModel,
+      openAITTSVoice,
+      speechPlaybackSpeed,
+      tldwTtsModel,
+      tldwTtsResponseFormat,
+      tldwTtsSpeed,
+      tldwTtsVoice,
+      ttsProvider,
+      voiceChatTtsMode
+    ]
+  )
+  const voiceConversationAvailability = React.useMemo(
+    () =>
+      resolveVoiceConversationAvailability({
+        isConnectionReady: isConnectionReady && !canonicalConnectionLoading,
+        hasVoiceConversationTransport,
+        authReady: Boolean(
+          canonicalConnectionConfig?.serverUrl &&
+            (canonicalConnectionConfig?.authMode === "multi-user"
+              ? canonicalConnectionConfig.accessToken
+              : canonicalConnectionConfig.apiKey)
+        ),
+        sttHealthState,
+        ttsHealthState: audioHealthState,
+        selectedModel: String(voiceChatModel || "").trim(),
+        allowBackendDefaultModel: true,
+        ttsConfigReady: voiceConversationTtsConfig.ok
+      }),
+    [
+      audioHealthState,
+      canonicalConnectionConfig?.apiKey,
+      canonicalConnectionConfig?.authMode,
+      canonicalConnectionConfig?.accessToken,
+      canonicalConnectionConfig?.serverUrl,
+      canonicalConnectionLoading,
+      hasVoiceConversationTransport,
+      isConnectionReady,
+      sttHealthState,
+      voiceChatModel,
+      voiceConversationTtsConfig.ok
+    ]
+  )
+  const voiceChatAvailable = voiceConversationAvailability.available
   const dictationCapturePlan = React.useMemo(
     () =>
       resolveAudioCapturePlan({
@@ -590,11 +690,12 @@ export const SidepanelForm = ({
       void voiceChatMessages.finalizeAssistant(text)
     },
     onError: (msg) => {
+      const runtimeError = normalizeVoiceConversationRuntimeError(msg)
       notification.error({
         message: t("playground:voiceChat.errorTitle", "Voice chat error"),
-        description: msg
+        description: runtimeError.message
       })
-      voiceChatMessages.abandonTurn()
+      void voiceChatMessages.failTurn(runtimeError.reason)
       setVoiceChatEnabled(false)
     },
     onWarning: (msg) => {
@@ -1901,14 +2002,21 @@ export const SidepanelForm = ({
     return "border-border text-text-muted"
   }, [voiceChat.state, voiceChatEnabled])
 
+  const voiceChatUnavailableMessage = React.useMemo(() => {
+    const fallback = t(
+      "playground:voiceChat.unavailableBody",
+      "Connect to a tldw server with audio chat streaming enabled."
+    )
+    return voiceConversationAvailability.message
+      ? t(voiceConversationAvailability.message, fallback)
+      : fallback
+  }, [t, voiceConversationAvailability.message])
+
   const handleVoiceChatToggle = React.useCallback(() => {
     if (!voiceChatAvailable) {
       notification.error({
         message: t("playground:voiceChat.unavailableTitle", "Voice chat unavailable"),
-        description: t(
-          "playground:voiceChat.unavailableBody",
-          "Connect to a tldw server with audio chat streaming enabled."
-        )
+        description: voiceChatUnavailableMessage
       })
       return
     }
@@ -1930,7 +2038,8 @@ export const SidepanelForm = ({
     stopListening,
     stopServerDictation,
     t,
-    voiceChatMessages
+    voiceChatMessages,
+    voiceChatUnavailableMessage
   ])
 
   const handleLiveCaptionsToggle = React.useCallback(async () => {
@@ -3078,10 +3187,7 @@ export const SidepanelForm = ({
                                         title={
                                           voiceChatAvailable
                                             ? voiceChatStatusLabel
-                                            : t(
-                                                "playground:voiceChat.unavailableTitle",
-                                                "Voice chat unavailable"
-                                              )
+                                            : voiceChatUnavailableMessage
                                         }
                                       >
                                         <button
@@ -3391,10 +3497,7 @@ export const SidepanelForm = ({
                                     title={
                                       voiceChatAvailable
                                         ? voiceChatStatusLabel
-                                        : t(
-                                            "playground:voiceChat.unavailableTitle",
-                                            "Voice chat unavailable"
-                                          )
+                                        : voiceChatUnavailableMessage
                                     }
                                   >
                                     <button

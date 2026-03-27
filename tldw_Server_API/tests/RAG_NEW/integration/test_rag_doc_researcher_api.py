@@ -2,6 +2,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app as fastapi_app
+from tldw_Server_API.app.core.DB_Management.media_db.media_database import (
+    MediaDatabase,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.core.RAG.rag_service.query_classifier import QueryClassification
@@ -113,6 +116,60 @@ def test_rag_search_doc_researcher_flags(client_with_overrides, monkeypatch):
     assert "granularity_routing" in metadata
     assert "evidence_accumulation" in metadata
     assert "evidence_chains" in metadata
+
+
+def test_rag_search_natural_language_media_fallback(
+    client_with_overrides,
+    monkeypatch,
+    tmp_path,
+):
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user as _get_media_db
+
+    db_path = tmp_path / "media.db"
+    media_db = MediaDatabase(db_path=str(db_path), client_id="route-fallback")
+    media_db.initialize_db()
+
+    try:
+        media_id, _, _ = media_db.add_media_with_keywords(
+            title="Transcript of the duel",
+            media_type="transcript",
+            content=(
+                "This transcript states the exact fallback phrase weakness frieza saiyans "
+                "without adding any chunk rows."
+            ),
+            keywords=["frieza", "saiyans", "weakness"],
+        )
+
+        async def _override_media_db():
+            return media_db
+
+        monkeypatch.setitem(fastapi_app.dependency_overrides, _get_media_db, _override_media_db)
+
+        resp = client_with_overrides.post(
+            "/api/v1/rag/search",
+            json={
+                "query": "What weakness does Frieza mention about the Saiyans during the fight?",
+                "sources": ["media_db"],
+                "search_mode": "fts",
+                "fts_level": "chunk",
+                "enable_query_classification": False,
+                "enable_research_loop": False,
+                "enable_generation": False,
+                "enable_cache": False,
+                "enable_reranking": False,
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        docs = data.get("documents", [])
+
+        assert docs, data
+        assert any(doc.get("id") == str(media_id) for doc in docs)
+        assert any("weakness frieza saiyans" in (doc.get("content") or "").lower() for doc in docs)
+        assert all(doc.get("metadata", {}).get("source") == "media_db" for doc in docs)
+    finally:
+        media_db.close_connection()
 
 
 def test_rag_search_endpoint_skip_search_bypasses_retrieval(client_with_overrides, monkeypatch):

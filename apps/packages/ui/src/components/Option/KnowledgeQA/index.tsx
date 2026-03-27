@@ -421,7 +421,10 @@ function KnowledgeQAContent() {
   }
 
   return (
-    <div className="relative flex h-full">
+    <div
+      data-testid="knowledge-page-root"
+      className="relative flex h-full w-full min-w-0 flex-1"
+    >
       <KnowledgeQALayout onExportClick={() => setExportDialogOpen(true)} />
 
       {/* Settings panel (drawer) */}

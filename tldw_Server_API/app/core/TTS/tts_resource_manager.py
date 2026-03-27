@@ -1119,6 +1119,11 @@ _resource_manager: Optional[TTSResourceManager] = None
 _manager_lock = asyncio.Lock()
 
 
+def get_existing_resource_manager() -> Optional[TTSResourceManager]:
+    """Return the global resource manager only when it already exists."""
+    return _resource_manager
+
+
 async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSResourceManager:
     """
     Get or create the global TTS resource manager.

@@ -317,24 +317,7 @@ class OpenAIAdapter(TTSAdapter):
                 )
 
         except Exception as e:
-            if _is_http_status_error(e):
-                await self._handle_http_status_error(e)
-            if isinstance(e, (CoreNetworkError, RetryExhaustedError)) or _is_httpx_exception(e):
-                logger.error(f"{self.provider_name} network/timeout error: {e}")
-                reason = str(e) or e.__class__.__name__
-                if _is_timeout_error(e) or "timeout" in reason.lower():
-                    # Map any timeout-like condition (including wrapped ones) to TTSTimeoutError
-                    raise timeout_error(self.provider_name, timeout_seconds=60.0) from e
-                # All other transport failures are treated as network errors
-                raise network_error(self.provider_name, e) from e
-            if not isinstance(e, (TTSProviderError, TTSAuthenticationError, TTSRateLimitError, TTSNetworkError, TTSTimeoutError)):
-                logger.error(f"{self.provider_name} unexpected error: {e}")
-                raise TTSProviderError(
-                    f"Unexpected error in {self.provider_name}",
-                    provider=self.provider_name,
-                    details={"error": str(e), "error_type": type(e).__name__}
-                ) from e
-            raise
+            await self._raise_normalized_request_error(e)
 
     async def _handle_http_status_error(self, e: Exception) -> None:
         """Normalize HTTP status errors into TTS-specific exceptions."""
@@ -376,6 +359,33 @@ class OpenAIAdapter(TTSAdapter):
                 error_code=str(status_code),
             )
 
+    async def _raise_normalized_request_error(self, e: Exception) -> None:
+        if _is_http_status_error(e):
+            await self._handle_http_status_error(e)
+        if isinstance(e, (CoreNetworkError, RetryExhaustedError)) or _is_httpx_exception(e):
+            logger.error(f"{self.provider_name} network/timeout error: {e}")
+            reason = str(e) or e.__class__.__name__
+            if _is_timeout_error(e) or "timeout" in reason.lower():
+                raise timeout_error(self.provider_name, timeout_seconds=60.0) from e
+            raise network_error(self.provider_name, e) from e
+        if not isinstance(
+            e,
+            (
+                TTSProviderError,
+                TTSAuthenticationError,
+                TTSRateLimitError,
+                TTSNetworkError,
+                TTSTimeoutError,
+            ),
+        ):
+            logger.error(f"{self.provider_name} unexpected error: {e}")
+            raise TTSProviderError(
+                f"Unexpected error in {self.provider_name}",
+                provider=self.provider_name,
+                details={"error": str(e), "error_type": type(e).__name__}
+            ) from e
+        raise e
+
     async def _stream_audio(
         self,
         headers: dict[str, str],
@@ -407,7 +417,7 @@ class OpenAIAdapter(TTSAdapter):
                     logger.debug("OpenAI TTS response close after stream failed", exc_info=stream_close_error)
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
-            raise
+            await self._raise_normalized_request_error(e)
 
     async def _generate_complete(
         self,
@@ -551,10 +561,11 @@ class OpenAITTSAdapter(OpenAIAdapter):
 
         try:
             resp = await super().generate(request)
-        except TTSRateLimitError:
-            # Preserve rate limit error semantics
+        except (TTSAuthenticationError, TTSRateLimitError, TTSNetworkError, TTSTimeoutError):
+            # Preserve typed provider failures so callers and health checks can
+            # classify auth/network/rate-limit issues accurately.
             raise
-        except (TTSProviderError, TTSNetworkError, TTSTimeoutError) as e:
+        except TTSProviderError as e:
             # Normalize to generation error for tests
             raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__}) from e
         except Exception as e:

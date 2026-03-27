@@ -10,7 +10,10 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import httpx
 from io import BytesIO
 
-from tldw_Server_API.app.core.TTS.adapters.openai_adapter import OpenAIAdapter as OpenAITTSAdapter
+from tldw_Server_API.app.core.TTS.adapters.openai_adapter import (
+    OpenAIAdapter as OpenAITTSAdapter,
+    OpenAITTSAdapter as ProductionOpenAITTSAdapter,
+)
 from tldw_Server_API.app.core.TTS.adapters.base import (
     TTSRequest,
     TTSResponse,
@@ -391,6 +394,34 @@ class TestStreamingGeneration:
         # Should have received first chunk before error
         assert len(chunks) == 1
 
+    @pytest.mark.unit
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
+    async def test_streaming_auth_error_401_is_normalized(self, mock_post):
+        """HTTP 401 during stream setup should surface as TTSAuthenticationError."""
+        async def _unused_iter(chunk_size=1024):
+            if False:
+                yield b""
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.aread = AsyncMock(return_value=b'{"error":{"message":"Invalid API key"}}')
+        mock_response.aiter_bytes = MagicMock(return_value=_unused_iter())
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401",
+            request=Mock(),
+            response=mock_response,
+        )
+        mock_post.return_value = mock_response
+
+        adapter = OpenAITTSAdapter({"openai_api_key": "bad-key"})
+        request = TTSRequest(text="Test", voice="alloy", stream=True)
+
+        response = await adapter.generate(request)
+
+        with pytest.raises(TTSAuthenticationError):
+            async for _ in response.audio_stream:
+                pass
+
 # ========================================================================
 # Error Handling Tests
 # ========================================================================
@@ -455,6 +486,24 @@ class TestErrorHandling:
         request = TTSRequest(text="Test", voice="alloy", stream=False)
 
         from tldw_Server_API.app.core.TTS.tts_exceptions import TTSAuthenticationError
+        with pytest.raises(TTSAuthenticationError):
+            await adapter.generate(request)
+
+    @pytest.mark.unit
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
+    async def test_production_adapter_preserves_auth_error_401(self, mock_post):
+        """Production OpenAITTSAdapter should preserve typed auth failures."""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.aread = AsyncMock(return_value=b'{"error":{"message":"Invalid API key"}}')
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401", request=Mock(), response=mock_response
+        )
+        mock_post.return_value = mock_response
+
+        adapter = ProductionOpenAITTSAdapter({"openai_api_key": "bad-key"})
+        request = TTSRequest(text="Test", voice="alloy", stream=False)
+
         with pytest.raises(TTSAuthenticationError):
             await adapter.generate(request)
 
