@@ -63,7 +63,7 @@ def test_load_qwen3_tokenizer_uses_from_pretrained_when_available(monkeypatch):
 
     class FakeTokenizer:
         @classmethod
-        def from_pretrained(cls, model_id, local_files_only=True):
+        def from_pretrained(cls, model_id, local_files_only=False):
             instance = cls()
             instance.model = model_id
             instance.local_files_only = local_files_only
@@ -75,6 +75,10 @@ def test_load_qwen3_tokenizer_uses_from_pretrained_when_available(monkeypatch):
     tokenizer = tokenizer_service._load_qwen3_tokenizer("Qwen/Qwen3-TTS-Tokenizer-12Hz", allow_download=False)
     assert tokenizer.model == "Qwen/Qwen3-TTS-Tokenizer-12Hz"
     assert tokenizer.local_files_only is True
+
+    tokenizer = tokenizer_service._load_qwen3_tokenizer("Qwen/Qwen3-TTS-Tokenizer-12Hz", allow_download=True)
+    assert tokenizer.model == "Qwen/Qwen3-TTS-Tokenizer-12Hz"
+    assert tokenizer.local_files_only is False
 
 
 def test_load_qwen3_tokenizer_maps_model_path_error(monkeypatch):

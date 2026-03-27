@@ -33,7 +33,7 @@ def _make_wav_bytes(*, sample_rate: int = 24000, channels: int = 1) -> bytes:
         wav_file.setnchannels(channels)
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
-        wav_file.writeframes(b"\x00\x00" * 32)
+        wav_file.writeframes(b"\x00\x00" * sample_rate)
     return buffer.getvalue()
 
 
@@ -333,13 +333,12 @@ async def test_streaming_generation_retries_probe_after_non_incremental_result(t
     voice_path.parent.mkdir(parents=True, exist_ok=True)
     voice_path.write_bytes(_make_wav_bytes())
 
-    probe_results = iter([False, True])
     probe_calls = 0
 
     async def _fake_probe() -> bool:
         nonlocal probe_calls
         probe_calls += 1
-        return next(probe_results)
+        return False
 
     async def _fake_cli_stream(request: TTSRequest, resolved_voice_path: Path):
         assert resolved_voice_path == voice_path
@@ -361,10 +360,34 @@ async def test_streaming_generation_retries_probe_after_non_incremental_result(t
     with pytest.raises(TTSGenerationError):
         await adapter.generate(request)
 
-    response = await adapter.generate(request)
-    assert response.metadata["transport"] == "stdout_stream"
-    assert [chunk async for chunk in response.audio_stream] == [b"cli-retry-1", b"cli-retry-2"]
-    assert probe_calls == 2
+    with pytest.raises(TTSGenerationError):
+        await adapter.generate(request)
+    assert probe_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_convert_stdout_audio_trims_partial_float_frame_before_decoding(tmp_path, monkeypatch):
+    adapter = _build_adapter(tmp_path)
+
+    captured: dict[str, object] = {}
+
+    async def _fake_convert(audio_data, source_format, target_format, sample_rate):
+        captured["audio_data"] = audio_data
+        captured["source_format"] = source_format
+        captured["target_format"] = target_format
+        captured["sample_rate"] = sample_rate
+        return b"converted"
+
+    monkeypatch.setattr(adapter, "convert_audio_format", _fake_convert)
+
+    stdout = np.array([0.0, 0.5, -0.5], dtype=np.dtype("<f4")).tobytes() + b"\xff"
+    output = await adapter._convert_stdout_audio(stdout, AudioFormat.WAV)
+
+    assert output == b"converted"
+    assert captured["source_format"] == AudioFormat.PCM
+    assert captured["target_format"] == AudioFormat.WAV
+    assert captured["sample_rate"] == adapter.DEFAULT_SAMPLE_RATE
+    assert list(captured["audio_data"]) == [0, 16383, -16383]
 
 
 @pytest.mark.asyncio

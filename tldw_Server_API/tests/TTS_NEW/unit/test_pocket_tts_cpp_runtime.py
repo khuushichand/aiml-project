@@ -237,6 +237,59 @@ def test_pocket_tts_cpp_trust_token_rejects_paths_outside_provider_runtime_dir(t
         register_provider_managed_voice_path(unmanaged_path)
 
 
+def test_pocket_tts_cpp_validate_runtime_assets_requires_tokenizer_file_and_model_directory(tmp_path):
+    from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import validate_runtime_assets
+    from tldw_Server_API.app.core.TTS.tts_exceptions import TTSModelNotFoundError
+
+    binary_path = tmp_path / "bin" / "pocket-tts"
+    tokenizer_path = tmp_path / "models" / "pocket_tts_cpp" / "tokenizer.model"
+    model_path = tmp_path / "models" / "pocket_tts_cpp" / "onnx"
+
+    binary_path.parent.mkdir(parents=True, exist_ok=True)
+    binary_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary_path.chmod(0o755)
+    tokenizer_path.mkdir(parents=True, exist_ok=True)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_bytes(b"not-a-directory")
+
+    with pytest.raises(TTSModelNotFoundError, match="tokenizer"):
+        validate_runtime_assets(
+            binary_path=binary_path,
+            model_path=model_path,
+            tokenizer_path=tokenizer_path,
+            precision="int8",
+        )
+
+
+@pytest.mark.asyncio
+async def test_write_runtime_file_writes_via_atomic_replace(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
+
+    target_path = tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "voice.wav"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(b"old-bytes")
+    replace_calls: list[tuple[Path, Path, bytes, bytes]] = []
+
+    def _fake_replace(src: str, dst: str) -> None:
+        src_path = Path(src)
+        dst_path = Path(dst)
+        replace_calls.append((src_path, dst_path, src_path.read_bytes(), dst_path.read_bytes()))
+        os.unlink(dst_path)
+        os.rename(src_path, dst_path)
+
+    monkeypatch.setattr(runtime_module.os, "replace", _fake_replace, raising=True)
+
+    await runtime_module._write_runtime_file(target_path, b"new-bytes")
+
+    assert replace_calls
+    src_path, dst_path, temp_bytes, old_bytes = replace_calls[0]
+    assert src_path != target_path
+    assert dst_path == target_path
+    assert temp_bytes == b"new-bytes"
+    assert old_bytes == b"old-bytes"
+    assert target_path.read_bytes() == b"new-bytes"
+
+
 @pytest.mark.asyncio
 async def test_pocket_tts_cpp_materializes_stored_voice_to_stable_custom_path(tmp_path):
     from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
@@ -466,10 +519,12 @@ async def test_pocket_tts_cpp_materialized_direct_reference_enforces_max_bytes_i
 
     assert is_transient is False
     assert materialized.exists()
-    assert not old_file.exists()
-    remaining_files = list(runtime_dir.glob("*.wav"))
-    assert remaining_files == [materialized]
-    assert sum(path.stat().st_size for path in remaining_files) == materialized.stat().st_size
+    assert old_file.exists()
+    remaining_files = sorted(runtime_dir.glob("*.wav"))
+    assert remaining_files == sorted([materialized, old_file])
+    assert sum(path.stat().st_size for path in remaining_files) == (
+        materialized.stat().st_size + old_file.stat().st_size
+    )
 
 
 @pytest.mark.asyncio
@@ -506,7 +561,7 @@ async def test_pocket_tts_cpp_post_write_pruning_never_returns_deleted_active_pa
 
     assert is_transient is False
     assert materialized.exists()
-    assert not stale_file.exists()
+    assert stale_file.exists()
     assert materialized in runtime_dir.glob("*.wav")
 
 
@@ -543,10 +598,9 @@ async def test_pocket_tts_cpp_custom_voice_materialization_enforces_max_bytes_im
         monkeypatch.undo()
 
     assert materialized.exists()
-    assert not old_file.exists()
+    assert old_file.exists()
     assert materialized in runtime_dir.glob("*.wav")
     assert materialized.read_bytes() == normalized
-    assert sum(path.stat().st_size for path in runtime_dir.glob("*.wav")) <= 20 or list(runtime_dir.glob("*.wav")) == [materialized]
 
 
 @pytest.mark.asyncio

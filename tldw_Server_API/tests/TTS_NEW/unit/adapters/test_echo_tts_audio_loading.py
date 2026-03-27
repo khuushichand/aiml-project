@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from tldw_Server_API.app.core.TTS.adapters.echo_tts_adapter import EchoTTSAdapter
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSModelLoadError
 
 
 @pytest.mark.unit
@@ -65,5 +66,5 @@ async def test_compute_speaker_latent_raises_when_inference_missing():
     adapter = EchoTTSAdapter(config={})
     adapter._echo_inference = None
 
-    with pytest.raises(Exception, match="inference module not loaded"):
+    with pytest.raises(TTSModelLoadError, match="inference module not loaded"):
         await adapter._compute_speaker_latent(b"voice-bytes")

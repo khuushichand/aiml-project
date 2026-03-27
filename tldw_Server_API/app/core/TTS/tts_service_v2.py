@@ -345,12 +345,6 @@ class TTSServiceV2:
             extras = {}
 
         provider_cfg = self._get_provider_runtime_config("pocket_tts_cpp")
-        runtime_dir = get_runtime_dir(voice_manager=voice_manager, user_id=user_id)
-        prune_materialized_voice_cache(
-            runtime_dir,
-            cache_ttl_hours=provider_cfg.get("cache_ttl_hours"),
-            cache_max_bytes=provider_cfg.get("cache_max_bytes_per_user"),
-        )
 
         voice_path = None
         is_transient = False
@@ -384,6 +378,13 @@ class TTSServiceV2:
             reference_text = getattr(metadata, "reference_text", None)
 
         trust_token = register_provider_managed_voice_path(voice_path)
+        runtime_dir = get_runtime_dir(voice_manager=voice_manager, user_id=user_id)
+        prune_materialized_voice_cache(
+            runtime_dir,
+            cache_ttl_hours=provider_cfg.get("cache_ttl_hours"),
+            cache_max_bytes=provider_cfg.get("cache_max_bytes_per_user"),
+            protected_paths={voice_path},
+        )
         extras["pocket_tts_cpp_voice_path"] = str(voice_path)
         extras[PROVIDER_MANAGED_VOICE_TOKEN_KEY] = trust_token
         if reference_text:
@@ -448,8 +449,13 @@ class TTSServiceV2:
             try:
                 resource_mgr = await get_resource_manager()
                 resource_mgr.touch_model(provider_key, getattr(tts_request, "model", None))
-            except _TTS_NONCRITICAL_EXCEPTIONS:
-                pass
+            except _TTS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Non-critical touch_model failure for provider {} model {}: {}",
+                    provider_key,
+                    getattr(tts_request, "model", None),
+                    exc,
+                )
 
             request_for_provider = self._maybe_sanitize_request(tts_request, provider_key)
             validate_tts_request(

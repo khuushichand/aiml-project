@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import wave
 from io import BytesIO
 from pathlib import Path
@@ -25,6 +26,11 @@ def _make_wav_bytes(
     channels: int = 1,
     sample_width: int = 2,
 ) -> bytes:
+    frame_width = max(channels * sample_width, 1)
+    min_payload_len = sample_rate * frame_width
+    if len(payload) < min_payload_len:
+        repeats = (min_payload_len + len(payload) - 1) // len(payload)
+        payload = (payload * repeats)[:min_payload_len]
     buffer = BytesIO()
     with wave.open(buffer, "wb") as wav_file:
         wav_file.setnchannels(channels)
@@ -32,6 +38,10 @@ def _make_wav_bytes(
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(payload)
     return buffer.getvalue()
+
+
+def _make_wav_base64(payload: bytes = b"\x00\x01" * 8) -> str:
+    return base64.b64encode(_make_wav_bytes(payload)).decode("ascii")
 
 
 class _ServiceVoiceManager:
@@ -46,7 +56,7 @@ class _ServiceVoiceManager:
     async def load_voice_reference_audio(self, user_id: int, voice_id: str) -> bytes:
         assert user_id == 1
         assert voice_id == "voice-1"
-        return b"RIFF" + b"\x00" * 32
+        return _make_wav_bytes()
 
     async def load_reference_metadata(self, user_id: int, voice_id: str):
         assert user_id == 1
@@ -63,6 +73,7 @@ async def test_pocket_tts_cpp_service_injects_stable_path_for_custom_voice(tmp_p
     manager = _ServiceVoiceManager(tmp_path / "voices")
     from tldw_Server_API.app.core.TTS.adapters import pocket_tts_cpp_runtime as runtime_module
 
+    source_wav = _make_wav_bytes()
     converted_wav = _make_wav_bytes(b"\x00\x01" * 8)
 
     monkeypatch.setattr(
@@ -72,7 +83,7 @@ async def test_pocket_tts_cpp_service_injects_stable_path_for_custom_voice(tmp_p
     )
 
     async def _fake_convert(input_path: Path, output_path: Path, sample_rate: int, channels: int, bit_depth: int) -> bool:
-        assert input_path.read_bytes() == b"RIFF" + b"\x00" * 32
+        assert input_path.read_bytes() == source_wav
         output_path.write_bytes(converted_wav)
         return True
 
@@ -93,7 +104,7 @@ async def test_pocket_tts_cpp_service_injects_stable_path_for_custom_voice(tmp_p
     await service._apply_custom_voice_reference(request, user_id=1, provider_hint="pocket_tts_cpp")
 
     expected = tmp_path / "voices" / "providers" / "pocket_tts_cpp" / "custom_voice-1.wav"
-    assert request.voice_reference == b"RIFF" + b"\x00" * 32
+    assert request.voice_reference == source_wav
     assert request.extra_params["pocket_tts_cpp_voice_path"] == str(expected)
     assert request.extra_params[PROVIDER_MANAGED_VOICE_TOKEN_KEY]
     assert request.extra_params["pocket_tts_cpp_reference_text"] == "stored reference text"
@@ -108,7 +119,7 @@ async def test_pocket_tts_cpp_service_injects_stable_path_for_direct_voice_refer
         text="hello",
         voice="alloy",
         format=AudioFormat.WAV,
-        voice_reference=b"RIFF" + b"\x01" * 24,
+        voice_reference=_make_wav_bytes(b"\x01\x02" * 8),
         extra_params={"reference_text": "direct reference text"},
     )
 
@@ -208,7 +219,7 @@ async def test_pocket_tts_cpp_service_cleans_trust_token_after_generation(tmp_pa
         async def load_voice_reference_audio(self, user_id: int, voice_id: str) -> bytes:
             assert user_id == 1
             assert voice_id == "voice-1"
-            return b"RIFF" + b"\x00" * 32
+            return _make_wav_bytes()
 
         async def load_reference_metadata(self, user_id: int, voice_id: str):
             return None
@@ -278,7 +289,7 @@ async def test_pocket_tts_cpp_service_cleans_trust_token_after_generation(tmp_pa
     "voice,voice_reference,expected_fragment",
     [
         ("custom:voice-1", None, "custom_voice-1.wav"),
-        ("alloy", "UklGRgMDAwMDAwM=", "ref_"),
+        ("alloy", _make_wav_base64(b"\x01\x02" * 8), "ref_"),
     ],
 )
 async def test_pocket_tts_cpp_fallback_materializes_voice_for_fallback_adapter(
@@ -483,7 +494,7 @@ async def test_pocket_tts_cpp_validation_failure_cleans_transient_direct_referen
         voice="alloy",
         response_format="wav",
         stream=False,
-        voice_reference="UklGRgMDAwMDAwM=",
+        voice_reference=_make_wav_base64(b"\x02\x03" * 8),
         extra_params={"reference_text": "direct reference text"},
     )
 
@@ -561,7 +572,7 @@ async def test_pocket_tts_cpp_cancellation_during_adapter_acquisition_cleans_tra
         voice="alloy",
         response_format="wav",
         stream=False,
-        voice_reference="UklGRgMDAwMDAwM=",
+        voice_reference=_make_wav_base64(b"\x04\x05" * 8),
         extra_params={"reference_text": "direct reference text"},
     )
 
@@ -631,7 +642,7 @@ async def test_pocket_tts_cpp_materialization_failure_surfaces_explicit_error(tm
         voice="alloy",
         response_format="wav",
         stream=False,
-        voice_reference="UklGRgMDAwMDAwM=",
+        voice_reference=_make_wav_base64(b"\x06\x07" * 8),
         extra_params={"reference_text": "direct reference text"},
     )
 
@@ -643,3 +654,57 @@ async def test_pocket_tts_cpp_materialization_failure_surfaces_explicit_error(tm
     assert exc_info.value.error_code == "pocket_tts_cpp_voice_materialization_failed"
     assert "ffmpeg missing" in exc_info.value.details["reason"]
     service._get_adapter.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prepare_generate_speech_request_logs_noncritical_touch_model_failure(monkeypatch):
+    service = TTSServiceV2()
+    warnings: list[str] = []
+
+    class _Adapter:
+        provider_name = "pocket_tts_cpp"
+        provider_key = "pocket_tts_cpp"
+
+    class _ResourceManager:
+        def touch_model(self, provider_key, model_name):
+            raise RuntimeError(f"cache miss for {provider_key}:{model_name}")
+
+    request = OpenAISpeechRequest(
+        model="pocket_tts_cpp",
+        input="hello",
+        voice="custom:voice-1",
+        response_format="wav",
+        stream=False,
+    )
+    tts_request = TTSRequest(
+        text="hello",
+        voice="custom:voice-1",
+        format=AudioFormat.WAV,
+        extra_params={},
+    )
+
+    monkeypatch.setattr(service, "_apply_custom_voice_reference", AsyncMock(), raising=True)
+    monkeypatch.setattr(service, "_get_adapter", AsyncMock(return_value=_Adapter()), raising=True)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.tts_service_v2.get_resource_manager",
+        AsyncMock(return_value=_ResourceManager()),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.tts_service_v2.logger.warning",
+        lambda message, *args: warnings.append(message.format(*args)),
+        raising=True,
+    )
+
+    await service._prepare_generate_speech_request(
+        request=request,
+        tts_request=tts_request,
+        provider="pocket_tts_cpp",
+        provider_hint="pocket_tts_cpp",
+        provider_overrides=None,
+        fallback=False,
+        user_id=1,
+    )
+
+    assert warnings
+    assert "touch_model" in warnings[0]

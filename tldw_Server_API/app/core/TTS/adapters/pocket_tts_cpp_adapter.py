@@ -41,15 +41,15 @@ class PocketTTSCppAdapter(TTSAdapter):
     """Adapter for the PocketTTS.cpp command-line runtime."""
 
     PROVIDER_KEY = "pocket_tts_cpp"
-    SUPPORTED_FORMATS: set[AudioFormat] = {
+    SUPPORTED_FORMATS: frozenset[AudioFormat] = frozenset({
         AudioFormat.MP3,
         AudioFormat.WAV,
         AudioFormat.OPUS,
         AudioFormat.FLAC,
         AudioFormat.PCM,
         AudioFormat.AAC,
-    }
-    SUPPORTED_LANGUAGES = {"en"}
+    })
+    SUPPORTED_LANGUAGES = frozenset({"en"})
     DEFAULT_SAMPLE_RATE = 24000
     MAX_TEXT_LENGTH = 5000
 
@@ -369,11 +369,11 @@ class PocketTTSCppAdapter(TTSAdapter):
             self._cli_stream_probe_voice_path = voice_path
             try:
                 probe_result = await self._probe_cli_streaming_support()
-                if probe_result:
-                    self._cli_streaming_supported = True
+                self._cli_streaming_supported = probe_result
                 return probe_result
             except Exception as exc:
                 logger.warning("PocketTTS.cpp CLI streaming probe failed: {}", exc)
+                self._cli_streaming_supported = False
                 return False
             finally:
                 self._cli_stream_probe_voice_path = None
@@ -529,7 +529,19 @@ class PocketTTSCppAdapter(TTSAdapter):
                 provider=self.PROVIDER_KEY,
             )
 
-        audio = np.frombuffer(stdout, dtype=np.float32)
+        usable = len(stdout) - (len(stdout) % 4)
+        if usable <= 0:
+            raise TTSGenerationError(
+                "PocketTTS.cpp stdout transport returned malformed PCM data",
+                provider=self.PROVIDER_KEY,
+            )
+        if usable != len(stdout):
+            logger.debug(
+                "PocketTTS.cpp stdout PCM dropped {} trailing bytes before decoding",
+                len(stdout) - usable,
+            )
+
+        audio = np.frombuffer(stdout[:usable], dtype=np.dtype("<f4")).astype(np.float32, copy=False)
         if audio.size == 0:
             raise TTSGenerationError(
                 "PocketTTS.cpp stdout transport returned empty PCM data",

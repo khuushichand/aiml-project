@@ -100,7 +100,6 @@ def fake_qwen_model_module(monkeypatch):
 @pytest.mark.asyncio
 async def test_auto_model_selects_customvoice_cpu(fake_qwen_module):
     adapter = Qwen3TTSAdapter({"runtime": "upstream", "device": "cpu", "model": "auto"})
-    adapter._resolve_torch_dtype = lambda: "float32"
     await adapter.ensure_initialized()
 
     request = TTSRequest(
@@ -136,7 +135,6 @@ def test_provider_style_model_aliases_resolve_to_canonical_model(model_alias):
 @pytest.mark.asyncio
 async def test_voice_design_requires_instruct(fake_qwen_module):
     adapter = Qwen3TTSAdapter({"runtime": "upstream", "device": "cpu", "model": "auto"})
-    adapter._resolve_torch_dtype = lambda: "float32"
     await adapter.ensure_initialized()
 
     request = TTSRequest(
@@ -156,7 +154,6 @@ async def test_voice_design_requires_instruct(fake_qwen_module):
 @pytest.mark.asyncio
 async def test_voice_clone_maps_reference_and_prompt(fake_qwen_module):
     adapter = Qwen3TTSAdapter({"runtime": "upstream", "device": "cpu", "model": "auto"})
-    adapter._resolve_torch_dtype = lambda: "float32"
     await adapter.ensure_initialized()
 
     voice_bytes = b"VOICE_BYTES"
@@ -195,7 +192,6 @@ async def test_voice_clone_maps_reference_and_prompt(fake_qwen_module):
 @pytest.mark.asyncio
 async def test_streaming_transcode_fallback_buffers_output(fake_qwen_module, monkeypatch):
     adapter = Qwen3TTSAdapter({"runtime": "upstream", "device": "cpu", "model": "auto"})
-    adapter._resolve_torch_dtype = lambda: "float32"
     await adapter.ensure_initialized()
 
     async def fake_generate_pcm(_request, _model_id):

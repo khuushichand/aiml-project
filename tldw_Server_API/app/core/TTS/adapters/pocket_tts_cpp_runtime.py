@@ -67,14 +67,14 @@ def validate_runtime_assets(
             details={"binary_path": str(binary_path)},
         )
 
-    if not tokenizer_path.exists():
+    if not tokenizer_path.exists() or not tokenizer_path.is_file():
         raise TTSModelNotFoundError(
             f"PocketTTS.cpp tokenizer not found at {tokenizer_path}",
             provider=PROVIDER_KEY,
             details={"tokenizer_path": str(tokenizer_path)},
         )
 
-    if not model_path.exists():
+    if not model_path.exists() or not model_path.is_dir():
         raise TTSModelNotFoundError(
             f"PocketTTS.cpp models directory not found at {model_path}",
             provider=PROVIDER_KEY,
@@ -477,10 +477,19 @@ async def normalize_reference_audio_to_wav(
     input_fd, input_name = tempfile.mkstemp(prefix="pocket_tts_cpp_ref_", suffix=suffix)
     output_fd, output_name = tempfile.mkstemp(prefix="pocket_tts_cpp_ref_", suffix=".wav")
     try:
-        with os.fdopen(input_fd, "wb") as input_file:
-            input_file.write(audio_bytes)
-        with os.fdopen(output_fd, "wb"):
-            pass
+        def _write_input_file() -> None:
+            with os.fdopen(input_fd, "wb") as input_file:
+                input_file.write(audio_bytes)
+                input_file.flush()
+                os.fsync(input_file.fileno())
+
+        def _create_output_placeholder() -> None:
+            with os.fdopen(output_fd, "wb") as output_file:
+                output_file.flush()
+                os.fsync(output_file.fileno())
+
+        await asyncio.to_thread(_write_input_file)
+        await asyncio.to_thread(_create_output_placeholder)
 
         input_path = Path(input_name)
         output_path = Path(output_name)
@@ -493,7 +502,7 @@ async def normalize_reference_audio_to_wav(
         )
         if not converted or not output_path.exists():
             raise RuntimeError("Failed to normalize PocketTTS.cpp reference audio to WAV")
-        normalized = output_path.read_bytes()
+        normalized = await asyncio.to_thread(output_path.read_bytes)
         if normalized[:4] != b"RIFF" or normalized[8:12] != b"WAVE":
             raise RuntimeError("PocketTTS.cpp reference normalization did not produce WAV bytes")
         return normalized
@@ -503,10 +512,33 @@ async def normalize_reference_audio_to_wav(
         with contextlib.suppress(OSError):
             Path(output_name).unlink()
 
-
-def _write_runtime_file(path: Path, payload: bytes) -> None:
+def _write_runtime_file_sync(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(payload)
+    temp_fd, temp_name = tempfile.mkstemp(
+        prefix=f"{path.stem}.",
+        suffix=f"{path.suffix}.tmp",
+        dir=str(path.parent),
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(temp_fd, "wb") as temp_file:
+            temp_file.write(payload)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        with contextlib.suppress(OSError):
+            temp_path.unlink()
+        raise
+
+
+async def _write_runtime_file(path: Path, payload: bytes) -> None:
+    await asyncio.to_thread(_write_runtime_file_sync, path, payload)
 
 
 async def materialize_custom_voice_reference(
@@ -521,14 +553,7 @@ async def materialize_custom_voice_reference(
     target_path = runtime_dir / f"custom_{voice_id}.wav"
     voice_bytes = await voice_manager.load_voice_reference_audio(user_id, voice_id)
     normalized_bytes = await normalize_reference_audio_to_wav(voice_bytes)
-    _write_runtime_file(target_path, normalized_bytes)
-    if cache_max_bytes is not None:
-        prune_materialized_voice_cache(
-            runtime_dir,
-            cache_ttl_hours=None,
-            cache_max_bytes=cache_max_bytes,
-            protected_paths={target_path},
-        )
+    await _write_runtime_file(target_path, normalized_bytes)
     return target_path
 
 
@@ -548,14 +573,7 @@ async def materialize_direct_voice_reference(
         target_path = runtime_dir / f"ref_{digest}.wav"
     else:
         target_path = runtime_dir / f"ref_{digest}_{uuid.uuid4().hex}.wav"
-    _write_runtime_file(target_path, normalized_bytes)
-    if cache_max_bytes is not None:
-        prune_materialized_voice_cache(
-            runtime_dir,
-            cache_ttl_hours=None,
-            cache_max_bytes=cache_max_bytes,
-            protected_paths={target_path},
-        )
+    await _write_runtime_file(target_path, normalized_bytes)
     return target_path, not persist_direct_voice_references
 
 
