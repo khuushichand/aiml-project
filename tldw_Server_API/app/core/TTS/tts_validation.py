@@ -26,6 +26,7 @@ from .tts_exceptions import (
     TTSVoiceNotFoundError,
 )
 from .utils import parse_bool, resolve_qwen3_runtime_name
+from .voice_manager import PROVIDER_REQUIREMENTS
 
 #
 #######################################################################################################################
@@ -567,6 +568,7 @@ class TTSInputValidator:
                 self._validate_voice(request.voice, provider)
 
             min_duration = None
+            max_duration = None
             if isinstance(request.extra_params, dict):
                 min_duration = self._coerce_float(request.extra_params.get("reference_duration_min"))
 
@@ -641,6 +643,10 @@ class TTSInputValidator:
                         "PocketTTS.cpp requires a direct voice_reference or a stored custom: voice",
                         provider=provider,
                     )
+                duration_limits = PROVIDER_REQUIREMENTS.get("pocket_tts_cpp", {}).get("duration", {})
+                if min_duration is None:
+                    min_duration = self._coerce_float(duration_limits.get("min"))
+                max_duration = self._coerce_float(duration_limits.get("max"))
 
             # Validate parameters (provider-aware)
             self._validate_parameters(request, provider)
@@ -654,7 +660,11 @@ class TTSInputValidator:
 
             # Validate voice reference if provided
             if request.voice_reference:
-                self._validate_voice_reference(request.voice_reference, min_duration=min_duration)
+                self._validate_voice_reference(
+                    request.voice_reference,
+                    min_duration=min_duration,
+                    max_duration=max_duration,
+                )
 
             return True, None
 
@@ -870,7 +880,12 @@ class TTSInputValidator:
             if voice_clone_prompt is not None:
                 self._validate_voice_clone_prompt(voice_clone_prompt, provider)
 
-    def _validate_voice_reference(self, voice_ref_data: bytes, min_duration: Optional[float] = None):
+    def _validate_voice_reference(
+        self,
+        voice_ref_data: bytes,
+        min_duration: Optional[float] = None,
+        max_duration: Optional[float] = None,
+    ):
         """Validate voice reference audio for cloning"""
         if len(voice_ref_data) == 0:
             raise TTSInvalidVoiceReferenceError("Voice reference data is empty")
@@ -887,7 +902,7 @@ class TTSInputValidator:
                 "Voice reference file is not a valid audio format"
             )
 
-        if min_duration is not None and min_duration > 0:
+        if (min_duration is not None and min_duration > 0) or (max_duration is not None and max_duration > 0):
             try:
                 import io
 
@@ -905,10 +920,15 @@ class TTSInputValidator:
                     "Unable to read voice reference audio for duration validation",
                     details={"error": str(exc)},
                 ) from exc
-            if duration < min_duration:
+            if min_duration is not None and duration < min_duration:
                 raise TTSInvalidVoiceReferenceError(
                     f"Voice reference audio too short: {duration:.2f}s (min {min_duration}s)",
                     details={"duration_seconds": duration, "min_seconds": min_duration},
+                )
+            if max_duration is not None and duration > max_duration:
+                raise TTSInvalidVoiceReferenceError(
+                    f"Voice reference audio too long: {duration:.2f}s (max {max_duration}s)",
+                    details={"duration_seconds": duration, "max_seconds": max_duration},
                 )
 
     def _sanitize_html(self, text: str) -> str:

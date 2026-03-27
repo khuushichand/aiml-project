@@ -355,18 +355,22 @@ Success means:
 - the `text` field is close to `This is the accelerated audio setup smoke test`
 - the backend matches the path you intended
 
-## Optional Alternative: `pocket_tts`
+## Optional Alternatives: PocketTTS Runtimes
 
-Use `pocket_tts` instead of `supertonic` if local voice cloning matters more than the simplest first-run TTS path.
+Use a PocketTTS runtime instead of `supertonic` if local voice cloning matters more than the simplest first-run TTS path.
 
 Use:
 
-- [PocketTTS Voice Cloning Guide](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/User_Guides/WebUI_Extension/PocketTTS_Voice_Cloning_Guide.md)
+- [PocketTTS Voice Cloning Guide](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/User_Guides/WebUI_Extension/PocketTTS_Voice_Cloning_Guide.md) for `pocket_tts` (Python/ONNX)
+- `python Helper_Scripts/TTS_Installers/install_tts_pocket_tts_cpp.py` for `pocket_tts_cpp` (compiled native runtime)
 
-Tradeoff:
+Tradeoffs:
 
-- excellent if voice cloning is the point
-- worse as the default first sound path because reference audio is mandatory
+- `pocket_tts` is the ONNX/Python runtime and is the simplest PocketTTS path to read and debug.
+- `pocket_tts_cpp` is a separate compiled runtime and uses a different installer and runtime layout.
+- Both are excellent if voice cloning is the point.
+- Both are worse than the default first-sound path because you still need either a direct `voice_reference` clip or a stored `custom:<voice_id>` voice.
+- `pocket_tts_cpp` streaming is only available when the local CLI probe proves incremental on this install; otherwise streaming requests fail closed.
 
 ## Better But More Demanding: `qwen3_tts`
 

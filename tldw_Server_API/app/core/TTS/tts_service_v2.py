@@ -11,6 +11,7 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Optional
 
 #
@@ -33,6 +34,16 @@ from .adapter_registry import (
     get_tts_factory,
 )
 from .adapters.base import AudioFormat, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse
+from .adapters.pocket_tts_cpp_runtime import (
+    cleanup_transient_voice_reference,
+    get_runtime_dir,
+    materialize_custom_voice_reference,
+    materialize_direct_voice_reference,
+    prune_materialized_voice_cache,
+    PROVIDER_MANAGED_VOICE_TOKEN_KEY,
+    register_provider_managed_voice_path,
+    revoke_provider_managed_voice_token,
+)
 from .audio_utils import (
     crossfade_audio,
     evaluate_audio_quality,
@@ -264,6 +275,207 @@ class TTSServiceV2:
             ("correlation_id", "x_correlation_id", "x-correlation-id"),
         )
         return request_id, correlation_id
+
+    def _get_provider_runtime_config(self, provider_key: str) -> dict[str, Any]:
+        """Best-effort provider config lookup for runtime materialization settings."""
+        config_source = None
+        for factory in (self.factory, self._factory):
+            registry = getattr(factory, "registry", None) if factory is not None else None
+            if registry is None:
+                continue
+            config_source = getattr(registry, "config", None)
+            if config_source is not None:
+                break
+
+        if config_source is None:
+            return {}
+
+        if hasattr(config_source, "model_dump"):
+            config_source = config_source.model_dump()
+        elif hasattr(config_source, "dict"):
+            config_source = config_source.dict()
+
+        providers_cfg = None
+        if isinstance(config_source, dict):
+            providers_cfg = config_source.get("providers")
+        else:
+            providers_cfg = getattr(config_source, "providers", None)
+
+        if providers_cfg is None:
+            return {}
+
+        provider_cfg = providers_cfg.get(provider_key) if isinstance(providers_cfg, dict) else getattr(providers_cfg, provider_key, None)
+        if provider_cfg is None:
+            return {}
+        if hasattr(provider_cfg, "model_dump"):
+            provider_cfg = provider_cfg.model_dump()
+        elif hasattr(provider_cfg, "dict"):
+            provider_cfg = provider_cfg.dict()
+        return provider_cfg if isinstance(provider_cfg, dict) else {}
+
+    @staticmethod
+    def _extract_reference_text_from_extras(extras: dict[str, Any]) -> Optional[str]:
+        for key in (
+            "pocket_tts_cpp_reference_text",
+            "reference_text",
+            "ref_text",
+            "voice_reference_text",
+        ):
+            value = extras.get(key)
+            if value is None:
+                continue
+            try:
+                parsed = str(value).strip()
+            except _TTS_NONCRITICAL_EXCEPTIONS:
+                continue
+            if parsed:
+                return parsed
+        return None
+
+    async def _apply_pocket_tts_cpp_runtime_materialization(
+        self,
+        request: TTSRequest,
+        *,
+        user_id: int,
+        voice_manager: Any,
+        metadata: Optional[Any],
+    ) -> None:
+        extras = request.extra_params or {}
+        if not isinstance(extras, dict):
+            extras = {}
+
+        provider_cfg = self._get_provider_runtime_config("pocket_tts_cpp")
+
+        voice_path = None
+        is_transient = False
+        voice_name = request.voice or ""
+        if isinstance(voice_name, str) and voice_name.startswith("custom:"):
+            voice_id = voice_name.split("custom:", 1)[-1].strip()
+            if voice_id:
+                voice_path = await materialize_custom_voice_reference(
+                    voice_manager=voice_manager,
+                    user_id=user_id,
+                    voice_id=voice_id,
+                    cache_max_bytes=provider_cfg.get("cache_max_bytes_per_user"),
+                )
+        elif request.voice_reference:
+            voice_path, is_transient = await materialize_direct_voice_reference(
+                voice_manager=voice_manager,
+                user_id=user_id,
+                voice_reference=request.voice_reference,
+                persist_direct_voice_references=bool(
+                    provider_cfg.get("persist_direct_voice_references", False)
+                ),
+                cache_max_bytes=provider_cfg.get("cache_max_bytes_per_user"),
+            )
+
+        if voice_path is None:
+            request.extra_params = extras
+            return
+
+        reference_text = self._extract_reference_text_from_extras(extras)
+        if reference_text is None and metadata is not None:
+            reference_text = getattr(metadata, "reference_text", None)
+
+        trust_token = register_provider_managed_voice_path(voice_path)
+        runtime_dir = get_runtime_dir(voice_manager=voice_manager, user_id=user_id)
+        prune_materialized_voice_cache(
+            runtime_dir,
+            cache_ttl_hours=provider_cfg.get("cache_ttl_hours"),
+            cache_max_bytes=provider_cfg.get("cache_max_bytes_per_user"),
+            protected_paths={voice_path},
+        )
+        extras["pocket_tts_cpp_voice_path"] = str(voice_path)
+        extras[PROVIDER_MANAGED_VOICE_TOKEN_KEY] = trust_token
+        if reference_text:
+            extras["pocket_tts_cpp_reference_text"] = reference_text
+        if is_transient:
+            extras["_pocket_tts_cpp_transient_voice_path"] = str(voice_path)
+        else:
+            extras.pop("_pocket_tts_cpp_transient_voice_path", None)
+        request.extra_params = extras
+
+    def _cleanup_transient_pocket_tts_cpp_voice_path(
+        self,
+        request: TTSRequest,
+    ) -> None:
+        extras = getattr(request, "extra_params", None)
+        if not isinstance(extras, dict):
+            return
+        managed_voice_path_raw = extras.get("pocket_tts_cpp_voice_path")
+        trust_token = extras.pop(PROVIDER_MANAGED_VOICE_TOKEN_KEY, None)
+        revoke_provider_managed_voice_token(
+            trust_token,
+            Path(str(managed_voice_path_raw)) if managed_voice_path_raw else None,
+        )
+        raw_path = extras.pop("_pocket_tts_cpp_transient_voice_path", None)
+        if not raw_path:
+            raw_path = None
+        if raw_path:
+            cleanup_transient_voice_reference(Path(str(raw_path)), True)
+
+    async def _close_response_audio_stream(self, response: Optional[TTSResponse]) -> None:
+        if response is None:
+            return
+        audio_stream = getattr(response, "audio_stream", None)
+        if audio_stream and hasattr(audio_stream, "aclose"):
+            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+                await audio_stream.aclose()
+
+    async def _prepare_generate_speech_request(
+        self,
+        *,
+        request: OpenAISpeechRequest,
+        tts_request: TTSRequest,
+        provider: Optional[str],
+        provider_hint: Optional[str],
+        provider_overrides: Optional[dict[str, Any]],
+        fallback: bool,
+        user_id: Optional[int],
+    ) -> tuple[TTSAdapter, str, TTSRequest]:
+        """Resolve provider-managed request state before execution begins."""
+        prepared = False
+        try:
+            self._apply_token_defaults(tts_request)
+            validate_tts_request(
+                tts_request,
+                provider=provider_hint,
+                config=self._get_validation_config(),
+            )
+            await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
+
+            adapter = await self._get_adapter(request.model, provider, overrides=provider_overrides)
+            if not adapter and fallback:
+                adapter = await self._get_fallback_adapter(tts_request)
+            if not adapter:
+                raise TTSProviderNotConfiguredError(
+                    f"No TTS adapter available for model '{request.model}'",
+                    provider=provider,
+                )
+
+            provider_key = self._resolve_provider_key(adapter)
+            try:
+                resource_mgr = await get_resource_manager()
+                resource_mgr.touch_model(provider_key, getattr(tts_request, "model", None))
+            except _TTS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Non-critical touch_model failure for provider {} model {}: {}",
+                    provider_key,
+                    getattr(tts_request, "model", None),
+                    exc,
+                )
+
+            request_for_provider = self._maybe_sanitize_request(tts_request, provider_key)
+            validate_tts_request(
+                request_for_provider,
+                provider=provider_key,
+                config=self._get_validation_config(),
+            )
+            prepared = True
+            return adapter, provider_key, request_for_provider
+        finally:
+            if not prepared:
+                self._cleanup_transient_pocket_tts_cpp_voice_path(tts_request)
 
     def _get_tts_request_observability(
         self,
@@ -1009,8 +1221,10 @@ class TTSServiceV2:
             # Ignore resource check errors in legacy path
             pass
 
-        # Delegate to adapter.generate and return its response
-        return await adapter.generate(request)  # type: ignore[union-attr]
+        try:
+            return await adapter.generate(request)  # type: ignore[union-attr]
+        finally:
+            self._cleanup_transient_pocket_tts_cpp_voice_path(request)
 
     async def generate_stream(self, request: TTSRequest) -> AsyncGenerator[bytes, None]:
         """Legacy streaming wrapper expected by unit tests."""
@@ -1037,10 +1251,12 @@ class TTSServiceV2:
         except _TTS_NONCRITICAL_EXCEPTIONS:
             pass
 
-        # Adapter is expected to expose `generate_stream` in legacy tests
-        stream = await adapter.generate_stream(request)  # type: ignore[attr-defined]
-        async for chunk in stream:
-            yield chunk
+        try:
+            stream = await adapter.generate_stream(request)  # type: ignore[attr-defined]
+            async for chunk in stream:
+                yield chunk
+        finally:
+            self._cleanup_transient_pocket_tts_cpp_voice_path(request)
 
     async def list_providers(self) -> list[str]:
         """Legacy provider listing wrapper."""
@@ -1482,12 +1698,16 @@ class TTSServiceV2:
             except _TTS_NONCRITICAL_EXCEPTIONS:
                 provider_hint = None
 
-        await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
-        self._apply_token_defaults(tts_request)
-
-        # Validate the request first
         try:
-            validate_tts_request(tts_request, provider=provider_hint, config=self._get_validation_config())
+            adapter, provider_key, request_for_provider = await self._prepare_generate_speech_request(
+                request=request,
+                tts_request=tts_request,
+                provider=provider,
+                provider_hint=provider_hint,
+                provider_overrides=provider_overrides,
+                fallback=fallback,
+                user_id=user_id,
+            )
         except TTSValidationError as e:
             logger.error(f"TTS request validation failed: {e}")
             if self._stream_errors_as_audio:
@@ -1495,31 +1715,12 @@ class TTSServiceV2:
                 return
             else:
                 raise
-
-        # Get adapter
-        adapter = await self._get_adapter(request.model, provider, overrides=provider_overrides)
-        if not adapter and fallback:
-            # Try to find any available adapter
-            adapter = await self._get_fallback_adapter(tts_request)
-
-        if not adapter:
-            error = TTSProviderNotConfiguredError(
-                f"No TTS adapter available for model '{request.model}'",
-                provider=provider,
-            )
+        except TTSProviderNotConfiguredError as error:
             logger.error(str(error))
             if self._stream_errors_as_audio:
                 yield f"ERROR: {str(error)}".encode()
                 return
             raise error
-
-        provider_key = self._resolve_provider_key(adapter)
-        # Update model usage for LRU cache tracking (best-effort)
-        try:
-            resource_mgr = await get_resource_manager()
-            resource_mgr.touch_model(provider_key, getattr(tts_request, "model", None))
-        except _TTS_NONCRITICAL_EXCEPTIONS:
-            pass
 
         # Track metrics
         start_time = time.time()
@@ -1530,6 +1731,7 @@ class TTSServiceV2:
         voice_to_voice_recorded = False
         voice_to_voice_route_label = voice_to_voice_route or "audio.speech"
         voice_to_voice_start_ts: Optional[float] = None
+        response: Optional[TTSResponse] = None
         try:
             if voice_to_voice_start is not None:
                 start_val = float(voice_to_voice_start)
@@ -1544,19 +1746,6 @@ class TTSServiceV2:
                 tts_request.voice_to_voice_route = voice_to_voice_route_label
             except _TTS_NONCRITICAL_EXCEPTIONS:
                 pass
-
-        # Re-validate against the concrete adapter's provider (important for fallback providers)
-        try:
-            request_for_provider = tts_request
-            request_for_provider = self._maybe_sanitize_request(tts_request, provider_key)
-            validate_tts_request(request_for_provider, provider=provider_key, config=self._get_validation_config())
-        except TTSValidationError as e:
-            logger.error(f"TTS request validation failed for provider {provider_key}: {e}")
-            if self._stream_errors_as_audio:
-                yield b"ERROR: Unable to generate audio."
-                return
-            else:
-                raise
 
         def _record_voice_to_voice(provider_name: str) -> None:
             nonlocal voice_to_voice_recorded
@@ -1588,9 +1777,6 @@ class TTSServiceV2:
                     if self.circuit_manager:
                         breaker_provider_key = self._resolve_circuit_breaker_key(provider_key, adapter)
                         circuit_breaker = await self.circuit_manager.get_breaker(breaker_provider_key)
-
-                    # Generate response (with or without circuit breaker)
-                    response: Optional[TTSResponse] = None
 
                     async def _generate_with_adapter() -> TTSResponse:
                         should_chunk, target_chars, max_chars, min_chars, crossfade_ms = self._should_service_chunk(
@@ -1675,9 +1861,7 @@ class TTSServiceV2:
                             request_for_provider,
                         )
                         if metadata_only:
-                            if response.audio_stream and hasattr(response.audio_stream, "aclose"):
-                                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
-                                    await response.audio_stream.aclose()
+                            await self._close_response_audio_stream(response)
                             with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 self._record_tts_metrics(
                                     provider=provider_key,
@@ -1882,6 +2066,8 @@ class TTSServiceV2:
                 else:
                     raise tts_error from e
         finally:
+            await self._close_response_audio_stream(response)
+            self._cleanup_transient_pocket_tts_cpp_voice_path(request_for_provider)
             try:
                 if not released_active_slot:
                     await self._decrement_active_requests(provider_key)
@@ -1896,6 +2082,7 @@ class TTSServiceV2:
                     fallback_plan[1],
                     metadata_only=True,
                     metadata_target=request,
+                    user_id=user_id,
                 ):
                     pass
                 return
@@ -1905,6 +2092,7 @@ class TTSServiceV2:
                 fallback_plan[1],
                 metadata_only=False,
                 metadata_target=request,
+                user_id=user_id,
             ):
                 yield chunk
             return
@@ -1915,14 +2103,35 @@ class TTSServiceV2:
         request: TTSRequest,
         metadata_only: bool = False,
         metadata_target: Optional[Any] = None,
+        user_id: Optional[int] = None,
     ) -> AsyncGenerator[bytes, None]:
         """Generate audio with a specific adapter"""
         provider_key = self._resolve_provider_key(adapter)
+        request_for_provider = request
+        active_requests_incremented = False
+        start_time = time.time()
+        audio_size = 0
+        success = False
+        error_message: Optional[str] = None
+        voice_metric_recorded = False
+        v2v_start: Optional[float] = None
+        v2v_route = getattr(request_for_provider, "voice_to_voice_route", "audio.speech") or "audio.speech"
+        response: Optional[TTSResponse] = None
         # Ensure the request is valid for the concrete adapter/provider.
         try:
+            if provider_key == "pocket_tts_cpp" and user_id is not None:
+                extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+                if not (
+                    isinstance(extras, dict)
+                    and extras.get("pocket_tts_cpp_voice_path")
+                    and extras.get(PROVIDER_MANAGED_VOICE_TOKEN_KEY)
+                ):
+                    await self._apply_custom_voice_reference(request, user_id, provider_key)
             request_for_provider = self._maybe_sanitize_request(request, provider_key)
             validate_tts_request(request_for_provider, provider=provider_key, config=self._get_validation_config())
-        except TTSValidationError as e:
+        except _TTS_NONCRITICAL_EXCEPTIONS as e:
+            if provider_key == "pocket_tts_cpp":
+                self._cleanup_transient_pocket_tts_cpp_voice_path(request)
             logger.error(f"TTS request validation failed for provider {provider_key}: {e}")
             if self._stream_errors_as_audio:
                 yield b"ERROR: Unable to generate audio."
@@ -1931,12 +2140,8 @@ class TTSServiceV2:
                 raise
 
         await self._increment_active_requests(provider_key)
+        active_requests_incremented = True
         start_time = time.time()
-        audio_size = 0
-        success = False
-        error_message: Optional[str] = None
-        voice_metric_recorded = False
-        v2v_start: Optional[float] = None
         try:
             raw = getattr(request_for_provider, "voice_to_voice_start", None)
             if raw is not None:
@@ -1945,7 +2150,6 @@ class TTSServiceV2:
                     v2v_start = parsed
         except _TTS_NONCRITICAL_EXCEPTIONS:
             v2v_start = None
-        v2v_route = getattr(request_for_provider, "voice_to_voice_route", "audio.speech") or "audio.speech"
 
         def _record_voice_to_voice() -> None:
             nonlocal voice_metric_recorded
@@ -2030,23 +2234,26 @@ class TTSServiceV2:
                 yield f"ERROR: All providers failed - {str(e)}".encode()
             raise TTSGenerationError(f"All providers failed - {str(e)}") from e
         finally:
-            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
-                await self._decrement_active_requests(provider_key)
-            try:
-                duration = time.time() - start_time
-                self._record_tts_metrics(
-                    provider=provider_key,
-                    model=getattr(request_for_provider, "model", None) or provider_key,
-                    voice=request_for_provider.voice or "default",
-                    format=request_for_provider.format.value,
-                    text_length=len(request_for_provider.text),
-                    audio_size=audio_size,
-                    duration=duration if duration >= 0 else 0.0,
-                    success=success,
-                    error=error_message if not success else None
-                )
-            except _TTS_NONCRITICAL_EXCEPTIONS:
-                pass
+            await self._close_response_audio_stream(response)
+            self._cleanup_transient_pocket_tts_cpp_voice_path(request_for_provider)
+            if active_requests_incremented:
+                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+                    await self._decrement_active_requests(provider_key)
+                try:
+                    duration = time.time() - start_time
+                    self._record_tts_metrics(
+                        provider=provider_key,
+                        model=getattr(request_for_provider, "model", None) or provider_key,
+                        voice=request_for_provider.voice or "default",
+                        format=request_for_provider.format.value,
+                        text_length=len(request_for_provider.text),
+                        audio_size=audio_size,
+                        duration=duration if duration >= 0 else 0.0,
+                        success=success,
+                        error=error_message if not success else None
+                    )
+                except _TTS_NONCRITICAL_EXCEPTIONS:
+                    pass
 
     def _convert_request(self, request: OpenAISpeechRequest) -> TTSRequest:
         """Convert OpenAI request to unified TTS request"""
@@ -2173,63 +2380,90 @@ class TTSServiceV2:
         if not user_id:
             return
         voice_id = request.voice or ""
-        if not isinstance(voice_id, str) or not voice_id.startswith("custom:"):
-            return
-        raw_id = voice_id.split("custom:", 1)[-1].strip()
-        if not raw_id:
-            return
+        is_custom_voice = isinstance(voice_id, str) and voice_id.startswith("custom:")
+        raw_id = voice_id.split("custom:", 1)[-1].strip() if is_custom_voice else ""
+        provider_key = (provider_hint or "").lower()
         try:
             from tldw_Server_API.app.core.TTS.voice_manager import VoiceProcessingError, get_voice_manager
 
             voice_manager = get_voice_manager()
-            if request.voice_reference is None:
+            metadata = None
+            if is_custom_voice and raw_id and request.voice_reference is None:
                 request.voice_reference = await voice_manager.load_voice_reference_audio(user_id, raw_id)
 
-            metadata = await voice_manager.load_reference_metadata(user_id, raw_id)
             extras = request.extra_params or {}
             if not isinstance(extras, dict):
                 extras = {}
 
-            ref_text_keys = ("reference_text", "ref_text", "voice_reference_text")
-            has_ref_text = any(extras.get(key) for key in ref_text_keys)
+            if is_custom_voice and raw_id:
+                metadata = await voice_manager.load_reference_metadata(user_id, raw_id)
+                ref_text_keys = ("reference_text", "ref_text", "voice_reference_text")
+                has_ref_text = any(extras.get(key) for key in ref_text_keys)
 
-            if metadata:
-                provider_key = (provider_hint or "").lower()
-                artifacts = metadata.provider_artifacts.get(provider_key) if provider_key else None
-                if artifacts:
-                    if "ref_codes" not in extras and artifacts.get("ref_codes") is not None:
-                        extras["ref_codes"] = artifacts.get("ref_codes")
-                    if not has_ref_text:
-                        extras["reference_text"] = (
-                            artifacts.get("reference_text") or metadata.reference_text
-                        )
-                elif not has_ref_text and metadata.reference_text:
-                    extras["reference_text"] = metadata.reference_text
+                if metadata:
+                    artifacts = metadata.provider_artifacts.get(provider_key) if provider_key else None
+                    if artifacts:
+                        if "ref_codes" not in extras and artifacts.get("ref_codes") is not None:
+                            extras["ref_codes"] = artifacts.get("ref_codes")
+                        if not has_ref_text:
+                            extras["reference_text"] = (
+                                artifacts.get("reference_text") or metadata.reference_text
+                            )
+                    elif not has_ref_text and metadata.reference_text:
+                        extras["reference_text"] = metadata.reference_text
 
-                if provider_key == "qwen3_tts" and "voice_clone_prompt" not in extras:
-                    if metadata.voice_clone_prompt_b64:
-                        if metadata.voice_clone_prompt_format:
-                            extras["voice_clone_prompt"] = {
-                                "format": metadata.voice_clone_prompt_format,
-                                "data_b64": metadata.voice_clone_prompt_b64,
-                            }
-                        else:
-                            extras["voice_clone_prompt"] = metadata.voice_clone_prompt_b64
+                    if provider_key == "qwen3_tts" and "voice_clone_prompt" not in extras:
+                        if metadata.voice_clone_prompt_b64:
+                            if metadata.voice_clone_prompt_format:
+                                extras["voice_clone_prompt"] = {
+                                    "format": metadata.voice_clone_prompt_format,
+                                    "data_b64": metadata.voice_clone_prompt_b64,
+                                }
+                            else:
+                                extras["voice_clone_prompt"] = metadata.voice_clone_prompt_b64
 
+            if (provider_hint or "").lower() == "pocket_tts_cpp":
+                await self._apply_pocket_tts_cpp_runtime_materialization(
+                    request,
+                    user_id=user_id,
+                    voice_manager=voice_manager,
+                    metadata=metadata,
+                )
+                extras = request.extra_params if isinstance(request.extra_params, dict) else extras
             request.extra_params = extras
         except VoiceProcessingError as e:
+            if provider_key == "pocket_tts_cpp":
+                raise TTSValidationError(
+                    "PocketTTS.cpp voice reference preparation failed",
+                    provider="pocket_tts_cpp",
+                    error_code="pocket_tts_cpp_voice_materialization_failed",
+                    details={
+                        "voice_id": raw_id or None,
+                        "reason": str(e),
+                    },
+                ) from e
             request_id, _ = self._get_tts_request_observability(request)
             logger.warning(
                 "Custom voice resolution failed for {} (request_id={}): {}",
-                raw_id,
+                raw_id or "direct-reference",
                 request_id or "unknown",
                 e,
             )
         except _TTS_NONCRITICAL_EXCEPTIONS as e:
+            if provider_key == "pocket_tts_cpp":
+                raise TTSGenerationError(
+                    "PocketTTS.cpp voice reference preparation failed",
+                    provider="pocket_tts_cpp",
+                    error_code="pocket_tts_cpp_voice_materialization_failed",
+                    details={
+                        "voice_id": raw_id or None,
+                        "reason": str(e),
+                    },
+                ) from e
             request_id, _ = self._get_tts_request_observability(request)
             logger.warning(
                 "Custom voice resolution error for {} (request_id={}): {}",
-                raw_id,
+                raw_id or "direct-reference",
                 request_id or "unknown",
                 e,
             )
@@ -2638,6 +2872,7 @@ class TTSServiceV2:
         *,
         metadata_only: bool = False,
         metadata_target: Optional[Any] = None,
+        user_id: Optional[int] = None,
     ) -> AsyncGenerator[bytes, None]:
         """
         Try fallback providers in priority order.
@@ -2668,9 +2903,10 @@ class TTSServiceV2:
                         fallback_adapter,
                         request,
                         metadata_only=metadata_only,
-                            metadata_target=metadata_target,
-                        ):
-                            yield chunk
+                        metadata_target=metadata_target,
+                        user_id=user_id,
+                    ):
+                        yield chunk
                 finally:
                     request.model = original_model
                 logger.info(f"Successfully fell back to {fallback_provider_key}")
@@ -2716,6 +2952,7 @@ class TTSServiceV2:
                                     request,
                                     metadata_only=metadata_only,
                                     metadata_target=metadata_target,
+                                    user_id=user_id,
                                 ):
                                     yield chunk
                             finally:

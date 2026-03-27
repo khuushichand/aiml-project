@@ -1,4 +1,7 @@
 import os
+import wave
+from io import BytesIO
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock
 from fastapi import FastAPI
@@ -8,8 +11,27 @@ from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_rou
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.TTS.adapters.base import TTSResponse
+from tldw_Server_API.app.core.TTS.adapters.pocket_tts_cpp_runtime import (
+    PROVIDER_MANAGED_VOICE_TOKEN_KEY,
+)
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata
+
+
+def _make_wav_bytes(
+    payload: bytes = b"\x00\x01" * 8,
+    *,
+    sample_rate: int = 24000,
+    channels: int = 1,
+    sample_width: int = 2,
+) -> bytes:
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sample_width)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(payload)
+    return buffer.getvalue()
 
 
 @pytest.fixture
@@ -84,6 +106,94 @@ def test_custom_voice_resolution_populates_reference(client, monkeypatch):
 
     payload = {
         "model": "neutts-air",
+        "input": "Hello world",
+        "voice": "custom:voice-1",
+        "response_format": "pcm",
+        "stream": False,
+    }
+    try:
+        r = client.post(
+            "/api/v1/audio/speech",
+            json=payload,
+            headers={"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]},
+        )
+        assert r.status_code == 200, r.text
+        assert r.content == b"ok"
+    finally:
+        client.app.dependency_overrides.pop(audio_endpoints.get_tts_service, None)
+
+
+def test_pocket_tts_cpp_custom_voice_resolution_uses_stable_path_and_reference_text(
+    client, monkeypatch, tmp_path
+):
+    voices_root = tmp_path / "voices"
+    expected_wav = _make_wav_bytes(b"\x02\x03" * 8)
+
+    class _FakeVoiceManager:
+        def get_user_voices_path(self, user_id):
+            assert str(user_id) == "1"
+            voices_root.mkdir(parents=True, exist_ok=True)
+            return voices_root
+
+        async def load_voice_reference_audio(self, user_id, voice_id):
+            assert str(user_id) == "1"
+            assert voice_id == "voice-1"
+            return expected_wav
+
+        async def load_reference_metadata(self, user_id, voice_id):
+            return VoiceReferenceMetadata(
+                voice_id=voice_id,
+                reference_text="stored text",
+            )
+
+    class _FakeAdapter:
+        provider_name = "pocket_tts_cpp"
+        provider_key = "pocket_tts_cpp"
+
+        async def generate(self, request):
+            voice_path = request.extra_params.get("pocket_tts_cpp_voice_path")
+            assert voice_path is not None
+            assert voice_path.endswith("/voices/providers/pocket_tts_cpp/custom_voice-1.wav")
+            assert Path(voice_path).exists()
+            assert Path(voice_path).read_bytes()[:4] == b"RIFF"
+            with wave.open(str(voice_path), "rb") as wav_file:
+                assert wav_file.getnchannels() == 1
+                assert wav_file.getsampwidth() == 2
+                assert wav_file.getframerate() == 24000
+            assert request.extra_params.get(PROVIDER_MANAGED_VOICE_TOKEN_KEY)
+            assert request.extra_params.get("pocket_tts_cpp_reference_text") == "stored text"
+            return TTSResponse(audio_data=b"ok", format=request.format, sample_rate=24000)
+
+    def _fake_get_voice_manager():
+        return _FakeVoiceManager()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.voice_manager.get_voice_manager",
+        _fake_get_voice_manager,
+        raising=True,
+    )
+
+    class _FakeFactory:
+        def get_provider_for_model(self, _model):
+            return "pocket_tts_cpp"
+
+    service = TTSServiceV2()
+    service._ensure_factory = AsyncMock(return_value=_FakeFactory())
+    service._get_adapter = AsyncMock(return_value=_FakeAdapter())
+
+    async def _fake_get_tts_service_v2():
+        return service
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.TTS.tts_service_v2.get_tts_service_v2",
+        _fake_get_tts_service_v2,
+        raising=True,
+    )
+
+    client.app.dependency_overrides[audio_endpoints.get_tts_service] = _fake_get_tts_service_v2
+
+    payload = {
+        "model": "pocket_tts_cpp",
         "input": "Hello world",
         "voice": "custom:voice-1",
         "response_format": "pcm",

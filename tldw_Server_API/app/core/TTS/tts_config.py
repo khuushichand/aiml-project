@@ -47,8 +47,6 @@ class ProviderConfig(BaseModel):
     model_path: Optional[str] = None
     binary_path: Optional[str] = None
     tokenizer_path: Optional[str] = None
-    binary_path: Optional[str] = None
-    tokenizer_path: Optional[str] = None
     mlx_model: Optional[str] = None
     capability_override: dict[str, Any] = Field(default_factory=dict)
     device: str = "cpu"
@@ -71,10 +69,6 @@ class ProviderConfig(BaseModel):
     tokenizer_max_tokens: Optional[int] = None
     tokenizer_max_payload_mb: Optional[int] = None
     voice_clone_prompt_max_kb: Optional[int] = None
-    enable_voice_cache: bool = False
-    cache_ttl_hours: Optional[int] = None
-    cache_max_bytes_per_user: Optional[int] = None
-    persist_direct_voice_references: bool = False
     enable_voice_cache: bool = False
     cache_ttl_hours: Optional[int] = None
     cache_max_bytes_per_user: Optional[int] = None
@@ -317,14 +311,13 @@ class TTSConfigManager:
                         'kokoro',
                         'kitten_tts',
                         'higgs',
-                    'dia',
-                    'chatterbox',
-                    'vibevoice',
-                    'vibevoice_realtime',
-                    'neutts',
-                    'pocket_tts_cpp',
-                    'lux_tts',
+                        'dia',
+                        'chatterbox',
+                        'vibevoice',
+                        'vibevoice_realtime',
+                        'neutts',
                         'pocket_tts_cpp',
+                        'lux_tts',
                     ]:
                         if provider not in config_dict['providers']:
                             config_dict['providers'][provider] = {}

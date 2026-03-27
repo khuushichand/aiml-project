@@ -1,6 +1,8 @@
 # PocketTTS Voice Cloning Guide
 
-A step-by-step guide to installing PocketTTS, cloning a voice from a reference audio sample, and setting the cloned voice as your default TTS output.
+A step-by-step guide to installing PocketTTS (`pocket_tts`, the Python/ONNX runtime), cloning a voice from a reference audio sample, and setting the cloned voice as your default TTS output.
+
+If you want the separate compiled-native runtime, use `pocket_tts_cpp` and its installer helper instead. That provider has different runtime expectations and is documented in the general TTS guides, not in this ONNX-specific guide.
 
 ## What is PocketTTS?
 

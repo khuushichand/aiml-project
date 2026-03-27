@@ -666,15 +666,6 @@ class TTSAdapterRegistry:
                     alias('cache_ttl_hours', 'pocket_tts_cpp_cache_ttl_hours')
                     alias('cache_max_bytes_per_user', 'pocket_tts_cpp_cache_max_bytes_per_user')
                     alias('persist_direct_voice_references', 'pocket_tts_cpp_persist_direct_voice_references')
-                elif p == 'pocket_tts_cpp':
-                    alias('binary_path', 'pocket_tts_cpp_binary_path')
-                    alias('tokenizer_path', 'pocket_tts_cpp_tokenizer_path')
-                    alias('device', 'pocket_tts_cpp_device')
-                    alias('sample_rate', 'pocket_tts_cpp_sample_rate')
-                    alias('enable_voice_cache', 'pocket_tts_cpp_enable_voice_cache')
-                    alias('cache_ttl_hours', 'pocket_tts_cpp_cache_ttl_hours')
-                    alias('cache_max_bytes_per_user', 'pocket_tts_cpp_cache_max_bytes_per_user')
-                    alias('persist_direct_voice_references', 'pocket_tts_cpp_persist_direct_voice_references')
                 elif p == 'echo_tts':
                     alias('model', 'echo_tts_model')
                     alias('model_path', 'echo_tts_model_path')
