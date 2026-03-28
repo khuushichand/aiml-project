@@ -18,6 +18,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+from tldw_Server_API.app.core.Usage.pricing_catalog import compute_token_cost
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +75,8 @@ class SessionRecord:
     needs_bootstrap: bool = False
     # Forking lineage
     forked_from: str | None = None
+    # Model used for cost estimation
+    model: str | None = None
 
     def to_info_dict(self, *, has_websocket: bool = False) -> dict[str, Any]:
         return {
@@ -99,6 +102,12 @@ class SessionRecord:
             "policy_provenance_summary": self.policy_provenance_summary,
             "policy_refresh_error": self.policy_refresh_error,
             "forked_from": self.forked_from,
+            "model": self.model,
+            "estimated_cost_usd": compute_token_cost(
+                model=self.model,
+                prompt_tokens=self.usage.prompt_tokens,
+                completion_tokens=self.usage.completion_tokens,
+            ),
         }
 
     def to_detail_dict(
@@ -327,6 +336,7 @@ class ACPSessionStore:
             bootstrap_ready=d.get("bootstrap_ready", True),
             needs_bootstrap=d.get("needs_bootstrap", False),
             forked_from=d.get("forked_from"),
+            model=d.get("model"),
         )
 
     # ------------------------------------------------------------------
@@ -417,6 +427,7 @@ class ACPSessionStore:
         policy_provenance_summary: dict[str, Any] | None = None,
         policy_refresh_error: str | None = None,
         forked_from: str | None = None,
+        model: str | None = None,
     ) -> SessionRecord:
         d = self._db.register_session(
             session_id=session_id,
@@ -437,6 +448,7 @@ class ACPSessionStore:
             policy_provenance_summary=policy_provenance_summary,
             policy_refresh_error=policy_refresh_error,
             forked_from=forked_from,
+            model=model,
         )
         logger.debug("Registered ACP session {} for user {}", session_id, user_id)
         return self._dict_to_record(d)
@@ -579,10 +591,33 @@ class ACPSessionStore:
     async def get_agent_metrics(self) -> list[dict[str, Any]]:
         """Aggregate session metrics per agent type.
 
-        Delegates to the SQLite backend for an efficient GROUP BY query.
-        Returns a list of dicts sorted by total_tokens descending.
+        Delegates to the SQLite backend for an efficient GROUP BY query,
+        then enriches each entry with ``total_estimated_cost_usd`` computed
+        from per-session model and token counts via the pricing catalog.
         """
-        return self._db.aggregate_metrics_by_agent()
+        metrics = self._db.aggregate_metrics_by_agent()
+
+        # Compute per-session costs and aggregate by agent_type
+        cost_by_agent: dict[str, float] = {}
+        try:
+            for row in self._db.get_session_cost_data():
+                cost = compute_token_cost(
+                    model=row.get("model"),
+                    prompt_tokens=row.get("prompt_tokens", 0) or 0,
+                    completion_tokens=row.get("completion_tokens", 0) or 0,
+                )
+                if cost is not None:
+                    agent = row.get("agent_type", "custom")
+                    cost_by_agent[agent] = cost_by_agent.get(agent, 0.0) + cost
+        except Exception as exc:
+            logger.warning("Failed to compute agent cost metrics: {}", exc)
+
+        for m in metrics:
+            agent = m["agent_type"]
+            total_cost = cost_by_agent.get(agent)
+            m["total_estimated_cost_usd"] = round(total_cost, 6) if total_cost else None
+
+        return metrics
 
     # -- Agent Config CRUD --------------------------------------------------
 

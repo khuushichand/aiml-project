@@ -24,6 +24,7 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPSessionUsageResponse,
     ACPTokenUsage,
 )
+from tldw_Server_API.app.core.Usage.pricing_catalog import compute_token_cost
 from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
 
 router = APIRouter(tags=["admin-acp"])
@@ -87,6 +88,12 @@ async def admin_acp_session_usage(session_id: str) -> ACPSessionUsageResponse:
         message_count=rec.message_count,
         created_at=rec.created_at,
         last_activity_at=rec.last_activity_at,
+        model=rec.model,
+        estimated_cost_usd=compute_token_cost(
+            model=rec.model,
+            prompt_tokens=rec.usage.prompt_tokens,
+            completion_tokens=rec.usage.completion_tokens,
+        ),
     )
 
 

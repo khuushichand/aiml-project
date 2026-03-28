@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection,
 )
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     policy_snapshot_refreshed_at TEXT,
     policy_summary TEXT,
     policy_provenance_summary TEXT,
-    policy_refresh_error TEXT
+    policy_refresh_error TEXT,
+    model TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
@@ -120,6 +121,7 @@ _ALLOWED_MIGRATION_COLUMNS = {
         "policy_summary": "policy_summary TEXT",
         "policy_provenance_summary": "policy_provenance_summary TEXT",
         "policy_refresh_error": "policy_refresh_error TEXT",
+        "model": "model TEXT",
     },
     "agent_registry": {
         "mcp_orchestration": "mcp_orchestration TEXT NOT NULL DEFAULT 'agent_driven'",
@@ -316,6 +318,13 @@ class ACPSessionsDB:
                     "mcp_refresh_tools",
                     "mcp_refresh_tools INTEGER NOT NULL DEFAULT 0",
                 )
+            if current_version < 6:
+                _ensure_column(
+                    conn,
+                    "sessions",
+                    "model",
+                    "model TEXT",
+                )
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
             self._initialized = True
@@ -370,6 +379,7 @@ class ACPSessionsDB:
         policy_refresh_error: str | None = None,
         forked_from: str | None = None,
         needs_bootstrap: bool = False,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """Insert a new session record and return it as a dict."""
         conn = self._get_conn()
@@ -383,8 +393,8 @@ class ACPSessionsDB:
                 persona_id, workspace_id, workspace_group_id, scope_snapshot_id,
                 policy_snapshot_version, policy_snapshot_fingerprint, policy_snapshot_refreshed_at,
                 policy_summary, policy_provenance_summary, policy_refresh_error,
-                forked_from, needs_bootstrap
-            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                forked_from, needs_bootstrap, model
+            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id, user_id, agent_type, name, cwd,
@@ -401,6 +411,7 @@ class ACPSessionsDB:
                 else None,
                 policy_refresh_error,
                 forked_from, int(needs_bootstrap),
+                model,
             ),
         )
         conn.commit()
@@ -624,6 +635,18 @@ class ACPSessionsDB:
             }
             for r in rows
         ]
+
+    def get_session_cost_data(self) -> list[dict[str, Any]]:
+        """Return per-session (agent_type, model, prompt_tokens, completion_tokens).
+
+        Used by the service layer to compute estimated costs using the
+        pricing catalog (which lives outside the DB module).
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT agent_type, model, prompt_tokens, completion_tokens FROM sessions"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
     # Text normalization (local helper — no external imports)
@@ -853,6 +876,7 @@ class ACPSessionsDB:
             scope_snapshot_id=source.get("scope_snapshot_id"),
             forked_from=source_session_id,
             needs_bootstrap=True,
+            model=source.get("model"),
         )
 
         # Copy messages from source up to message_index (inclusive)

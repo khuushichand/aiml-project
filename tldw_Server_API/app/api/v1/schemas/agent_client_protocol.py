@@ -432,6 +432,8 @@ class ACPSessionInfo(BaseModel):
         default=None, description="Last ACP policy snapshot refresh error, if any"
     )
     forked_from: str | None = Field(default=None, description="Source session ID when this session was forked")
+    model: str | None = Field(default=None, description="LLM model used in this session (for cost estimation)")
+    estimated_cost_usd: float | None = Field(default=None, description="Estimated cost in USD based on token usage and model pricing")
 
 
 class ACPSessionListResponse(BaseModel):
@@ -474,6 +476,8 @@ class ACPSessionUsageResponse(BaseModel):
     message_count: int = 0
     created_at: str = ""
     last_activity_at: str | None = None
+    model: str | None = Field(default=None, description="LLM model used in this session")
+    estimated_cost_usd: float | None = Field(default=None, description="Estimated cost in USD")
 
 
 # -----------------------------------------------------------------------------
@@ -491,6 +495,7 @@ class ACPAgentMetrics(BaseModel):
     total_tokens: int = Field(default=0, description="Sum of total tokens across all sessions")
     total_messages: int = Field(default=0, description="Sum of messages across all sessions")
     last_used_at: str | None = Field(default=None, description="ISO 8601 timestamp of most recent activity")
+    total_estimated_cost_usd: float | None = Field(default=None, description="Total estimated cost in USD across all sessions for this agent")
 
 
 class ACPAgentMetricsListResponse(BaseModel):

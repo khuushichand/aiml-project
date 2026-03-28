@@ -1774,6 +1774,17 @@ async def acp_session_new(
         resolved_workspace_group_id = resolved_workspace_group_id or sandbox_meta.get("workspace_group_id")
         resolved_scope_snapshot_id = resolved_scope_snapshot_id or sandbox_meta.get("scope_snapshot_id")
 
+    # Resolve model from agent registry for cost tracking
+    resolved_model: str | None = None
+    try:
+        from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+        _reg = get_agent_registry()
+        _agent_entry = _reg.get_entry(resolved_agent_type or "custom")
+        if _agent_entry is not None:
+            resolved_model = _agent_entry.model or _agent_entry.mcp_llm_model
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
+
     # Persist session metadata and emit SSE event
     persisted_record = None
     try:
@@ -1790,6 +1801,7 @@ async def acp_session_new(
             workspace_id=resolved_workspace_id,
             workspace_group_id=resolved_workspace_group_id,
             scope_snapshot_id=resolved_scope_snapshot_id,
+            model=resolved_model,
         )
         if persisted_record is not None:
             try:
