@@ -77,6 +77,10 @@ class SessionRecord:
     forked_from: str | None = None
     # Model used for cost estimation
     model: str | None = None
+    # Token budget fields
+    token_budget: int | None = None
+    auto_terminate_at_budget: bool = False
+    budget_exhausted: bool = False
 
     def to_info_dict(self, *, has_websocket: bool = False) -> dict[str, Any]:
         return {
@@ -107,6 +111,14 @@ class SessionRecord:
                 model=self.model,
                 prompt_tokens=self.usage.prompt_tokens,
                 completion_tokens=self.usage.completion_tokens,
+            ),
+            "token_budget": self.token_budget,
+            "auto_terminate_at_budget": self.auto_terminate_at_budget,
+            "budget_exhausted": self.budget_exhausted,
+            "budget_remaining": (
+                max(0, self.token_budget - self.usage.total_tokens)
+                if self.token_budget is not None
+                else None
             ),
         }
 
@@ -211,6 +223,8 @@ class AgentConfig:
     enabled: bool = True
     created_at: str = ""
     updated_at: str | None = None
+    default_token_budget: int | None = None
+    default_auto_terminate_at_budget: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         import os
@@ -233,6 +247,8 @@ class AgentConfig:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "is_configured": is_configured,
+            "default_token_budget": self.default_token_budget,
+            "default_auto_terminate_at_budget": self.default_auto_terminate_at_budget,
         }
 
 
@@ -337,6 +353,9 @@ class ACPSessionStore:
             needs_bootstrap=d.get("needs_bootstrap", False),
             forked_from=d.get("forked_from"),
             model=d.get("model"),
+            token_budget=d.get("token_budget"),
+            auto_terminate_at_budget=d.get("auto_terminate_at_budget", False),
+            budget_exhausted=d.get("budget_exhausted", False),
         )
 
     # ------------------------------------------------------------------
@@ -428,6 +447,8 @@ class ACPSessionStore:
         policy_refresh_error: str | None = None,
         forked_from: str | None = None,
         model: str | None = None,
+        token_budget: int | None = None,
+        auto_terminate_at_budget: bool = False,
     ) -> SessionRecord:
         d = self._db.register_session(
             session_id=session_id,
@@ -449,9 +470,32 @@ class ACPSessionStore:
             policy_refresh_error=policy_refresh_error,
             forked_from=forked_from,
             model=model,
+            token_budget=token_budget,
+            auto_terminate_at_budget=auto_terminate_at_budget,
         )
         logger.debug("Registered ACP session {} for user {}", session_id, user_id)
         return self._dict_to_record(d)
+
+    async def update_session_budget(
+        self,
+        session_id: str,
+        token_budget: int | None,
+        auto_terminate_at_budget: bool,
+    ) -> SessionRecord | None:
+        """Update the token budget for a session. Returns updated record or None."""
+        updated = self._db.update_session_budget(
+            session_id, token_budget, auto_terminate_at_budget,
+        )
+        if not updated:
+            return None
+        return await self.get_session(session_id)
+
+    async def check_and_enforce_budget(self, session_id: str) -> bool:
+        """Check if session has exceeded its token budget.
+
+        Returns True if the session was terminated due to budget exhaustion.
+        """
+        return self._db.check_budget_and_terminate(session_id)
 
     async def update_policy_snapshot_state(
         self,
@@ -639,6 +683,8 @@ class ACPSessionStore:
                 team_id=data.get("team_id"),
                 enabled=data.get("enabled", True),
                 created_at=now,
+                default_token_budget=data.get("default_token_budget"),
+                default_auto_terminate_at_budget=data.get("default_auto_terminate_at_budget", True),
             )
             self._agent_configs[config.id] = config
         return config
@@ -650,7 +696,8 @@ class ACPSessionStore:
                 return None
             for key in ("name", "description", "system_prompt", "allowed_tools",
                         "denied_tools", "parameters", "requires_api_key",
-                        "org_id", "team_id", "enabled", "type"):
+                        "org_id", "team_id", "enabled", "type",
+                        "default_token_budget", "default_auto_terminate_at_budget"):
                 if key in data:
                     setattr(config, key, data[key])
             config.updated_at = datetime.now(timezone.utc).isoformat()

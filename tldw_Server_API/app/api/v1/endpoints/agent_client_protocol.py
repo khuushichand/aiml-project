@@ -669,6 +669,27 @@ async def _execute_acp_prompt(
     )
     if used_bootstrap:
         await _clear_acp_bootstrap_state(session_id)
+
+    # Check token budget after recording usage — auto-terminate if exceeded
+    budget_terminated = False
+    try:
+        store = await get_acp_session_store()
+        budget_terminated = await store.check_and_enforce_budget(session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Budget enforcement check failed for session {}", session_id)
+    if budget_terminated:
+        # Inject budget exhaustion notice into the result
+        result["budget_exhausted"] = True
+        result["budget_termination_notice"] = (
+            "Session auto-terminated: token budget exhausted"
+        )
+        _acp_record_audit_event(
+            action="budget_terminated",
+            user_id=int(user_id),
+            session_id=session_id,
+            metadata={"reason": "token_budget_exhausted"},
+        )
+
     _acp_record_audit_event(
         action="prompt",
         user_id=int(user_id),
@@ -1884,6 +1905,24 @@ async def acp_session_prompt(
         raise
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning("Token quota check failed (non-blocking): {}", exc)
+    # Budget exhaustion pre-check — reject prompts on budget-exhausted sessions
+    try:
+        store = await get_acp_session_store()
+        rec = await store.get_session(payload.session_id)
+        if rec and rec.budget_exhausted:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "budget_exhausted",
+                    "message": "Session token budget has been exhausted",
+                    "token_budget": rec.token_budget,
+                    "total_tokens": rec.usage.total_tokens,
+                },
+            )
+    except HTTPException:
+        raise
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Budget exhaustion pre-check failed (non-blocking): {}", exc)
     try:
         client = await get_runner_client()
         result, turn_usage = await _execute_acp_prompt(

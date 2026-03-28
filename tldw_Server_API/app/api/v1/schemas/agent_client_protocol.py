@@ -434,6 +434,10 @@ class ACPSessionInfo(BaseModel):
     forked_from: str | None = Field(default=None, description="Source session ID when this session was forked")
     model: str | None = Field(default=None, description="LLM model used in this session (for cost estimation)")
     estimated_cost_usd: float | None = Field(default=None, description="Estimated cost in USD based on token usage and model pricing")
+    token_budget: int | None = Field(default=None, description="Maximum token count for this session (NULL = no limit)")
+    auto_terminate_at_budget: bool = Field(default=False, description="Whether the session auto-terminates when budget is exceeded")
+    budget_exhausted: bool = Field(default=False, description="Whether the session was terminated due to budget exhaustion")
+    budget_remaining: int | None = Field(default=None, description="Tokens remaining before budget is hit (NULL if no budget set)")
 
 
 class ACPSessionListResponse(BaseModel):
@@ -524,6 +528,14 @@ class ACPAgentConfigCreate(BaseModel):
     org_id: int | None = Field(default=None, description="Restrict to specific organization")
     team_id: int | None = Field(default=None, description="Restrict to specific team")
     enabled: bool = Field(default=True, description="Whether the agent is enabled")
+    default_token_budget: int | None = Field(
+        default=None,
+        description="Default token budget for new sessions using this agent (NULL = no limit)",
+    )
+    default_auto_terminate_at_budget: bool = Field(
+        default=True,
+        description="Whether new sessions using this agent auto-terminate when budget is exceeded",
+    )
 
 
 class ACPAgentConfigResponse(ACPAgentConfigCreate):
@@ -577,6 +589,28 @@ class ACPPermissionPolicyListResponse(BaseModel):
 # -----------------------------------------------------------------------------
 # Health Check Response
 # -----------------------------------------------------------------------------
+
+
+class ACPSessionBudgetRequest(BaseModel):
+    """Request to set or update the token budget for an ACP session."""
+    token_budget: int | None = Field(
+        default=None,
+        description="Maximum token count for this session. NULL removes the budget.",
+    )
+    auto_terminate_at_budget: bool = Field(
+        default=True,
+        description="Whether to auto-terminate the session when the budget is exceeded.",
+    )
+
+
+class ACPSessionBudgetResponse(BaseModel):
+    """Response after updating a session's token budget."""
+    session_id: str = Field(..., description="Session identifier")
+    token_budget: int | None = Field(default=None, description="Current token budget")
+    auto_terminate_at_budget: bool = Field(default=False, description="Auto-terminate enabled")
+    budget_exhausted: bool = Field(default=False, description="Whether the budget has been exhausted")
+    total_tokens: int = Field(default=0, description="Current total token usage")
+    budget_remaining: int | None = Field(default=None, description="Tokens remaining in budget")
 
 
 class ACPHealthResponse(BaseModel):
