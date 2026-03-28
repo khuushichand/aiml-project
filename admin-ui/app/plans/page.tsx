@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/toast';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { CardSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput, FormSelect } from '@/components/ui/form';
 import { CreditCard, Plus, Pencil, Trash2 } from 'lucide-react';
@@ -48,7 +48,7 @@ export default function PlansPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const { success, error: showError } = useToast();
-  const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
 
   const [showDialog, setShowDialog] = useState(false);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
@@ -167,14 +167,13 @@ export default function PlansPage() {
       message = `Warning: Could not verify whether this plan has active subscribers.\n\n${message}`;
     }
 
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: 'Delete Plan',
       message,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: false,
     });
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       await api.deletePlan(plan.id);

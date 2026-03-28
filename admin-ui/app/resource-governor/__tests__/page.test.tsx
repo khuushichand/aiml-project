@@ -20,8 +20,8 @@ vi.mock('@/components/ResponsiveLayout', () => ({
   ),
 }));
 
-vi.mock('@/components/ui/confirm-dialog', () => ({
-  useConfirm: () => confirmMock,
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => confirmMock,
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -60,7 +60,7 @@ type ApiMock = {
 const apiMock = api as unknown as ApiMock;
 
 beforeEach(() => {
-  confirmMock.mockResolvedValue(true);
+  confirmMock.mockResolvedValue({ reason: 'test audit reason', adminPassword: '' });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
   apiMock.getResourceGovernorPolicy.mockResolvedValue({ policies: [] });

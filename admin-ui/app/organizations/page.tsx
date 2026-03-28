@@ -18,6 +18,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select } from '@/components/ui/select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormField } from '@/components/ui/form';
 import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
@@ -52,6 +53,7 @@ type OrganizationFormData = z.infer<typeof organizationSchema>;
 
 function OrganizationsPageContent() {
   const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -330,14 +332,13 @@ function OrganizationsPageContent() {
     try {
       const members = await api.getOrgMembers(String(organization.id));
       const memberCount = Array.isArray(members) ? members.length : 0;
-      const confirmed = await confirm({
+      const approval = await promptPrivilegedAction({
         title: 'Delete organization',
         message: `Delete "${organization.name}"? This organization has ${memberCount} member${memberCount === 1 ? '' : 's'}.`,
         confirmText: 'Delete',
-        variant: 'danger',
-        icon: 'delete',
+        requirePassword: false,
       });
-      if (!confirmed) return;
+      if (!approval) return;
 
       setDeletingOrganizationId(organization.id);
       await api.deleteOrganization(String(organization.id));

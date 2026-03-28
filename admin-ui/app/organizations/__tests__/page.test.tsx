@@ -7,6 +7,7 @@ import OrganizationsPage from '../page';
 import { api } from '@/lib/api-client';
 
 const confirmMock = vi.hoisted(() => vi.fn());
+const privilegedActionMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 const setPageMock = vi.hoisted(() => vi.fn());
@@ -30,6 +31,10 @@ vi.mock('@/components/ResponsiveLayout', () => ({
 
 vi.mock('@/components/ui/confirm-dialog', () => ({
   useConfirm: () => confirmMock,
+}));
+
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => privilegedActionMock,
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -72,6 +77,7 @@ const apiMock = api as unknown as ApiMock;
 
 beforeEach(() => {
   confirmMock.mockResolvedValue(true);
+  privilegedActionMock.mockResolvedValue({ reason: 'test audit reason', adminPassword: '' });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
 
@@ -132,7 +138,7 @@ describe('OrganizationsPage critical CRUD controls', () => {
     await user.click(within(row as HTMLElement).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledWith(
+      expect(privilegedActionMock).toHaveBeenCalledWith(
         expect.objectContaining({
           title: 'Delete organization',
           message: expect.stringContaining('This organization has 2 members'),

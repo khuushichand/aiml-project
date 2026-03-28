@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
 import { api } from '@/lib/api-client';
@@ -214,7 +214,7 @@ const getPolicyRowKey = (policy: ResourcePolicy, fallbackIndex: number) => {
 };
 
 export default function ResourceGovernorPage() {
-  const confirm = useConfirm();
+  const promptPrivilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
 
   // Policies state
@@ -719,14 +719,14 @@ export default function ResourceGovernorPage() {
     const policyId = String(policy.id);
     if (deletingPolicyId === policyId) return;
 
-    const confirmed = await confirm({
+    const approval = await promptPrivilegedAction({
       title: `Delete policy "${policy.name}"?`,
       message: 'This will remove the resource governance policy. This action cannot be undone.',
       confirmText: 'Delete',
-      variant: 'danger',
+      requirePassword: false,
     });
 
-    if (!confirmed) return;
+    if (!approval) return;
 
     try {
       setDeletingPolicyId(policyId);

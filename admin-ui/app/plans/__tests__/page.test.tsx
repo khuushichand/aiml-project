@@ -25,8 +25,8 @@ vi.mock('@/components/ResponsiveLayout', () => ({
   ),
 }));
 
-vi.mock('@/components/ui/confirm-dialog', () => ({
-  useConfirm: () => confirmMock,
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => confirmMock,
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -107,7 +107,7 @@ const samplePlans = [
 
 beforeEach(() => {
   billingEnabled = true;
-  confirmMock.mockResolvedValue(true);
+  confirmMock.mockResolvedValue({ reason: 'test audit reason', adminPassword: '' });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
   apiMock.getPlans.mockResolvedValue(samplePlans);
