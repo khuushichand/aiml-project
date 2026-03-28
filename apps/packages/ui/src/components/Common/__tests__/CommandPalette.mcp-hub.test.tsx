@@ -63,4 +63,24 @@ describe("CommandPalette MCP Hub discoverability", () => {
       screen.queryByRole("option", { name: /Go to Settings/i })
     ).not.toBeInTheDocument()
   })
+
+  it("keeps multiple settings that intentionally share the same route", async () => {
+    render(
+      <MemoryRouter>
+        <CommandPalette />
+      </MemoryRouter>
+    )
+
+    window.dispatchEvent(new CustomEvent("tldw:open-command-palette"))
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument()
+
+    const searchInput = screen.getByPlaceholderText(/Type a command or search/i)
+    fireEvent.change(searchInput, { target: { value: "language" } })
+
+    expect(screen.getAllByRole("option")).toHaveLength(3)
+    expect(screen.getByText("Language")).toBeInTheDocument()
+    expect(screen.getByText("OCR language")).toBeInTheDocument()
+    expect(screen.getByText("Speech recognition language")).toBeInTheDocument()
+  })
 })

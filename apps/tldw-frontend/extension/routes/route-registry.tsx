@@ -33,9 +33,9 @@ import {
   PenLine,
   ShieldCheck
 } from "lucide-react"
+import { Navigate } from "react-router-dom"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import { createSettingsRoute } from "./settings-route"
-import { Navigate } from "../shims/react-router-dom"
 
 export type RouteKind = "options" | "sidepanel"
 

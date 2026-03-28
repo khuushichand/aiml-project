@@ -474,6 +474,11 @@ export function CommandPalette({
       }
 
       const existingCommand = dedupedCommands[existingIndex]
+      if (existingCommand.category === "setting" && command.category === "setting") {
+        dedupedCommands.push(command)
+        continue
+      }
+
       if (existingCommand.category === "setting" && command.category !== "setting") {
         dedupedCommands[existingIndex] = command
       }

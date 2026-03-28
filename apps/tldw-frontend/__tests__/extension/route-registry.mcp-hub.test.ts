@@ -2,6 +2,12 @@
 import React, { Suspense } from "react"
 import { render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation
+} from "react-router-dom"
 
 const routeMocks = vi.hoisted(() => ({
   standaloneMcpHub: vi.fn(() =>
@@ -39,6 +45,16 @@ const renderRoute = (element: React.ReactElement) =>
     )
   )
 
+const RedirectLocationProbe = () => {
+  const location = useLocation()
+
+  return React.createElement(
+    "div",
+    { "data-testid": "redirect-location" },
+    `${location.pathname}${location.search}`
+  )
+}
+
 describe("extension route registry MCP Hub parity", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -74,5 +90,39 @@ describe("extension route registry MCP Hub parity", () => {
     expect(await screen.findByTestId("settings-mcp-hub")).toBeVisible()
     expect(routeMocks.settingsMcpHub).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId("standalone-mcp-hub")).not.toBeInTheDocument()
+  })
+
+  it("uses react-router redirects for legacy extension routes", async () => {
+    const { ROUTE_DEFINITIONS } = await import(
+      "../../extension/routes/route-registry"
+    )
+    const route = ROUTE_DEFINITIONS.find(
+      (candidate) => candidate.path === "/prompt-studio"
+    )
+
+    expect(route).toBeDefined()
+
+    render(
+      React.createElement(
+        MemoryRouter,
+        { initialEntries: ["/prompt-studio"] },
+        React.createElement(
+          Routes,
+          null,
+          React.createElement(Route, {
+            path: "/prompt-studio",
+            element: route!.element
+          }),
+          React.createElement(Route, {
+            path: "/prompts",
+            element: React.createElement(RedirectLocationProbe)
+          })
+        )
+      )
+    )
+
+    expect(await screen.findByTestId("redirect-location")).toHaveTextContent(
+      "/prompts?tab=studio"
+    )
   })
 })
