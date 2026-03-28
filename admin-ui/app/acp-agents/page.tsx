@@ -46,6 +46,7 @@ interface AgentMetrics {
   total_tokens: number;
   total_messages: number;
   last_used_at: string | null;
+  total_estimated_cost_usd: number | null;
 }
 
 function formatTokens(n: number): string {
@@ -72,6 +73,11 @@ function formatRelativeTime(iso: string | null): string {
   if (days < 30) return `${days}d ago`;
   const months = Math.floor(days / 30);
   return `${months}mo ago`;
+}
+
+function formatCost(usd: number | null | undefined): string {
+  if (usd == null) return '\u2014';
+  return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
 }
 
 interface PermissionPolicy {
@@ -377,6 +383,7 @@ export default function ACPAgentsPage() {
                         <TableHead>Tools</TableHead>
                         <TableHead>Sessions</TableHead>
                         <TableHead>Tokens</TableHead>
+                        <TableHead>Cost</TableHead>
                         <TableHead>Last Used</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
@@ -432,6 +439,11 @@ export default function ACPAgentsPage() {
                                 </TableCell>
                                 <TableCell className="text-xs font-mono">
                                   {metrics ? formatTokens(metrics.total_tokens) : (
+                                    <span className="text-muted-foreground">{'\u2014'}</span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-xs font-mono">
+                                  {metrics ? formatCost(metrics.total_estimated_cost_usd) : (
                                     <span className="text-muted-foreground">{'\u2014'}</span>
                                   )}
                                 </TableCell>

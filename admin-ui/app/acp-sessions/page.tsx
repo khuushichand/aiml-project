@@ -35,6 +35,8 @@ interface ACPSession {
   };
   tags: string[];
   has_websocket: boolean;
+  model: string | null;
+  estimated_cost_usd: number | null;
 }
 
 interface ACPSessionListResponse {
@@ -162,6 +164,11 @@ export default function ACPSessionsPage() {
     return String(count);
   };
 
+  const formatCost = (usd: number | null | undefined): string => {
+    if (usd == null) return '\u2014';
+    return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
+  };
+
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
@@ -265,6 +272,7 @@ export default function ACPSessionsPage() {
                         <TableHead>Status</TableHead>
                         <TableHead>Messages</TableHead>
                         <TableHead>Tokens</TableHead>
+                        <TableHead>Est. Cost</TableHead>
                         <TableHead>WS</TableHead>
                         <TableHead>Created</TableHead>
                         <TableHead>Actions</TableHead>
@@ -289,6 +297,16 @@ export default function ACPSessionsPage() {
                             <span className="text-xs font-mono" title={`Prompt: ${session.usage.prompt_tokens} | Completion: ${session.usage.completion_tokens}`}>
                               {formatTokens(session.usage.total_tokens)}
                             </span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-xs font-mono" title={session.model || undefined}>
+                              {formatCost(session.estimated_cost_usd)}
+                            </span>
+                            {session.model && (
+                              <div className="text-[10px] text-muted-foreground truncate max-w-[100px]" title={session.model}>
+                                {session.model}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell>
                             {session.has_websocket ? (
