@@ -219,6 +219,8 @@ export default function DashboardPage() {
   const [creatingOrg, setCreatingOrg] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [securityHealth, setSecurityHealth] = useState<SecurityHealthData | null>(null);
   const [securityHealthError, setSecurityHealthError] = useState('');
   const [billingStats, setBillingStats] = useState<{
@@ -447,12 +449,26 @@ export default function DashboardPage() {
       setUptimeSummary(DEFAULT_DASHBOARD_UPTIME_SUMMARY);
     } finally {
       setLoading(false);
+      setLastRefreshed(new Date());
     }
   }, [activityRange, selectedOrg]);
 
   useEffect(() => {
     void loadDashboardData();
   }, [loadDashboardData]);
+
+  // Auto-refresh: 60-second interval, paused when tab is not visible
+  useEffect(() => {
+    if (!autoRefreshEnabled) return;
+
+    const intervalId = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadDashboardData();
+      }
+    }, 60_000);
+
+    return () => clearInterval(intervalId);
+  }, [autoRefreshEnabled, loadDashboardData]);
 
   const formatTimeAgo = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -714,6 +730,9 @@ export default function DashboardPage() {
             uptimeWindowDays={uptimeSummary.windowDays}
             loading={loading}
             onRefresh={loadDashboardData}
+            lastRefreshed={lastRefreshed}
+            autoRefreshEnabled={autoRefreshEnabled}
+            onAutoRefreshToggle={() => setAutoRefreshEnabled((prev) => !prev)}
           />
 
           {error && (
