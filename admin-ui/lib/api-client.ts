@@ -144,6 +144,11 @@ export const api = {
   // Dashboard & Stats
   // ============================================
   getDashboardStats: () => requestJson('/admin/stats'),
+  getRealtimeStats: () =>
+    requestJson<{
+      active_sessions: number;
+      tokens_today: { prompt: number; completion: number; total: number };
+    }>('/admin/stats/realtime'),
   getDashboardActivity: (days = 7, params?: { granularity?: 'hour' | 'day' }) => {
     const query = new URLSearchParams({ days: String(days) });
     if (params?.granularity) {

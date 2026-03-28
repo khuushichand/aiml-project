@@ -10,23 +10,31 @@ import {
   ArrowUpRight,
   Building2,
   Clock3,
+  Coins,
   Cpu,
   HardDrive,
   Minus,
+  Monitor,
   Users,
   Wallet,
   Workflow,
   XCircle,
 } from 'lucide-react';
 
+export type RealtimeStats = {
+  active_sessions: number;
+  tokens_today: { prompt: number; completion: number; total: number };
+};
+
 type StatsGridProps = {
   loading: boolean;
   stats: DashboardUIStats;
   storagePercentage: number;
   operationalKpis: DashboardOperationalKpis;
+  realtimeStats?: RealtimeStats | null;
 };
 
-const CARD_COUNT = 8;
+const CARD_COUNT = 10;
 
 const formatTrendValue = (trend: MetricTrend): string => {
   if (trend.percentChange !== null) {
@@ -102,17 +110,34 @@ const formatLiveValue = (value: number | null): string => (
   value === null ? 'unavailable' : `${value}`
 );
 
+const formatCompactNumber = (value: number): string => {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return `${value}`;
+};
+
 const buildStatsLiveSummary = (
   stats: DashboardUIStats,
   storagePercentage: number,
-  operationalKpis: DashboardOperationalKpis
-): string => (
-  `Dashboard metrics updated. ${stats.users} total users, ${stats.activeUsers} active users, ` +
-  `${stats.organizations} organizations, ${stats.enabledProviders} enabled providers, ` +
-  `${storagePercentage.toFixed(0)} percent storage used, ` +
-  `error rate ${formatLiveValue(operationalKpis.errorRatePct)} percent, ` +
-  `queue depth ${formatLiveValue(operationalKpis.queueDepth)}.`
-);
+  operationalKpis: DashboardOperationalKpis,
+  realtimeStats?: RealtimeStats | null,
+): string => {
+  const base =
+    `Dashboard metrics updated. ${stats.users} total users, ${stats.activeUsers} active users, ` +
+    `${stats.organizations} organizations, ${stats.enabledProviders} enabled providers, ` +
+    `${storagePercentage.toFixed(0)} percent storage used, ` +
+    `error rate ${formatLiveValue(operationalKpis.errorRatePct)} percent, ` +
+    `queue depth ${formatLiveValue(operationalKpis.queueDepth)}.`;
+  if (realtimeStats) {
+    return (
+      base +
+      ` ${realtimeStats.active_sessions} active sessions, ` +
+      `${formatCompactNumber(realtimeStats.tokens_today.total)} tokens consumed.`
+    );
+  }
+  return base;
+};
 
 const LATENCY_UNAVAILABLE_TOOLTIP =
   'Latency p95 unavailable. Backend must expose http_request_duration_seconds histogram at /metrics/text.';
@@ -122,6 +147,7 @@ export const StatsGrid = ({
   stats,
   storagePercentage,
   operationalKpis,
+  realtimeStats,
 }: StatsGridProps) => (
   <div
     className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
@@ -131,7 +157,7 @@ export const StatsGrid = ({
     data-testid="dashboard-stats-live-region"
   >
     <p className="sr-only">
-      {loading ? 'Dashboard metrics loading.' : buildStatsLiveSummary(stats, storagePercentage, operationalKpis)}
+      {loading ? 'Dashboard metrics loading.' : buildStatsLiveSummary(stats, storagePercentage, operationalKpis, realtimeStats)}
     </p>
     {loading ? (
       Array.from({ length: CARD_COUNT }).map((_, index) => (
@@ -201,6 +227,41 @@ export const StatsGrid = ({
                 {storagePercentage.toFixed(0)}% used
               </p>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Active Sessions</CardTitle>
+            <Monitor className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {realtimeStats ? realtimeStats.active_sessions : 'N/A'}
+            </div>
+            <p className="text-xs text-muted-foreground">ACP agent sessions</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Token Consumption</CardTitle>
+            <Coins className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {realtimeStats
+                ? formatCompactNumber(realtimeStats.tokens_today.total)
+                : 'N/A'}
+            </div>
+            {realtimeStats ? (
+              <p className="text-xs text-muted-foreground">
+                {formatCompactNumber(realtimeStats.tokens_today.prompt)} prompt /{' '}
+                {formatCompactNumber(realtimeStats.tokens_today.completion)} completion
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">prompt / completion</p>
+            )}
           </CardContent>
         </Card>
 

@@ -14,7 +14,7 @@ import { AlertsBanner } from '@/components/dashboard/AlertsBanner';
 import { CreateOrganizationDialog } from '@/components/dashboard/CreateOrganizationDialog';
 import { CreateUserDialog } from '@/components/dashboard/CreateUserDialog';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
-import { StatsGrid } from '@/components/dashboard/StatsGrid';
+import { StatsGrid, type RealtimeStats } from '@/components/dashboard/StatsGrid';
 import { ActivitySection } from '@/components/dashboard/ActivitySection';
 import { RecentActivityCard } from '@/components/dashboard/RecentActivityCard';
 import { QuickActionsCard } from '@/components/dashboard/QuickActionsCard';
@@ -198,6 +198,7 @@ export default function DashboardPage() {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [securityHealth, setSecurityHealth] = useState<SecurityHealthData | null>(null);
   const [securityHealthError, setSecurityHealthError] = useState('');
+  const [realtimeStats, setRealtimeStats] = useState<RealtimeStats | null>(null);
   const [billingStats, setBillingStats] = useState<{
     active_subscriptions: number;
     past_due_count: number;
@@ -248,6 +249,7 @@ export default function DashboardPage() {
         embeddingsHealthResult,
         securityHealthResult,
         incidentsResult,
+        realtimeStatsResult,
       ] = await Promise.allSettled([
         api.getDashboardStats(),
         api.getUsers(orgParams),
@@ -271,6 +273,7 @@ export default function DashboardPage() {
         api.getEmbeddingsHealth(),
         api.getSecurityHealth(),
         api.getIncidents({ limit: '200' }),
+        api.getRealtimeStats(),
       ]);
 
       const users = processUsers(usersResult);
@@ -322,6 +325,13 @@ export default function DashboardPage() {
       setSecurityHealth(resolvedSecurityHealth.data);
       setSecurityHealthError(resolvedSecurityHealth.error);
 
+      // Process realtime stats (active sessions + token consumption)
+      if (realtimeStatsResult.status === 'fulfilled' && realtimeStatsResult.value) {
+        setRealtimeStats(realtimeStatsResult.value as RealtimeStats);
+      } else {
+        setRealtimeStats(null);
+      }
+
       const { activeUsers, totalStorage, totalQuota } = computeUserStats(users);
 
       const computedStats: DashboardUIStats = {
@@ -367,6 +377,7 @@ export default function DashboardPage() {
         { key: 'tts_health', label: 'TTS health', result: ttsHealthResult },
         { key: 'stt_health', label: 'STT health', result: sttHealthResult },
         { key: 'embeddings_health', label: 'embeddings health', result: embeddingsHealthResult },
+        { key: 'realtime_stats', label: 'realtime stats', result: realtimeStatsResult },
       ].filter((entry): entry is {
         key: string;
         label: string;
@@ -623,6 +634,7 @@ export default function DashboardPage() {
             stats={stats}
             storagePercentage={storagePercentage}
             operationalKpis={operationalKpis}
+            realtimeStats={realtimeStats}
           />
 
           {isBillingEnabled() && billingStats && (

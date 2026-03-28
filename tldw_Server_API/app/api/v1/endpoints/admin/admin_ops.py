@@ -707,6 +707,52 @@ async def delete_incident(
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Realtime Stats
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@router.get("/stats/realtime")
+async def get_realtime_stats(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict:
+    """Realtime operational statistics for dashboard KPIs.
+
+    Returns active ACP session count and aggregate token consumption
+    across all sessions.  Gracefully degrades when the ACP session store
+    has not been initialised (e.g. ACP is disabled).
+    """
+    _require_platform_admin(principal)
+
+    active_sessions = 0
+    tokens_today: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0}
+
+    try:
+        from tldw_Server_API.app.services.admin_acp_sessions_service import (
+            get_acp_session_store,
+        )
+
+        store = await get_acp_session_store()
+
+        # Count active sessions via list_sessions with status filter
+        _records, total_active = await store.list_sessions(status="active", limit=1, offset=0)
+        active_sessions = total_active
+
+        # Aggregate token consumption from agent metrics
+        metrics = await store.get_agent_metrics()
+        for m in metrics:
+            tokens_today["prompt"] += int(m.get("total_prompt_tokens", 0) or 0)
+            tokens_today["completion"] += int(m.get("total_completion_tokens", 0) or 0)
+            tokens_today["total"] += int(m.get("total_tokens", 0) or 0)
+    except Exception as exc:
+        logger.debug("Realtime stats: ACP session store unavailable: {}", exc)
+
+    return {
+        "active_sessions": active_sessions,
+        "tokens_today": tokens_today,
+    }
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Pricing Catalog Management
 # ---------------------------------------------
 
