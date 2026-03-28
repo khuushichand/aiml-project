@@ -213,7 +213,10 @@ describe('ByokDashboardPage', () => {
 
     expect(await screen.findByRole('button', { name: /run validation sweep/i })).toBeInTheDocument();
     expect(screen.getByText('All orgs • provider=openai')).toBeInTheDocument();
-    expect(screen.getByText('12 checked • 10 valid • 1 invalid • 1 errors')).toBeInTheDocument();
+    expect(screen.getByText('12 checked')).toBeInTheDocument();
+    expect(screen.getByText('10 valid')).toBeInTheDocument();
+    expect(screen.getByText('1 invalid')).toBeInTheDocument();
+    expect(screen.getByText('1 errors')).toBeInTheDocument();
     expect(
       screen.queryByText('Validation sweep control is hidden until backend batch validation support is available.')
     ).not.toBeInTheDocument();
@@ -292,7 +295,10 @@ describe('ByokDashboardPage', () => {
     await waitFor(() => {
       expect(apiMock.getByokValidationRun).toHaveBeenCalledWith('run-2');
       expect(screen.getByText('Complete')).toBeInTheDocument();
-      expect(screen.getByText('12 checked • 10 valid • 1 invalid • 1 errors')).toBeInTheDocument();
+      expect(screen.getByText('12 checked')).toBeInTheDocument();
+      expect(screen.getByText('10 valid')).toBeInTheDocument();
+      expect(screen.getByText('1 invalid')).toBeInTheDocument();
+      expect(screen.getByText('1 errors')).toBeInTheDocument();
       expect(toastSuccessMock).toHaveBeenCalled();
     }, { timeout: 5000 });
   }, 10000);

@@ -955,9 +955,25 @@ export default function ByokDashboardPage() {
                         {formatValidationStatus(latestValidationRun.status)}
                       </Badge>
                     </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {formatValidationCounts(latestValidationRun)}
-                    </div>
+                    {latestValidationRun.status === 'complete' && latestValidationRun.keys_checked != null ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Badge variant="secondary">{latestValidationRun.keys_checked} checked</Badge>
+                        <Badge className="bg-green-600 text-white">{latestValidationRun.valid_count ?? 0} valid</Badge>
+                        {(latestValidationRun.invalid_count ?? 0) > 0 && (
+                          <Badge variant="destructive">{latestValidationRun.invalid_count} invalid</Badge>
+                        )}
+                        {(latestValidationRun.error_count ?? 0) > 0 && (
+                          <Badge className="bg-yellow-500 text-black">{latestValidationRun.error_count} errors</Badge>
+                        )}
+                        {(latestValidationRun.invalid_count ?? 0) === 0 && (latestValidationRun.error_count ?? 0) === 0 && (
+                          <span className="text-xs text-green-600 font-medium">All keys passed validation</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {formatValidationCounts(latestValidationRun)}
+                      </div>
+                    )}
                     <div className="mt-1 text-xs text-muted-foreground">
                       Requested by {latestValidationRun.requested_by_label || 'Unknown'} • {new Date(latestValidationRun.created_at).toLocaleString()}
                     </div>

@@ -979,6 +979,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  deleteUserVirtualKey: (userId: string, keyId: string) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/virtual-keys/${encodeURIComponent(keyId)}`, {
+      method: 'DELETE',
+    }),
 
   // ============================================
   // Tool Permissions (Role-specific)

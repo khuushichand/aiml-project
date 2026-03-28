@@ -18,7 +18,7 @@ import type {
   SnoozeDurationOption,
   SystemAlert,
 } from '../types';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 type AlertsPanelProps = {
   alerts: SystemAlert[];
@@ -67,14 +67,21 @@ export default function AlertsPanel({
   onSnooze,
   onEscalate,
 }: AlertsPanelProps) {
+  const ALERTS_PAGE_SIZE = 10;
   const [snoozeSelections, setSnoozeSelections] = useState<Record<string, SnoozeDurationOption>>(
     {}
   );
+  const [alertsDisplayLimit, setAlertsDisplayLimit] = useState(ALERTS_PAGE_SIZE);
   const now = new Date();
   const snoozedCount = alerts.filter((alert) => isAlertSnoozed(alert, now)).length;
   const visibleAlerts = showSnoozed
     ? alerts
     : alerts.filter((alert) => !isAlertSnoozed(alert, now));
+  const paginatedAlerts = visibleAlerts.slice(0, alertsDisplayLimit);
+  const hasMoreAlerts = visibleAlerts.length > alertsDisplayLimit;
+  const handleShowMoreAlerts = useCallback(() => {
+    setAlertsDisplayLimit((prev) => prev + ALERTS_PAGE_SIZE);
+  }, []);
   const activeCount = alerts.filter(
     (alert) => !alert.acknowledged && !isAlertSnoozed(alert, now)
   ).length;
@@ -96,16 +103,29 @@ export default function AlertsPanel({
             {activeCount} active, {acknowledgedCount} acknowledged
           </CardDescription>
         </div>
-        <Button
-          type="button"
-          variant={showSnoozed ? 'secondary' : 'outline'}
-          size="sm"
-          onClick={onToggleShowSnoozed}
-          data-testid="alerts-show-snoozed-toggle"
-        >
-          <ChevronDown className="mr-2 h-4 w-4" />
-          Show snoozed ({snoozedCount})
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              document.querySelector('[data-testid="alert-rule-create"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }}
+            data-testid="alerts-create-rule-shortcut"
+          >
+            Create Rule
+          </Button>
+          <Button
+            type="button"
+            variant={showSnoozed ? 'secondary' : 'outline'}
+            size="sm"
+            onClick={onToggleShowSnoozed}
+            data-testid="alerts-show-snoozed-toggle"
+          >
+            <ChevronDown className="mr-2 h-4 w-4" />
+            Show snoozed ({snoozedCount})
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         {loading ? (
@@ -117,7 +137,7 @@ export default function AlertsPanel({
           </div>
         ) : (
           <div className="space-y-3">
-            {visibleAlerts.slice(0, 10).map((alert) => (
+            {paginatedAlerts.map((alert) => (
               <div
                 key={alert.id}
                 className={`flex items-start justify-between p-3 rounded-lg border ${
@@ -229,6 +249,22 @@ export default function AlertsPanel({
                 </div>
               </div>
             ))}
+            {hasMoreAlerts && (
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-xs text-muted-foreground">
+                  Showing {paginatedAlerts.length} of {visibleAlerts.length} alerts
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleShowMoreAlerts}
+                  data-testid="alerts-load-more"
+                >
+                  Load more
+                </Button>
+              </div>
+            )}
           </div>
         )}
 

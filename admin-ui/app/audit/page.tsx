@@ -670,6 +670,12 @@ function AuditPageContent() {
       link.remove();
       window.URL.revokeObjectURL(url);
 
+      if (entries.length >= COMPLIANCE_REPORT_LIMIT) {
+        showError(
+          'Report may be incomplete',
+          `The report reached the ${COMPLIANCE_REPORT_LIMIT.toLocaleString()} event limit. Narrow the date range for a complete report.`
+        );
+      }
       success(
         'Compliance report generated',
         `${COMPLIANCE_REPORT_TYPE_LABELS[reportType]} exported with ${entries.length} events.`

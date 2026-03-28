@@ -102,7 +102,17 @@ export const UnifiedApiKeysTable = ({
           <TableHead>Created</TableHead>
           <TableHead>Last Used</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead>Age</TableHead>
+          <TableHead>
+            <span className="group relative cursor-help" title="Green: <90d, Yellow: 90-180d, Red: >180d">
+              Age
+              <span className="ml-1 inline-block text-muted-foreground text-xs align-super">?</span>
+              <span className="pointer-events-none absolute left-0 top-full z-10 mt-1 hidden w-48 rounded-md border bg-popover p-2 text-xs font-normal text-popover-foreground shadow-md group-hover:block">
+                <span className="block"><span className="inline-block h-2 w-2 rounded-full bg-green-600 mr-1" />Green: &lt;90 days</span>
+                <span className="block"><span className="inline-block h-2 w-2 rounded-full bg-yellow-500 mr-1" />Yellow: 90-180 days</span>
+                <span className="block"><span className="inline-block h-2 w-2 rounded-full bg-red-600 mr-1" />Red: &gt;180 days</span>
+              </span>
+            </span>
+          </TableHead>
           <TableHead>Expiry</TableHead>
           <TableHead>Activity</TableHead>
           {hasTelemetry && <TableHead>Requests (24h)</TableHead>}

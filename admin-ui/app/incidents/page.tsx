@@ -32,7 +32,7 @@ import {
 import { useUrlPagination } from '@/lib/use-url-state';
 import { usePagedResource } from '@/lib/use-paged-resource';
 import type { IncidentItem } from '@/types/incidents';
-import { AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, ExternalLink, RefreshCw, Trash2 } from 'lucide-react';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportIncidents, ExportFormat } from '@/lib/export';
 
@@ -96,6 +96,7 @@ function IncidentsPageContent() {
   const [severity, setSeverity] = useState<typeof SEVERITIES[number]>('medium');
   const [summary, setSummary] = useState('');
   const [tags, setTags] = useState('');
+  const [runbookUrl, setRunbookUrl] = useState('');
   const [creating, setCreating] = useState(false);
 
   const [updateNotes, setUpdateNotes] = useState<Record<string, string>>({});
@@ -210,11 +211,13 @@ function IncidentsPageContent() {
         severity,
         summary,
         tags: tags ? tags.split(',').map((item) => item.trim()).filter(Boolean) : [],
+        ...(runbookUrl.trim() ? { runbook_url: runbookUrl.trim() } : {}),
       });
       success('Incident created');
       setTitle('');
       setSummary('');
       setTags('');
+      setRunbookUrl('');
       resetPagination();
       await reload();
     } catch (err: unknown) {
@@ -450,6 +453,16 @@ function IncidentsPageContent() {
                   onChange={(e) => setTags(e.target.value)}
                 />
               </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label htmlFor="incident-runbook-url">Runbook URL (optional)</Label>
+                <Input
+                  id="incident-runbook-url"
+                  type="url"
+                  placeholder="https://wiki.example.com/runbooks/..."
+                  value={runbookUrl}
+                  onChange={(e) => setRunbookUrl(e.target.value)}
+                />
+              </div>
               <div>
                 <Button
                   onClick={() => {
@@ -647,6 +660,19 @@ function IncidentsPageContent() {
                         </Badge>
                       ))}
                     </div>
+                    {incident.runbook_url && (
+                      <div className="flex items-center gap-1 text-sm">
+                        <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+                        <a
+                          href={incident.runbook_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline"
+                        >
+                          Runbook
+                        </a>
+                      </div>
+                    )}
                     <div className="grid gap-3 md:grid-cols-4">
                       <div className="space-y-1">
                         <Label htmlFor={`status-${incident.id}`}>Status</Label>
@@ -840,7 +866,7 @@ function IncidentsPageContent() {
                         Add Update
                       </Button>
                     </div>
-                    <details className="text-sm text-muted-foreground">
+                    <details className="text-sm text-muted-foreground" open={displayStatus !== 'resolved'}>
                       <summary className="cursor-pointer">Timeline ({incident.timeline?.length || 0})</summary>
                       <div className="mt-2 space-y-2">
                         {(incident.timeline || []).map((event) => (

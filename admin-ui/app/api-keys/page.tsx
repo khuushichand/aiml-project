@@ -30,7 +30,8 @@ import {
 import { api } from '@/lib/api-client';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
 import type { UserWithKeyCount } from '@/types';
-import { AlertTriangle, Copy, Key, Plus, RotateCw, Search } from 'lucide-react';
+import { AlertTriangle, Copy, FileText, Key, Plus, RotateCw, Search, ShieldOff } from 'lucide-react';
+import Link from 'next/link';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportApiKeys, ExportFormat } from '@/lib/export';
 import { logger } from '@/lib/logger';
@@ -48,6 +49,7 @@ function ApiKeysPageContent() {
   const [partialLoadWarning, setPartialLoadWarning] = useState('');
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [bulkRotating, setBulkRotating] = useState(false);
+  const [bulkRevoking, setBulkRevoking] = useState(false);
 
   // Create Key dialog state
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -291,6 +293,44 @@ function ApiKeysPageContent() {
     }
   };
 
+  const handleRevokeSelected = async () => {
+    const revokeableRows = selectedRows.filter((row) => row.status === 'active');
+    if (revokeableRows.length === 0 || bulkRevoking) return;
+
+    const confirmed = await confirm({
+      title: 'Revoke selected keys',
+      message: `Permanently revoke ${revokeableRows.length} active key(s)? This action cannot be undone.`,
+      confirmText: 'Revoke',
+      variant: 'danger',
+      icon: 'warning',
+    });
+    if (!confirmed) return;
+
+    try {
+      setBulkRevoking(true);
+      const results = await Promise.allSettled(
+        revokeableRows.map((row) => api.revokeApiKey(String(row.ownerUserId), row.keyId))
+      );
+      const successCount = results.filter((result) => result.status === 'fulfilled').length;
+      const failureCount = results.length - successCount;
+
+      if (successCount > 0) {
+        toastSuccess('Bulk revocation complete', `${successCount} key(s) revoked successfully.`);
+      }
+      if (failureCount > 0) {
+        toastError('Some revocations failed', `${failureCount} key(s) failed to revoke.`);
+      }
+
+      clearSelection();
+      await loadUnifiedApiKeys();
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Bulk revocation failed';
+      toastError('Bulk revocation failed', message);
+    } finally {
+      setBulkRevoking(false);
+    }
+  };
+
   const handleOpenCreateDialog = () => {
     setCreateUserId('');
     setCreateKeyName('');
@@ -445,6 +485,16 @@ function ApiKeysPageContent() {
             </Card>
           </div>
 
+          <div className="mb-6 flex items-center gap-2 text-sm">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            <Link
+              href="/audit?resource=api_key"
+              className="text-primary hover:underline"
+            >
+              View key activity in audit log
+            </Link>
+          </div>
+
           <Card className="mb-6">
             <CardHeader>
               <CardTitle>Filters</CardTitle>
@@ -513,12 +563,22 @@ function ApiKeysPageContent() {
                   </Button>
                   <Button
                     onClick={handleRotateSelected}
-                    disabled={selectedRowIds.size === 0 || bulkRotating}
+                    disabled={selectedRowIds.size === 0 || bulkRotating || bulkRevoking}
                     loading={bulkRotating}
                     loadingText="Rotating..."
                   >
                     <RotateCw className="mr-2 h-4 w-4" />
                     Rotate Selected ({selectedRowIds.size})
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleRevokeSelected}
+                    disabled={selectedRowIds.size === 0 || bulkRevoking || bulkRotating}
+                    loading={bulkRevoking}
+                    loadingText="Revoking..."
+                  >
+                    <ShieldOff className="mr-2 h-4 w-4" />
+                    Revoke Selected ({selectedRowIds.size})
                   </Button>
                 </div>
               </div>
@@ -602,7 +662,17 @@ function ApiKeysPageContent() {
                     </AlertDescription>
                   </Alert>
                   <div className="flex justify-end">
-                    <Button onClick={() => setCreateDialogOpen(false)}>Done</Button>
+                    <Button onClick={async () => {
+                      const confirmed = await confirm({
+                        title: 'Dismiss API key',
+                        message: 'Have you saved this API key? It will not be shown again.',
+                        confirmText: 'Yes, I saved it',
+                        variant: 'warning',
+                      });
+                      if (confirmed) {
+                        setCreateDialogOpen(false);
+                      }
+                    }}>Done</Button>
                   </div>
                 </div>
               ) : (

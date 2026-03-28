@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Plus, Copy, KeyRound, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, Plus, Copy, KeyRound, ShieldCheck, Trash2, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { ToggleBadgeGroup } from '@/components/ui/toggle-badge-group';
 import { api } from '@/lib/api-client';
@@ -70,6 +70,7 @@ export default function UserApiKeysPage() {
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [creatingVirtualKey, setCreatingVirtualKey] = useState(false);
   const [newVirtualKeyValue, setNewVirtualKeyValue] = useState<string | null>(null);
+  const [deletingVirtualKeyId, setDeletingVirtualKeyId] = useState<string | null>(null);
 
   const { user, apiKeys, loading, reload } = useUserApiKeys(userId, { onError: setError });
 
@@ -88,6 +89,27 @@ export default function UserApiKeysPage() {
       // Don't set error - virtual keys may not be available
     } finally {
       setVirtualKeysLoading(false);
+    }
+  };
+
+  const handleDeleteVirtualKey = async (keyId: string, keyName: string) => {
+    const confirmed = await confirm({
+      title: 'Delete virtual key',
+      message: `Delete virtual key "${keyName}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    try {
+      setDeletingVirtualKeyId(keyId);
+      await api.deleteUserVirtualKey(userId, keyId);
+      setSuccess('Virtual key deleted');
+      await loadVirtualKeys();
+    } catch (err: unknown) {
+      logger.error('Failed to delete virtual key', { component: 'UserApiKeysPage', error: err instanceof Error ? err.message : String(err) });
+      setError(err instanceof Error && err.message ? err.message : 'Failed to delete virtual key');
+    } finally {
+      setDeletingVirtualKeyId(null);
     }
   };
 
@@ -479,6 +501,7 @@ export default function UserApiKeysPage() {
                         <TableHead>Created</TableHead>
                         <TableHead>Last Used</TableHead>
                         <TableHead>Expires</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -512,6 +535,22 @@ export default function UserApiKeysPage() {
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {formatDate(key.expires_at)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                void handleDeleteVirtualKey(key.id, key.name);
+                              }}
+                              disabled={deletingVirtualKeyId === key.id}
+                              loading={deletingVirtualKeyId === key.id}
+                              aria-label={`Delete virtual key ${key.name}`}
+                              title="Delete virtual key"
+                              className="text-red-500 hover:text-red-500"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))}

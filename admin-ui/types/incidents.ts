@@ -32,6 +32,7 @@ export type IncidentItem = {
   root_cause?: string | null;
   impact?: string | null;
   action_items?: IncidentActionItem[];
+  runbook_url?: string | null;
 };
 
 export type IncidentsResponse = {

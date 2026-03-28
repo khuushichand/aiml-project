@@ -10,6 +10,16 @@ import { formatAxeViolations, getCriticalAndSeriousAxeViolations } from '@/test-
 
 const confirmMock = vi.hoisted(() => vi.fn());
 
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/monitoring',
+  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
+
 vi.mock('@/components/PermissionGuard', () => ({
   PermissionGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
