@@ -29,8 +29,6 @@ services:
       - ../docker-data/app:/app/Databases
       - ../docker-data/user_data:/app/Databases/user_databases
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
