@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
 import { Building2, ChevronDown, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -158,10 +159,30 @@ export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) 
   const { organizations, selectedOrg, setSelectedOrg, loading } = useOrgContext();
   const { isSuperAdmin } = usePermissions();
 
-  // Super admins see all orgs and can choose to scope to one; org-scoped users are auto-selected and don't need a switcher
+  // Org-scoped (non-super-admin) users see a read-only badge showing their org
   if (!isSuperAdmin()) {
-    return null;
+    if (loading) {
+      return (
+        <div className={`flex items-center gap-2 px-3 py-2 ${className}`}>
+          <Building2 className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">Loading...</span>
+        </div>
+      );
+    }
+    if (!selectedOrg) {
+      return null;
+    }
+    return (
+      <div className={`flex items-center gap-2 px-3 py-2 ${className}`} data-testid="org-badge">
+        <Building2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+        <Badge variant="secondary" className="cursor-default hover:bg-secondary truncate max-w-[140px]">
+          {selectedOrg.name}
+        </Badge>
+      </div>
+    );
   }
+
+  // Super admins see all orgs and can choose to scope to one
   if (loading) {
     return (
       <div className={`flex items-center gap-2 px-3 py-2 ${className}`}>
@@ -229,6 +250,25 @@ export function useOrgFilteredData<T extends { org_id?: number }>(data: T[]): T[
   }
 
   return data.filter((item) => item.org_id === selectedOrg.id);
+}
+
+// Banner component showing the active org context near page headers
+export function OrgContextBanner() {
+  const { selectedOrg } = useOrgContext();
+
+  if (!selectedOrg) {
+    return null;
+  }
+
+  return (
+    <div
+      data-testid="org-context-banner"
+      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground"
+    >
+      <Building2 className="h-3 w-3" aria-hidden="true" />
+      <span>Viewing: <span className="font-medium text-foreground">{selectedOrg.name}</span></span>
+    </div>
+  );
 }
 
 export default OrgContextSwitcher;

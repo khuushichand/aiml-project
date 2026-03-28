@@ -21,7 +21,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
-import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
+import { OrgContextSwitcher, OrgContextBanner } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
 import { useToast } from '@/components/ui/toast';
 import { isBillingEnabled } from '@/lib/billing';
@@ -486,6 +486,9 @@ export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
               {showBreadcrumbs && <Breadcrumbs />}
             </div>
           )}
+          <div className="px-4 pt-2 lg:px-8 empty:hidden">
+            <OrgContextBanner />
+          </div>
           {children}
         </main>
       </div>
