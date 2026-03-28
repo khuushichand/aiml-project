@@ -20,7 +20,10 @@ export type IncidentItem = {
   tags?: string[];
   created_at: string;
   updated_at: string;
+  acknowledged_at?: string | null;
   resolved_at?: string | null;
+  mtta_minutes?: number | null;
+  mttr_minutes?: number | null;
   created_by?: string | null;
   updated_by?: string | null;
   timeline?: IncidentEvent[];

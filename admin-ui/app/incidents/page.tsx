@@ -40,6 +40,20 @@ const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
 const formatIncidentDate = (value?: string | null) =>
   formatDateTime(value, { fallback: '—' });
 
+const formatMinutes = (minutes: number | null | undefined): string => {
+  if (minutes == null) return '—';
+  if (minutes < 1) return '< 1m';
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  if (minutes < 1440) {
+    const h = Math.floor(minutes / 60);
+    const m = Math.round(minutes % 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  const d = Math.floor(minutes / 1440);
+  const h = Math.round((minutes % 1440) / 60);
+  return h > 0 ? `${d}d ${h}h` : `${d}d`;
+};
+
 type IncidentAssignableUser = {
   id: string;
   label: string;
@@ -86,6 +100,13 @@ function IncidentsPageContent() {
   const [updatingIncidents, setUpdatingIncidents] = useState<Set<string>>(new Set());
   const [assignableUsers, setAssignableUsers] = useState<IncidentAssignableUser[]>([]);
   const [incidentWorkflow, setIncidentWorkflow] = useState<IncidentWorkflowMap>({});
+  const [slaMetrics, setSlaMetrics] = useState<{
+    avg_mtta_minutes: number | null;
+    avg_mttr_minutes: number | null;
+    p95_mttr_minutes: number | null;
+    resolved_count: number;
+    total_incidents: number;
+  } | null>(null);
 
   const params = useMemo(() => {
     const offset = Math.max(0, (page - 1) * pageSize);
@@ -119,6 +140,10 @@ function IncidentsPageContent() {
 
   useEffect(() => {
     setIncidentWorkflow((prev) => mergeIncidentWorkflowWithIncidents(incidents, prev));
+  }, [incidents]);
+
+  useEffect(() => {
+    api.getIncidentSlaMetrics().then(setSlaMetrics).catch(() => {});
   }, [incidents]);
 
   useEffect(() => {
@@ -471,6 +496,43 @@ function IncidentsPageContent() {
             </CardContent>
           </Card>
 
+          {slaMetrics && (
+            <div className="grid gap-4 md:grid-cols-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Avg. Time to Acknowledge</CardDescription>
+                  <CardTitle className="text-lg">
+                    {formatMinutes(slaMetrics.avg_mtta_minutes)}
+                  </CardTitle>
+                </CardHeader>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Avg. Time to Resolve</CardDescription>
+                  <CardTitle className="text-lg">
+                    {formatMinutes(slaMetrics.avg_mttr_minutes)}
+                  </CardTitle>
+                </CardHeader>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>P95 Resolution Time</CardDescription>
+                  <CardTitle className="text-lg">
+                    {formatMinutes(slaMetrics.p95_mttr_minutes)}
+                  </CardTitle>
+                </CardHeader>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Resolved</CardDescription>
+                  <CardTitle className="text-lg">
+                    {slaMetrics.resolved_count} / {slaMetrics.total_incidents}
+                  </CardTitle>
+                </CardHeader>
+              </Card>
+            </div>
+          )}
+
           {error && (
             <Alert variant="destructive">
               <AlertDescription>{error}</AlertDescription>
@@ -524,6 +586,16 @@ function IncidentsPageContent() {
                       </CardTitle>
                       <CardDescription>
                         Updated {formatIncidentDate(incident.updated_at)} · Created {formatIncidentDate(incident.created_at)}
+                        {incident.mtta_minutes != null && (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            MTTA: {formatMinutes(incident.mtta_minutes)}
+                          </span>
+                        )}
+                        {incident.mttr_minutes != null && (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            MTTR: {formatMinutes(incident.mttr_minutes)}
+                          </span>
+                        )}
                       </CardDescription>
                     </div>
                     <Button

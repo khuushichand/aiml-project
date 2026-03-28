@@ -576,6 +576,16 @@ export const api = {
     requestJson(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
       method: 'DELETE',
     }),
+  getIncidentSlaMetrics: () =>
+    requestJson<{
+      total_incidents: number;
+      resolved_count: number;
+      acknowledged_count: number;
+      avg_mtta_minutes: number | null;
+      avg_mttr_minutes: number | null;
+      p95_mtta_minutes: number | null;
+      p95_mttr_minutes: number | null;
+    }>('/admin/incidents/metrics/sla'),
 
   // ============================================
   // Audit Logs

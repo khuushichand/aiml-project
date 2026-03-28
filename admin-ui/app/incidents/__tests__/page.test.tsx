@@ -54,6 +54,7 @@ vi.mock('@/lib/api-client', () => ({
     updateIncident: vi.fn(),
     addIncidentEvent: vi.fn(),
     deleteIncident: vi.fn(),
+    getIncidentSlaMetrics: vi.fn(),
   },
 }));
 
@@ -75,6 +76,15 @@ beforeEach(() => {
   apiMock.updateIncident.mockResolvedValue({});
   apiMock.addIncidentEvent.mockResolvedValue({});
   apiMock.deleteIncident.mockResolvedValue({});
+  apiMock.getIncidentSlaMetrics.mockResolvedValue({
+    total_incidents: 0,
+    resolved_count: 0,
+    acknowledged_count: 0,
+    avg_mtta_minutes: null,
+    avg_mttr_minutes: null,
+    p95_mtta_minutes: null,
+    p95_mttr_minutes: null,
+  });
 });
 
 afterEach(() => {
