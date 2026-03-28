@@ -9,6 +9,7 @@ import type {
   BackupScheduleListResponse,
   BackupScheduleMutationResponse,
   BackupsResponse,
+  BillingAnalytics,
   ByokValidationRunCreateRequest,
   ByokValidationRunItem,
   ByokValidationRunListResponse,
@@ -1247,6 +1248,9 @@ export const api = {
   // ============================================
   // Plans & Billing
   // ============================================
+  getBillingAnalytics: () =>
+    requestJson<BillingAnalytics>('/admin/billing/analytics'),
+
   getPlans: (params?: Record<string, QueryParamValue>) => {
     const qs = buildQueryString(params);
     return requestJson<Plan[]>(`/billing/plans${qs ? `?${qs}` : ''}`);

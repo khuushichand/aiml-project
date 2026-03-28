@@ -84,6 +84,7 @@ const navigationItems = {
   configuration: { name: 'Configuration', href: '/config', icon: Settings, role: ['admin', 'super_admin', 'owner'], keywords: ['settings', 'system config'] },
   plans: { name: 'Plans', href: '/plans', icon: CreditCard, role: ['admin', 'super_admin', 'owner'], keywords: ['billing', 'pricing', 'subscription', 'tiers'], billingOnly: true },
   subscriptions: { name: 'Subscriptions', href: '/subscriptions', icon: Receipt, role: ['admin', 'super_admin', 'owner'], keywords: ['billing', 'payments', 'invoices'], billingOnly: true },
+  revenueAnalytics: { name: 'Revenue Analytics', href: '/billing/analytics', icon: BarChart3, role: ['admin', 'super_admin', 'owner'], keywords: ['billing', 'mrr', 'revenue', 'metrics', 'analytics'], billingOnly: true },
   featureRegistry: { name: 'Feature Registry', href: '/feature-registry', icon: Grid3X3, role: ['admin', 'super_admin', 'owner'], keywords: ['gating', 'entitlements', 'open core'], billingOnly: true },
 } satisfies Record<string, NavigationItem>;
 
@@ -138,6 +139,7 @@ export const navigationSections: NavigationSection[] = [
       navigationItems.usage,
       navigationItems.plans,
       navigationItems.subscriptions,
+      navigationItems.revenueAnalytics,
       navigationItems.featureRegistry,
       navigationItems.flags,
       navigationItems.dataOps,
@@ -238,6 +240,9 @@ const resolveDynamicPathLabel = (segments: string[]): string | null => {
   }
   if (root === 'subscriptions' && segments.length === 2) {
     return `Subscription ${decodeURIComponent(idOrSlug)}`;
+  }
+  if (root === 'billing' && idOrSlug === 'analytics') {
+    return 'Revenue Analytics';
   }
   return null;
 };

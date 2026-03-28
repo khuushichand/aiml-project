@@ -707,6 +707,132 @@ async def delete_incident(
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Billing Analytics
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+@router.get("/billing/analytics")
+async def get_billing_analytics(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict:
+    """Revenue and subscription analytics.
+
+    Computes MRR, subscriber counts by status, plan distribution,
+    and trial conversion rate from the billing database.  Returns
+    zeroed metrics when billing is disabled or no subscriptions exist.
+    """
+    _require_platform_admin(principal)
+
+    from tldw_Server_API.app.core.Billing.runtime_flags import is_billing_enabled
+
+    # Default empty response for when billing is disabled or no data exists.
+    empty_response: dict = {
+        "mrr_cents": 0,
+        "subscriber_count": 0,
+        "active_count": 0,
+        "trialing_count": 0,
+        "past_due_count": 0,
+        "canceled_count": 0,
+        "plan_distribution": [],
+        "trial_conversion_rate_pct": 0.0,
+    }
+
+    if not is_billing_enabled():
+        return empty_response
+
+    try:
+        from tldw_Server_API.app.core.AuthNZ.repos.billing_repo import AuthnzBillingRepo
+
+        pool = await get_db_pool()
+        repo = AuthnzBillingRepo(db_pool=pool)
+
+        subscriptions = await repo.list_all_subscriptions()
+        if not subscriptions:
+            return empty_response
+
+        # Aggregate metrics
+        mrr_cents = 0
+        active_count = 0
+        trialing_count = 0
+        past_due_count = 0
+        canceled_count = 0
+        plan_counts: dict[str, int] = {}
+        total_trials_ever = 0
+        converted_trials = 0
+
+        for sub in subscriptions:
+            status = str(sub.get("status") or "").strip().lower()
+            plan_display = str(sub.get("plan_display_name") or sub.get("plan_name") or "Unknown")
+            plan_counts[plan_display] = plan_counts.get(plan_display, 0) + 1
+
+            if status == "active":
+                active_count += 1
+                # MRR: use monthly price for active subs
+                price_monthly = sub.get("price_usd_monthly")
+                if price_monthly is not None:
+                    try:
+                        # price_usd_monthly is stored as dollars (float/int);
+                        # convert to cents for the response.
+                        monthly_cents = int(round(float(price_monthly) * 100))
+                    except (ValueError, TypeError):
+                        monthly_cents = 0
+                    billing_cycle = str(sub.get("billing_cycle") or "monthly").lower()
+                    if billing_cycle == "yearly":
+                        # For yearly billing, MRR = yearly_price / 12
+                        price_yearly = sub.get("price_usd_yearly")
+                        if price_yearly is not None:
+                            try:
+                                yearly_cents = int(round(float(price_yearly) * 100))
+                                mrr_cents += yearly_cents // 12
+                            except (ValueError, TypeError):
+                                mrr_cents += monthly_cents
+                        else:
+                            mrr_cents += monthly_cents
+                    else:
+                        mrr_cents += monthly_cents
+            elif status == "trialing":
+                trialing_count += 1
+            elif status == "past_due":
+                past_due_count += 1
+            elif status == "canceled":
+                canceled_count += 1
+
+            # Trial tracking: if there's a trial_end field, this sub had a trial.
+            if sub.get("trial_end"):
+                total_trials_ever += 1
+                # A converted trial is one that reached active status after trialing.
+                if status == "active":
+                    converted_trials += 1
+
+        subscriber_count = active_count + trialing_count + past_due_count
+        trial_conversion_rate = (
+            round(converted_trials / total_trials_ever * 100, 1)
+            if total_trials_ever > 0
+            else 0.0
+        )
+
+        plan_distribution = [
+            {"plan_name": name, "count": count}
+            for name, count in sorted(plan_counts.items(), key=lambda x: -x[1])
+        ]
+
+        return {
+            "mrr_cents": mrr_cents,
+            "subscriber_count": subscriber_count,
+            "active_count": active_count,
+            "trialing_count": trialing_count,
+            "past_due_count": past_due_count,
+            "canceled_count": canceled_count,
+            "plan_distribution": plan_distribution,
+            "trial_conversion_rate_pct": trial_conversion_rate,
+        }
+
+    except Exception as exc:
+        logger.warning("billing/analytics: failed to compute metrics: {}", exc)
+        return empty_response
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Realtime Stats
 # ---------------------------------------------------------------------------------------------------------------------
 

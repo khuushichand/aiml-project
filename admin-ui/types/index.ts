@@ -507,6 +507,22 @@ export interface Invoice {
   created_at: string;
 }
 
+export interface PlanDistributionEntry {
+  plan_name: string;
+  count: number;
+}
+
+export interface BillingAnalytics {
+  mrr_cents: number;
+  subscriber_count: number;
+  active_count: number;
+  trialing_count: number;
+  past_due_count: number;
+  canceled_count: number;
+  plan_distribution: PlanDistributionEntry[];
+  trial_conversion_rate_pct: number;
+}
+
 export interface FeatureRegistryEntry {
   feature_key: string;
   display_name: string;
