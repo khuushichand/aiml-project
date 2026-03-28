@@ -1121,6 +1121,17 @@ export const api = {
     requestJson(`/admin/acp/agents/${configId}`, {
       method: 'DELETE',
     }),
+  getACPAgentMetrics: () =>
+    requestJson<{ items: Array<{
+      agent_type: string;
+      session_count: number;
+      active_sessions: number;
+      total_prompt_tokens: number;
+      total_completion_tokens: number;
+      total_tokens: number;
+      total_messages: number;
+      last_used_at: string | null;
+    }> }>('/admin/acp/agents/metrics'),
 
   // ============================================
   // ACP Permission Policies (Admin)

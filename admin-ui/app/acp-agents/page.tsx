@@ -37,6 +37,43 @@ interface AgentConfig {
   updated_at: string | null;
 }
 
+interface AgentMetrics {
+  agent_type: string;
+  session_count: number;
+  active_sessions: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_messages: number;
+  last_used_at: string | null;
+}
+
+function formatTokens(n: number): string {
+  if (n === 0) return '0';
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) return '\u2014';
+  const now = Date.now();
+  const then = new Date(iso).getTime();
+  const diffMs = now - then;
+  if (diffMs < 0) return 'just now';
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  return `${months}mo ago`;
+}
+
 interface PermissionPolicy {
   id: number;
   name: string;
@@ -73,6 +110,7 @@ const defaultPolicyForm = {
 export default function ACPAgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [policies, setPolicies] = useState<PermissionPolicy[]>([]);
+  const [agentMetrics, setAgentMetrics] = useState<Map<string, AgentMetrics>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -101,6 +139,12 @@ export default function ACPAgentsPage() {
       ]);
       setAgents(agentsRes.agents || []);
       setPolicies(policiesRes.policies || []);
+
+      // Fetch metrics separately — non-blocking; failures are silently ignored
+      api.getACPAgentMetrics().then(({ items }) => {
+        const map = new Map(items.map(m => [m.agent_type, m]));
+        setAgentMetrics(map);
+      }).catch(() => {});
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Failed to load data';
       setError(message);
@@ -331,6 +375,9 @@ export default function ACPAgentsPage() {
                         <TableHead>Status</TableHead>
                         <TableHead>Model</TableHead>
                         <TableHead>Tools</TableHead>
+                        <TableHead>Sessions</TableHead>
+                        <TableHead>Tokens</TableHead>
+                        <TableHead>Last Used</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -365,6 +412,35 @@ export default function ACPAgentsPage() {
                             {agent.allowed_tools ? `${agent.allowed_tools.length} allowed` : 'All'}
                             {agent.denied_tools ? `, ${agent.denied_tools.length} denied` : ''}
                           </TableCell>
+                          {(() => {
+                            const metrics = agentMetrics.get(agent.type);
+                            return (
+                              <>
+                                <TableCell>
+                                  {metrics ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <span>{metrics.session_count}</span>
+                                      {metrics.active_sessions > 0 && (
+                                        <Badge variant="default" className="text-xs px-1.5 py-0">
+                                          {metrics.active_sessions} active
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-muted-foreground">{'\u2014'}</span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-xs font-mono">
+                                  {metrics ? formatTokens(metrics.total_tokens) : (
+                                    <span className="text-muted-foreground">{'\u2014'}</span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-xs text-muted-foreground">
+                                  {metrics ? formatRelativeTime(metrics.last_used_at) : '\u2014'}
+                                </TableCell>
+                              </>
+                            );
+                          })()}
                           <TableCell>
                             <div className="flex gap-1">
                               <AccessibleIconButton
