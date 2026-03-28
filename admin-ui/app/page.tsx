@@ -218,6 +218,7 @@ export default function DashboardPage() {
   const [orgError, setOrgError] = useState('');
   const [creatingOrg, setCreatingOrg] = useState(false);
   const [loading, setLoading] = useState(true);
+  const loadingRef = useRef(false); // Ref-based guard for auto-refresh overlap
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
@@ -231,6 +232,7 @@ export default function DashboardPage() {
 
   const loadDashboardData = useCallback(async () => {
     try {
+      loadingRef.current = true;
       setLoading(true);
       setError(null);
       setSecurityHealthError('');
@@ -448,6 +450,7 @@ export default function DashboardPage() {
       setOperationalKpis(DEFAULT_DASHBOARD_OPERATIONAL_KPIS);
       setUptimeSummary(DEFAULT_DASHBOARD_UPTIME_SUMMARY);
     } finally {
+      loadingRef.current = false;
       setLoading(false);
       setLastRefreshed(new Date());
     }
@@ -462,7 +465,7 @@ export default function DashboardPage() {
     if (!autoRefreshEnabled) return;
 
     const intervalId = setInterval(() => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && !loadingRef.current) {
         void loadDashboardData();
       }
     }, 60_000);
