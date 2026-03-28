@@ -10,9 +10,28 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 
-- Single-image reference-guided generation for `POST /api/v1/files/create` image artifacts via `payload.reference_file_id`, including managed reference-image discovery through `GET /api/v1/files/reference-images`.
-- Image backend capability metadata for `image_reference_input`, plus Model Studio support for documented reference-image model families.
-- Playground image-generation modal support for selecting one eligible managed image as a reference source, with synced request metadata for image-generation events.
+- Shared workspace cloning and "Shared With Me" flows, backed by new sharing APIs, privilege-aware workspace sharing rules, and clone-service support. (PR #903)
+- ACP workspaces gained workspace discovery and health services for workspace-entity orchestration surfaces. (PR #912)
+- Deep Research now includes jobs-backed run persistence, provider-backed collection/synthesis, replayable SSE progress, checkpoint review, chat handoff and follow-up flows, and workflow launch/wait/bundle steps. (PR #831)
+- MCP Hub governance pack management expanded with source distribution, trust policy and signer provenance/diagnostics, hosted staging/production overlays, and route parity across shared UI, the web app, and extension settings. (PRs #917, #922, #933)
+- Companion/Home and integrations management grew with a customizable Companion Home dashboard, notifications surfaces, shared integrations and scheduled-task management, and workspace installation registry syncing. (PRs #920, #925, #926)
+- The audio stack gained KittenTTS provider support, curated `kitten_tts` bundle profiles, shared admin audio installer routes/panel, and `pocket_tts_cpp` adapter/runtime/installer support. Audio setup docs and scripts were also migrated from `huggingface-cli` to `hf`. (PRs #918, #919, #921, #923, #931)
+- Telegram bot AuthNZ/governance support now includes permission foundations, admin configuration APIs, webhook intake/deduplication, linked-actor mapping, scoped execution identities, and exact-scope approval callbacks. (PR #924)
+- Reference-guided image generation for `POST /api/v1/files/create` image artifacts via `payload.reference_file_id`, including managed reference-image discovery through `GET /api/v1/files/reference-images`, backend `image_reference_input` capability metadata, documented Model Studio support for eligible reference-image model families, and Playground modal support for selecting one managed reference image as the request source.
+
+### Changed
+
+- Media DB v2 advanced through the phase-1 and stage-1 caller-first migrations, splitting the monolith into repository/runtime/schema modules, rebinding callers to the new API surface, tightening request-scope isolation, and expanding read-contract coverage. (PRs #911, #930, #925)
+- Quick Ingest audio configuration now uses structured language selection and backend-driven transcription model dropdowns, and the web UI also gained audio input source switching. (direct dev merges)
+- Knowledge QA and related workspace/chat flows were hardened with a wider desktop workspace, media retrieval fallback coverage, workspace study material ownership, flashcard visibility enforcement, and stricter voice-conversation capability contracts. (direct dev merges and PR #933 follow-ups)
+- Admin and operator surfaces were overhauled with production-readiness and incident-management follow-through across dashboard, AI overview, budgets, compliance, monitoring, invitations, registration codes, webhooks, usage, and voice-command tooling. (PR #932)
+
+### Fixed
+
+- Embeddings jobs workers now normalize legacy chunk types instead of failing queued work. (PR #914)
+- Sharing, research, governance-pack trust, Telegram approvals/webhooks, companion routing, MCP Hub navigation, and admin audio installer follow-ups received post-review stability fixes. (PRs #903, #831, #922, #924, #926, #933)
+- `pocket_tts_cpp`, KittenTTS bundle verification, quick ingest language-state handling, quickstart same-origin hydration/browser config, and Media DB v2 delete/review regressions were addressed in post-merge hardening. (PRs #919, #921, #923, #930, #931 and direct follow-ups)
+- CI and repo hygiene were tightened with frontend/browser gate fixes, isolated workspace installation repo tests, OSS/private boundary enforcement, and GitHub Actions dependency bumps for `docker/login-action`, `docker/setup-buildx-action`, and `dependency-review-action`. (PRs #843, #900, #901, #925 and related follow-ups)
 
 ## Backfill: merged on `main` before `dev` sync
 
