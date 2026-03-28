@@ -3,6 +3,10 @@ const withBundleAnalyzer =
     ? require('@next/bundle-analyzer')({ enabled: true })
     : (config) => config;
 
+const { withSentryConfig } = process.env.NEXT_PUBLIC_SENTRY_DSN
+  ? require('@sentry/nextjs')
+  : { withSentryConfig: (config) => config };
+
 const isDev = process.env.NODE_ENV !== 'production';
 
 /** @type {import('next').NextConfig} */
@@ -56,4 +60,7 @@ const nextConfig = {
   },
 };
 
-module.exports = withBundleAnalyzer(nextConfig);
+module.exports = withSentryConfig(withBundleAnalyzer(nextConfig), {
+  silent: true,
+  disableLogger: true,
+});
