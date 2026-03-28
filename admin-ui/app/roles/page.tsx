@@ -15,7 +15,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput } from '@/components/ui/form';
-import { Shield, Plus, Trash2, Lock, Settings } from 'lucide-react';
+import { Shield, Plus, Trash2, Lock, Settings, ArrowLeftRight } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 import Link from 'next/link';
@@ -483,11 +483,19 @@ export default function RolesPage() {
                 <p className="text-sm text-muted-foreground mb-4">
                   For advanced role-permission mapping and bulk assignment, use the permission matrix view.
                 </p>
-                <Link href="/roles/matrix">
-                  <Button variant="outline">
-                    Open Permission Matrix
-                  </Button>
-                </Link>
+                <div className="flex gap-2">
+                  <Link href="/roles/compare">
+                    <Button variant="outline">
+                      <ArrowLeftRight className="mr-2 h-4 w-4" />
+                      Compare Roles
+                    </Button>
+                  </Link>
+                  <Link href="/roles/matrix">
+                    <Button variant="outline">
+                      Open Permission Matrix
+                    </Button>
+                  </Link>
+                </div>
               </CardContent>
             </Card>
           </div>

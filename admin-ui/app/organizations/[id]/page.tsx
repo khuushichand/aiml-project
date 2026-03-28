@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
-  ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks, Pencil
+  ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff, ListChecks, Pencil, Search
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Organization, OrgMember, Team, ProviderSecret, User, WatchlistSettings, Subscription, OrgUsageSummary, Invoice } from '@/types';
@@ -31,6 +31,8 @@ import {
   isBillingEnabled,
   resolveOrganizationBillingSnapshot,
 } from '@/lib/billing';
+import { Pagination } from '@/components/ui/pagination';
+import { Select } from '@/components/ui/select';
 import { logger } from '@/lib/logger';
 
 const VALID_TABS = ['members', 'teams', 'keys', 'billing'] as const;
@@ -108,6 +110,11 @@ function OrganizationDetailPageInner() {
   const [editOrgError, setEditOrgError] = useState('');
   const [updatingOrg, setUpdatingOrg] = useState(false);
   const [deletingOrg, setDeletingOrg] = useState(false);
+
+  // Member search & pagination
+  const [memberSearch, setMemberSearch] = useState('');
+  const [memberPage, setMemberPage] = useState(1);
+  const [memberPageSize, setMemberPageSize] = useState(10);
 
   const loadData = useCallback(async () => {
     const requestId = loadRequestRef.current + 1;
@@ -680,15 +687,14 @@ function OrganizationDetailPageInner() {
                             </div>
                             <div className="space-y-2">
                               <Label htmlFor="inviteRole">Role</Label>
-                              <select
+                              <Select
                                 id="inviteRole"
                                 value={inviteRole}
                                 onChange={(e) => setInviteRole(e.target.value)}
-                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                               >
                                 <option value="member">Member</option>
                                 <option value="admin">Admin</option>
-                              </select>
+                              </Select>
                             </div>
                             {inviteLink && (
                               <div className="space-y-2">
@@ -748,16 +754,15 @@ function OrganizationDetailPageInner() {
                             />
                             <div className="space-y-2">
                               <Label htmlFor="memberRole">Role</Label>
-                              <select
+                              <Select
                                 id="memberRole"
                                 value={newMemberRole}
                                 onChange={(e) => setNewMemberRole(e.target.value)}
-                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                               >
                                 <option value="member">Member</option>
                                 <option value="admin">Admin</option>
                                 <option value="owner">Owner</option>
-                              </select>
+                              </Select>
                             </div>
                           </div>
                           <DialogFooter>
@@ -773,85 +778,129 @@ function OrganizationDetailPageInner() {
                       <div className="text-center text-muted-foreground py-8">
                         No members yet. Add or invite members to get started.
                       </div>
-                    ) : (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>User</TableHead>
-                            <TableHead>Role</TableHead>
-                            <TableHead>Joined</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {members.map((member) => (
-                            <TableRow key={member.user_id}>
-                              <TableCell>
-                                <div>
-                                  <div className="font-medium">{member.user?.username || `User ${member.user_id}`}</div>
-                                  {member.user?.email && (
-                                    <div className="text-xs text-muted-foreground">{member.user.email}</div>
-                                  )}
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <select
-                                  value={memberRoleSelections[member.user_id] ?? member.role}
-                                  onChange={async (event) => {
-                                    const newRole = event.target.value;
-                                    const previousRole = memberRoleSelections[member.user_id] ?? member.role;
-                                    setMemberRoleSelections((prev) => ({
-                                      ...prev,
-                                      [member.user_id]: newRole,
-                                    }));
-                                    const displayName = member.user?.username || `User ${member.user_id}`;
-                                    const confirmed = await confirm({
-                                      title: 'Change Role',
-                                      message: `Change role for ${displayName} to ${newRole}?`,
-                                      confirmText: 'Change Role',
-                                      variant: 'default',
-                                    });
-                                    if (confirmed) {
-                                      const updated = await handleUpdateMemberRole(member.user_id, newRole);
-                                      if (!updated) {
-                                        setMemberRoleSelections((prev) => ({
-                                          ...prev,
-                                          [member.user_id]: previousRole,
-                                        }));
-                                      }
-                                    } else {
-                                      setMemberRoleSelections((prev) => ({
-                                        ...prev,
-                                        [member.user_id]: previousRole,
-                                      }));
-                                    }
-                                  }}
-                                  className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-                                >
-                                  <option value="member">Member</option>
-                                  <option value="admin">Admin</option>
-                                  <option value="owner">Owner</option>
-                                </select>
-                              </TableCell>
-                              <TableCell className="text-sm text-muted-foreground">
-                                {new Date(member.joined_at).toLocaleDateString()}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRemoveMember(member.user_id, member.user?.username)}
-                                  aria-label={`Remove ${member.user?.username || `User ${member.user_id}`} from organization`}
-                                  title="Remove member"
-                                >
-                                  <Trash2 className="h-4 w-4 text-red-500" />
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    )}
+                    ) : (() => {
+                      const filteredMembers = members.filter((member) => {
+                        if (!memberSearch) return true;
+                        const q = memberSearch.toLowerCase();
+                        return (
+                          (member.user?.username || '').toLowerCase().includes(q) ||
+                          (member.user?.email || '').toLowerCase().includes(q)
+                        );
+                      });
+                      const memberTotalPages = Math.max(1, Math.ceil(filteredMembers.length / memberPageSize));
+                      const safeMemberPage = Math.min(memberPage, memberTotalPages);
+                      const memberStartIndex = (safeMemberPage - 1) * memberPageSize;
+                      const paginatedMembers = filteredMembers.slice(memberStartIndex, memberStartIndex + memberPageSize);
+
+                      return (
+                      <>
+                        <div className="relative max-w-sm mb-4">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            placeholder="Search members by name or email..."
+                            value={memberSearch}
+                            onChange={(e) => { setMemberSearch(e.target.value); setMemberPage(1); }}
+                            className="pl-10"
+                          />
+                        </div>
+                        {filteredMembers.length === 0 ? (
+                          <div className="text-center text-muted-foreground py-4 text-sm">
+                            No members match your search.
+                          </div>
+                        ) : (
+                          <>
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>User</TableHead>
+                                  <TableHead>Role</TableHead>
+                                  <TableHead>Joined</TableHead>
+                                  <TableHead className="text-right">Actions</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {paginatedMembers.map((member) => (
+                                  <TableRow key={member.user_id}>
+                                    <TableCell>
+                                      <div>
+                                        <div className="font-medium">{member.user?.username || `User ${member.user_id}`}</div>
+                                        {member.user?.email && (
+                                          <div className="text-xs text-muted-foreground">{member.user.email}</div>
+                                        )}
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Select
+                                        value={memberRoleSelections[member.user_id] ?? member.role}
+                                        onChange={async (event) => {
+                                          const newRole = event.target.value;
+                                          const previousRole = memberRoleSelections[member.user_id] ?? member.role;
+                                          setMemberRoleSelections((prev) => ({
+                                            ...prev,
+                                            [member.user_id]: newRole,
+                                          }));
+                                          const displayName = member.user?.username || `User ${member.user_id}`;
+                                          const confirmed = await confirm({
+                                            title: 'Change Role',
+                                            message: `Change role for ${displayName} to ${newRole}?`,
+                                            confirmText: 'Change Role',
+                                            variant: 'default',
+                                          });
+                                          if (confirmed) {
+                                            const updated = await handleUpdateMemberRole(member.user_id, newRole);
+                                            if (!updated) {
+                                              setMemberRoleSelections((prev) => ({
+                                                ...prev,
+                                                [member.user_id]: previousRole,
+                                              }));
+                                            }
+                                          } else {
+                                            setMemberRoleSelections((prev) => ({
+                                              ...prev,
+                                              [member.user_id]: previousRole,
+                                            }));
+                                          }
+                                        }}
+                                        className="h-8 w-28"
+                                      >
+                                        <option value="member">Member</option>
+                                        <option value="admin">Admin</option>
+                                        <option value="owner">Owner</option>
+                                      </Select>
+                                    </TableCell>
+                                    <TableCell className="text-sm text-muted-foreground">
+                                      {new Date(member.joined_at).toLocaleDateString()}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleRemoveMember(member.user_id, member.user?.username)}
+                                        aria-label={`Remove ${member.user?.username || `User ${member.user_id}`} from organization`}
+                                        title="Remove member"
+                                      >
+                                        <Trash2 className="h-4 w-4 text-red-500" />
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                            {filteredMembers.length > memberPageSize && (
+                              <Pagination
+                                currentPage={safeMemberPage}
+                                totalPages={memberTotalPages}
+                                totalItems={filteredMembers.length}
+                                pageSize={memberPageSize}
+                                onPageChange={setMemberPage}
+                                onPageSizeChange={(size) => { setMemberPageSize(size); setMemberPage(1); }}
+                              />
+                            )}
+                          </>
+                        )}
+                      </>
+                      );
+                    })()}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -960,11 +1009,10 @@ function OrganizationDetailPageInner() {
                           <div className="space-y-4 py-4">
                             <div className="space-y-2">
                               <Label htmlFor="byokProvider">Provider</Label>
-                              <select
+                              <Select
                                 id="byokProvider"
                                 value={byokProvider}
                                 onChange={(e) => setByokProvider(e.target.value)}
-                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                               >
                                 <option value="">Select provider...</option>
                                 <option value="openai">OpenAI</option>
@@ -975,7 +1023,7 @@ function OrganizationDetailPageInner() {
                                 <option value="mistral">Mistral AI</option>
                                 <option value="deepseek">DeepSeek</option>
                                 <option value="openrouter">OpenRouter</option>
-                              </select>
+                              </Select>
                             </div>
                             <div className="space-y-2">
                               <Label htmlFor="byokApiKey">API Key</Label>

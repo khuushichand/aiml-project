@@ -274,6 +274,8 @@ export default function UserDetailPage() {
   const [showAddOverride, setShowAddOverride] = useState(false);
   const [newOverridePermissionId, setNewOverridePermissionId] = useState('');
   const [newOverrideGrant, setNewOverrideGrant] = useState(true);
+  const [permSearchQuery, setPermSearchQuery] = useState('');
+  const [permSourceFilter, setPermSourceFilter] = useState<'all' | EffectivePermissionSource>('all');
 
   const applyRateLimits = useCallback((limits?: UserRateLimits | null) => {
     if (!limits) {
@@ -1013,36 +1015,67 @@ export default function UserDetailPage() {
                   )}
 
                   {/* Effective Permissions */}
-                  {effectivePermissions.length > 0 && (
+                  {effectivePermissions.length > 0 && (() => {
+                    const filteredPerms = effectivePermissions.filter((perm) => {
+                      const matchesSearch = !permSearchQuery || perm.name.toLowerCase().includes(permSearchQuery.toLowerCase());
+                      const matchesSource = permSourceFilter === 'all' || perm.source === permSourceFilter;
+                      return matchesSearch && matchesSource;
+                    });
+                    return (
                     <details className="text-sm">
                       <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
                         View effective permissions ({effectivePermissions.length})
                       </summary>
-                      <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
-                        {effectivePermissions.map((perm, index) => (
-                          <div
-                            key={perm.id || `perm-${index}`}
-                            className="flex items-center justify-between p-2 rounded bg-muted/30"
+                      <div className="mt-2 space-y-2">
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Search permissions..."
+                            value={permSearchQuery}
+                            onChange={(e) => setPermSearchQuery(e.target.value)}
+                            className="h-8 text-xs"
+                          />
+                          <Select
+                            value={permSourceFilter}
+                            onChange={(e) => setPermSourceFilter(e.target.value as 'all' | EffectivePermissionSource)}
+                            className="h-8 text-xs w-40"
                           >
-                            <code className="font-mono text-xs">{perm.name}</code>
-                            {perm.source === 'override' ? (
-                              <Badge variant="secondary" className="text-xs">
-                                Direct override
-                              </Badge>
-                            ) : perm.source === 'role' ? (
-                              <Badge variant="outline" className="text-xs">
-                                Role: {perm.sourceLabel || user.role || 'role'}
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="text-xs">
-                                Inherited
-                              </Badge>
-                            )}
-                          </div>
-                        ))}
+                            <option value="all">All sources</option>
+                            <option value="role">Role-derived</option>
+                            <option value="override">Direct overrides</option>
+                            <option value="inherited">Inherited only</option>
+                          </Select>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto space-y-1">
+                          {filteredPerms.length === 0 ? (
+                            <div className="text-xs text-muted-foreground py-2 text-center">
+                              No permissions match your filter.
+                            </div>
+                          ) : filteredPerms.map((perm, index) => (
+                            <div
+                              key={perm.id || `perm-${index}`}
+                              className="flex items-center justify-between p-2 rounded bg-muted/30"
+                            >
+                              <code className="font-mono text-xs">{perm.name}</code>
+                              {perm.source === 'override' ? (
+                                <Badge variant="secondary" className="text-xs">
+                                  Direct override
+                                </Badge>
+                              ) : perm.source === 'role' ? (
+                                <Badge variant="outline" className="text-xs">
+                                  Role: {perm.sourceLabel || user.role || 'role'}
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-xs">
+                                  Inherited
+                                </Badge>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </details>
-                  )}
+                    );
+                  })()}
                 </CardContent>
               </Card>
 

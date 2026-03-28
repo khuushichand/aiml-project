@@ -1243,6 +1243,7 @@ function UsersPageContent() {
                           <TableHead>Role</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Storage</TableHead>
+                          <TableHead>Created At</TableHead>
                           <TableHead>Last Login</TableHead>
                           <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -1307,6 +1308,11 @@ function UsersPageContent() {
                                     />
                                   </div>
                                 </div>
+                              </TableCell>
+                              <TableCell className="text-muted-foreground text-sm">
+                                {user.created_at
+                                  ? new Date(user.created_at).toLocaleDateString()
+                                  : '—'}
                               </TableCell>
                               <TableCell className="text-muted-foreground text-sm">
                                 <div className="flex items-center gap-1.5">

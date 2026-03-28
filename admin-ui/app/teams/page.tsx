@@ -85,15 +85,29 @@ function TeamsPageContent() {
   const loadTeams = useCallback(async (orgId: string) => {
     try {
       setLoading(true);
-      const data = await api.getTeams(orgId);
-      setTeams(Array.isArray(data) ? data : []);
+      if (orgId === '__all__') {
+        // Load teams from all organizations
+        const results = await Promise.allSettled(
+          organizations.map((org) => api.getTeams(String(org.id)))
+        );
+        const allTeams: Team[] = [];
+        results.forEach((result) => {
+          if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+            allTeams.push(...result.value);
+          }
+        });
+        setTeams(allTeams);
+      } else {
+        const data = await api.getTeams(orgId);
+        setTeams(Array.isArray(data) ? data : []);
+      }
     } catch (error) {
       logger.error('Failed to load teams', { component: 'TeamsPage', error: error instanceof Error ? error.message : String(error) });
       setTeams([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [organizations]);
 
   useEffect(() => {
     loadOrganizations();
@@ -343,7 +357,7 @@ function TeamsPageContent() {
                 />
                 <Button
                   onClick={() => setShowCreateForm(!showCreateForm)}
-                  disabled={!selectedOrgId}
+                  disabled={!selectedOrgId || selectedOrgId === '__all__'}
                 >
                   <Plus className="mr-2 h-4 w-4" />
                   New Team
@@ -381,6 +395,7 @@ function TeamsPageContent() {
                     onChange={(e) => handleOrgChange(e.target.value)}
                     className="max-w-md"
                   >
+                    <option value="__all__">All Organizations</option>
                     {organizations.map((org) => (
                       <option key={org.id} value={org.id}>
                         {org.name} ({org.slug})
@@ -391,7 +406,7 @@ function TeamsPageContent() {
               </CardContent>
             </Card>
 
-            {showCreateForm && selectedOrgId && (
+            {showCreateForm && selectedOrgId && selectedOrgId !== '__all__' && (
               <Card className="mb-6">
                 <CardHeader>
                   <CardTitle>Create Team</CardTitle>
@@ -448,9 +463,11 @@ function TeamsPageContent() {
               <CardHeader>
                 <CardTitle>Teams List</CardTitle>
                 <CardDescription>
-                  {selectedOrgId
-                    ? `Teams in ${organizations.find(o => String(o.id) === selectedOrgId)?.name || 'selected organization'}`
-                    : 'Select an organization to view teams'}
+                  {selectedOrgId === '__all__'
+                    ? `Teams across all organizations`
+                    : selectedOrgId
+                      ? `Teams in ${organizations.find(o => String(o.id) === selectedOrgId)?.name || 'selected organization'}`
+                      : 'Select an organization to view teams'}
                 </CardDescription>
               </CardHeader>
               <CardContent>
