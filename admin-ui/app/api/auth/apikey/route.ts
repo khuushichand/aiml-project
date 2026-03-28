@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildApiUrlForRequest } from '@/lib/api-config';
 import { setApiKeySessionCookies } from '@/lib/server-auth';
-import { checkRateLimit } from '@/lib/rate-limiter';
+import { checkRateLimit, extractClientIp } from '@/lib/rate-limiter';
 
 const isAdminApiKeyLoginEnabled = (): boolean =>
   process.env.ADMIN_UI_ALLOW_API_KEY_LOGIN === 'true';
@@ -16,11 +16,7 @@ const shouldAttachTestDiagnostics = (): boolean =>
   process.env.TEST_MODE === 'true';
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    ?? request.headers.get('x-real-ip')
-    ?? 'unknown';
-
-  const rateCheck = checkRateLimit(ip);
+  const rateCheck = checkRateLimit(extractClientIp(request.headers));
   if (!rateCheck.allowed) {
     return NextResponse.json(
       { detail: 'Too many login attempts. Please try again later.' },

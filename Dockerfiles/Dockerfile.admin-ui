@@ -47,8 +47,10 @@ RUN useradd -m -u 10003 adminui
 # Standalone output mirrors builder tree: standalone/admin-ui/server.js
 COPY --from=builder --chown=adminui:adminui /build/admin-ui/.next/standalone /app
 COPY --from=builder --chown=adminui:adminui /build/admin-ui/.next/static /app/admin-ui/.next/static
-# admin-ui may not ship a public/ directory; copy only if present
-COPY --from=builder --chown=adminui:adminui /build/admin-ui/public /app/admin-ui/public 2>/dev/null || true
+# admin-ui may not ship a public/ directory; copy only if present.
+# Docker COPY does not support shell-style || true, so use a RUN fallback.
+RUN mkdir -p /app/admin-ui/public
+COPY --from=builder --chown=adminui:adminui /build/admin-ui/public* /app/admin-ui/public/
 
 USER adminui
 

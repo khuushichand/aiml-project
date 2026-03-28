@@ -22,6 +22,20 @@ function pruneStore(): void {
   }
 }
 
+/**
+ * Extract client IP from standard proxy headers.
+ * Falls back to 'unknown' if no headers present (e.g., direct localhost access).
+ */
+export function extractClientIp(headers: {
+  get(name: string): string | null;
+}): string {
+  return (
+    headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    headers.get('x-real-ip') ??
+    'unknown'
+  );
+}
+
 export function checkRateLimit(ip: string): {
   allowed: boolean;
   retryAfterSeconds?: number;
