@@ -11,6 +11,11 @@ import {
   normalizeVoiceConversationRuntimeError
 } from "@/services/tldw/voice-conversation"
 import { arrayBufferToBase64 } from "@/utils/compress"
+import {
+  DEFAULT_TLDW_TTS_MODEL,
+  DEFAULT_TLDW_TTS_VOICE,
+  DEFAULT_TTS_PROVIDER
+} from "@/services/tts"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { resolveApiProviderForModel } from "@/utils/resolve-api-provider"
 import { useStreamingAudioPlayer } from "@/hooks/useStreamingAudioPlayer"
@@ -124,9 +129,9 @@ export const useVoiceChatStream = ({
     isSettled: hasAudioCatalogSettled
   } = useAudioSourceCatalog()
 
-  const [ttsProvider] = useStorage("ttsProvider", "browser")
-  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
-  const [tldwTtsVoice] = useStorage("tldwTtsVoice", "af_heart")
+  const [ttsProvider] = useStorage("ttsProvider", DEFAULT_TTS_PROVIDER)
+  const [tldwTtsModel] = useStorage("tldwTtsModel", DEFAULT_TLDW_TTS_MODEL)
+  const [tldwTtsVoice] = useStorage("tldwTtsVoice", DEFAULT_TLDW_TTS_VOICE)
   const [tldwTtsResponseFormat] = useStorage("tldwTtsResponseFormat", "mp3")
   const [tldwTtsSpeed] = useStorage("tldwTtsSpeed", 1)
   const [openAITTSModel] = useStorage("openAITTSModel", "tts-1")

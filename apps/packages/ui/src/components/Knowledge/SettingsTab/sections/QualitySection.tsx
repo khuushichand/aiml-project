@@ -2,7 +2,7 @@ import React from "react"
 import { Radio } from "antd"
 import { useTranslation } from "react-i18next"
 import type { TFunction } from "i18next"
-import type { RagSettings } from "@/services/rag/unified-rag"
+import type { RagSettings, RagTextChunkMethod } from "@/services/rag/unified-rag"
 import { SettingField } from "../shared/SettingField"
 import { CollapsibleSection } from "../shared/CollapsibleSection"
 
@@ -21,6 +21,17 @@ const SEARCH_MODE_OPTIONS = [
 const FTS_LEVEL_OPTIONS = [
   { label: "Media", value: "media" },
   { label: "Chunk", value: "chunk" }
+]
+
+const TEXT_LATE_CHUNK_METHOD_OPTIONS: { label: string; value: RagTextChunkMethod }[] = [
+  { label: "Sentences", value: "sentences" },
+  { label: "Words", value: "words" },
+  { label: "Paragraphs", value: "paragraphs" },
+  { label: "Tokens", value: "tokens" },
+  { label: "Semantic", value: "semantic" },
+  { label: "Propositions", value: "propositions" },
+  { label: "Ebook Chapters", value: "ebook_chapters" },
+  { label: "JSON", value: "json" },
 ]
 
 const RERANK_STRATEGY_OPTIONS = [
@@ -43,6 +54,11 @@ export const getQualitySectionVisible = (
     t("sidepanel:rag.quality", "Quality"),
     t("sidepanel:rag.searchMode", "Search mode"),
     t("sidepanel:rag.ftsLevel", "FTS level"),
+    "Text late chunking",
+    "Late chunk method",
+    "Late chunk size",
+    "Late chunk overlap",
+    "Late chunk language",
     t("sidepanel:rag.hybridAlpha", "Hybrid alpha"),
     t("sidepanel:rag.intentRouting", "Intent routing"),
     t("sidepanel:rag.topK", "Top results"),
@@ -95,6 +111,11 @@ export const QualitySection: React.FC<QualitySectionProps> = ({
   const normalizedFilter = searchFilter.trim().toLowerCase()
   const matchesFilter = (label: string) =>
     !normalizedFilter || label.toLowerCase().includes(normalizedFilter)
+  const showTextLateChunking =
+    (settings.search_mode === "fts" || settings.search_mode === "hybrid") &&
+    settings.fts_level === "chunk"
+  const showTextLateChunkingKnobs =
+    showTextLateChunking && settings.enable_text_late_chunking
 
   const sectionVisible = getQualitySectionVisible(searchFilter, t)
 
@@ -139,6 +160,67 @@ export const QualitySection: React.FC<QualitySectionProps> = ({
             options={FTS_LEVEL_OPTIONS}
           />
         )}
+      {showTextLateChunking &&
+        matchesFilter("Text late chunking") && (
+          <SettingField
+            type="switch"
+            label="Text late chunking"
+            helper="For this query, bypass stored text chunks and rechunk matched media in memory."
+            value={settings.enable_text_late_chunking}
+            onChange={(val) => onUpdate("enable_text_late_chunking", val)}
+          />
+        )}
+      {showTextLateChunkingKnobs && matchesFilter("Late chunk method") && (
+        <SettingField
+          type="select"
+          label="Late chunk method"
+          helper="Chunk matched media in memory with this method for the current query."
+          value={settings.chunk_method}
+          onChange={(val) =>
+            onUpdate("chunk_method", val as RagSettings["chunk_method"])
+          }
+          options={TEXT_LATE_CHUNK_METHOD_OPTIONS}
+        />
+      )}
+      {showTextLateChunkingKnobs && matchesFilter("Late chunk size") && (
+        <SettingField
+          type="number"
+          label="Late chunk size"
+          helper="Maximum unit count per transient chunk."
+          value={settings.chunk_size}
+          onChange={(val) => onUpdate("chunk_size", Math.max(1, Math.round(val)))}
+          min={1}
+        />
+      )}
+      {showTextLateChunkingKnobs && matchesFilter("Late chunk overlap") && (
+        <SettingField
+          type="number"
+          label="Late chunk overlap"
+          helper="Overlap between transient chunks. Must stay below chunk size."
+          value={settings.chunk_overlap}
+          onChange={(val) =>
+            onUpdate(
+              "chunk_overlap",
+              Math.max(
+                0,
+                Math.min(Math.round(val), Math.max(0, settings.chunk_size - 1))
+              )
+            )
+          }
+          min={0}
+          max={Math.max(0, settings.chunk_size - 1)}
+        />
+      )}
+      {showTextLateChunkingKnobs && matchesFilter("Late chunk language") && (
+        <SettingField
+          type="text"
+          label="Late chunk language"
+          helper="Optional language override such as en or es."
+          value={settings.chunk_language}
+          onChange={(val) => onUpdate("chunk_language", val)}
+          placeholder="Auto"
+        />
+      )}
 
       {/* Hybrid Alpha (only for hybrid mode) */}
       {settings.search_mode === "hybrid" &&

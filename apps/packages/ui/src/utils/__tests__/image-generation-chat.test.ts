@@ -27,6 +27,7 @@ describe("image-generation-chat helpers", () => {
           width: 768,
           height: 1024,
           format: "png",
+          referenceFileId: 17,
           extraParams: { tiling: false }
         },
         source: "generate-modal",
@@ -51,6 +52,7 @@ describe("image-generation-chat helpers", () => {
     expect(metadata?.request.prompt).toBe("portrait of Lana")
     expect(metadata?.request.backend).toBe("tldw_server-Flux-Klein")
     expect(metadata?.request.width).toBe(768)
+    expect(metadata?.request.referenceFileId).toBe(17)
     expect(metadata?.source).toBe("generate-modal")
     expect(metadata?.promptMode).toBe("expression")
     expect(metadata?.refine?.model).toBe("deepseek-chat")
@@ -115,7 +117,8 @@ describe("image-generation-chat helpers", () => {
         prompt: "portrait shot",
         backend: "flux",
         width: 768,
-        height: 1024
+        height: 1024,
+        referenceFileId: 91
       },
       source: "generate-modal",
       imageDataUrl: "data:image/png;base64,abc123"
@@ -124,6 +127,7 @@ describe("image-generation-chat helpers", () => {
     expect(parsed).toBeTruthy()
     expect(parsed?.eventId).toBe("evt-42")
     expect(parsed?.request.backend).toBe("flux")
+    expect(parsed?.request.referenceFileId).toBe(91)
     expect(parsed?.source).toBe("generate-modal")
     expect(parsed?.imageDataUrl).toBe("data:image/png;base64,abc123")
   })

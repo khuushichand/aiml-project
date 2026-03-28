@@ -13,6 +13,7 @@ import {
   LoaderCircle,
   Filter,
 } from "lucide-react"
+import { AnswerModelMenu } from "./AnswerModelMenu"
 
 type KnowledgeContextBarProps = {
   preset: RagPresetName
@@ -25,6 +26,10 @@ type KnowledgeContextBarProps = {
   onIncludeNoteIdsChange: (ids: string[]) => void
   webEnabled: boolean
   onToggleWeb: () => void
+  generationProvider: string | null
+  generationModel: string | null
+  onGenerationProviderChange: (provider: string | null) => void
+  onGenerationModelChange: (model: string | null) => void
   contextChangedSinceLastRun: boolean
   onOpenSettings: () => void
 }
@@ -222,6 +227,10 @@ export function KnowledgeContextBar({
   onIncludeNoteIdsChange,
   webEnabled,
   onToggleWeb,
+  generationProvider,
+  generationModel,
+  onGenerationProviderChange,
+  onGenerationModelChange,
   contextChangedSinceLastRun,
   onOpenSettings,
 }: KnowledgeContextBarProps) {
@@ -757,6 +766,14 @@ export function KnowledgeContextBar({
           <Globe className={cn("h-3.5 w-3.5", webEnabled ? "fill-current" : "")} />
           Web
         </button>
+
+        <AnswerModelMenu
+          generationProvider={generationProvider}
+          generationModel={generationModel}
+          onGenerationProviderChange={onGenerationProviderChange}
+          onGenerationModelChange={onGenerationModelChange}
+          menuAlign="right"
+        />
 
         <button
           type="button"

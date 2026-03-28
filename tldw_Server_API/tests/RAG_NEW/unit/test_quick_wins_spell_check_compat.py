@@ -5,6 +5,7 @@ import pytest
 from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGResponse
 from tldw_Server_API.app.core.RAG.rag_service import quick_wins as qw
 from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline as up
+from tldw_Server_API.app.core.RAG.rag_service.quick_wins import QuerySpellChecker
 
 
 class _FakeChecker:
@@ -80,3 +81,16 @@ async def test_unified_pipeline_spell_check_no_config_attr_error(monkeypatch):
     assert not any("no attribute 'config'" in err for err in (result.errors or []))
     assert result.metadata.get("original_query") == "teh query"
     assert result.metadata.get("corrected_query") == "the query"
+
+
+@pytest.mark.unit
+def test_query_spell_checker_preserves_ambiguous_media_entity_names():
+    checker = QuerySpellChecker()
+
+    frieza_result = checker.check_query("frieza new form")
+    goku_result = checker.check_query("goku one inch punch on frieza")
+
+    assert frieza_result["corrected"] == "frieza new form"
+    assert frieza_result["has_errors"] is False
+    assert goku_result["corrected"] == "goku one inch punch on frieza"
+    assert goku_result["has_errors"] is False

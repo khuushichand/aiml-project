@@ -96,6 +96,43 @@ describe("submitQuickIngestBatch", () => {
     })
   })
 
+  it("defaults perform_chunking to true when common options are omitted", async () => {
+    mocks.bgUpload.mockResolvedValue({
+      batch_id: "batch-default-chunking",
+      jobs: [{ id: 202 }]
+    })
+    mocks.bgRequest.mockResolvedValue({
+      ok: true,
+      data: {
+        status: "completed",
+        result: { media_id: "m-default-chunking" }
+      }
+    })
+
+    await submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-default-chunking",
+          url: "https://example.com/default-chunking",
+          type: "document"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false
+    } as any)
+
+    expect(mocks.bgUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/media/ingest/jobs",
+        method: "POST",
+        fields: expect.objectContaining({
+          perform_chunking: true
+        })
+      })
+    )
+  })
+
   it("captures direct batch tracking metadata before polling completes", async () => {
     const onTrackingMetadata = vi.fn()
 

@@ -147,6 +147,33 @@ class UnifiedRAGRequest(BaseModel):
         description="FTS granularity: 'media' searches Media FTS; 'chunk' searches plaintext chunks",
         example="chunk"
     )
+    enable_text_late_chunking: bool = Field(
+        default=False,
+        description="When enabled with chunk-level search, bypass persisted text chunks and late-chunk matched media in memory for this query",
+        example=False,
+    )
+    chunk_method: Optional[Literal["semantic", "tokens", "paragraphs", "sentences", "words", "ebook_chapters", "json", "propositions"]] = Field(
+        default=None,
+        description="Transient text late chunking method for this query",
+        example="sentences",
+    )
+    chunk_size: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description="Transient text late chunk size for this query",
+        example=500,
+    )
+    chunk_overlap: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Transient text late chunk overlap for this query",
+        example=50,
+    )
+    chunk_language: Optional[str] = Field(
+        default=None,
+        description="Optional language override for transient text late chunking",
+        example="en",
+    )
 
     hybrid_alpha: float = Field(
         default=0.7,
@@ -182,6 +209,16 @@ class UnifiedRAGRequest(BaseModel):
     @classmethod
     def _alias_min_relevance_score(cls, v):
         # Field-level aliasing handled by model-level pre-validators.
+        return v
+
+    @field_validator("chunk_overlap")
+    @classmethod
+    def _validate_chunk_overlap(cls, v, info):
+        if v is None:
+            return v
+        chunk_size = info.data.get("chunk_size")
+        if chunk_size is not None and v >= chunk_size:
+            raise ValueError("chunk_overlap must be less than chunk_size")
         return v
 
     # ========== QUERY EXPANSION ==========
@@ -1794,6 +1831,14 @@ class UnifiedBatchRequest(BaseModel):
     enable_cache: bool = Field(default=True)
     cache_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
     adaptive_cache: bool = Field(default=True)
+    enable_text_late_chunking: bool = Field(default=False)
+    chunk_method: Optional[Literal["semantic", "tokens", "paragraphs", "sentences", "words", "ebook_chapters", "json", "propositions"]] = Field(
+        default=None,
+        description="Transient text late chunking method for this batch query set",
+    )
+    chunk_size: Optional[int] = Field(default=None, gt=0)
+    chunk_overlap: Optional[int] = Field(default=None, ge=0)
+    chunk_language: Optional[str] = Field(default=None)
 
     # Filtering
     keyword_filter: Optional[list[str]] = Field(default=None)
@@ -1824,6 +1869,16 @@ class UnifiedBatchRequest(BaseModel):
     sibling_window: int = Field(default=_DEF_SIB_WIN, ge=0, le=50)
     include_parent_document: bool = Field(default=_DEF_INC_PARENT)
     parent_max_tokens: Optional[int] = Field(default=_DEF_PARENT_MAX_TOK, ge=1)
+
+    @field_validator("chunk_overlap")
+    @classmethod
+    def _validate_batch_chunk_overlap(cls, v, info):
+        if v is None:
+            return v
+        chunk_size = info.data.get("chunk_size")
+        if chunk_size is not None and v >= chunk_size:
+            raise ValueError("chunk_overlap must be less than chunk_size")
+        return v
 
     # Advanced retrieval
     enable_multi_vector_passages: bool = Field(default=False)

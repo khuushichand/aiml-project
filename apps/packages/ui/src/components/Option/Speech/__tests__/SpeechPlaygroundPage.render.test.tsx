@@ -38,7 +38,6 @@ const { storageValues, setSpeechModeMock, setSpeechHistoryMock } = vi.hoisted(()
   setSpeechModeMock: vi.fn(),
   setSpeechHistoryMock: vi.fn(),
 }))
-
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (_key: string, fallback?: string) => fallback || _key,
@@ -84,7 +83,7 @@ vi.mock("@tanstack/react-query", () => ({
     if (options?.queryKey?.[0] === "fetchTTSSettings") {
       return {
         data: {
-          ttsProvider: "browser",
+          ttsProvider: "",
           ttsEnabled: true,
           tldwTtsSpeed: 1,
           tldwTtsStreaming: false,
@@ -123,7 +122,9 @@ vi.mock("@/components/Common/CharacterProgressBar", () => ({
 }))
 
 vi.mock("@/components/Option/Speech/TtsProviderStrip", () => ({
-  TtsProviderStrip: () => <div data-testid="tts-provider-strip" />,
+  TtsProviderStrip: (props: { provider: string }) => (
+    <div data-testid="tts-provider-strip" data-provider={props.provider} />
+  ),
 }))
 
 vi.mock("@/components/Option/Speech/TtsStickyActionBar", () => ({
@@ -240,9 +241,9 @@ vi.mock("@/services/tts-providers", () => ({
 }))
 
 vi.mock("@/services/tts", () => ({
-  getTTSProvider: vi.fn(async () => "browser"),
+  getTTSProvider: vi.fn(async () => "tldw"),
   getTTSSettings: vi.fn(async () => ({
-    ttsProvider: "browser",
+    ttsProvider: "",
     ttsEnabled: true,
     responseSplitting: "punctuation",
     tldwTtsSpeed: 1,
@@ -254,6 +255,9 @@ vi.mock("@/services/tts", () => ({
   setTldwTTSResponseFormat: vi.fn(),
   setTldwTTSStreamingEnabled: vi.fn(),
   setResponseSplitting: vi.fn(),
+  DEFAULT_TTS_PROVIDER: "tldw",
+  DEFAULT_TLDW_TTS_MODEL: "KittenML/kitten-tts-nano-0.8",
+  DEFAULT_TLDW_TTS_VOICE: "Bella",
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -322,6 +326,15 @@ describe("SpeechPlaygroundPage", () => {
     render(<SpeechPlaygroundPage />)
 
     expect(screen.getByTestId("speech-page-shell")).toBeInTheDocument()
+  })
+
+  it("passes the resolved provider to the tldw strip when the stored provider is empty", (): void => {
+    render(<SpeechPlaygroundPage />)
+
+    expect(screen.getByTestId("tts-provider-strip")).toHaveAttribute(
+      "data-provider",
+      "tldw"
+    )
   })
 
   it("hides the mode switcher and STT region when locked to listen mode", (): void => {

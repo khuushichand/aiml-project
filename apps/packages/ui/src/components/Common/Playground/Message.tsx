@@ -81,6 +81,10 @@ import {
   type ImageGenerationRequestSnapshot
 } from "@/utils/image-generation-chat"
 import { isDeepResearchCompletionMetadata } from "@/components/Option/Playground/research-chat-context"
+import {
+  DEFAULT_TLDW_TTS_MODEL,
+  DEFAULT_TTS_PROVIDER
+} from "@/services/tts"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
@@ -296,8 +300,8 @@ export const PlaygroundMessage = (props: Props) => {
     moodConfidenceDefault
   )
   const [userPersonaImage] = useStorage("chatUserPersonaImage", "")
-  const [ttsProvider] = useStorage("ttsProvider", "browser")
-  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
+  const [ttsProvider] = useStorage("ttsProvider", DEFAULT_TTS_PROVIDER)
+  const [tldwTtsModel] = useStorage("tldwTtsModel", DEFAULT_TLDW_TTS_MODEL)
   const { t } = useTranslation(["common", "playground"])
   const { capabilities } = useServerCapabilities()
   const uiMode = useUiModeStore((state) => state.mode)

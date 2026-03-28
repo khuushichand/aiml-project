@@ -13,7 +13,9 @@ import {
   type TtsProviderValue
 } from "@/services/tts-providers"
 
-const DEFAULT_TTS_PROVIDER: TtsProviderValue = "browser"
+export const DEFAULT_TTS_PROVIDER: TtsProviderValue = "tldw"
+export const DEFAULT_TLDW_TTS_MODEL = "KittenML/kitten-tts-nano-0.8"
+export const DEFAULT_TLDW_TTS_VOICE = "Bella"
 
 export const SUPPORTED_TLDW_TTS_FORMATS = [
   "mp3",
@@ -128,13 +130,13 @@ const SPEECH_PLAYBACK_SPEED_SETTING = defineSetting(
 )
 const TLDW_TTS_MODEL_SETTING = defineSetting(
   "tldwTtsModel",
-  "kokoro",
-  (value) => coerceString(value, "kokoro")
+  DEFAULT_TLDW_TTS_MODEL,
+  (value) => coerceString(value, DEFAULT_TLDW_TTS_MODEL)
 )
 const TLDW_TTS_VOICE_SETTING = defineSetting(
   "tldwTtsVoice",
-  "af_heart",
-  (value) => coerceString(value, "af_heart")
+  DEFAULT_TLDW_TTS_VOICE,
+  (value) => coerceString(value, DEFAULT_TLDW_TTS_VOICE)
 )
 const TLDW_TTS_RESPONSE_FORMAT_SETTING = defineSetting(
   "tldwTtsResponseFormat",

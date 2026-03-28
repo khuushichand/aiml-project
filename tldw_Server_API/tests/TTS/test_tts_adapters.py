@@ -345,6 +345,30 @@ class TestAdapterRegistry:
         assert adapter is not None
         assert adapter.status == ProviderStatus.AVAILABLE
 
+    def test_legacy_kokoro_provider_config_aliases_generic_fields(self):
+        """Legacy flattened config should expose Kokoro ONNX settings under adapter keys."""
+        registry = TTSAdapterRegistry(
+            {
+                "kokoro_enabled": True,
+                "kokoro_config": {
+                    "enabled": True,
+                    "use_onnx": True,
+                    "model_path": "models/kokoro/onnx/model.onnx",
+                    "voices_json": "models/kokoro/onnx/voices-v1.0.bin",
+                    "voice_dir": "models/kokoro/voices",
+                    "device": "cpu",
+                },
+            }
+        )
+
+        provider_config = registry._get_provider_config(TTSProvider.KOKORO)
+
+        assert provider_config["kokoro_use_onnx"] is True
+        assert provider_config["kokoro_model_path"] == "models/kokoro/onnx/model.onnx"
+        assert provider_config["kokoro_voices_json"] == "models/kokoro/onnx/voices-v1.0.bin"
+        assert provider_config["kokoro_voice_dir"] == "models/kokoro/voices"
+        assert provider_config["kokoro_device"] == "cpu"
+
     async def test_disabled_provider(self):
         """Test disabled provider"""
         config = {"openai_enabled": False}
@@ -409,6 +433,42 @@ class TestAdapterRegistry:
 
         registry = TTSAdapterRegistry({"providers": {"kitten_tts": {"enabled": True}}})
         registry.register_adapter(TTSProvider.KITTEN_TTS, StaticKittenAdapter)
+
+        caps = await registry.get_all_capabilities()
+
+        assert TTSProvider.KITTEN_TTS in caps
+        assert caps[TTSProvider.KITTEN_TTS].provider_name == "KittenTTS"
+
+    async def test_get_all_capabilities_keeps_static_kitten_capabilities_after_failed_init(self):
+        """Failed runtime init must not suppress static capability discovery for KittenTTS."""
+
+        class StaticKittenAdapter(TTSAdapter):
+            STATIC_CAPABILITY_DISCOVERY = True
+
+            async def initialize(self) -> bool:
+                raise RuntimeError("simulated runtime init failure")
+
+            async def generate(self, request: TTSRequest) -> TTSResponse:
+                return TTSResponse(audio_data=b"unused")
+
+            async def get_capabilities(self) -> TTSCapabilities:
+                return TTSCapabilities(
+                    provider_name="KittenTTS",
+                    supported_languages={"en"},
+                    supported_voices=[VoiceInfo(id="Bella", name="Bella")],
+                    supported_formats={AudioFormat.WAV, AudioFormat.MP3, AudioFormat.PCM},
+                    max_text_length=5000,
+                    supports_streaming=True,
+                    sample_rate=24000,
+                    default_format=AudioFormat.WAV,
+                )
+
+        registry = TTSAdapterRegistry({"providers": {"kitten_tts": {"enabled": True}}})
+        registry.register_adapter(TTSProvider.KITTEN_TTS, StaticKittenAdapter)
+
+        failed_adapter = await registry.get_adapter(TTSProvider.KITTEN_TTS)
+
+        assert failed_adapter is None
 
         caps = await registry.get_all_capabilities()
 

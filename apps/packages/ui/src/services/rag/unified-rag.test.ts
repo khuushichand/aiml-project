@@ -23,4 +23,14 @@ describe("buildRagSearchRequest rag_profile", () => {
 
     expect((req.options as Record<string, unknown>).rag_profile).toBe("fast")
   })
+
+  it("includes enable_text_late_chunking when enabled", () => {
+    const req = buildRagSearchRequest({
+      ...DEFAULT_RAG_SETTINGS,
+      query: "q",
+      enable_text_late_chunking: true
+    })
+
+    expect((req.options as Record<string, unknown>).enable_text_late_chunking).toBe(true)
+  })
 })

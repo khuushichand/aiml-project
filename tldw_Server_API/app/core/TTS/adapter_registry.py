@@ -666,6 +666,15 @@ class TTSAdapterRegistry:
                     alias('cache_ttl_hours', 'pocket_tts_cpp_cache_ttl_hours')
                     alias('cache_max_bytes_per_user', 'pocket_tts_cpp_cache_max_bytes_per_user')
                     alias('persist_direct_voice_references', 'pocket_tts_cpp_persist_direct_voice_references')
+                elif p == 'pocket_tts_cpp':
+                    alias('binary_path', 'pocket_tts_cpp_binary_path')
+                    alias('tokenizer_path', 'pocket_tts_cpp_tokenizer_path')
+                    alias('device', 'pocket_tts_cpp_device')
+                    alias('sample_rate', 'pocket_tts_cpp_sample_rate')
+                    alias('enable_voice_cache', 'pocket_tts_cpp_enable_voice_cache')
+                    alias('cache_ttl_hours', 'pocket_tts_cpp_cache_ttl_hours')
+                    alias('cache_max_bytes_per_user', 'pocket_tts_cpp_cache_max_bytes_per_user')
+                    alias('persist_direct_voice_references', 'pocket_tts_cpp_persist_direct_voice_references')
                 elif p == 'echo_tts':
                     alias('model', 'echo_tts_model')
                     alias('model_path', 'echo_tts_model_path')
@@ -689,6 +698,15 @@ class TTSAdapterRegistry:
                     alias('target_latency_ms', 'higgs_target_latency_ms')
 
                 return cfg
+
+        if self.config_manager:
+            # Use unified configuration system
+            provider_cfg = self.config_manager.get_provider_config(provider.value)
+
+            if provider_cfg:
+                # Convert to dict for adapter consumption
+                cfg = model_dump_compat(provider_cfg)
+                return _apply_provider_aliases(provider.value, cfg)
 
         # Fallback to legacy config
         provider_config = self.config.copy()
@@ -751,6 +769,12 @@ class TTSAdapterRegistry:
                         if caps:
                             capabilities[provider] = caps
                             continue
+
+                # Skip providers currently marked as failed by registry backoff
+                # only when static capability discovery is unavailable.
+                status = self._base.get_status(provider.value)
+                if status == RegistryProviderStatus.FAILED:
+                    continue
 
                 # Try to get adapter with a timeout to avoid hanging
                 adapter = await asyncio.wait_for(self.get_adapter(provider), timeout=5.0)

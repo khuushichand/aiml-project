@@ -971,6 +971,11 @@ async def unified_rag_pipeline(
     # ========== SEARCH CONFIGURATION ==========
     search_mode: Literal["fts", "vector", "hybrid"] = "hybrid",
     fts_level: Literal["media", "chunk"] = "media",
+    enable_text_late_chunking: bool = False,
+    chunk_method: Optional[str] = None,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+    chunk_language: Optional[str] = None,
     hybrid_alpha: float = 0.7,  # 0=FTS only, 1=Vector only
     adaptive_hybrid_weights: bool = False,
     enable_intent_routing: bool = False,
@@ -2599,7 +2604,12 @@ async def unified_rag_pipeline(
                         use_fts=(search_mode in ["fts", "hybrid"]),
                         use_vector=(search_mode in ["vector", "hybrid"]),
                         include_metadata=True,
-                        fts_level=fts_level
+                        fts_level=fts_level,
+                        enable_text_late_chunking=enable_text_late_chunking,
+                        chunk_method=chunk_method,
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                        chunk_language=chunk_language,
                     )
                     # Optional date filter
                     if enable_date_filter and date_range and isinstance(date_range, dict):
@@ -3745,6 +3755,11 @@ async def unified_rag_pipeline(
                             use_vector=(search_mode in ["vector", "hybrid"]),
                             include_metadata=True,
                             fts_level=fts_level,
+                            enable_text_late_chunking=enable_text_late_chunking,
+                            chunk_method=chunk_method,
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap,
+                            chunk_language=chunk_language,
                         )
                         data_sources = list(resolved_data_sources)
                         if not data_sources:
@@ -3954,6 +3969,11 @@ async def unified_rag_pipeline(
                                 use_vector=(search_mode in ["vector", "hybrid"]),
                                 include_metadata=True,
                                 fts_level=fts_level,
+                                enable_text_late_chunking=enable_text_late_chunking,
+                                chunk_method=chunk_method,
+                                chunk_size=chunk_size,
+                                chunk_overlap=chunk_overlap,
+                                chunk_language=chunk_language,
                             )
                             data_sources = list(resolved_data_sources)
 
@@ -5432,7 +5452,7 @@ async def unified_rag_pipeline(
                                 try:
                                     if MultiDatabaseRetriever and RetrievalConfig and media_db_path:
                                         mdr = _build_multi_retriever({"media_db": media_db_path})
-                                        conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level)
+                                        conf = RetrievalConfig(max_results=min(10, top_k), min_score=min_score, use_fts=True, use_vector=True, include_metadata=True, fts_level=fts_level, enable_text_late_chunking=enable_text_late_chunking, chunk_method=chunk_method, chunk_size=chunk_size, chunk_overlap=chunk_overlap, chunk_language=chunk_language)
                                         numeric_added: list[Document] = []
                                         for tok in list(nf.missing)[:3]:
                                             try:

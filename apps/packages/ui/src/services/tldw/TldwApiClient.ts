@@ -1112,10 +1112,24 @@ export type FileCreateResponse = {
   artifact: FileArtifact
 }
 
+export type ReferenceImageCandidate = {
+  file_id: number
+  title: string
+  mime_type: string
+  width?: number | null
+  height?: number | null
+  created_at: string
+}
+
+export type ReferenceImageListResponse = {
+  items: ReferenceImageCandidate[]
+}
+
 export type ImageArtifactRequest = {
   backend: string
   prompt: string
   negativePrompt?: string
+  referenceFileId?: number
   width?: number
   height?: number
   steps?: number
@@ -6248,6 +6262,9 @@ export class TldwApiClient {
       prompt: request.prompt
     }
     if (request.negativePrompt) payload.negative_prompt = request.negativePrompt
+    if (typeof request.referenceFileId === "number") {
+      payload.reference_file_id = request.referenceFileId
+    }
     if (typeof request.width === "number") payload.width = request.width
     if (typeof request.height === "number") payload.height = request.height
     if (typeof request.steps === "number") payload.steps = request.steps

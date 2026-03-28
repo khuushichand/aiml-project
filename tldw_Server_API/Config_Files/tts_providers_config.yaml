@@ -3,9 +3,10 @@
 
 # Provider priority order (first available will be used by default)
 provider_priority:
+  - kitten_tts  # Local ONNX voices with first-use model download
+  - pocket_tts_cpp # Local PocketTTS.cpp voice cloning
   - openai      # Reliable, high quality
   - kokoro      # Local, fast
-  - kitten_tts  # Local ONNX voices with first-use model download
   - pocket_tts  # Local ONNX voice cloning
   - lux_tts     # Local ZipVoice voice cloning (48kHz)
   - supertonic  # Local Supertonic ONNX (requires assets)
@@ -15,7 +16,6 @@ provider_priority:
   - dia         # Dialogue specialist
   - higgs       # Advanced multi-lingual
   - index_tts   # IndexTTS2 (local, expressive zero-shot)
-  - pocket_tts_cpp # Local PocketTTS.cpp voice cloning
   - qwen3_tts   # Qwen3-TTS (local, multilingual; disabled by default)
 
 # Provider-specific configurations
@@ -36,7 +36,7 @@ providers:
   # Kokoro TTS Configuration
   kokoro:
     enabled: true
-    use_onnx: false  # Default to PyTorch backend; set true to use ONNX
+    use_onnx: true  # Use ONNX on this machine; kokoro_onnx is installed and assets are present
     # Recommended layouts:
     #   PyTorch:
     #     - model_path: models/kokoro/pytorch/model.pth
@@ -44,12 +44,12 @@ providers:
     #   ONNX (opt-in):
     #     - model_path: models/kokoro/onnx/model.onnx (or another onnx variant)
     #     - voices_json: models/kokoro/onnx/voices-v1.0.bin (voices bundle file)
-    # Default path for hexgrad/Kokoro-82M PyTorch checkpoint
-    model_path: "models/kokoro/kokoro-v1_0.pth"
+    # Use the checked-in ONNX assets for local development.
+    model_path: "models/kokoro/onnx/model.onnx"
     # For kokoro-onnx>=0.3.x, voices_json must point to the voices bundle
     # file (e.g., voices-v1.0.bin), not the directory of per-voice .bin files.
     # When using ONNX, override this path accordingly.
-    voices_json: "models/kokoro/voices"
+    voices_json: "models/kokoro/onnx/voices-v1.0.bin"
     voice_dir: "models/kokoro/voices"  # For PyTorch variant (hexgrad/Kokoro-82M)
     device: "cpu"  # or "cuda" for GPU
     normalize_text: true
@@ -94,7 +94,7 @@ providers:
 
   # KittenTTS ONNX Configuration (local; English single-speaker voices)
   kitten_tts:
-    enabled: false
+    enabled: true
     model: "KittenML/kitten-tts-nano-0.8"
     # Pin to an immutable HF commit; override only with another commit hash.
     model_revision: "8d6d5a1851ffd13c894c40227c888302c2a86ef7"

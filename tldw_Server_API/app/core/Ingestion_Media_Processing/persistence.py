@@ -3008,10 +3008,21 @@ async def persist_primary_av_item(
             raw_source_hash_str = str(raw_source_hash).strip()
             source_hash_for_db = raw_source_hash_str if raw_source_hash_str else None
 
+        effective_chunk_options = chunk_options
+        if effective_chunk_options is None and getattr(form_data, "perform_chunking", False):
+            try:
+                effective_chunk_options = prepare_chunking_options_dict(form_data)
+            except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as chunk_opts_err:
+                logger.warning(
+                    "Failed to derive chunk options during AV persistence for {}: {}",
+                    original_input_ref,
+                    chunk_opts_err,
+                )
+
         # Build plaintext chunks for chunk-level FTS if chunking is requested.
         chunks_for_sql: list[dict[str, Any]] | None = None
         try:
-            _opts = chunk_options or {}
+            _opts = effective_chunk_options or {}
             if _opts:
                 from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
                     Chunker as _Chunker,
@@ -3042,7 +3053,12 @@ async def persist_primary_av_item(
                             "metadata": _small,
                         }
                     )
-        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as chunk_err:
+            logger.warning(
+                "Failed to build AV chunks during persistence for {}: {}",
+                original_input_ref,
+                chunk_err,
+            )
             chunks_for_sql = None
 
         # Merge processor-provided and analysis-derived extra chunks (VLM/OCR)
@@ -3111,7 +3127,7 @@ async def persist_primary_av_item(
             "transcription_model": transcription_model_used,
             "author": author_for_db,
             "overwrite": getattr(form_data, "overwrite_existing", False),
-            "chunk_options": chunk_options,
+            "chunk_options": effective_chunk_options,
             "chunks": chunks_for_sql,
         }
 
@@ -3149,7 +3165,7 @@ async def persist_primary_av_item(
         )
         _emit_ingestion_chunks_metric(
             media_type=media_type,
-            chunk_method=(chunk_options or {}).get("method"),
+            chunk_method=(effective_chunk_options or {}).get("method"),
             chunk_count=len(chunks_for_sql) if isinstance(chunks_for_sql, list) else 0,
         )
 

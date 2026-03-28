@@ -142,17 +142,20 @@ describe("sourceListUtils", () => {
   })
 
   it("formats chunk positions across common chunk id formats", () => {
-    expect(formatChunkPosition("3/12")).toBe("Chunk 3 of 12")
-    expect(formatChunkPosition("chunk_4_of_20")).toBe("Chunk 4 of 20")
-    expect(formatChunkPosition("chunk-7")).toBe("Chunk 7")
-    expect(formatChunkPosition("128")).toBe("Chunk 128")
+    expect(formatChunkPosition("3/12")).toBe("Section 3 of 12")
+    expect(formatChunkPosition("chunk_4_of_20")).toBe("Section 4 of 20")
+    expect(formatChunkPosition("chunk-7")).toBe("Section 7")
+    expect(formatChunkPosition("128")).toBe("Section 128")
     expect(formatChunkPosition("doc-aabbcc-uuid")).toBeNull()
   })
 
   it("produces relevance descriptor levels with color semantics", () => {
     expect(getRelevanceDescriptor(0.91)?.level).toBe("high")
+    expect(getRelevanceDescriptor(0.91)?.label).toBe("Strong relevance")
     expect(getRelevanceDescriptor(0.67)?.level).toBe("moderate")
+    expect(getRelevanceDescriptor(0.67)?.label).toBe("Moderate relevance")
     expect(getRelevanceDescriptor(0.21)?.level).toBe("low")
+    expect(getRelevanceDescriptor(0.21)?.label).toBe("Weak relevance")
     expect(getRelevanceDescriptor(undefined)).toBeNull()
   })
 

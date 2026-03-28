@@ -983,7 +983,7 @@ export const PlaygroundChat = ({
 
   return (
     <>
-      <div className="relative flex w-full flex-col items-center pt-16 pb-4">
+      <div className="relative flex w-full flex-col items-center pt-8 pb-4">
         {showSelectedServerChatLoadFailure ? (
           <div className="mt-32 w-full px-6">
             <div className="mx-auto max-w-xl rounded-xl border border-destructive/30 bg-destructive/5 px-5 py-4 text-center text-sm text-text">
@@ -991,7 +991,7 @@ export const PlaygroundChat = ({
             </div>
           </div>
         ) : messages.length === 0 && serverChatLoadState !== "loading" && (
-          <div className="mt-32 w-full">
+          <div className="mt-4 w-full">
             <PlaygroundEmpty />
           </div>
         )}

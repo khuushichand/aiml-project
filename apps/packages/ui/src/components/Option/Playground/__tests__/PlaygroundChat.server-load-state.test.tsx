@@ -103,7 +103,29 @@ describe("PlaygroundChat selected server chat load state", () => {
     vi.clearAllMocks()
   })
 
+  it("uses the tighter empty-state top spacing when no messages are present", () => {
+    useMessageOptionState.value = {
+      ...useMessageOptionState.value,
+      serverChatLoadState: "idle",
+      serverChatLoadError: null
+    }
+
+    render(<PlaygroundChat />)
+
+    const emptyState = screen.getByTestId("playground-empty")
+    expect(emptyState.parentElement).toHaveClass("mt-4")
+    expect(emptyState.parentElement).not.toHaveClass("mt-8")
+    expect(emptyState.parentElement?.parentElement).toHaveClass("pt-8")
+    expect(emptyState.parentElement?.parentElement).not.toHaveClass("pt-16")
+  })
+
   it("shows a selected-chat load failure state instead of the empty state", () => {
+    useMessageOptionState.value = {
+      ...useMessageOptionState.value,
+      serverChatLoadState: "failed",
+      serverChatLoadError: "Failed to load conversation."
+    }
+
     render(<PlaygroundChat />)
 
     expect(screen.getByText("Failed to load conversation.")).toBeInTheDocument()

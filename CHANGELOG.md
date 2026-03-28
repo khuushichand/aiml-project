@@ -8,7 +8,11 @@ and this project adheres to Some kind of Versioning
 
 ## [Unreleased]
 
-- No unreleased changes yet.
+### Added
+
+- Single-image reference-guided generation for `POST /api/v1/files/create` image artifacts via `payload.reference_file_id`, including managed reference-image discovery through `GET /api/v1/files/reference-images`.
+- Image backend capability metadata for `image_reference_input`, plus Model Studio support for documented reference-image model families.
+- Playground image-generation modal support for selecting one eligible managed image as a reference source, with synced request metadata for image-generation events.
 
 ## Backfill: merged on `main` before `dev` sync
 

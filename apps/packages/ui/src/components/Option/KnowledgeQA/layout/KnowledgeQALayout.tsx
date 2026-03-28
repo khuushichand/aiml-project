@@ -224,8 +224,10 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
   }, [latestUserTurnKey])
 
   useEffect(() => {
+    const resultsCount = results?.length ?? 0
     if (
       hasResults &&
+      resultsCount >= 3 &&
       queryStage !== "searching" &&
       !settingsPanelOpen &&
       !evidenceRailOpen &&
@@ -241,6 +243,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     evidenceRailOpen,
     hasResults,
     queryStage,
+    results?.length,
     setEvidenceRailOpen,
     settingsPanelOpen,
   ])
@@ -352,6 +355,14 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   }
                   onOpenSourceSelector={handleOpenSourceSelector}
                   onOpenSettings={() => setSettingsPanelOpen(true)}
+                  generationProvider={settings.generation_provider ?? null}
+                  generationModel={settings.generation_model ?? null}
+                  onGenerationProviderChange={(provider) =>
+                    updateSetting("generation_provider", provider)
+                  }
+                  onGenerationModelChange={(model) =>
+                    updateSetting("generation_model", model)
+                  }
                   contextChangedSinceLastRun={contextChangedSinceLastRun}
                   className={isDesktopReadyState ? "justify-center" : undefined}
                 />
@@ -370,6 +381,14 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                   webEnabled={settings.enable_web_fallback}
                   onToggleWeb={() =>
                     updateSetting("enable_web_fallback", !settings.enable_web_fallback)
+                  }
+                  generationProvider={settings.generation_provider ?? null}
+                  generationModel={settings.generation_model ?? null}
+                  onGenerationProviderChange={(provider) =>
+                    updateSetting("generation_provider", provider)
+                  }
+                  onGenerationModelChange={(model) =>
+                    updateSetting("generation_model", model)
                   }
                   contextChangedSinceLastRun={contextChangedSinceLastRun}
                   onOpenSettings={() => setSettingsPanelOpen(true)}

@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     normalize_output_storage_filename,
 )
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
+from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
 
 _OUTPUT_TEMPLATE_ENV = SandboxedEnvironment(autoescape=True, enable_async=False)
 _OUTPUT_TEMPLATE_ENV.filters["markdown_link"] = lambda text, url: f"[{text}]({url})" if url else text
@@ -41,6 +42,10 @@ _OUTPUTS_TEMPLATE_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
+
+DEFAULT_KITTEN_TTS_MODEL = "KittenML/kitten-tts-nano-0.8"
+DEFAULT_KITTEN_TTS_VOICE = "Bella"
+DEFAULT_KITTEN_TTS_PROVIDER = "kitten_tts"
 
 
 def _normalize_template_syntax(template_str: str) -> str:
@@ -308,6 +313,81 @@ def _strip_html_for_tts(text: str) -> str:
     return "".join(output)
 
 
+def _is_concrete_tts_voice(voice: str | None) -> bool:
+    if voice is None:
+        return False
+    normalized = str(voice).strip()
+    if not normalized:
+        return False
+    if normalized.lower() == "clone_required":
+        return False
+    if normalized.lower().startswith("custom:"):
+        return bool(normalized.split(":", 1)[-1].strip())
+    return True
+
+
+def _infer_output_tts_provider_from_model(model: str | None) -> str | None:
+    if not model:
+        return None
+    normalized = str(model).strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"tts-1", "tts-1-hd"}:
+        return "openai"
+    if normalized.startswith("pocket_tts_cpp") or normalized.startswith("pocket-tts-cpp"):
+        return "pocket_tts_cpp"
+    if (
+        normalized.startswith("kitten_tts")
+        or normalized.startswith("kitten-tts")
+        or normalized.startswith("kittentts")
+        or normalized.startswith("kittenml/kitten-tts")
+    ):
+        return "kitten_tts"
+    if normalized.startswith("kokoro"):
+        return "kokoro"
+    return None
+
+
+async def _is_pocket_tts_cpp_ready(voice: str | None) -> bool:
+    if not _is_concrete_tts_voice(voice):
+        return False
+    try:
+        tts = await get_tts_service_v2()
+        get_status = getattr(tts, "get_status", None)
+        if not callable(get_status):
+            return False
+        status = get_status()
+    except Exception:
+        return False
+
+    providers = status.get("providers") if isinstance(status, dict) else None
+    pocket = providers.get("pocket_tts_cpp") if isinstance(providers, dict) else None
+    if not isinstance(pocket, dict):
+        return False
+    return str(pocket.get("status") or "").lower() == "available"
+
+
+async def _resolve_tts_generation_defaults(
+    *,
+    tts_model: str | None,
+    tts_voice: str | None,
+    template_row,
+) -> tuple[str, str, float | None]:
+    tpl_model, tpl_voice, tpl_speed = _extract_tts_defaults(template_row)
+    explicit_model = tts_model is not None
+    resolved_model = tts_model or tpl_model
+    resolved_voice = tts_voice or tpl_voice or DEFAULT_KITTEN_TTS_VOICE
+    if resolved_model is None:
+        return DEFAULT_KITTEN_TTS_MODEL, resolved_voice, tpl_speed
+
+    provider_hint = _infer_output_tts_provider_from_model(resolved_model)
+    if not explicit_model and provider_hint == "pocket_tts_cpp":
+        if not await _is_pocket_tts_cpp_ready(resolved_voice):
+            return DEFAULT_KITTEN_TTS_MODEL, DEFAULT_KITTEN_TTS_VOICE, tpl_speed
+
+    return str(resolved_model), resolved_voice, tpl_speed
+
+
 def _extract_tts_defaults(template_row) -> tuple[str | None, str | None, float | None]:
     if not template_row or not getattr(template_row, "metadata_json", None):
         return None, None, None
@@ -342,16 +422,19 @@ async def _write_tts_audio_file(
 ) -> None:
     try:
         from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
-        from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
     except Exception as exc:
         logger.error(f"TTS import failed: {exc}")
         raise HTTPException(status_code=500, detail="tts_unavailable") from exc
     tts = await get_tts_service_v2()
-    tpl_model, tpl_voice, tpl_speed = _extract_tts_defaults(template_row)
+    resolved_model, resolved_voice, tpl_speed = await _resolve_tts_generation_defaults(
+        tts_model=tts_model,
+        tts_voice=tts_voice,
+        template_row=template_row,
+    )
     req = OpenAISpeechRequest(
-        model=(tts_model or tpl_model or "kokoro"),
+        model=resolved_model,
         input=rendered,
-        voice=(tts_voice or tpl_voice or "af_heart"),
+        voice=resolved_voice,
         response_format="mp3",
         stream=True,
     )

@@ -13,6 +13,7 @@ import {
   inferUploadMediaTypeFromFile,
   normalizeMediaType
 } from "@/services/tldw/media-routing"
+import { resolvePerformChunking } from "@/services/tldw/ingest-defaults"
 import {
   ensureSidepanelOpen,
   pickFirstString,
@@ -1524,7 +1525,7 @@ export default defineBackground({
         const fields: Record<string, any> = {
           media_type: mediaType,
           perform_analysis: Boolean(common.perform_analysis),
-          perform_chunking: Boolean(common.perform_chunking),
+          perform_chunking: resolvePerformChunking(common.perform_chunking),
           overwrite_existing: Boolean(common.overwrite_existing)
         }
         const resolvedDefaults: {

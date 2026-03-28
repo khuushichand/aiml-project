@@ -31,6 +31,12 @@ type ThreadOption = {
   label: string
 }
 
+function truncatePreview(value: string, maxLength = 220): string {
+  const normalized = value.trim()
+  if (normalized.length <= maxLength) return normalized
+  return `${normalized.slice(0, maxLength).trimEnd()}...`
+}
+
 function extractInlineCitationIndices(content: string | null | undefined): number[] {
   if (typeof content !== "string" || content.length === 0) return []
   const matches = content.match(/\[(\d+)\]/g) || []
@@ -444,10 +450,27 @@ export function ConversationThread({ className }: ConversationThreadProps) {
     setIsComparisonOpen(true)
   }, [currentThreadId, historicalTurns, latestTurn])
 
+  const handleCompareTurnToCurrent = useCallback(
+    (turnId: string) => {
+      if (!currentThreadId) return
+      if (!latestTurn) return
+
+      setLeftThreadId(currentThreadId)
+      setRightThreadId(currentThreadId)
+      setLeftTurnId(turnId)
+      setRightTurnId(latestTurn.id)
+      setIsComparisonOpen(true)
+    },
+    [currentThreadId, latestTurn]
+  )
+
   const hasComparisonWorkspace = threadOptions.length > 0
   const canCompareWithPrevious =
     Boolean(currentThreadId) && Boolean(latestTurn) && historicalTurns.length > 0
-  if (!hasComparisonWorkspace && historicalTurns.length === 0) {
+  const hasAdvancedComparisonWorkspace =
+    hasComparisonWorkspace && (threadOptions.length > 1 || historicalTurns.length > 1)
+  const showComparisonWorkspace = hasAdvancedComparisonWorkspace || isComparisonOpen
+  if (historicalTurns.length === 0) {
     return null
   }
 
@@ -483,6 +506,13 @@ export function ConversationThread({ className }: ConversationThreadProps) {
               </div>
 
               <p className="mt-2 text-sm font-medium">{turn.question}</p>
+              {turn.answer ? (
+                <p className="mt-2 text-sm whitespace-pre-wrap leading-relaxed text-text-muted">
+                  {truncatePreview(turn.answer, 220)}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm text-text-muted">No answer recorded.</p>
+              )}
 
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
@@ -500,48 +530,59 @@ export function ConversationThread({ className }: ConversationThreadProps) {
                     className="inline-flex items-center gap-1 rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <GitBranch className="w-3 h-3" />
-                    {branchingTurnId === turn.id ? "Creating branch..." : "Start Branch"}
+                    {branchingTurnId === turn.id ? "Creating branch..." : "Ask a different follow-up"}
+                  </button>
+                ) : null}
+                {canCompareWithPrevious && turnIndex === historicalTurns.length - 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => handleCompareTurnToCurrent(turn.id)}
+                    className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/15 transition-colors"
+                  >
+                    Compare to current answer
                   </button>
                 ) : null}
               </div>
 
-              <details className="mt-2 group">
-                <summary className="cursor-pointer text-xs text-primary hover:text-primaryStrong transition-colors">
-                  {turn.answer ? "Show answer" : "No answer recorded"}
-                </summary>
-                {turn.answer ? (
+              {turn.answer && turn.answer.length > 220 ? (
+                <details className="mt-2 group">
+                  <summary className="cursor-pointer text-xs text-primary hover:text-primaryStrong transition-colors">
+                    Show full answer
+                  </summary>
                   <p className="mt-2 text-sm whitespace-pre-wrap leading-relaxed">
                     {turn.answer}
                   </p>
-                ) : null}
-              </details>
+                </details>
+              ) : null}
             </article>
           ))}
         </div>
       ) : null}
 
-      {hasComparisonWorkspace && (
+      {showComparisonWorkspace && (
         <div className="border-t border-border px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold">Comparison workspace</h3>
-            <div className="flex flex-wrap items-center gap-2">
-              {canCompareWithPrevious ? (
+            <h3 className="text-sm font-semibold">Compare answers</h3>
+            {hasAdvancedComparisonWorkspace ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {canCompareWithPrevious ? (
+                  <button
+                    type="button"
+                    onClick={handleCompareWithPrevious}
+                    className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/15 transition-colors"
+                  >
+                    Compare to current answer
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={handleCompareWithPrevious}
-                  className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/15 transition-colors"
+                  onClick={() => setIsComparisonOpen((previous) => !previous)}
+                  className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors"
                 >
-                  Compare with previous
+                  {isComparisonOpen ? "Hide comparison" : "Compare turns"}
                 </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => setIsComparisonOpen((previous) => !previous)}
-                className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-text-subtle hover:bg-hover hover:text-text transition-colors"
-              >
-                {isComparisonOpen ? "Hide comparison" : "Compare turns"}
-              </button>
-            </div>
+              </div>
+            ) : null}
           </div>
 
           {isComparisonOpen && (

@@ -25,6 +25,9 @@ from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 class QuerySpellChecker:
     """Spell checker for queries."""
 
+    _MIN_CONFIDENT_FREQUENCY = 500
+    _MIN_FREQUENCY_RATIO = 20.0
+
     def __init__(self, custom_dictionary: Optional[list[str]] = None):
         """
         Initialize spell checker.
@@ -52,6 +55,53 @@ class QuerySpellChecker:
         ]
         self.spell_checker.word_frequency.load_words(terms)
 
+    def _candidate_frequency(self, token: str) -> int:
+        try:
+            return int(self.spell_checker.word_frequency.dictionary.get(token.lower(), 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            return 0
+
+    def _should_apply_correction(
+        self,
+        word: str,
+        correction: str,
+        suggestions: set[str],
+    ) -> bool:
+        normalized_word = word.strip().lower()
+        normalized_correction = correction.strip().lower()
+        if not normalized_correction or normalized_correction == normalized_word:
+            return False
+
+        ranked_suggestions = sorted(
+            {
+                suggestion
+                for suggestion in suggestions
+                if isinstance(suggestion, str) and suggestion.strip()
+            },
+            key=lambda suggestion: (
+                -self._candidate_frequency(suggestion),
+                suggestion,
+            ),
+        )
+        if not ranked_suggestions:
+            return False
+
+        top_frequency = self._candidate_frequency(ranked_suggestions[0])
+        if top_frequency < self._MIN_CONFIDENT_FREQUENCY:
+            return False
+
+        second_frequency = (
+            self._candidate_frequency(ranked_suggestions[1])
+            if len(ranked_suggestions) > 1
+            else 0
+        )
+        if second_frequency > 0:
+            frequency_ratio = top_frequency / max(second_frequency, 1)
+            if frequency_ratio < self._MIN_FREQUENCY_RATIO:
+                return False
+
+        return True
+
     def check_query(self, query: str) -> dict[str, Any]:
         """
         Check query for spelling errors.
@@ -72,10 +122,11 @@ class QuerySpellChecker:
             if suggestions:
                 # Get most likely correction
                 correction = self.spell_checker.correction(word) or word
-                corrections[word] = {
-                    "correction": correction,
-                    "suggestions": list(suggestions)[:5]
-                }
+                if self._should_apply_correction(word, correction, suggestions):
+                    corrections[word] = {
+                        "correction": correction,
+                        "suggestions": list(suggestions)[:5]
+                    }
 
         # Generate corrected query
         corrected_query = query

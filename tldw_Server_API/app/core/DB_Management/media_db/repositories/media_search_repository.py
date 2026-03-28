@@ -336,27 +336,28 @@ class MediaSearchRepository:
                     logger.warning("FTS requested for unsupported backend {}", backend_type)
                     fts_search_active = False
 
-                title_content_like_parts: list[str] = []
-                for field in ["title", "content"]:
-                    if field in sanitized_text_search_fields:
-                        column = f"m.{field}"
-                        _append_case_insensitive_like(
-                            backend_type,
-                            title_content_like_parts,
-                            like_params,
-                            column,
-                            f"%{like_search_query}%",
-                        )
-                        if len(like_search_query) <= 2 and not (search_query.startswith('"') and search_query.endswith('"')):
+                if not fts_search_active:
+                    title_content_like_parts: list[str] = []
+                    for field in ["title", "content"]:
+                        if field in sanitized_text_search_fields:
+                            column = f"m.{field}"
                             _append_case_insensitive_like(
                                 backend_type,
                                 title_content_like_parts,
                                 like_params,
                                 column,
-                                f"%{like_search_query}",
+                                f"%{like_search_query}%",
                             )
-                if title_content_like_parts:
-                    like_conditions.append(f"({' OR '.join(title_content_like_parts)})")
+                            if len(like_search_query) <= 2 and not (search_query.startswith('"') and search_query.endswith('"')):
+                                _append_case_insensitive_like(
+                                    backend_type,
+                                    title_content_like_parts,
+                                    like_params,
+                                    column,
+                                    f"%{like_search_query}",
+                                )
+                    if title_content_like_parts:
+                        like_conditions.append(f"({' OR '.join(title_content_like_parts)})")
 
             like_fields_to_search = [field for field in sanitized_text_search_fields if field in ["author", "type"]]
             if like_fields_to_search:

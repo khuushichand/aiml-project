@@ -865,4 +865,88 @@ describe("StudioPane Stage 3 information architecture and UX polish", () => {
     fireEvent.click(screen.getByRole("button", { name: "Regenerate options" }))
     expect(await screen.findByText("Replace existing")).toBeInTheDocument()
   })
+
+  it("opens browser audio summaries with browser speech controls", async () => {
+    const speak = vi.fn()
+    const pause = vi.fn()
+    const resume = vi.fn()
+    const cancel = vi.fn()
+    const speechSynthesisDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      "speechSynthesis"
+    )
+    const utteranceDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "SpeechSynthesisUtterance"
+    )
+
+    try {
+      Object.defineProperty(window, "speechSynthesis", {
+        configurable: true,
+        value: {
+          speaking: false,
+          paused: false,
+          speak,
+          pause,
+          resume,
+          cancel
+        }
+      })
+      Object.defineProperty(globalThis, "SpeechSynthesisUtterance", {
+        configurable: true,
+        value: class {
+          text: string
+          rate = 1
+          onstart: (() => void) | null = null
+          onpause: (() => void) | null = null
+          onresume: (() => void) | null = null
+          onend: (() => void) | null = null
+          onerror: (() => void) | null = null
+
+          constructor(text: string) {
+            this.text = text
+          }
+        }
+      })
+
+      workspaceStoreState.generatedArtifacts = [
+        {
+          id: "artifact-browser-audio",
+          type: "audio_overview",
+          title: "Browser Audio Summary",
+          status: "completed",
+          content: "Browser spoken summary text.",
+          audioFormat: "browser",
+          createdAt: new Date("2026-02-18T08:00:00.000Z")
+        }
+      ]
+
+      renderExpandedStudioPane()
+
+      fireEvent.click(screen.getByRole("button", { name: "View" }))
+
+      expect(
+        await screen.findByText("Use your browser to play this audio summary.")
+      ).toBeInTheDocument()
+      expect(screen.getByText("Browser spoken summary text.")).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole("button", { name: "Play" }))
+      expect(speak).toHaveBeenCalledTimes(1)
+
+      fireEvent.click(screen.getByRole("button", { name: "Stop" }))
+      expect(cancel).toHaveBeenCalled()
+    } finally {
+      if (speechSynthesisDescriptor) {
+        Object.defineProperty(window, "speechSynthesis", speechSynthesisDescriptor)
+      } else {
+        delete (window as { speechSynthesis?: unknown }).speechSynthesis
+      }
+
+      if (utteranceDescriptor) {
+        Object.defineProperty(globalThis, "SpeechSynthesisUtterance", utteranceDescriptor)
+      } else {
+        delete (globalThis as { SpeechSynthesisUtterance?: unknown }).SpeechSynthesisUtterance
+      }
+    }
+  })
 })

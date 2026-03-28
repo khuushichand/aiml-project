@@ -1,7 +1,11 @@
+import base64
+
 import pytest
 
 from tldw_Server_API.app.core.Image_Generation.adapters.base import ImageGenRequest
 from tldw_Server_API.app.core.Image_Generation.adapters import modelstudio_image_adapter as modelstudio_module
+from tldw_Server_API.app.core.Image_Generation.adapters.image_format_utils import reference_image_data_url
+from tldw_Server_API.app.core.Image_Generation.capabilities import ResolvedReferenceImage
 from tldw_Server_API.app.core.Image_Generation.config import ImageGenerationConfig
 from tldw_Server_API.app.core.Image_Generation.exceptions import ImageGenerationError
 
@@ -80,6 +84,61 @@ def _make_request(**overrides) -> ImageGenRequest:
     )
     base.update(overrides)
     return ImageGenRequest(**base)
+
+
+def _make_reference_image(**overrides) -> ResolvedReferenceImage:
+    base = dict(
+        file_id=123,
+        filename="reference.png",
+        mime_type="image/png",
+        width=64,
+        height=64,
+        bytes_len=10,
+        content=b"reference",
+        temp_path=None,
+    )
+    base.update(overrides)
+    return ResolvedReferenceImage(**base)
+
+
+def test_reference_image_data_url_reads_temp_path(tmp_path):
+    path = tmp_path / "reference.png"
+    path.write_bytes(b"reference-bytes")
+
+    reference_image = _make_reference_image(content=None, temp_path=str(path))
+
+    assert reference_image_data_url(reference_image) == (
+        "data:image/png;base64," + base64.b64encode(b"reference-bytes").decode("ascii")
+    )
+
+
+def test_modelstudio_sync_payload_includes_reference_image_content(monkeypatch):
+    cfg = _make_config()
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    payload = adapter._build_sync_payload(
+        _make_request(model="qwen-image-edit-v1", reference_image=_make_reference_image())
+    )
+
+    assert payload["input"]["messages"][0]["content"] == [
+        {"image": "data:image/png;base64," + base64.b64encode(b"reference").decode("ascii")},
+        {"text": "draw a cat"},
+    ]
+
+
+def test_modelstudio_rejects_reference_image_for_unsupported_model(monkeypatch):
+    cfg = _make_config()
+    monkeypatch.setattr(modelstudio_module, "get_image_generation_config", lambda: cfg)
+    monkeypatch.setattr(
+        modelstudio_module,
+        "fetch_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("upstream should not be called")),
+    )
+
+    adapter = modelstudio_module.ModelStudioImageAdapter()
+    with pytest.raises(ImageGenerationError, match="unsupported model"):
+        adapter.generate(_make_request(model="qwen-image", reference_image=_make_reference_image()))
 
 
 def test_modelstudio_generate_sync_data_url(monkeypatch):

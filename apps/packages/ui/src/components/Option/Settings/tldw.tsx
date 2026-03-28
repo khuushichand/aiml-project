@@ -43,6 +43,7 @@ type TimeoutValues = {
   request: number
   stream: number
   chatRequest: number
+  chatStartup: number
   chatStream: number
   ragRequest: number
   media: number
@@ -106,6 +107,7 @@ const TIMEOUT_PRESETS: Record<TimeoutPresetKey, TimeoutValues> = {
     request: 10,
     stream: 15,
     chatRequest: 10,
+    chatStartup: 10,
     chatStream: 15,
     ragRequest: 10,
     media: 60,
@@ -115,6 +117,7 @@ const TIMEOUT_PRESETS: Record<TimeoutPresetKey, TimeoutValues> = {
     request: 20,
     stream: 30,
     chatRequest: 20,
+    chatStartup: 20,
     chatStream: 30,
     ragRequest: 20,
     media: 90,
@@ -151,6 +154,7 @@ export const TldwSettings = () => {
   const [requestTimeoutSec, setRequestTimeoutSec] = useState<number>(10)
   const [streamIdleTimeoutSec, setStreamIdleTimeoutSec] = useState<number>(15)
   const [chatRequestTimeoutSec, setChatRequestTimeoutSec] = useState<number>(10)
+  const [chatStartupTimeoutSec, setChatStartupTimeoutSec] = useState<number>(10)
   const [chatStreamIdleTimeoutSec, setChatStreamIdleTimeoutSec] = useState<number>(15)
   const [ragRequestTimeoutSec, setRagRequestTimeoutSec] = useState<number>(10)
   const [mediaRequestTimeoutSec, setMediaRequestTimeoutSec] = useState<number>(60)
@@ -179,6 +183,7 @@ export const TldwSettings = () => {
         presetValues.request === values.request &&
         presetValues.stream === values.stream &&
         presetValues.chatRequest === values.chatRequest &&
+        presetValues.chatStartup === values.chatStartup &&
         presetValues.chatStream === values.chatStream &&
         presetValues.ragRequest === values.ragRequest &&
         presetValues.media === values.media &&
@@ -195,6 +200,7 @@ export const TldwSettings = () => {
     setRequestTimeoutSec(presetValues.request)
     setStreamIdleTimeoutSec(presetValues.stream)
     setChatRequestTimeoutSec(presetValues.chatRequest)
+    setChatStartupTimeoutSec(presetValues.chatStartup)
     setChatStreamIdleTimeoutSec(presetValues.chatStream)
     setRagRequestTimeoutSec(presetValues.ragRequest)
     setMediaRequestTimeoutSec(presetValues.media)
@@ -371,6 +377,7 @@ export const TldwSettings = () => {
         if (typeof (config as any).requestTimeoutMs === 'number') nextTimeouts.request = Math.round((config as any).requestTimeoutMs / 1000)
         if (typeof (config as any).streamIdleTimeoutMs === 'number') nextTimeouts.stream = Math.round((config as any).streamIdleTimeoutMs / 1000)
         if (typeof (config as any).chatRequestTimeoutMs === 'number') nextTimeouts.chatRequest = Math.round((config as any).chatRequestTimeoutMs / 1000)
+        if (typeof (config as any).chatStartupTimeoutMs === 'number') nextTimeouts.chatStartup = Math.round((config as any).chatStartupTimeoutMs / 1000)
         if (typeof (config as any).chatStreamIdleTimeoutMs === 'number') nextTimeouts.chatStream = Math.round((config as any).chatStreamIdleTimeoutMs / 1000)
         if (typeof (config as any).ragRequestTimeoutMs === 'number') nextTimeouts.ragRequest = Math.round((config as any).ragRequestTimeoutMs / 1000)
         if (typeof (config as any).mediaRequestTimeoutMs === 'number') nextTimeouts.media = Math.round((config as any).mediaRequestTimeoutMs / 1000)
@@ -379,6 +386,7 @@ export const TldwSettings = () => {
         setRequestTimeoutSec(nextTimeouts.request)
         setStreamIdleTimeoutSec(nextTimeouts.stream)
         setChatRequestTimeoutSec(nextTimeouts.chatRequest)
+        setChatStartupTimeoutSec(nextTimeouts.chatStartup)
         setChatStreamIdleTimeoutSec(nextTimeouts.chatStream)
         setRagRequestTimeoutSec(nextTimeouts.ragRequest)
         setMediaRequestTimeoutSec(nextTimeouts.media)
@@ -417,6 +425,7 @@ export const TldwSettings = () => {
         requestTimeoutMs?: number
         streamIdleTimeoutMs?: number
         chatRequestTimeoutMs?: number
+        chatStartupTimeoutMs?: number
         chatStreamIdleTimeoutMs?: number
         ragRequestTimeoutMs?: number
         mediaRequestTimeoutMs?: number
@@ -428,6 +437,7 @@ export const TldwSettings = () => {
         requestTimeoutMs: Math.min(2147483000, Math.max(1, Math.round(Number(requestTimeoutSec) || 10)) * 1000),
         streamIdleTimeoutMs: Math.min(2147483000, Math.max(1, Math.round(Number(streamIdleTimeoutSec) || 15)) * 1000),
         chatRequestTimeoutMs: Math.min(2147483000, Math.max(1, Math.round(Number(chatRequestTimeoutSec) || requestTimeoutSec || 10)) * 1000),
+        chatStartupTimeoutMs: Math.min(2147483000, Math.max(1, Math.round(Number(chatStartupTimeoutSec) || TIMEOUT_PRESETS.balanced.chatStartup)) * 1000),
         chatStreamIdleTimeoutMs: Math.min(2147483000, Math.max(1, Math.round(Number(chatStreamIdleTimeoutSec) || streamIdleTimeoutSec || 15)) * 1000),
         ragRequestTimeoutMs: Math.min(2147483000, Math.max(1, Math.round(Number(ragRequestTimeoutSec) || requestTimeoutSec || 10)) * 1000),
         mediaRequestTimeoutMs: Math.min(2147483000, Math.max(1, Math.round(Number(mediaRequestTimeoutSec) || requestTimeoutSec || 10)) * 1000),
@@ -1435,6 +1445,7 @@ export const TldwSettings = () => {
                                 request: newValue,
                                 stream: streamIdleTimeoutSec,
                                 chatRequest: chatRequestTimeoutSec,
+                                chatStartup: chatStartupTimeoutSec,
                                 chatStream: chatStreamIdleTimeoutSec,
                                 ragRequest: ragRequestTimeoutSec,
                                 media: mediaRequestTimeoutSec,
@@ -1472,6 +1483,7 @@ export const TldwSettings = () => {
                                 request: requestTimeoutSec,
                                 stream: newValue,
                                 chatRequest: chatRequestTimeoutSec,
+                                chatStartup: chatStartupTimeoutSec,
                                 chatStream: chatStreamIdleTimeoutSec,
                                 ragRequest: ragRequestTimeoutSec,
                                 media: mediaRequestTimeoutSec,
@@ -1511,6 +1523,7 @@ export const TldwSettings = () => {
                                 request: requestTimeoutSec,
                                 stream: streamIdleTimeoutSec,
                                 chatRequest: newValue,
+                                chatStartup: chatStartupTimeoutSec,
                                 chatStream: chatStreamIdleTimeoutSec,
                                 ragRequest: ragRequestTimeoutSec,
                                 media: mediaRequestTimeoutSec,
@@ -1520,6 +1533,51 @@ export const TldwSettings = () => {
                           }}
                           suffix="s"
                         />
+                        <div className="text-xs text-text-subtle mt-1">
+                          {t('settings:tldw.hints.chatRequest', {
+                            defaultValue:
+                              'Applies to non-stream chat request timeout handling. Use startup timeout below for first visible token.',
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1">
+                          {t('settings:tldw.chatStartup', {
+                            defaultValue: 'Chat startup timeout'
+                          })}
+                        </label>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={chatStartupTimeoutSec}
+                          onChange={(e) => {
+                            const newValue = parseSeconds(
+                              e.target.value,
+                              TIMEOUT_PRESETS.balanced.chatStartup
+                            )
+                            setChatStartupTimeoutSec(newValue)
+                            setTimeoutPreset(
+                              determinePreset({
+                                request: requestTimeoutSec,
+                                stream: streamIdleTimeoutSec,
+                                chatRequest: chatRequestTimeoutSec,
+                                chatStartup: newValue,
+                                chatStream: chatStreamIdleTimeoutSec,
+                                ragRequest: ragRequestTimeoutSec,
+                                media: mediaRequestTimeoutSec,
+                                upload: uploadRequestTimeoutSec
+                              })
+                            )
+                          }}
+                          suffix="s"
+                        />
+                        <div className="text-xs text-text-subtle mt-1">
+                          {t('settings:tldw.hints.chatStartup', {
+                            defaultValue:
+                              'Abort streaming if no visible assistant output arrives within this time. Default: {{seconds}}s.',
+                            seconds: TIMEOUT_PRESETS.balanced.chatStartup
+                          })}
+                        </div>
                       </div>
                       <div>
                         <label className="block text-sm font-medium mb-1">
@@ -1540,6 +1598,7 @@ export const TldwSettings = () => {
                                 request: requestTimeoutSec,
                                 stream: streamIdleTimeoutSec,
                                 chatRequest: chatRequestTimeoutSec,
+                                chatStartup: chatStartupTimeoutSec,
                                 chatStream: newValue,
                                 ragRequest: ragRequestTimeoutSec,
                                 media: mediaRequestTimeoutSec,
@@ -1569,6 +1628,7 @@ export const TldwSettings = () => {
                                 request: requestTimeoutSec,
                                 stream: streamIdleTimeoutSec,
                                 chatRequest: chatRequestTimeoutSec,
+                                chatStartup: chatStartupTimeoutSec,
                                 chatStream: chatStreamIdleTimeoutSec,
                                 ragRequest: newValue,
                                 media: mediaRequestTimeoutSec,
@@ -1598,6 +1658,7 @@ export const TldwSettings = () => {
                                 request: requestTimeoutSec,
                                 stream: streamIdleTimeoutSec,
                                 chatRequest: chatRequestTimeoutSec,
+                                chatStartup: chatStartupTimeoutSec,
                                 chatStream: chatStreamIdleTimeoutSec,
                                 ragRequest: ragRequestTimeoutSec,
                                 media: newValue,
@@ -1627,6 +1688,7 @@ export const TldwSettings = () => {
                                 request: requestTimeoutSec,
                                 stream: streamIdleTimeoutSec,
                                 chatRequest: chatRequestTimeoutSec,
+                                chatStartup: chatStartupTimeoutSec,
                                 chatStream: chatStreamIdleTimeoutSec,
                                 ragRequest: ragRequestTimeoutSec,
                                 media: mediaRequestTimeoutSec,

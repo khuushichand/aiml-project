@@ -2917,7 +2917,7 @@ export const PlaygroundForm = ({
     setToolsPopoverOpen
   })
   const {
-    imageGenerateModalOpen, setImageGenerateModalOpen,
+    imageGenerateModalOpen,
     imageGenerateBackend, setImageGenerateBackend,
     imageGeneratePrompt, setImageGeneratePrompt,
     imageGeneratePromptMode, setImageGeneratePromptMode,
@@ -2931,7 +2931,11 @@ export const PlaygroundForm = ({
     imageGenerateSampler, setImageGenerateSampler,
     imageGenerateModel, setImageGenerateModel,
     imageGenerateExtraParams, setImageGenerateExtraParams,
+    imageGenerateReferenceFileId,
+    setImageGenerateReferenceFileId,
     imageGenerateSyncPolicy, setImageGenerateSyncPolicy,
+    referenceImageCandidates,
+    referenceImageCandidatesLoading,
     imagePromptContextBreakdown,
     imagePromptRefineSubmitting,
     imagePromptRefineBaseline,
@@ -2948,6 +2952,7 @@ export const PlaygroundForm = ({
     imageEventSyncBaselineMode,
     imageGenerateResolvedSyncMode,
     clearImagePromptRefineState,
+    closeImageGenerateModal,
     hydrateImageGenerateSettings,
     openImageGenerateModal,
     handleCreateImagePromptDraft,
@@ -4540,6 +4545,8 @@ export const PlaygroundForm = ({
                           voiceChatButton={voiceChatButton}
                           modelUsageBadge={modelUsageBadge}
                           selectedSystemPrompt={selectedSystemPrompt}
+                          systemPrompt={systemPrompt}
+                          setSystemPrompt={setSystemPrompt}
                           setSelectedSystemPrompt={setSelectedSystemPrompt}
                           setSelectedQuickPrompt={setSelectedQuickPrompt}
                           temporaryChat={temporaryChat}
@@ -4637,7 +4644,7 @@ export const PlaygroundForm = ({
         <React.Suspense fallback={null}>
           <LazyPlaygroundImageGenModal
             open={imageGenerateModalOpen}
-            onClose={() => setImageGenerateModalOpen(false)}
+            onClose={closeImageGenerateModal}
             busy={imageGenerateBusy}
             backend={imageGenerateBackend}
             backendOptions={imageGenerateBackendOptions}
@@ -4691,6 +4698,10 @@ export const PlaygroundForm = ({
             onNegativePromptChange={setImageGenerateNegativePrompt}
             extraParams={imageGenerateExtraParams}
             onExtraParamsChange={setImageGenerateExtraParams}
+            referenceFileId={imageGenerateReferenceFileId}
+            onReferenceFileIdChange={setImageGenerateReferenceFileId}
+            referenceImageCandidates={referenceImageCandidates}
+            referenceImageCandidatesLoading={referenceImageCandidatesLoading}
             submitting={imageGenerateSubmitting}
             onSubmit={submitImageGenerateModal}
             t={t}

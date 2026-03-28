@@ -15,6 +15,7 @@ import {
   DISCUSS_MEDIA_PROMPT_SETTING,
   LAST_MEDIA_ID_SETTING
 } from "@/services/settings/ui-settings"
+import { resolvePerformChunking } from "@/services/tldw/ingest-defaults"
 import { useQuickIngestStore } from "@/store/quick-ingest"
 import { detectSections } from "@/utils/content-review"
 import {
@@ -566,7 +567,7 @@ export function useIngestResults(deps: UseIngestResultsDeps) {
       }
       const processingOptions: ProcessingOptions = {
         perform_analysis: Boolean(common.perform_analysis),
-        perform_chunking: Boolean(common.perform_chunking),
+        perform_chunking: resolvePerformChunking(common.perform_chunking),
         overwrite_existing: Boolean(common.overwrite_existing),
         advancedValues: { ...(advancedValues || {}) }
       }

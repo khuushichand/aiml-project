@@ -21,6 +21,7 @@ export type ImageGenerationRequestSnapshot = {
   backend: string
   format?: "png" | "jpg" | "webp"
   negativePrompt?: string
+  referenceFileId?: number
   width?: number
   height?: number
   steps?: number
@@ -478,7 +479,13 @@ const resolveImageGenerationRequestSnapshot = (
 
   const request: ImageGenerationRequestSnapshot = { prompt, backend }
   const assignNumber = (
-    key: "width" | "height" | "steps" | "cfgScale" | "seed",
+    key:
+      | "referenceFileId"
+      | "width"
+      | "height"
+      | "steps"
+      | "cfgScale"
+      | "seed",
     candidate: unknown
   ) => {
     if (typeof candidate === "number" && Number.isFinite(candidate)) {
@@ -498,6 +505,7 @@ const resolveImageGenerationRequestSnapshot = (
   assignString("negativePrompt", value.negativePrompt)
   assignString("sampler", value.sampler)
   assignString("model", value.model)
+  assignNumber("referenceFileId", value.referenceFileId)
   assignNumber("width", value.width)
   assignNumber("height", value.height)
   assignNumber("steps", value.steps)

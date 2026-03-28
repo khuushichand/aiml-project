@@ -3,14 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const mocks = vi.hoisted(() => ({
   initialize: vi.fn(async () => undefined),
   createChatCompletion: vi.fn(),
-  streamChatCompletion: vi.fn()
+  streamChatCompletion: vi.fn(),
+  getConfig: vi.fn(async () => null)
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     initialize: mocks.initialize,
     createChatCompletion: mocks.createChatCompletion,
-    streamChatCompletion: mocks.streamChatCompletion
+    streamChatCompletion: mocks.streamChatCompletion,
+    getConfig: mocks.getConfig
   }
 }))
 
@@ -34,12 +36,14 @@ const makeDefaultResponse = () =>
 describe("TldwChatService message sanitization", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useRealTimers()
     mocks.createChatCompletion.mockResolvedValue(makeDefaultResponse())
     mocks.streamChatCompletion.mockImplementation(async function* () {
       yield {
         choices: [{ index: 0, delta: { content: "hello" }, finish_reason: null }]
       }
     })
+    mocks.getConfig.mockResolvedValue(null)
   })
 
   it("falls back to system prompt when request messages are empty (send)", async () => {
@@ -233,5 +237,175 @@ describe("TldwChatService message sanitization", () => {
       run_id: "run_456",
       research_url: "/research?run=run_456"
     })
+  })
+
+  it("times out when no visible assistant progress arrives", async () => {
+    vi.useFakeTimers()
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://localhost:8000",
+      authMode: "single-user",
+      chatRequestTimeoutMs: 50,
+      chatStartupTimeoutMs: 50,
+      chatStreamIdleTimeoutMs: 500
+    })
+    mocks.streamChatCompletion.mockImplementation(
+      async function* (
+        _request: unknown,
+        options?: { signal?: AbortSignal }
+      ) {
+        let seq = 0
+        while (true) {
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          if (options?.signal?.aborted) {
+            return
+          }
+          seq += 1
+          yield {
+            event: "run_started",
+            run_id: "run_1",
+            seq,
+            data: {}
+          }
+        }
+      }
+    )
+
+    const service = new TldwChatService()
+    const streamRun = (async () => {
+      const tokens: string[] = []
+      for await (const token of service.streamMessage(
+        [{ role: "user", content: "why is prompt engineering important?" }],
+        { model: "gpt-test" }
+      )) {
+        tokens.push(token)
+      }
+      return tokens
+    })()
+    const settled = streamRun.then(
+      (value) => ({ status: "resolved" as const, value }),
+      (error) => ({ status: "rejected" as const, error })
+    )
+
+    await vi.advanceTimersByTimeAsync(80)
+
+    await expect(settled).resolves.toMatchObject({
+      status: "rejected",
+      error: {
+        message: "Stream completion failed",
+        cause: expect.objectContaining({
+          message: expect.stringContaining("visible output")
+        })
+      }
+    })
+  })
+
+  it("uses dedicated startup timeout instead of chat request timeout", async () => {
+    vi.useFakeTimers()
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://localhost:8000",
+      authMode: "single-user",
+      chatRequestTimeoutMs: 50,
+      chatStartupTimeoutMs: 500,
+      chatStreamIdleTimeoutMs: 500
+    })
+    mocks.streamChatCompletion.mockImplementation(
+      async function* (
+        _request: unknown,
+        options?: { signal?: AbortSignal }
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        if (options?.signal?.aborted) {
+          return
+        }
+        yield {
+          event: "run_started",
+          run_id: "run_1",
+          seq: 1,
+          data: {}
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        if (options?.signal?.aborted) {
+          return
+        }
+        yield {
+          event: "tool_pending",
+          run_id: "run_1",
+          seq: 2,
+          data: {}
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        if (options?.signal?.aborted) {
+          return
+        }
+        yield {
+          choices: [{ index: 0, delta: { content: "hello" }, finish_reason: null }]
+        }
+      }
+    )
+
+    const service = new TldwChatService()
+    const streamRun = (async () => {
+      const tokens: string[] = []
+      for await (const token of service.streamMessage(
+        [{ role: "user", content: "say hello after warmup" }],
+        { model: "gpt-test" }
+      )) {
+        tokens.push(token)
+      }
+      return tokens
+    })()
+
+    await vi.advanceTimersByTimeAsync(120)
+
+    await expect(streamRun).resolves.toEqual(["hello"])
+  })
+
+  it("keeps streaming when visible token progress arrives", async () => {
+    vi.useFakeTimers()
+    mocks.getConfig.mockResolvedValue({
+      serverUrl: "http://localhost:8000",
+      authMode: "single-user",
+      chatRequestTimeoutMs: 50,
+      chatStreamIdleTimeoutMs: 50
+    })
+    mocks.streamChatCompletion.mockImplementation(
+      async function* (
+        _request: unknown,
+        options?: { signal?: AbortSignal }
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        if (options?.signal?.aborted) {
+          return
+        }
+        yield {
+          choices: [{ index: 0, delta: { content: "hello" }, finish_reason: null }]
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        if (options?.signal?.aborted) {
+          return
+        }
+        yield {
+          choices: [{ index: 0, delta: { content: " world" }, finish_reason: null }]
+        }
+      }
+    )
+
+    const service = new TldwChatService()
+    const streamRun = (async () => {
+      const tokens: string[] = []
+      for await (const token of service.streamMessage(
+        [{ role: "user", content: "say hello" }],
+        { model: "gpt-test" }
+      )) {
+        tokens.push(token)
+      }
+      return tokens
+    })()
+
+    await vi.advanceTimersByTimeAsync(80)
+
+    await expect(streamRun).resolves.toEqual(["hello", " world"])
   })
 })

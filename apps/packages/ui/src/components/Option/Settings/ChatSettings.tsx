@@ -15,7 +15,11 @@ import { useChatSettings } from "@/hooks/useChatSettings"
 import { useSetting } from "@/hooks/useSetting"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
 import { toBase64 } from "@/libs/to-base64"
-import { CHAT_BACKGROUND_IMAGE_SETTING } from "@/services/settings/ui-settings"
+import {
+  CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH,
+  CHAT_BACKGROUND_IMAGE_MAX_SIZE_MB,
+  CHAT_BACKGROUND_IMAGE_SETTING
+} from "@/services/settings/ui-settings"
 import { RotateCcw, Upload } from "lucide-react"
 import { DiscoSkillsSettings } from "./DiscoSkillsSettings"
 import { QuickChatWorkflowGuidesSettings } from "./QuickChatWorkflowGuidesSettings"
@@ -31,8 +35,6 @@ import {
 } from "@/components/Common/QuickChatHelper/docs-rag-profile"
 
 const SELECT_CLASSNAME = "w-[200px]"
-const CHAT_BACKGROUND_MAX_BASE64_LENGTH = 3_000_000
-
 export const ChatSettings = () => {
   const { t } = useTranslation("settings")
   const notification = useAntdNotification()
@@ -430,12 +432,12 @@ export const ChatSettings = () => {
 
       try {
         const base64String = await toBase64(file)
-        if (base64String.length > CHAT_BACKGROUND_MAX_BASE64_LENGTH) {
+        if (base64String.length > CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH) {
           notification.error({
             message: t("chatBackground.tooLargeTitle", "Image too large"),
             description: t(
               "chatBackground.tooLargeDescription",
-              "Please choose a smaller image (around 3 MB or less) for the chat background. Try compressing or resizing it and upload again."
+              `Please choose a smaller image (around ${CHAT_BACKGROUND_IMAGE_MAX_SIZE_MB} MB or less) for the chat background. Try compressing or resizing it and upload again.`
             )
           })
           return

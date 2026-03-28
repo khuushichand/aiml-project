@@ -262,6 +262,9 @@ vi.mock("@/services/tts-providers", () => ({
 }))
 
 vi.mock("@/services/tts", () => ({
+  DEFAULT_TTS_PROVIDER: "tldw",
+  DEFAULT_TLDW_TTS_MODEL: "KittenML/kitten-tts-nano-0.8",
+  DEFAULT_TLDW_TTS_VOICE: "Bella",
   getTTSProvider: vi.fn(async () => "browser"),
   getTTSSettings: vi.fn(async () => ({
     ttsProvider: "browser",

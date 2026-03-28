@@ -10,7 +10,12 @@ import {
 } from "@/services/tldw/data-tables"
 import type { DataTableColumn } from "@/types/data-tables"
 import type { AllowedPath, PathOrUrl } from "@/services/tldw/openapi-guard"
-import type { FileCreateResponse, ImageArtifactRequest } from "../TldwApiClient"
+import type {
+  FileCreateResponse,
+  ImageArtifactRequest,
+  ReferenceImageCandidate,
+  ReferenceImageListResponse
+} from "../TldwApiClient"
 
 /**
  * Builds a query string from a record of parameters.
@@ -31,6 +36,32 @@ function buildQuery(params?: Record<string, any>): string {
   }
   const query = search.toString()
   return query ? `?${query}` : ''
+}
+
+const normalizeReferenceImageCandidate = (
+  item: any
+): ReferenceImageCandidate => ({
+  file_id: Number(item?.file_id ?? 0),
+  title: String(item?.title ?? ""),
+  mime_type: String(item?.mime_type ?? ""),
+  width:
+    typeof item?.width === "number" && Number.isFinite(item.width)
+      ? item.width
+      : null,
+  height:
+    typeof item?.height === "number" && Number.isFinite(item.height)
+      ? item.height
+      : null,
+  created_at: String(item?.created_at ?? "")
+})
+
+const normalizeReferenceImageListResponse = (
+  payload: any
+): ReferenceImageListResponse => {
+  const items = Array.isArray(payload?.items)
+    ? payload.items.map((item: any) => normalizeReferenceImageCandidate(item))
+    : []
+  return { items }
 }
 
 export const mediaMethods = {
@@ -177,6 +208,17 @@ export const mediaMethods = {
       method: "GET",
       abortSignal: options?.signal
     })
+  },
+
+  async listReferenceImageCandidates(
+    options?: { signal?: AbortSignal }
+  ): Promise<ReferenceImageListResponse> {
+    const response = await bgRequest<any>({
+      path: "/api/v1/files/reference-images" as PathOrUrl,
+      method: "GET",
+      abortSignal: options?.signal
+    })
+    return normalizeReferenceImageListResponse(response)
   },
 
   async searchMedia(
@@ -1266,6 +1308,9 @@ export const mediaMethods = {
       prompt: request.prompt
     }
     if (request.negativePrompt) payload.negative_prompt = request.negativePrompt
+    if (typeof request.referenceFileId === "number") {
+      payload.reference_file_id = request.referenceFileId
+    }
     if (typeof request.width === "number") payload.width = request.width
     if (typeof request.height === "number") payload.height = request.height
     if (typeof request.steps === "number") payload.steps = request.steps

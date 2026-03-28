@@ -981,39 +981,72 @@ describe("StudioPane Stage 2 workflows", () => {
         addedAt: new Date("2026-02-18T00:00:00.000Z")
       }
     ] as WorkspaceSource[]
-    mockRagSearch.mockResolvedValue({
-      generation: "Compared sources output",
-      usage: {
-        total_tokens: 321,
-        total_cost_usd: 0.12
-      }
-    })
+    mockGetMediaDetails
+      .mockResolvedValueOnce({
+        source: { title: "DSPy Prompting Talk" },
+        content: {
+          text: "Alpha reports retention improved by 18 percent after the Falcon rollout."
+        }
+      })
+      .mockResolvedValueOnce({
+        source: { title: "E2E DB Media" },
+        content: {
+          text: "Beta reports retention improved by 12 percent and attributes gains to training."
+        }
+      })
+    mockCreateChatCompletion.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content:
+                  "## Agreements\n- Both sources report retention gains.\n\n## Disagreements\n- Alpha reports 18 percent while Beta reports 12 percent."
+              }
+            }
+          ],
+          usage: {
+            total_tokens: 321,
+            total_cost_usd: 0.12
+          }
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        }
+      )
+    )
 
     renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Compare Sources" }))
 
     await waitFor(() => {
-      expect(mockRagSearch).toHaveBeenCalled()
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
     })
 
-    expect(mockRagSearch).toHaveBeenCalledWith(
-      "agreements disagreements claims evidence",
-      expect.objectContaining({
-        include_media_ids: [101, 202],
-        generation_prompt: expect.stringContaining("Compare the selected sources"),
-        top_k: 30,
-        enable_generation: true,
-        enable_citations: true
-      })
-    )
+    const compareRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(compareRequest).toMatchObject({
+      model: "gpt-4o-mini",
+      messages: [
+        expect.objectContaining({
+          role: "system",
+          content: expect.stringContaining("source-grounded comparison analyst")
+        }),
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Alpha reports retention improved by 18 percent")
+        })
+      ]
+    })
+    expect(mockRagSearch).not.toHaveBeenCalled()
 
     await waitFor(() => {
       expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
         expect.stringMatching(/^artifact-/),
         "completed",
         expect.objectContaining({
-          content: "Compared sources output",
+          content: expect.stringContaining("## Agreements"),
           totalTokens: 321,
           totalCostUsd: 0.12
         })

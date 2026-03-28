@@ -49,9 +49,9 @@ const nextConfig = {
   turbopack: {
     // Keep Turbopack aliases aligned with shared UI + web shims.
     resolveAlias: {
-      '@tldw/ui': '../../packages/ui/src',
-      '@': '../../packages/ui/src',
-      '~': '../../packages/ui/src',
+      '@tldw/ui': '../packages/ui/src',
+      '@': '../packages/ui/src',
+      '~': '../packages/ui/src',
       '@web': '.',
       'pa-tesseract.js': './node_modules/pa-tesseract.js',
       'react-router-dom': './extension/shims/react-router-dom.tsx',
@@ -65,9 +65,9 @@ const nextConfig = {
   transpilePackages: ['@tldw/ui'],
   webpack: (config) => {
     // Support extension-aligned aliases + shims
-    config.resolve.alias['@tldw/ui'] = path.resolve(__dirname, '../../packages/ui/src');
-    config.resolve.alias['@'] = path.resolve(__dirname, '../../packages/ui/src');
-    config.resolve.alias['~'] = path.resolve(__dirname, '../../packages/ui/src');
+    config.resolve.alias['@tldw/ui'] = path.resolve(__dirname, '../packages/ui/src');
+    config.resolve.alias['@'] = path.resolve(__dirname, '../packages/ui/src');
+    config.resolve.alias['~'] = path.resolve(__dirname, '../packages/ui/src');
     config.resolve.alias['@web'] = path.resolve(__dirname, '.');
     config.resolve.alias['pa-tesseract.js'] = paTesseractPath;
     config.resolve.alias['react-router-dom'] = path.resolve(

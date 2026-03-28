@@ -22,8 +22,8 @@ vi.mock("@/components/Common/PromptSelect", () => ({
   PromptSelect: () => <div data-testid="prompt-select" />
 }))
 
-vi.mock("@/components/Common/CharacterSelect", () => ({
-  CharacterSelect: () => <div data-testid="character-select" />
+vi.mock("@/components/Common/AssistantSelect", () => ({
+  AssistantSelect: () => <div data-testid="character-select" />
 }))
 
 vi.mock("@/components/Layouts/ConnectionStatus", () => ({
@@ -63,6 +63,8 @@ const createProps = (
   voiceChatButton: null,
   modelUsageBadge: null,
   selectedSystemPrompt: undefined,
+  systemPrompt: "",
+  setSystemPrompt: vi.fn(),
   setSelectedSystemPrompt: vi.fn(),
   setSelectedQuickPrompt: vi.fn(),
   temporaryChat: false,

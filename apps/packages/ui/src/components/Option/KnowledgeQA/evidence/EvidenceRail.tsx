@@ -89,7 +89,7 @@ function EvidenceRailContent({
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {tab === "sources" ? (
           resultsCount > 0 ? (
-            <SourceList />
+            <SourceList layout="rail" />
           ) : (
             <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm text-text-muted">
               No sources yet. Run a query to inspect retrieval evidence.
@@ -129,12 +129,17 @@ export function EvidenceRail({
           <button
             type="button"
             onClick={() => onOpenChange(true)}
-            className="rounded-md border border-border bg-surface p-2 text-text-subtle hover:bg-hover hover:text-text transition-colors"
-            aria-label="Open evidence panel"
+            className="relative rounded-md border border-border bg-surface p-2 text-text-subtle hover:bg-hover hover:text-text transition-colors"
+            aria-label={`Open evidence panel (${resultsCount} source${resultsCount === 1 ? "" : "s"})`}
             aria-expanded={false}
             aria-controls="knowledge-evidence-panel"
           >
             <PanelRightOpen className="h-4 w-4" />
+            {resultsCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-white">
+                {resultsCount}
+              </span>
+            )}
           </button>
         </aside>
       )
@@ -144,7 +149,7 @@ export function EvidenceRail({
       <aside
         id="knowledge-evidence-panel"
         className={cn(
-          "hidden w-[360px] shrink-0 border-l border-border bg-surface/40 lg:block",
+          "hidden w-[400px] shrink-0 border-l border-border bg-surface/40 lg:block xl:w-[420px]",
           className
         )}
         aria-label="Evidence panel"

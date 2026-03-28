@@ -37,8 +37,8 @@ def process_chunks(
     return chunk_batch_ops.process_chunks(self, media_id, chunks, batch_size=batch_size)
 
 
-def clear_unvectorized_chunks(self: Any) -> int:
-    return chunk_template_ops.clear_unvectorized_chunks(self)
+def clear_unvectorized_chunks(self: Any, media_id: int) -> int:
+    return chunk_template_ops.clear_unvectorized_chunks(self, media_id)
 
 
 def create_chunking_template(

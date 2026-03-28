@@ -19,7 +19,9 @@ from tldw_Server_API.app.core.Image_Generation.adapters.image_format_utils impor
     format_from_content_type,
     maybe_convert_format,
     maybe_decode_base64_image,
+    reference_image_data_url,
 )
+from tldw_Server_API.app.core.Image_Generation.capabilities import resolve_reference_image_capability
 from tldw_Server_API.app.core.Image_Generation.config import (
     DEFAULT_MODELSTUDIO_IMAGE_BASE_URL,
     DEFAULT_MODELSTUDIO_IMAGE_MODEL,
@@ -49,8 +51,9 @@ class ModelStudioImageAdapter:
         if output_format not in self.supported_formats:
             raise ImageGenerationError(f"unsupported output format: {output_format}")
 
+        has_reference_image = request.reference_image is not None
         mode = self._resolve_mode(request)
-        if mode == "sync":
+        if mode == "sync" or has_reference_image:
             content, content_type = self._generate_sync(request)
             return self._finalize_result(content, content_type, output_format)
         if mode == "async":
@@ -240,13 +243,24 @@ class ModelStudioImageAdapter:
         if request.negative_prompt:
             prompt = f"{prompt}\n\nNegative prompt: {request.negative_prompt.strip()}"
 
+        model = self._resolve_model(request)
+        if request.reference_image is not None:
+            capability = resolve_reference_image_capability("modelstudio", model, config=self._config)
+            if not capability.supported:
+                raise ImageGenerationError(f"Model Studio reference images have unsupported model: {model}")
+
+        content: list[dict[str, Any]] = []
+        if request.reference_image is not None:
+            content.append({"image": reference_image_data_url(request.reference_image)})
+        content.append({"text": prompt})
+
         payload: dict[str, Any] = {
-            "model": self._resolve_model(request),
+            "model": model,
             "input": {
                 "messages": [
                     {
                         "role": "user",
-                        "content": [{"text": prompt}],
+                        "content": content,
                     }
                 ]
             },
@@ -269,6 +283,9 @@ class ModelStudioImageAdapter:
         return payload
 
     def _build_async_payload(self, request: ImageGenRequest) -> dict[str, Any]:
+        if request.reference_image is not None:
+            raise ImageGenerationError("Model Studio reference images are only supported in sync mode")
+
         prompt = request.prompt.strip()
         if request.negative_prompt:
             prompt = f"{prompt}\n\nNegative prompt: {request.negative_prompt.strip()}"

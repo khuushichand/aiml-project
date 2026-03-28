@@ -228,9 +228,9 @@ export interface VoiceAssistantConfig {
   sttModel?: string;
   /** Language code for STT (default: auto-detect) */
   sttLanguage?: string;
-  /** TTS provider (default: 'kokoro') */
+  /** TTS provider (default: 'kitten_tts') */
   ttsProvider?: string;
-  /** TTS voice (default: 'af_heart') */
+  /** TTS voice (default: 'Bella') */
   ttsVoice?: string;
   /** TTS audio format (default: 'mp3') */
   ttsFormat?: 'mp3' | 'opus' | 'wav' | 'pcm';

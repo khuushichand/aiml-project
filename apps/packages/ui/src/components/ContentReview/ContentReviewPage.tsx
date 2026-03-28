@@ -30,6 +30,7 @@ import { getProviderDisplayName } from "@/utils/provider-registry"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 import { bgRequest, bgUpload } from "@/services/background-proxy"
 import { getServerCapabilities } from "@/services/tldw/server-capabilities"
+import { resolvePerformChunking } from "@/services/tldw/ingest-defaults"
 import { normalizeMediaTypeForUpload } from "@/services/tldw/media-routing"
 import { fetchChatModels } from "@/services/tldw-server"
 import {
@@ -94,7 +95,7 @@ const buildFields = (draft: ContentDraft) => {
   const fields: Record<string, any> = {
     media_type: normalizeMediaTypeForUpload(draft.mediaType),
     perform_analysis: Boolean(draft.processingOptions?.perform_analysis),
-    perform_chunking: Boolean(draft.processingOptions?.perform_chunking),
+    perform_chunking: resolvePerformChunking(draft.processingOptions?.perform_chunking),
     overwrite_existing: Boolean(draft.processingOptions?.overwrite_existing)
   }
   const nested: Record<string, any> = {}

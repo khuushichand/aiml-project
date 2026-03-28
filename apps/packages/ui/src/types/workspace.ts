@@ -264,7 +264,7 @@ export interface AudioGenerationSettings {
 }
 
 export const DEFAULT_AUDIO_SETTINGS: AudioGenerationSettings = {
-  provider: "tldw",
+  provider: "browser",
   model: "kokoro",
   voice: "af_heart",
   speed: 1.0,

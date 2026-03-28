@@ -42,6 +42,9 @@ import {
   useTtsProviderData
 } from "@/hooks/useTtsProviderData"
 import {
+  DEFAULT_TLDW_TTS_MODEL,
+  DEFAULT_TLDW_TTS_VOICE,
+  DEFAULT_TTS_PROVIDER,
   getTTSProvider,
   getTTSSettings,
   setTTSSettings,
@@ -103,7 +106,6 @@ type SpeechHistoryItem = {
 
 const SAMPLE_TEXT =
   "Sample: Hi there, this is the speech playground reading a short passage so you can preview voice and speed."
-
 const MAX_HISTORY_ITEMS = 100
 const STREAMING_FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"])
 const TTS_CHAR_WARNING = 2000
@@ -823,8 +825,12 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
 
   const [elevenVoiceId, setElevenVoiceId] = React.useState<string | undefined>(undefined)
   const [elevenModelId, setElevenModelId] = React.useState<string | undefined>(undefined)
-  const [tldwModel, setTldwModel] = React.useState<string | undefined>(undefined)
-  const [tldwVoice, setTldwVoice] = React.useState<string | undefined>(undefined)
+  const [tldwModel, setTldwModel] = React.useState<string | undefined>(
+    DEFAULT_TLDW_TTS_MODEL
+  )
+  const [tldwVoice, setTldwVoice] = React.useState<string | undefined>(
+    DEFAULT_TLDW_TTS_VOICE
+  )
   const [tldwFormat, setTldwFormat] = React.useState<string | undefined>(undefined)
   const [tldwLanguage, setTldwLanguage] = React.useState<string | undefined>(undefined)
   const [tldwStreaming, setTldwStreaming] = React.useState(false)
@@ -839,7 +845,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const [responseSplitting, setResponseSplitting] = React.useState("punctuation")
   const [openAiModel, setOpenAiModel] = React.useState<string | undefined>(undefined)
   const [openAiVoice, setOpenAiVoice] = React.useState<string | undefined>(undefined)
-  const provider = ttsSettings?.ttsProvider || "browser"
+  const provider = ttsSettings?.ttsProvider || DEFAULT_TTS_PROVIDER
   const isTldw = provider === "tldw"
   const inferredProviderKey = React.useMemo(() => {
     if (!isTldw) return null
@@ -876,8 +882,16 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
 
     const defaultConfig = {
       provider: lastVoice?.provider || (provider === "browser" ? "tldw" : provider),
-      voice: lastVoice?.voice || tldwVoice || ttsSettings?.tldwTtsVoice || "af_heart",
-      model: lastVoice?.model || tldwModel || ttsSettings?.tldwTtsModel || "kokoro",
+      voice:
+        lastVoice?.voice ||
+        tldwVoice ||
+        ttsSettings?.tldwTtsVoice ||
+        DEFAULT_TLDW_TTS_VOICE,
+      model:
+        lastVoice?.model ||
+        tldwModel ||
+        ttsSettings?.tldwTtsModel ||
+        DEFAULT_TLDW_TTS_MODEL,
       format: tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3",
       speed: ttsSettings?.tldwTtsSpeed ?? 1
     }
@@ -969,8 +983,8 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     if (!ttsSettings) return
     setElevenVoiceId(ttsSettings.elevenLabsVoiceId || undefined)
     setElevenModelId(ttsSettings.elevenLabsModel || undefined)
-    setTldwModel(ttsSettings.tldwTtsModel || undefined)
-    setTldwVoice(ttsSettings.tldwTtsVoice || undefined)
+    setTldwModel(ttsSettings.tldwTtsModel || DEFAULT_TLDW_TTS_MODEL)
+    setTldwVoice(ttsSettings.tldwTtsVoice || DEFAULT_TLDW_TTS_VOICE)
     setTldwFormat(ttsSettings.tldwTtsResponseFormat || undefined)
     setTldwLanguage(ttsSettings.tldwTtsLanguage || undefined)
     setTldwStreaming(Boolean(ttsSettings.tldwTtsStreaming))
@@ -1163,8 +1177,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
             description: `WebSocket streaming supports mp3, opus, aac, flac, wav, or pcm. Falling back to ${format.toUpperCase()}.`
           })
         }
-        const model = tldwModel || ttsSettings?.tldwTtsModel || "kokoro"
-        const voice = tldwVoice || ttsSettings?.tldwTtsVoice || "af_heart"
+        const model =
+          tldwModel || ttsSettings?.tldwTtsModel || DEFAULT_TLDW_TTS_MODEL
+        const voice =
+          tldwVoice || ttsSettings?.tldwTtsVoice || DEFAULT_TLDW_TTS_VOICE
         const speed = ttsSettings?.tldwTtsSpeed ?? 1
         const langCode = tldwLanguage || ttsSettings?.tldwTtsLanguage
         let utterance = markdownToText(ttsText)
@@ -1320,8 +1336,10 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         setTtsJobEta(null)
         setTtsJobError(null)
         try {
-          const model = tldwModel || ttsSettings?.tldwTtsModel || "kokoro"
-          const voice = tldwVoice || ttsSettings?.tldwTtsVoice || "af_heart"
+          const model =
+            tldwModel || ttsSettings?.tldwTtsModel || DEFAULT_TLDW_TTS_MODEL
+          const voice =
+            tldwVoice || ttsSettings?.tldwTtsVoice || DEFAULT_TLDW_TTS_VOICE
           const responseFormat = (tldwFormat || ttsSettings?.tldwTtsResponseFormat || "mp3").toLowerCase()
           const speed = ttsSettings?.tldwTtsSpeed ?? 1
           const langCode = tldwLanguage || ttsSettings?.tldwTtsLanguage
@@ -1513,7 +1531,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
     setDuration(0)
   }
 
-  const providerLabel = getTtsProviderLabel(ttsSettings?.ttsProvider)
+  const providerLabel = getTtsProviderLabel(provider)
 
   const activeProviderCaps = React.useMemo(
     (): { key: string; caps: TldwTtsProviderCapabilities } | null => {
@@ -1919,7 +1937,8 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   }
 
   const resolvePreviewModel = (voiceId: string) => {
-    if (!voiceId) return tldwModel || ttsSettings?.tldwTtsModel || "kokoro"
+    if (!voiceId)
+      return tldwModel || ttsSettings?.tldwTtsModel || DEFAULT_TLDW_TTS_MODEL
     if (voiceId.startsWith("custom:")) {
       const key = voiceId.replace("custom:", "")
       const match = customVoices.find((voice) => voice.voice_id === key)
@@ -1927,7 +1946,7 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
         return match.provider
       }
     }
-    return tldwModel || ttsSettings?.tldwTtsModel || "kokoro"
+    return tldwModel || ttsSettings?.tldwTtsModel || DEFAULT_TLDW_TTS_MODEL
   }
 
   const handleVoicePreview = async (card: VoiceRoleCard) => {
@@ -2009,7 +2028,8 @@ export const SpeechPlaygroundPage: React.FC<SpeechPlaygroundPageProps> = ({
   const handleReplayHistoryItem = React.useCallback(
     async (item: SpeechHistoryItem) => {
       if (item.type !== "tts") return
-      const providerToUse = item.provider || ttsSettings?.ttsProvider || "browser"
+      const providerToUse =
+        item.provider || ttsSettings?.ttsProvider || DEFAULT_TTS_PROVIDER
       setTtsText(item.text)
       stopStreaming()
       clearSegments()

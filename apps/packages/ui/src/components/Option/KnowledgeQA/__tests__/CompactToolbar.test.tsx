@@ -9,6 +9,17 @@ vi.mock("@/libs/utils", () => ({
 }))
 
 vi.mock("@/services/rag/unified-rag", () => ({}))
+vi.mock("@/services/tldw/TldwApiClient", () => ({
+  tldwClient: {
+    initialize: vi.fn().mockResolvedValue(undefined),
+    getProviders: vi.fn().mockResolvedValue({
+      default_provider: "openai",
+      providers: [
+        { name: "openai", display_name: "OpenAI", models: ["gpt-4o-mini"] },
+      ],
+    }),
+  },
+}))
 
 import { CompactToolbar } from "../context/CompactToolbar"
 
@@ -19,6 +30,10 @@ const defaultProps = {
   onToggleWeb: vi.fn(),
   onOpenSourceSelector: vi.fn(),
   onOpenSettings: vi.fn(),
+  generationProvider: null as string | null,
+  generationModel: null as string | null,
+  onGenerationProviderChange: vi.fn(),
+  onGenerationModelChange: vi.fn(),
   contextChangedSinceLastRun: false,
 }
 
@@ -91,6 +106,11 @@ describe("CompactToolbar", () => {
     const btn = screen.getByLabelText("Open settings")
     await userEvent.click(btn)
     expect(onOpenSettings).toHaveBeenCalledOnce()
+  })
+
+  it("shows an answer model control in the toolbar", () => {
+    renderToolbar()
+    expect(screen.getByRole("button", { name: "Choose answer model" })).toBeInTheDocument()
   })
 
   it('shows "Scope changed" badge when contextChangedSinceLastRun is true', () => {

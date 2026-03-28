@@ -450,6 +450,86 @@ async def test_persist_primary_av_item_upserts_normalized_transcript_via_extract
 
 
 @pytest.mark.asyncio
+async def test_persist_primary_av_item_recomputes_chunks_when_requested_but_chunk_options_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int | None] = []
+    _RepoBackedWorkerDB.instances = []
+    _FakeMediaRepository.calls = []
+
+    async def _fake_enforce(**kwargs: Any) -> None:
+        calls.append(kwargs.get("expected_chunk_count"))
+
+    async def _fake_persist_claims(**_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "_enforce_chunk_consistency_after_persist",
+        _fake_enforce,
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "persist_claims_if_applicable",
+        _fake_persist_claims,
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "create_media_database",
+        _fake_create_media_database,
+    )
+    monkeypatch.setattr(
+        ingestion_persistence,
+        "get_media_repository",
+        lambda db: _FakeMediaRepository(),
+        raising=False,
+    )
+
+    process_result = {
+        "status": "Success",
+        "input_ref": "clip.mp3",
+        "processing_source": "clip.mp3",
+        "metadata": {"model": "parakeet-mlx"},
+        "content": "hello world. second sentence.",
+        "transcript": "hello world. second sentence.",
+        "summary": None,
+        "analysis": None,
+        "analysis_details": {},
+        "warnings": None,
+        "error": None,
+    }
+
+    await ingestion_persistence.persist_primary_av_item(
+        process_result=process_result,
+        form_data=SimpleNamespace(
+            keywords=[],
+            custom_prompt=None,
+            overwrite_existing=True,
+            transcription_model="parakeet-mlx",
+            chunk_consistency_policy="warn",
+            perform_chunking=True,
+            media_type="audio",
+            transcription_language="en",
+        ),
+        media_type="audio",
+        original_input_ref="clip.mp3",
+        chunk_options=None,
+        path_kind="upload",
+        db_path=":memory:",
+        client_id="test-client",
+        loop=asyncio.get_running_loop(),
+        claims_context=None,
+    )
+
+    assert process_result.get("db_id") == 1
+    assert len(_FakeMediaRepository.calls) == 1
+    persisted_chunks = _FakeMediaRepository.calls[0]["chunks"]
+    assert isinstance(persisted_chunks, list)
+    assert len(persisted_chunks) == 1
+    assert calls == [1]
+
+
+@pytest.mark.asyncio
 async def test_persist_doc_item_and_children_routes_email_parent_and_child_through_media_repository(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

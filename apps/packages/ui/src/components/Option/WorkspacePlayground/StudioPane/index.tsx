@@ -269,6 +269,137 @@ const renderArtifactModalContent = (node: React.ReactNode) => (
   </Suspense>
 )
 
+type BrowserSpeechArtifactViewerProps = {
+  content: string
+  playbackRate?: number
+}
+
+const BrowserSpeechArtifactViewer: React.FC<BrowserSpeechArtifactViewerProps> = ({
+  content,
+  playbackRate = 1
+}) => {
+  const { t } = useTranslation(["playground", "common"])
+  const [speechState, setSpeechState] = useState<
+    "idle" | "speaking" | "paused" | "unavailable"
+  >(
+    typeof window === "undefined" || !("speechSynthesis" in window)
+      ? "unavailable"
+      : "idle"
+  )
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window &&
+        utteranceRef.current
+      ) {
+        window.speechSynthesis.cancel()
+      }
+      utteranceRef.current = null
+    }
+  }, [])
+
+  const handlePlay = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeechState("unavailable")
+      return
+    }
+
+    const synthesis = window.speechSynthesis
+    if (speechState === "paused" && synthesis.paused) {
+      synthesis.resume()
+      setSpeechState("speaking")
+      return
+    }
+
+    synthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(content)
+    utterance.rate = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1
+    utterance.onstart = () => setSpeechState("speaking")
+    utterance.onpause = () => setSpeechState("paused")
+    utterance.onresume = () => setSpeechState("speaking")
+    utterance.onend = () => setSpeechState("idle")
+    utterance.onerror = () => setSpeechState("idle")
+    utteranceRef.current = utterance
+    synthesis.speak(utterance)
+    setSpeechState("speaking")
+  }
+
+  const handlePauseToggle = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeechState("unavailable")
+      return
+    }
+
+    const synthesis = window.speechSynthesis
+    if (synthesis.paused) {
+      synthesis.resume()
+      setSpeechState("speaking")
+      return
+    }
+
+    if (synthesis.speaking) {
+      synthesis.pause()
+      setSpeechState("paused")
+    }
+  }
+
+  const handleStop = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSpeechState("unavailable")
+      return
+    }
+
+    window.speechSynthesis.cancel()
+    utteranceRef.current = null
+    setSpeechState("idle")
+  }
+
+  const statusText =
+    speechState === "speaking"
+      ? t("playground:studio.browserAudioSpeaking", "Speaking in your browser.")
+      : speechState === "paused"
+        ? t("playground:studio.browserAudioPaused", "Browser speech is paused.")
+        : speechState === "unavailable"
+          ? t(
+              "playground:studio.browserAudioUnavailable",
+              "Browser speech playback is unavailable in this environment."
+            )
+          : t(
+              "playground:studio.browserAudioReady",
+              "Use your browser to play this audio summary."
+            )
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="primary" onClick={handlePlay}>
+          {speechState === "paused"
+            ? t("common:resume", "Resume")
+            : t("common:play", "Play")}
+        </Button>
+        <Button
+          onClick={handlePauseToggle}
+          disabled={speechState !== "speaking" && speechState !== "paused"}
+        >
+          {speechState === "paused"
+            ? t("common:resume", "Resume")
+            : t("common:pause", "Pause")}
+        </Button>
+        <Button onClick={handleStop} disabled={speechState === "idle"}>
+          {t("common:stop", "Stop")}
+        </Button>
+      </div>
+      <p className="text-sm text-text-muted">{statusText}</p>
+      <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded bg-surface2 p-3 text-sm">
+        {content}
+      </div>
+    </div>
+  )
+}
+
 const renderQuickNotesSection = (onCollapse: () => void) => (
   <Suspense
     fallback={
@@ -652,6 +783,24 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           </div>
         ),
         ...responsiveModalProps(500)
+      })
+      return
+    }
+
+    if (
+      artifact.type === "audio_overview" &&
+      artifact.audioFormat === "browser" &&
+      artifact.content
+    ) {
+      Modal.info({
+        title: artifact.title,
+        content: (
+          <BrowserSpeechArtifactViewer
+            content={artifact.content}
+            playbackRate={audioSettings.speed}
+          />
+        ),
+        ...responsiveModalProps(560)
       })
       return
     }

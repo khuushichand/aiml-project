@@ -84,6 +84,10 @@ export const CHAT_BACKGROUND_IMAGE_SETTING = defineSetting(
   coerceOptionalString
 )
 
+export const CHAT_BACKGROUND_IMAGE_MAX_SIZE_MB = 15
+export const CHAT_BACKGROUND_IMAGE_MAX_BASE64_LENGTH =
+  CHAT_BACKGROUND_IMAGE_MAX_SIZE_MB * 1_000_000
+
 const SPLASH_CARD_NAME_SET = new Set(DEFAULT_SPLASH_CARD_NAMES)
 
 const coerceSplashCardNameArray = (value: unknown): string[] => {

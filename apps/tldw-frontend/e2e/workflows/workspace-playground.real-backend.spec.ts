@@ -137,6 +137,59 @@ type RagSearchCall = {
 const normalizeWhitespace = (value: string): string =>
   value.replace(/\s+/g, " ").trim()
 
+const normalizeAssistantMessageText = (value: string): string =>
+  value
+    .replace(/▋/g, "")
+    .split(/\n+/)
+    .map((line) => normalizeWhitespace(line))
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !/^(Mood:|Response complete$|Loading content(?:\.{3}|…)?)$/i.test(line)
+    )
+    .join(" ")
+
+const waitForCompletedAssistantReply = async (
+  workspacePage: WorkspacePlaygroundPage
+): Promise<string> => {
+  const assistantMessage = workspacePage.chatPanel.locator(
+    "article[aria-label*='Assistant message'], [data-role='assistant'], [data-message-role='assistant'], .assistant-message"
+  ).last()
+
+  await expect(assistantMessage).toBeVisible({ timeout: 30_000 })
+
+  const readCompletedReply = async (): Promise<string> => {
+    const isGenerating = await assistantMessage
+      .getByText(/Generating response/i)
+      .isVisible()
+      .catch(() => false)
+    const hasStopStreaming = await assistantMessage
+      .getByRole("button", {
+        name: /Stop streaming response|Stop Streaming/i
+      })
+      .isVisible()
+      .catch(() => false)
+    const text = normalizeAssistantMessageText(
+      (await assistantMessage.textContent().catch(() => "")) || ""
+    )
+
+    if (isGenerating || hasStopStreaming) {
+      return ""
+    }
+
+    return text
+  }
+
+  await expect
+    .poll(readCompletedReply, {
+      timeout: 90_000,
+      message: "Timed out waiting for the grounded workspace assistant reply"
+    })
+    .not.toBe("")
+
+  return readCompletedReply()
+}
+
 const seedLiveWorkspaceDocument = async (
   title: string,
   content: string
@@ -412,12 +465,14 @@ test.describe("Workspace Playground Workflow (Real Backend)", () => {
       expect(ragCall.requestBody.include_media_ids).toEqual([selectedSource.mediaId])
       expect(ragCall.requestBody.sources).toEqual(["media_db"])
       expect(String(ragCall.requestBody.query ?? "")).toContain(probeToken)
-      expect(
-        String(ragCall.responseBody?.generated_answer ?? "").trim().length
-      ).toBeGreaterThan(0)
       await expect(workspacePage.chatPanel.getByText(question)).toBeVisible({
         timeout: 10_000
       })
+      const groundedReply = await waitForCompletedAssistantReply(workspacePage)
+      expect(groundedReply.length).toBeGreaterThan(0)
+      expect(groundedReply).not.toMatch(
+        /cannot reach server|unable to reach server|request failed|connection/i
+      )
 
       await ensureNoServerReachabilityDialog(authedPage)
     } finally {

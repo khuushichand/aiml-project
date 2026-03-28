@@ -38,6 +38,10 @@ import {
   resolveCharacterMoodImageUrl
 } from "@/utils/character-mood"
 import type { PlaygroundMessageProps } from "./message-types"
+import {
+  DEFAULT_TLDW_TTS_MODEL,
+  DEFAULT_TTS_PROVIDER
+} from "@/services/tts"
 
 export type MessageStateProps = PlaygroundMessageProps & { sources?: any[] }
 
@@ -250,8 +254,8 @@ export function useMessageState(props: MessageStateProps) {
     moodConfidenceDefault
   )
   const [userPersonaImage] = useStorage("chatUserPersonaImage", "")
-  const [ttsProvider] = useStorage("ttsProvider", "browser")
-  const [tldwTtsModel] = useStorage("tldwTtsModel", "kokoro")
+  const [ttsProvider] = useStorage("ttsProvider", DEFAULT_TTS_PROVIDER)
+  const [tldwTtsModel] = useStorage("tldwTtsModel", DEFAULT_TLDW_TTS_MODEL)
 
   // ── Translation ───────────────────────────────────────────────────────────
   const { t } = useTranslation(["common", "playground"])
