@@ -79,6 +79,79 @@ export class WorkspacePlaygroundPage {
     await this.disableNextJsPortalPointerInterception()
   }
 
+  async setStudyMaterialsPolicy(policy: "general" | "workspace"): Promise<void> {
+    await this.page.evaluate((nextPolicy) => {
+      const store = (window as { __tldw_useWorkspaceStore?: unknown })
+        .__tldw_useWorkspaceStore as
+        | {
+            setState?: (state: { studyMaterialsPolicy: "general" | "workspace" }) => void
+          }
+        | undefined
+
+      if (!store?.setState) {
+        throw new Error("Workspace store is unavailable on window")
+      }
+
+      store.setState({ studyMaterialsPolicy: nextPolicy })
+    }, policy)
+  }
+
+  async getWorkspaceId(): Promise<string | null> {
+    return await this.page.evaluate(() => {
+      const store = (window as { __tldw_useWorkspaceStore?: unknown })
+        .__tldw_useWorkspaceStore as
+        | {
+            getState?: () => { workspaceId?: string | null }
+          }
+        | undefined
+
+      return store?.getState?.().workspaceId ?? null
+    })
+  }
+
+  async getGeneratedArtifactRecord(
+    artifactType: "quiz" | "flashcards",
+  ): Promise<{
+    id: string
+    title: string
+    status: string
+    serverId: number | string | null
+    data: Record<string, unknown> | null
+  } | null> {
+    return await this.page.evaluate((nextType) => {
+      const store = (window as { __tldw_useWorkspaceStore?: unknown })
+        .__tldw_useWorkspaceStore as
+        | {
+            getState?: () => {
+              generatedArtifacts?: Array<{
+                id: string
+                title: string
+                status: string
+                serverId?: number | string | null
+                data?: Record<string, unknown> | null
+                type?: string
+              }>
+            }
+          }
+        | undefined
+
+      const artifact = store?.getState?.().generatedArtifacts?.find(
+        (entry) => entry.type === nextType
+      )
+      if (!artifact) {
+        return null
+      }
+
+      return {
+        id: artifact.id,
+        title: artifact.title,
+        status: artifact.status,
+        serverId: artifact.serverId ?? null,
+        data: artifact.data ?? null,
+      }
+    }, artifactType)
+  }
+
   async waitForReady(): Promise<void> {
     await expect(this.workspacesButton).toBeVisible({ timeout: 30_000 })
     await expect(this.chatPanel).toBeVisible({ timeout: 30_000 })

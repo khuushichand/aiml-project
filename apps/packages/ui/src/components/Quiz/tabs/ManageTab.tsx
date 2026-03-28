@@ -64,6 +64,26 @@ interface ManageTabProps {
   onExternalSearchHandled?: () => void
 }
 
+export const buildQuizManageQueryParams = ({
+  searchQuery,
+  page,
+  pageSize,
+  showWorkspaceQuizzes,
+  selectedWorkspaceId
+}: {
+  searchQuery: string
+  page: number
+  pageSize: number
+  showWorkspaceQuizzes: boolean
+  selectedWorkspaceId?: string | null
+}) => ({
+  q: searchQuery.trim() || undefined,
+  limit: pageSize,
+  offset: (page - 1) * pageSize,
+  workspace_id: selectedWorkspaceId ?? undefined,
+  include_workspace_items: selectedWorkspaceId == null ? showWorkspaceQuizzes : false
+})
+
 type QuestionDraft = {
   id?: number
   question_type: QuestionType
@@ -469,6 +489,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const [messageApi, contextHolder] = message.useMessage()
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(10)
+  const [showWorkspaceQuizzes, setShowWorkspaceQuizzes] = React.useState(false)
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = React.useState<string | null>(null)
   const [editingQuiz, setEditingQuiz] = React.useState<Quiz | null>(null)
   const [editModalOpen, setEditModalOpen] = React.useState(false)
   const [questionModalOpen, setQuestionModalOpen] = React.useState(false)
@@ -589,12 +611,19 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     }
   }, [])
 
-  const offset = (page - 1) * pageSize
-  const { data, isLoading, refetch } = useQuizzesQuery({
-    q: searchQuery || undefined,
-    limit: pageSize,
-    offset
-  })
+  const queryParams = React.useMemo(
+    () =>
+      buildQuizManageQueryParams({
+        searchQuery,
+        page,
+        pageSize,
+        showWorkspaceQuizzes,
+        selectedWorkspaceId
+      }),
+    [page, pageSize, searchQuery, selectedWorkspaceId, showWorkspaceQuizzes]
+  )
+  const offset = queryParams.offset
+  const { data, isLoading, refetch } = useQuizzesQuery(queryParams)
   const createQuizMutation = useCreateQuizMutation()
   const deleteMutation = useDeleteQuizMutation()
   const updateQuizMutation = useUpdateQuizMutation()
@@ -615,6 +644,29 @@ export const ManageTab: React.FC<ManageTabProps> = ({
   const allQuizzes = data?.items ?? []
   const quizzes = allQuizzes.filter((q) => !deletedQuizIds.has(q.id))
   const total = data?.count ?? 0
+  const workspaceFilterOptions = React.useMemo(() => {
+    const workspaceIds = new Set<string>()
+    allQuizzes.forEach((quiz) => {
+      const rawWorkspaceId =
+        typeof quiz.workspace_id === "string" && quiz.workspace_id.trim().length > 0
+          ? quiz.workspace_id.trim()
+          : typeof quiz.workspace_tag === "string" && quiz.workspace_tag.startsWith("workspace:")
+            ? quiz.workspace_tag.slice("workspace:".length).trim()
+            : ""
+      if (rawWorkspaceId.length > 0) {
+        workspaceIds.add(rawWorkspaceId)
+      }
+    })
+    if (selectedWorkspaceId) {
+      workspaceIds.add(selectedWorkspaceId)
+    }
+    return Array.from(workspaceIds)
+      .sort((left, right) => left.localeCompare(right))
+      .map((workspaceId) => ({
+        label: workspaceId,
+        value: workspaceId
+      }))
+  }, [allQuizzes, selectedWorkspaceId])
   const allQuestions = (questionsQuery.data?.items ?? []) as Question[]
   const questions = allQuestions.filter((q) => !deletedQuestionIds.has(q.id))
   const questionTotal = questionsQuery.data?.count ?? 0
@@ -1309,7 +1361,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       timeLimit: editingQuiz.time_limit_seconds
         ? Math.round(editingQuiz.time_limit_seconds / 60)
         : undefined,
-      passingScore: editingQuiz.passing_score ?? undefined
+      passingScore: editingQuiz.passing_score ?? undefined,
+      workspaceId: editingQuiz.workspace_id ?? ""
     })
   }, [editingQuiz, editForm])
 
@@ -1333,6 +1386,9 @@ export const ManageTab: React.FC<ManageTabProps> = ({
     if (!editingQuiz) return
     try {
       const values = await editForm.validateFields()
+      const workspaceId = typeof values.workspaceId === "string"
+        ? values.workspaceId.trim()
+        : ""
       await updateQuizMutation.mutateAsync({
         quizId: editingQuiz.id,
         update: {
@@ -1340,6 +1396,8 @@ export const ManageTab: React.FC<ManageTabProps> = ({
           description: values.description || null,
           time_limit_seconds: values.timeLimit ? values.timeLimit * 60 : null,
           passing_score: values.passingScore ?? null,
+          workspace_id: workspaceId.length > 0 ? workspaceId : null,
+          workspace_tag: workspaceId.length > 0 ? `workspace:${workspaceId}` : null,
           expected_version: editingQuiz.version
         }
       })
@@ -1739,15 +1797,45 @@ export const ManageTab: React.FC<ManageTabProps> = ({
       />
 
       <div className="flex justify-between items-center">
-        <Input
-          ref={searchInputRef}
-          placeholder={t("option:quiz.searchQuizzes", { defaultValue: "Search quizzes..." })}
-          prefix={<SearchOutlined />}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="max-w-xs"
-          allowClear
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          <Input
+            ref={searchInputRef}
+            placeholder={t("option:quiz.searchQuizzes", { defaultValue: "Search quizzes..." })}
+            prefix={<SearchOutlined />}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="max-w-xs"
+            allowClear
+          />
+          <Checkbox
+            checked={showWorkspaceQuizzes}
+            onChange={(event) => {
+              setShowWorkspaceQuizzes(event.target.checked)
+              if (!event.target.checked) {
+                setSelectedWorkspaceId(null)
+              }
+              setPage(1)
+            }}
+            aria-label={t("option:quiz.showWorkspaceQuizzes", { defaultValue: "Show workspace quizzes" })}
+            data-testid="quiz-manage-show-workspace-quizzes"
+          >
+            {t("option:quiz.showWorkspaceQuizzes", { defaultValue: "Show workspace quizzes" })}
+          </Checkbox>
+          <Select<string>
+            allowClear
+            showSearch
+            placeholder={t("option:quiz.filterWorkspace", { defaultValue: "Filter workspace" })}
+            value={selectedWorkspaceId ?? undefined}
+            onChange={(value) => {
+              setSelectedWorkspaceId(value ?? null)
+              setPage(1)
+            }}
+            disabled={!showWorkspaceQuizzes && selectedWorkspaceId == null}
+            options={workspaceFilterOptions}
+            className="min-w-44"
+            data-testid="quiz-manage-workspace-filter"
+          />
+        </div>
         <Space>
           <Button onClick={onNavigateToGenerate}>
             {t("option:quiz.generateNew", { defaultValue: "Generate New" })}
@@ -2068,6 +2156,16 @@ export const ManageTab: React.FC<ManageTabProps> = ({
             label={t("option:quiz.description", { defaultValue: "Description" })}
           >
             <Input.TextArea rows={2} />
+          </Form.Item>
+
+          <Form.Item
+            name="workspaceId"
+            label={t("option:quiz.workspaceId", { defaultValue: "Workspace ID" })}
+          >
+            <Input
+              aria-label={t("option:quiz.workspaceId", { defaultValue: "Workspace ID" })}
+              placeholder={t("option:quiz.workspaceIdPlaceholder", { defaultValue: "Leave blank for general scope" })}
+            />
           </Form.Item>
 
           <div className="grid grid-cols-2 gap-4">

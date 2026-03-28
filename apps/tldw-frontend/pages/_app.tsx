@@ -9,7 +9,9 @@ import type { AppProps } from "next/app"
 import dynamic from "next/dynamic"
 import { useRouter } from "next/router"
 import React from "react"
+import { BackendRecoveryUiProvider } from "@/components/Common/BackendRecoveryUiContext"
 import { AppProviders } from "@web/components/AppProviders"
+import ErrorBoundary from "@web/components/ErrorBoundary"
 import { ConfigurationGuard } from "@web/components/networking/ConfigurationGuard"
 import { loadTldwAuth, loadTldwClient } from "@web/lib/configured-auth-state"
 
@@ -256,17 +258,21 @@ export default function App({ Component, pageProps }: AppProps) {
   return (
     <AppProviders>
       <ConfigurationGuard>
-        {isPublicAuthRoute ? (
-          <Component {...pageProps} />
-        ) : (
-          <OptionLayout
-            hideHeader={hideShellNav}
-            hideSidebar={hideShellNav || isSettingsRoute}
-            allowNestedHideHeader={!isSettingsRoute}
-          >
-            <Component {...pageProps} />
-          </OptionLayout>
-        )}
+        <BackendRecoveryUiProvider routeRecoveryEnabled>
+          <ErrorBoundary>
+            {isPublicAuthRoute ? (
+              <Component {...pageProps} />
+            ) : (
+              <OptionLayout
+                hideHeader={hideShellNav}
+                hideSidebar={hideShellNav || isSettingsRoute}
+                allowNestedHideHeader={!isSettingsRoute}
+              >
+                <Component {...pageProps} />
+              </OptionLayout>
+            )}
+          </ErrorBoundary>
+        </BackendRecoveryUiProvider>
       </ConfigurationGuard>
     </AppProviders>
   )

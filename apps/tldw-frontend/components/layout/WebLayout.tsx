@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useState, useContext } from "react"
 
-import { Button, Drawer, Modal, Tooltip } from "antd"
+import { Drawer, Tooltip } from "antd"
 import { EraserIcon, XIcon } from "lucide-react"
 import { IconButton } from "@/components/Common/IconButton"
 import { useLocation, useNavigate } from "react-router-dom"
@@ -50,6 +50,8 @@ import {
   BACKEND_UNREACHABLE_EVENT,
   type BackendUnreachableDetail
 } from "@/services/request-events"
+import { useBackendRecoveryUi } from "@/components/Common/BackendRecoveryUiContext"
+import { BackendUnavailableModalGate } from "@web/components/layout/BackendUnavailableModalGate"
 import { CommandPalette } from "@/components/Common/CommandPalette"
 import {
   useConnectionActions,
@@ -114,6 +116,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { phase, isConnected } = useConnectionState()
   const { checkOnce } = useConnectionActions()
   const { isChecking } = useConnectionUxState()
+  const { fatalBackendRecoveryActive } = useBackendRecoveryUi()
   const [backendUnavailableDetail, setBackendUnavailableDetail] =
     useState<BackendUnreachableDetail | null>(null)
   const [chatBackgroundImage] = useSetting(CHAT_BACKGROUND_IMAGE_SETTING)
@@ -537,47 +540,16 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         {/* Workflow landing modal + active workflow overlay */}
         <WorkflowIntegrationHost autoShowPaths={["/"]} />
 
-        <Modal
-          title={t(
-            "sidepanel:connectionBanner.unreachableTitle",
-            "Can't reach your tldw server"
-          )}
-          open={Boolean(backendUnavailableDetail)}
-          onCancel={closeBackendUnavailableModal}
-          maskClosable={false}
-          destroyOnHidden
-          footer={[
-            <Button key="dismiss" onClick={closeBackendUnavailableModal}>
-              {t("common:dismiss", "Dismiss")}
-            </Button>,
-            <Button key="health" onClick={openHealthDiagnostics}>
-              {t(
-                "settings:healthSummary.diagnostics",
-                "Health & diagnostics"
-              )}
-            </Button>,
-            <Button
-              key="retry"
-              type="primary"
-              loading={isChecking}
-              onClick={retryConnectionCheck}
-            >
-              {t("common:retry", "Retry")}
-            </Button>
-          ]}
-        >
-          <p className="text-sm text-text">
-            {t(
-              "sidepanel:connectionBanner.unreachableBody",
-              "Check that your server is running and accessible."
-            )}
-          </p>
-          {backendUnavailableDetail && (
-            <p className="mt-2 break-all text-xs text-text-subtle">
-              {`${backendUnavailableDetail.message} (${backendUnavailableDetail.method} ${backendUnavailableDetail.path})`}
-            </p>
-          )}
-        </Modal>
+        <BackendUnavailableModalGate
+          backendUnavailableDetail={backendUnavailableDetail}
+          fatalBackendRecoveryActive={fatalBackendRecoveryActive}
+          isChecking={isChecking}
+          onClose={closeBackendUnavailableModal}
+          onConsumeHiddenDetail={closeBackendUnavailableModal}
+          onOpenHealth={openHealthDiagnostics}
+          onRetry={retryConnectionCheck}
+          t={t}
+        />
       </main>
     </div>
   )

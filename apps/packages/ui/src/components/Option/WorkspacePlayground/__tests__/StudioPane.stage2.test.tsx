@@ -13,15 +13,19 @@ const { mockScheduleWorkspaceUndoAction, mockUndoWorkspaceAction } = vi.hoisted(
 
 const {
   mockGenerateQuiz,
+  mockCreateQuiz,
+  mockCreateQuestion,
   mockGenerateFlashcardsService,
   mockListDecks,
   mockCreateDeck,
   mockCreateFlashcard,
+  mockCreateFlashcardsBulk,
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
   mockCreateChatCompletion,
   mockGetMediaDetails,
+  mockUpsertWorkspace,
   mockAddArtifact,
   mockUpdateArtifactStatus,
   mockRemoveArtifact,
@@ -37,15 +41,19 @@ const {
   workspaceStoreState
 } = vi.hoisted(() => {
   const generateQuiz = vi.fn()
+  const createQuiz = vi.fn()
+  const createQuestion = vi.fn()
   const generateFlashcardsService = vi.fn()
   const listDecks = vi.fn()
   const createDeck = vi.fn()
   const createFlashcard = vi.fn()
+  const createFlashcardsBulk = vi.fn()
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
   const createChatCompletion = vi.fn()
   const getMediaDetails = vi.fn()
+  const upsertWorkspace = vi.fn()
 
   const addArtifact = vi.fn()
   const updateArtifactStatus = vi.fn()
@@ -74,6 +82,8 @@ const {
     selectedSourceIds: ["source-1"],
     selectedSourceFolderIds: [] as string[],
     sources: defaultSources,
+    workspaceId: "workspace-a",
+    workspaceName: "Workspace A",
     getSelectedMediaIds: () => [101],
     getEffectiveSelectedSources: () =>
       state.sources.filter((source: { id: string }) =>
@@ -87,6 +97,7 @@ const {
     isGeneratingOutput: false,
     generatingOutputType: null as any,
     workspaceTag: "workspace:test",
+    studyMaterialsPolicy: "workspace",
     audioSettings: {
       provider: "tldw" as const,
       model: "kokoro",
@@ -134,15 +145,19 @@ const {
 
   return {
     mockGenerateQuiz: generateQuiz,
+    mockCreateQuiz: createQuiz,
+    mockCreateQuestion: createQuestion,
     mockGenerateFlashcardsService: generateFlashcardsService,
     mockListDecks: listDecks,
     mockCreateDeck: createDeck,
     mockCreateFlashcard: createFlashcard,
+    mockCreateFlashcardsBulk: createFlashcardsBulk,
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
     mockCreateChatCompletion: createChatCompletion,
     mockGetMediaDetails: getMediaDetails,
+    mockUpsertWorkspace: upsertWorkspace,
     mockAddArtifact: addArtifact,
     mockUpdateArtifactStatus: updateArtifactStatus,
     mockRemoveArtifact: removeArtifact,
@@ -215,14 +230,17 @@ vi.mock("@/services/tts-provider", () => ({
 }))
 
 vi.mock("@/services/quizzes", () => ({
-  generateQuiz: mockGenerateQuiz
+  generateQuiz: mockGenerateQuiz,
+  createQuiz: mockCreateQuiz,
+  createQuestion: mockCreateQuestion
 }))
 
 vi.mock("@/services/flashcards", () => ({
   generateFlashcards: mockGenerateFlashcardsService,
   listDecks: mockListDecks,
   createDeck: mockCreateDeck,
-  createFlashcard: mockCreateFlashcard
+  createFlashcard: mockCreateFlashcard,
+  createFlashcardsBulk: mockCreateFlashcardsBulk
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -233,6 +251,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     listVisualStyles: vi.fn().mockResolvedValue([]),
     createChatCompletion: mockCreateChatCompletion,
     getMediaDetails: mockGetMediaDetails,
+    upsertWorkspace: mockUpsertWorkspace,
     exportPresentation: vi.fn(),
     downloadOutput: vi.fn()
   }
@@ -363,11 +382,14 @@ describe("StudioPane Stage 2 workflows", () => {
         addedAt: new Date("2026-02-18T00:00:00.000Z")
       }
     ]
+    workspaceStoreState.workspaceId = "workspace-a"
+    workspaceStoreState.workspaceName = "Workspace A"
     workspaceStoreState.getSelectedMediaIds = () => [101]
     workspaceStoreState.generatedArtifacts = []
     workspaceStoreState.isGeneratingOutput = false
     workspaceStoreState.generatingOutputType = null
     workspaceStoreState.noteFocusTarget = null
+    workspaceStoreState.studyMaterialsPolicy = "workspace"
     mockCaptureToCurrentNote.mockReset()
     messageOptionStoreState.selectedModel = "gpt-4o-mini"
     chatModelSettingsStoreState.apiProvider = undefined
@@ -415,6 +437,11 @@ describe("StudioPane Stage 2 workflows", () => {
     mockGetChatModels.mockResolvedValue([])
     mockCreateDeck.mockResolvedValue({ id: 1, name: "Workspace Flashcards" })
     mockCreateFlashcard.mockResolvedValue({ uuid: "card-1" })
+    mockCreateFlashcardsBulk.mockResolvedValue({
+      items: [{ uuid: "card-1", deck_id: 4 }],
+      count: 1,
+      total: 1
+    })
     mockRagSearch.mockResolvedValue({ generation: "summary" })
     mockSynthesizeSpeech.mockResolvedValue(new ArrayBuffer(8))
     mockGenerateSlidesFromMedia.mockResolvedValue({
@@ -425,16 +452,25 @@ describe("StudioPane Stage 2 workflows", () => {
       version: 1,
       created_at: "2026-02-18T00:00:00.000Z"
     })
-    mockGenerateQuiz.mockResolvedValue({
-      quiz: { id: 11, name: "Quiz", description: "" },
-      questions: [
-        {
-          question_text: "Q",
-          options: ["A", "B"],
-          correct_answer: "A",
-          explanation: "Because"
-        }
-      ]
+    mockCreateQuiz.mockResolvedValue({ id: 11, name: "Quiz", description: "" })
+    mockUpsertWorkspace.mockResolvedValue({
+      id: "workspace-a",
+      name: "Workspace A",
+      study_materials_policy: "workspace"
+    })
+    mockCreateQuestion.mockResolvedValue({
+      id: 21,
+      quiz_id: 11,
+      question_type: "multiple_choice",
+      question_text: "Q",
+      options: ["A", "B"],
+      correct_answer: "A",
+      explanation: "Because",
+      points: 1,
+      order_index: 0,
+      deleted: false,
+      client_id: "test",
+      version: 1
     })
   })
 
@@ -511,7 +547,7 @@ describe("StudioPane Stage 2 workflows", () => {
     )
   })
 
-  it("generates quiz content across all selected media", async () => {
+  it("generates one quiz from the selected source bundle", async () => {
     workspaceStoreState.selectedSourceIds = ["source-1", "source-2"]
     workspaceStoreState.getSelectedMediaIds = () => [101, 202]
     workspaceStoreState.sources = [
@@ -535,21 +571,154 @@ describe("StudioPane Stage 2 workflows", () => {
 
     renderStudioPane()
 
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "Project Falcon improved retention from 64 percent to 82 percent."
+      }
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: "Workspace Quiz",
+                  description: "Quiz description",
+                  questions: [
+                    {
+                      question_type: "multiple_choice",
+                      question_text: "What improved to 82 percent?",
+                      options: ["Retention", "Rollout", "Revenue"],
+                      correct_answer: "Retention",
+                      explanation: "The source states retention improved to 82 percent."
+                    }
+                  ]
+                })
+              }
+            }
+          ],
+          usage: {
+            total_tokens: 42
+          }
+        })
+      )
+    )
+
     fireEvent.click(screen.getByRole("button", { name: "Quiz" }))
 
     await waitFor(() => {
-      expect(mockGenerateQuiz).toHaveBeenCalledTimes(2)
+      expect(mockCreateQuiz).toHaveBeenCalledTimes(1)
     })
 
-    expect(mockGenerateQuiz).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ media_id: 101 }),
+    expect(mockCreateChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-4o-mini",
+        response_format: { type: "json_object" }
+      }),
       expect.any(Object)
     )
-    expect(mockGenerateQuiz).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ media_id: 202 }),
-      expect.any(Object)
+
+    expect(mockUpsertWorkspace).toHaveBeenCalledWith("workspace-a", {
+      name: "Workspace A",
+      study_materials_policy: "workspace"
+    })
+
+    expect(mockCreateQuiz).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Workspace Quiz",
+        description: "Quiz description",
+        media_id: 101,
+        source_bundle_json: [
+          { source_type: "media", source_id: "101" },
+          { source_type: "media", source_id: "202" }
+        ],
+        workspace_id: "workspace-a"
+      }),
+    )
+
+    expect(mockCreateQuestion).toHaveBeenCalledTimes(1)
+
+    expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/^artifact-/),
+      "completed",
+      expect.objectContaining({
+        serverId: 11,
+        data: expect.objectContaining({
+          quizId: 11,
+          sourceMediaIds: [101, 202],
+          sourceBundle: [
+            { source_type: "media", source_id: "101" },
+            { source_type: "media", source_id: "202" }
+          ]
+        })
+      })
+    )
+  })
+
+  it("keeps quiz ownership general when studyMaterialsPolicy is null", async () => {
+    workspaceStoreState.selectedSourceIds = ["source-1"]
+    workspaceStoreState.getSelectedMediaIds = () => [101]
+    workspaceStoreState.sources = [
+      {
+        id: "source-1",
+        mediaId: 101,
+        title: "DSPy Prompting Talk",
+        type: "video",
+        status: "ready",
+        addedAt: new Date("2026-02-18T00:00:00.000Z")
+      }
+    ] as WorkspaceSource[]
+    workspaceStoreState.studyMaterialsPolicy = null
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "Project Falcon improved retention from 64 percent to 82 percent."
+      }
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: "Workspace Quiz",
+                  questions: [
+                    {
+                      question_type: "multiple_choice",
+                      question_text: "What improved to 82 percent?",
+                      options: ["Retention", "Rollout", "Revenue"],
+                      correct_answer: "Retention"
+                    }
+                  ]
+                })
+              }
+            }
+          ]
+        })
+      )
+    )
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Quiz" }))
+
+    await waitFor(() => {
+      expect(mockCreateQuiz).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mockUpsertWorkspace).not.toHaveBeenCalled()
+    expect(mockCreateQuiz.mock.calls[0]?.[0]).not.toHaveProperty("workspace_id")
+    expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/^artifact-/),
+      "completed",
+      expect.objectContaining({
+        data: expect.objectContaining({
+          workspaceId: null
+        })
+      })
     )
   })
 
@@ -864,7 +1033,7 @@ describe("StudioPane Stage 2 workflows", () => {
     })
   })
 
-  it("uses structured flashcard generation with selected source content", async () => {
+  it("uses structured flashcard generation with one scoped deck and bulk saves", async () => {
     mockListDecks.mockResolvedValue([
       { id: 4, name: "Biology Deck", card_count: 0, created_at: null, updated_at: null }
     ])
@@ -893,7 +1062,7 @@ describe("StudioPane Stage 2 workflows", () => {
     fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
 
     await waitFor(() => {
-      expect(mockCreateFlashcard).toHaveBeenCalled()
+      expect(mockCreateFlashcardsBulk).toHaveBeenCalledTimes(1)
     })
 
     expect(mockGenerateFlashcardsService).toHaveBeenCalledWith(
@@ -909,15 +1078,110 @@ describe("StudioPane Stage 2 workflows", () => {
       })
     )
     expect(mockRagSearch).not.toHaveBeenCalled()
-    expect(mockCreateFlashcard).toHaveBeenCalledWith(
+    expect(mockCreateFlashcardsBulk).toHaveBeenCalledWith([
       expect.objectContaining({
         deck_id: 4,
         front: "ATP",
         back: "Cellular energy",
         source_ref_id: "101"
-      }),
-      expect.any(Object)
+      })
+    ], expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(mockCreateFlashcard).not.toHaveBeenCalled()
+    expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/^artifact-/),
+      "completed",
+      expect.objectContaining({
+        serverId: 4,
+        data: expect.objectContaining({
+          deckId: 4,
+          sourceMediaIds: [101]
+        })
+      })
     )
+  }, 15000)
+
+  it("falls back to per-card flashcard saves when bulk save rejects", async () => {
+    mockListDecks.mockResolvedValue([])
+    mockGenerateFlashcardsService.mockResolvedValue({
+      flashcards: [
+        { front: "ATP", back: "Cellular energy" },
+        { front: "ADP", back: "Lower energy" }
+      ],
+      count: 2
+    })
+    mockCreateDeck.mockResolvedValue({
+      id: 9,
+      name: "Workspace A Flashcards"
+    })
+    mockCreateFlashcardsBulk.mockRejectedValueOnce(new Error("Bulk flashcard save failed"))
+    mockCreateFlashcard
+      .mockResolvedValueOnce({ uuid: "card-a" })
+      .mockRejectedValueOnce(new Error("Second card failed"))
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
+
+    await waitFor(() => {
+    expect(mockCreateFlashcardsBulk).toHaveBeenCalledTimes(1)
+    })
+
+    await waitFor(() => {
+      expect(mockCreateFlashcard).toHaveBeenCalledTimes(2)
+    })
+
+    expect(mockCreateFlashcardsBulk).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+
+    expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+      expect.stringMatching(/^artifact-/),
+      "completed",
+      expect.objectContaining({
+        serverId: 9,
+        content: expect.stringContaining("Created 1 of 2 flashcards (1 failed)"),
+        data: expect.objectContaining({
+          deckId: 9,
+          sourceMediaIds: [101]
+        })
+      })
+    )
+  }, 15000)
+
+  it("does not fall back to per-card saves when bulk flashcard save aborts", async () => {
+    mockListDecks.mockResolvedValue([])
+    mockGenerateFlashcardsService.mockResolvedValue({
+      flashcards: [{ front: "ATP", back: "Cellular energy" }],
+      count: 1
+    })
+    mockCreateDeck.mockResolvedValue({
+      id: 12,
+      name: "Workspace A Flashcards"
+    })
+    const abortError = new Error("Aborted")
+    abortError.name = "AbortError"
+    mockCreateFlashcardsBulk.mockRejectedValueOnce(abortError)
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
+
+    await waitFor(() => {
+      expect(mockCreateFlashcardsBulk).toHaveBeenCalledTimes(1)
+    })
+
+    await waitFor(() => {
+      expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
+        expect.stringMatching(/^artifact-/),
+        "failed",
+        expect.objectContaining({
+          errorMessage: "Generation canceled before completion."
+        })
+      )
+    })
+
+    expect(mockCreateFlashcard).not.toHaveBeenCalled()
   }, 15000)
 
   it("falls back to the first available chat model for flashcards when no model is selected", async () => {

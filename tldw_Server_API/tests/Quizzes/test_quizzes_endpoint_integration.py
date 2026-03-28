@@ -318,21 +318,36 @@ def test_quiz_endpoints_reject_unknown_workspace_ids(
     assert payload["errors"][0]["error"] == "Workspace 'missing-ws' not found"
 
 
-def test_quiz_patch_rejects_workspace_tag_mutation(client_with_quizzes_db: TestClient):
+def test_quiz_patch_updates_workspace_scope_fields_together(client_with_quizzes_db: TestClient):
+    workspace_response = client_with_quizzes_db.put(
+        "/api/v1/workspaces/ws-1",
+        json={"name": "Workspace One"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_response.status_code == 200
+
     create_response = client_with_quizzes_db.post(
         "/api/v1/quizzes",
-        json={"name": "Quiz Tag Update Rejection"},
+        json={"name": "Quiz Scope Update", "workspace_id": "ws-1", "workspace_tag": "workspace:ws-1"},
         headers=AUTH_HEADERS,
     )
     assert create_response.status_code == 200
-    quiz_id = create_response.json()["id"]
+    created = create_response.json()
+    quiz_id = created["id"]
 
     update_response = client_with_quizzes_db.patch(
         f"/api/v1/quizzes/{quiz_id}",
-        json={"workspace_tag": "workspace:mutated"},
+        json={
+            "workspace_id": None,
+            "workspace_tag": None,
+            "expected_version": created["version"],
+        },
         headers=AUTH_HEADERS,
     )
-    assert update_response.status_code == 422
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["workspace_id"] is None
+    assert updated["workspace_tag"] is None
 
 
 def test_quiz_list_ignores_workspace_tag_query_param(client_with_quizzes_db: TestClient):

@@ -22087,6 +22087,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "name",
             "description",
             "workspace_id",
+            "workspace_tag",
             "media_id",
             "source_bundle_json",
             "time_limit_seconds",

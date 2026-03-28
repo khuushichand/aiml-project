@@ -380,6 +380,7 @@ export const createWorkspaceListSlice: WorkspaceSlice<WorkspaceListSliceActions>
           snapshot.workspaceCreatedAt ||
           savedWorkspace?.createdAt ||
           null,
+        studyMaterialsPolicy: snapshot.studyMaterialsPolicy ?? null,
         snapshot: buildWorkspaceBundleSnapshot(snapshot),
         ...(chatSession
           ? {
@@ -952,6 +953,7 @@ export const createWorkspaceListSlice: WorkspaceSlice<WorkspaceListSliceActions>
       workspaceId: clonedSnapshot.workspaceId,
       workspaceName: clonedSnapshot.workspaceName,
       workspaceTag: clonedSnapshot.workspaceTag,
+      studyMaterialsPolicy: clonedSnapshot.studyMaterialsPolicy ?? null,
       workspaceCreatedAt: reviveDateOrNull(clonedSnapshot.workspaceCreatedAt),
       workspaceChatReferenceId:
         clonedSnapshot.workspaceChatReferenceId ||

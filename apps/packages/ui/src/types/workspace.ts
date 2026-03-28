@@ -74,6 +74,32 @@ export type ArtifactType =
 
 export type ArtifactStatus = "pending" | "generating" | "completed" | "failed"
 
+export type StudyMaterialsPolicy = "general" | "workspace"
+
+export type WorkspaceStudyArtifactSource = {
+  source_type: string
+  source_id: string
+}
+
+export interface WorkspaceStudyArtifactData {
+  quizId?: number
+  deckId?: number
+  workspaceId?: string | null
+  sourceMediaIds?: number[]
+  sourceBundle?: WorkspaceStudyArtifactSource[]
+  questions?: Array<{
+    question: string
+    options: string[]
+    answer: string
+    explanation?: string
+    sourceMediaId?: number
+  }>
+  flashcards?: Array<{
+    front: string
+    back: string
+  }>
+}
+
 export interface GeneratedArtifact {
   id: string
   type: ArtifactType
@@ -91,7 +117,7 @@ export interface GeneratedArtifact {
   presentationId?: string // For slides - ID of the generated presentation
   presentationVersion?: number // For slides - version for export
   errorMessage?: string // If status is failed
-  data?: Record<string, unknown> // Optional structured artifact payload (quiz, flashcards, tables, etc.)
+  data?: WorkspaceStudyArtifactData & Record<string, unknown> // Optional structured artifact payload (quiz, flashcards, tables, etc.)
   createdAt: Date
   completedAt?: Date
 }

@@ -64,6 +64,48 @@ type QuizListCacheValue = {
   count: number
 }
 
+const normalizeWorkspaceId = (value?: string | null): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const normalizeWorkspaceTag = (value?: string | null): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const quizHasWorkspaceOwnership = (quiz: Quiz): boolean => (
+  normalizeWorkspaceId(quiz.workspace_id) != null ||
+  normalizeWorkspaceTag(quiz.workspace_tag) != null
+)
+
+const quizMatchesVisibility = (quiz: Quiz, params: QuizListParams): boolean => {
+  const workspaceId = normalizeWorkspaceId(params.workspace_id)
+  const includeWorkspaceItems = params.include_workspace_items ?? false
+  const quizWorkspaceId = normalizeWorkspaceId(quiz.workspace_id)
+  const quizWorkspaceTag = normalizeWorkspaceTag(quiz.workspace_tag)
+  const isWorkspaceOwned = quizHasWorkspaceOwnership(quiz)
+  const matchesSpecificWorkspace = workspaceId != null && (
+    quizWorkspaceId === workspaceId ||
+    quizWorkspaceTag === `workspace:${workspaceId}`
+  )
+
+  if (workspaceId != null) {
+    if (includeWorkspaceItems) {
+      return !isWorkspaceOwned || matchesSpecificWorkspace
+    }
+    return matchesSpecificWorkspace
+  }
+
+  if (includeWorkspaceItems) {
+    return true
+  }
+
+  return !isWorkspaceOwned
+}
+
 type OptimisticQuizContext = {
   previousLists: Array<[readonly unknown[], QuizListCacheValue | undefined]>
   previousDetail: Quiz | undefined
@@ -189,11 +231,11 @@ export function useCreateQuizMutation() {
         if (offset > 0) return
 
         const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined
-        const nextItems = [optimisticQuiz, ...previous.items]
+        const nextItems = [optimisticQuiz, ...previous.items].filter((quiz) => quizMatchesVisibility(quiz, params))
         qc.setQueryData(queryKey, {
           ...previous,
           items: limit ? nextItems.slice(0, limit) : nextItems,
-          count: previous.count + 1
+          count: previous.count + (quizMatchesVisibility(optimisticQuiz, params) ? 1 : 0)
         } satisfies QuizListCacheValue)
       })
 
@@ -248,14 +290,18 @@ export function useUpdateQuizMutation() {
       qc.setQueryData(["quizzes:detail", variables.quizId], (current: Quiz | undefined) => (
         current ? { ...current, ...patch } : current
       ))
-      qc.setQueriesData<QuizListCacheValue>({ queryKey: ["quizzes:list"] }, (current) => {
-        if (!current) return current
-        return {
-          ...current,
-          items: current.items.map((quiz) =>
-            quiz.id === variables.quizId ? { ...quiz, ...patch } : quiz
-          )
-        }
+      previousLists.forEach(([queryKey, previous]) => {
+        if (!previous) return
+        const params = extractQuizListParams(queryKey)
+        const nextItems = previous.items
+          .map((quiz) => (quiz.id === variables.quizId ? { ...quiz, ...patch } : quiz))
+          .filter((quiz) => quizMatchesVisibility(quiz, params))
+
+        qc.setQueryData(queryKey, {
+          ...previous,
+          items: nextItems,
+          count: nextItems.length
+        } satisfies QuizListCacheValue)
       })
 
       return {

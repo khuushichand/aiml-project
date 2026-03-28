@@ -12,6 +12,29 @@ import {
   parseFlashcardsStudyIntentFromLocation
 } from "@/services/tldw/quiz-flashcards-handoff"
 
+const parseInitialFlashcardsTab = (locationLike: { search?: string; hash?: string }): string | null => {
+  const search = locationLike.search || ""
+  const normalized = search.startsWith("?") ? search.slice(1) : search
+  const params = new URLSearchParams(normalized)
+  const rawTab = params.get("tab")?.trim().toLowerCase()
+
+  switch (rawTab) {
+    case "review":
+    case "study":
+      return "review"
+    case "manage":
+    case "cards":
+      return "cards"
+    case "transfer":
+    case "importexport":
+      return "importExport"
+    case "scheduler":
+      return "scheduler"
+    default:
+      return null
+  }
+}
+
 /**
  * FlashcardsManager contains all the tabs and core flashcard logic.
  * Connection state is handled by FlashcardsWorkspace.
@@ -39,8 +62,15 @@ export const FlashcardsManager: React.FC = () => {
         : null,
     []
   )
+  const initialTab = React.useMemo(
+    () =>
+      typeof window !== "undefined"
+        ? parseInitialFlashcardsTab(window.location)
+        : null,
+    []
+  )
   const [activeTab, setActiveTab] = React.useState<string>(() =>
-    initialGenerateIntent ? "importExport" : "review"
+    initialTab ?? (initialGenerateIntent ? "importExport" : "review")
   )
   const [reviewDeckId, setReviewDeckId] = React.useState<number | null | undefined>(
     initialStudyIntent?.deckId ?? undefined
@@ -94,9 +124,10 @@ export const FlashcardsManager: React.FC = () => {
       startQuizId,
       highlightQuizId: startQuizId,
       deckId: reviewDeckId ?? initialStudyIntent?.deckId,
-      sourceAttemptId: initialStudyIntent?.attemptId
+      sourceAttemptId: initialStudyIntent?.attemptId,
+      forceShowWorkspaceItems: initialStudyIntent?.forceShowWorkspaceItems ?? false
     })
-  }, [initialStudyIntent?.attemptId, initialStudyIntent?.deckId, initialStudyIntent?.quizId, reviewDeckId])
+  }, [initialStudyIntent?.attemptId, initialStudyIntent?.deckId, initialStudyIntent?.forceShowWorkspaceItems, initialStudyIntent?.quizId, reviewDeckId])
 
   const handleTabChange = React.useCallback(
     (nextTab: string) => {
@@ -163,6 +194,7 @@ export const FlashcardsManager: React.FC = () => {
                 reviewOverrideCard={reviewOverrideCard}
                 onClearOverride={() => setReviewOverrideCard(null)}
                 isActive={activeTab === "review"}
+                forceShowWorkspaceItems={initialStudyIntent?.forceShowWorkspaceItems ?? false}
               />
             )
           },
@@ -175,6 +207,10 @@ export const FlashcardsManager: React.FC = () => {
                 onReviewCard={handleReviewCard}
                 openCreateSignal={openCreateSignal}
                 isActive={activeTab === "cards"}
+                initialDeckId={initialTab === "cards" ? initialStudyIntent?.deckId : undefined}
+                initialShowWorkspaceDecks={
+                  initialTab === "cards" ? (initialStudyIntent?.forceShowWorkspaceItems ?? false) : false
+                }
               />
             )
           },

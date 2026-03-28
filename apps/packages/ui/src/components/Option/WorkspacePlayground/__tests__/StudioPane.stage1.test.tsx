@@ -15,12 +15,14 @@ const {
   mockMessageError,
   mockMessageInfo,
   mockGenerateFlashcardsService,
+  mockCreateFlashcardsBulk,
   mockRagSearch,
   mockSynthesizeSpeech,
   mockGenerateSlidesFromMedia,
   mockDownloadOutput,
   mockCreateChatCompletion,
   mockGetMediaDetails,
+  mockUpsertWorkspace,
   mockGetChatModels,
   messageOptionStoreState,
   chatModelSettingsStoreState,
@@ -37,12 +39,14 @@ const {
   const messageError = vi.fn()
   const messageInfo = vi.fn()
   const generateFlashcardsService = vi.fn()
+  const createFlashcardsBulk = vi.fn()
   const ragSearch = vi.fn()
   const synthesizeSpeech = vi.fn()
   const generateSlidesFromMedia = vi.fn()
   const downloadOutput = vi.fn()
   const createChatCompletion = vi.fn()
   const getMediaDetails = vi.fn()
+  const upsertWorkspace = vi.fn()
   const getChatModels = vi.fn()
   const defaultAudioSettings: AudioGenerationSettings = {
     provider: "browser",
@@ -125,12 +129,14 @@ const {
     mockMessageError: messageError,
     mockMessageInfo: messageInfo,
     mockGenerateFlashcardsService: generateFlashcardsService,
+    mockCreateFlashcardsBulk: createFlashcardsBulk,
     mockRagSearch: ragSearch,
     mockSynthesizeSpeech: synthesizeSpeech,
     mockGenerateSlidesFromMedia: generateSlidesFromMedia,
     mockDownloadOutput: downloadOutput,
     mockCreateChatCompletion: createChatCompletion,
     mockGetMediaDetails: getMediaDetails,
+    mockUpsertWorkspace: upsertWorkspace,
     mockGetChatModels: getChatModels,
     messageOptionStoreState: messageOptionState,
     chatModelSettingsStoreState: chatModelSettingsState,
@@ -188,7 +194,10 @@ vi.mock("@/services/flashcards", () => ({
   generateFlashcards: mockGenerateFlashcardsService,
   listDecks: vi.fn().mockResolvedValue([]),
   createDeck: vi.fn().mockResolvedValue({ id: 1, name: "Workspace Flashcards" }),
-  createFlashcard: vi.fn().mockResolvedValue({ uuid: "card-1" })
+  createFlashcard: vi.fn().mockResolvedValue({ uuid: "card-1" }),
+  createFlashcardsBulk: mockCreateFlashcardsBulk.mockResolvedValue({
+    cards: [{ uuid: "card-1" }]
+  })
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -199,6 +208,7 @@ vi.mock("@/services/tldw/TldwApiClient", () => ({
     listVisualStyles: vi.fn().mockResolvedValue([]),
     createChatCompletion: mockCreateChatCompletion,
     getMediaDetails: mockGetMediaDetails,
+    upsertWorkspace: mockUpsertWorkspace,
     exportPresentation: vi.fn(),
     downloadOutput: mockDownloadOutput
   }
@@ -922,16 +932,79 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
     anchorClickSpy.mockRestore()
   })
 
+  it("downloads flashcard artifacts locally instead of calling outputs download", async () => {
+    mockDownloadOutput.mockResolvedValue(new Blob(["server download"]))
+
+    const createObjectUrlSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:flashcards")
+    const revokeObjectUrlSpy = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => {})
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {})
+
+    workspaceStoreState.generatedArtifacts = [
+      {
+        id: "artifact-flashcards",
+        type: "flashcards",
+        title: "Flashcards",
+        status: "completed",
+        serverId: 7,
+        content: "Front: ATP\nBack: Cellular energy",
+        data: {
+          flashcards: [
+            {
+              front: "ATP",
+              back: "Cellular energy"
+            }
+          ],
+          deckId: 7
+        },
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Download" }))
+
+    await waitFor(() => {
+      expect(createObjectUrlSpy).toHaveBeenCalled()
+    })
+
+    expect(mockDownloadOutput).not.toHaveBeenCalled()
+    expect(anchorClickSpy).toHaveBeenCalled()
+    expect(revokeObjectUrlSpy).toHaveBeenCalled()
+
+    createObjectUrlSpy.mockRestore()
+    revokeObjectUrlSpy.mockRestore()
+    anchorClickSpy.mockRestore()
+  })
+
   it("completes browser audio overview generation without server TTS", async () => {
     workspaceStoreState.audioSettings = {
       ...baseAudioSettings,
       provider: "browser"
     }
-    mockRagSearch.mockResolvedValue({ generation: "Audio script" })
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "Project Falcon improved retention by 18 percent after the March 2026 onboarding update."
+      }
+    })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse("Audio script")
+    )
 
     renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Audio Summary" }))
+
+    await waitFor(() => {
+      expect(mockCreateChatCompletion).toHaveBeenCalled()
+    })
 
     await waitFor(() => {
       expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
@@ -944,6 +1017,13 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       )
     })
 
+    const audioRequest = mockCreateChatCompletion.mock.calls[0]?.[0]
+    expect(audioRequest.messages?.[0]?.content).toContain(
+      "source-grounded audio script writer"
+    )
+    expect(audioRequest.messages?.[1]?.content).toContain("DSPy Prompting Talk")
+    expect(audioRequest.messages?.[1]?.content).toContain("March 2026 onboarding")
+    expect(mockRagSearch).not.toHaveBeenCalled()
     expect(mockSynthesizeSpeech).not.toHaveBeenCalled()
   })
 
@@ -985,9 +1065,17 @@ describe("StudioPane Stage 1 generation lifecycle control", () => {
       provider: "tldw",
       model: "kokoro"
     }
-    mockRagSearch.mockResolvedValue({
-      generation: "Sorry, I encountered an error. Please try again."
+    mockGetMediaDetails.mockResolvedValue({
+      source: { title: "DSPy Prompting Talk" },
+      content: {
+        text: "Project Falcon improved retention by 18 percent after the March 2026 onboarding update."
+      }
     })
+    mockCreateChatCompletion.mockResolvedValue(
+      createChatCompletionResponse(
+        "Sorry, I encountered an error. Please try again."
+      )
+    )
     mockSynthesizeSpeech.mockResolvedValue(new ArrayBuffer(8))
 
     renderStudioPane()

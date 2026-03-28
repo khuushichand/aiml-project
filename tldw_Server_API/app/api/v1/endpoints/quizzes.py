@@ -249,6 +249,8 @@ def update_quiz(
         update_data = updates.model_dump(exclude_unset=True)
         if "workspace_id" in update_data:
             _ensure_workspace_exists(db, update_data["workspace_id"])
+            if update_data["workspace_id"] is None and "workspace_tag" not in update_data:
+                update_data["workspace_tag"] = None
         ok = db.update_quiz(quiz_id, update_data)
         if not ok:
             raise HTTPException(status_code=404, detail="Quiz not found")

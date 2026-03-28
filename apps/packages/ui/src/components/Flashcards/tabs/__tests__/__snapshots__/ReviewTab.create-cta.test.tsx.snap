@@ -147,6 +147,12 @@ exports[`ReviewTab create CTA visibility > matches baseline snapshot for active 
           >
             Standard
           </span>
+          <span
+            class="ant-tag ant-tag-filled ant-tag-green css-dev-only-do-not-override-3uaqrl css-var-root"
+            data-testid="flashcards-review-queue-state"
+          >
+            Review
+          </span>
           <button
             aria-label="Edit card (E)"
             class="ant-btn css-dev-only-do-not-override-3uaqrl css-var-root ant-btn-default ant-btn-color-default ant-btn-variant-outlined ant-btn-sm"

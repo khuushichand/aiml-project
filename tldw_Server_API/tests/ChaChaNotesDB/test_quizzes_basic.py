@@ -83,22 +83,34 @@ def test_quiz_workspace_id_persists_and_can_move_between_scopes():
         all_items = db.list_quizzes(include_workspace_items=True, limit=20, offset=0)["items"]
         assert any(item["id"] == quiz_id for item in all_items)
 
-        assert db.update_quiz(quiz_id, {"workspace_id": None, "expected_version": quiz["version"]}) is True
+        assert db.update_quiz(
+            quiz_id,
+            {
+                "workspace_id": None,
+                "workspace_tag": None,
+                "expected_version": quiz["version"],
+            },
+        ) is True
         moved_to_general = db.get_quiz(quiz_id)
         assert moved_to_general is not None
         assert moved_to_general["workspace_id"] is None
-        assert moved_to_general["workspace_tag"] == "workspace:legacy"
+        assert moved_to_general["workspace_tag"] is None
 
         general_items = db.list_quizzes(limit=20, offset=0)["items"]
         assert any(item["id"] == quiz_id for item in general_items)
 
         assert db.update_quiz(
             quiz_id,
-            {"workspace_id": "ws-1", "expected_version": moved_to_general["version"]},
+            {
+                "workspace_id": "ws-1",
+                "workspace_tag": "workspace:ws-1",
+                "expected_version": moved_to_general["version"],
+            },
         ) is True
         moved_back = db.get_quiz(quiz_id)
         assert moved_back is not None
         assert moved_back["workspace_id"] == "ws-1"
+        assert moved_back["workspace_tag"] == "workspace:ws-1"
 
 
 def test_fill_blank_accepts_delimited_alternates():
