@@ -15,6 +15,8 @@ import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { isBillingEnabled } from '@/lib/billing';
 import Link from 'next/link';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { formatDate } from '@/lib/formatters';
 import type { Subscription, SubscriptionStatus } from '@/types';
 
@@ -37,6 +39,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
 function SubscriptionsPageContent() {
   const { error: showError } = useToast();
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [orgNames, setOrgNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -51,6 +54,17 @@ function SubscriptionsPageContent() {
       }
       const data = await api.getSubscriptions(params);
       setSubscriptions(data);
+      // Batch-fetch org names for display
+      try {
+        const orgs = await api.getOrganizations();
+        const names: Record<string, string> = {};
+        (Array.isArray(orgs) ? orgs : []).forEach((o: { id: number | string; name: string }) => {
+          names[String(o.id)] = o.name;
+        });
+        setOrgNames(names);
+      } catch (err) {
+        console.error('Failed to fetch organization names for subscriptions:', err);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load subscriptions';
       setLoadError(message);
@@ -84,7 +98,18 @@ function SubscriptionsPageContent() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>Subscriptions</CardTitle>
-            <Select
+            <div className="flex items-center gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => {
+                  exportData({
+                    data: subscriptions as unknown as Record<string, unknown>[],
+                    filename: 'subscriptions',
+                    format,
+                  });
+                }}
+                disabled={subscriptions.length === 0}
+              />
+              <Select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               className="w-48"
@@ -96,6 +121,7 @@ function SubscriptionsPageContent() {
                 </option>
               ))}
             </Select>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -104,6 +130,18 @@ function SubscriptionsPageContent() {
               <AlertDescription>{loadError}</AlertDescription>
             </Alert>
           )}
+
+          {!loading && (() => {
+            const atRisk = subscriptions.filter(s => s.status === 'past_due' || s.status === 'incomplete');
+            if (atRisk.length === 0) return null;
+            return (
+              <Alert className="mb-4 border-red-200 bg-red-50">
+                <AlertDescription className="text-red-900">
+                  <strong>{atRisk.length} subscription{atRisk.length !== 1 ? 's' : ''} need attention</strong> — {atRisk.filter(s => s.status === 'past_due').length} past due, {atRisk.filter(s => s.status === 'incomplete').length} incomplete.
+                </AlertDescription>
+              </Alert>
+            );
+          })()}
 
           {loading ? (
             <TableSkeleton rows={5} columns={5} />
@@ -128,7 +166,7 @@ function SubscriptionsPageContent() {
                         href={`/organizations/${sub.org_id}`}
                         className="text-blue-600 hover:underline"
                       >
-                        Org {sub.org_id}
+                        {orgNames[String(sub.org_id)] || `Org ${sub.org_id}`}
                       </Link>
                     </TableCell>
                     <TableCell>

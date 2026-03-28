@@ -15,6 +15,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
 import { api } from '@/lib/api-client';
@@ -215,6 +216,7 @@ const getPolicyRowKey = (policy: ResourcePolicy, fallbackIndex: number) => {
 
 export default function ResourceGovernorPage() {
   const confirm = useConfirm();
+  const privilegedAction = usePrivilegedActionDialog();
   const { success, error: showError } = useToast();
 
   // Policies state
@@ -239,6 +241,7 @@ export default function ResourceGovernorPage() {
   const [simulationResult, setSimulationResult] = useState<PolicySimulationResult | null>(null);
   const [simulationLoading, setSimulationLoading] = useState(false);
   const [resolutionUserId, setResolutionUserId] = useState('');
+  const [userSuggestions, setUserSuggestions] = useState<Array<{ id: number; username: string }>>([]);
   const [resolutionResourceType, setResolutionResourceType] = useState<PolicyFormData['resource_type']>('llm');
   const [resolutionResult, setResolutionResult] = useState<PolicyResolutionResult | null>(null);
   const [resolutionError, setResolutionError] = useState('');
@@ -612,7 +615,18 @@ export default function ResourceGovernorPage() {
         return;
       }
 
-      const user = scopeUsers.find((entry) => String(entry.id) === userIdValue);
+      const normalizedUserValue = userIdValue.toLowerCase();
+      const matchingSuggestion = userSuggestions.find(
+        (entry) =>
+          String(entry.id) === userIdValue ||
+          entry.username?.toLowerCase() === normalizedUserValue
+      );
+      const resolvedUserId = matchingSuggestion ? String(matchingSuggestion.id) : userIdValue;
+      const user = scopeUsers.find(
+        (entry) =>
+          String(entry.id) === resolvedUserId ||
+          entry.username?.toLowerCase() === normalizedUserValue
+      );
       if (!user) {
         setResolutionError(`User ${userIdValue} was not found in the current admin scope.`);
         return;
@@ -719,14 +733,14 @@ export default function ResourceGovernorPage() {
     const policyId = String(policy.id);
     if (deletingPolicyId === policyId) return;
 
-    const confirmed = await confirm({
+    const result = await privilegedAction({
       title: `Delete policy "${policy.name}"?`,
       message: 'This will remove the resource governance policy. This action cannot be undone.',
       confirmText: 'Delete',
-      variant: 'danger',
+      requirePassword: true,
     });
 
-    if (!confirmed) return;
+    if (!result) return;
 
     try {
       setDeletingPolicyId(policyId);
@@ -982,13 +996,32 @@ export default function ResourceGovernorPage() {
             <CardContent className="grid gap-4">
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="space-y-1">
-                  <Label htmlFor="resolution-user-id">User ID</Label>
+                  <Label htmlFor="resolution-user-id">User ID or name</Label>
                   <Input
                     id="resolution-user-id"
-                    placeholder="e.g., 42"
+                    placeholder="Search by name or enter ID..."
+                    list="user-suggestions"
                     value={resolutionUserId}
-                    onChange={(event) => setResolutionUserId(event.target.value)}
+                    onChange={(event) => {
+                      const val = event.target.value;
+                      setResolutionUserId(val);
+                      // Debounced user search for suggestions
+                      if (val.length >= 2 && !/^\d+$/.test(val)) {
+                        api.getUsers({ search: val, limit: '5' }).then((users) => {
+                          setUserSuggestions(
+                            (Array.isArray(users) ? users : []).map((u: { id: number; username: string }) => ({
+                              id: u.id, username: u.username,
+                            }))
+                          );
+                        }).catch(() => {});
+                      }
+                    }}
                   />
+                  <datalist id="user-suggestions">
+                    {userSuggestions.map((u) => (
+                      <option key={u.id} value={String(u.id)}>{u.username} (ID: {u.id})</option>
+                    ))}
+                  </datalist>
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="resolution-resource-type">Resource Type</Label>

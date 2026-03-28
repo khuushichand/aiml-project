@@ -9,9 +9,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ArrowLeft, RefreshCw, Shield, Save, X } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { ArrowLeft, RefreshCw, Shield, Save, Search, X } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type RolePermissionMap = Record<number, Set<number>>;
 
@@ -25,6 +27,8 @@ export default function PermissionMatrixPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [permSearch, setPermSearch] = useState('');
+  const [differencesOnly, setDifferencesOnly] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -292,7 +296,7 @@ export default function PermissionMatrixPage() {
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="text-center text-muted-foreground py-8">Loading...</div>
+                  <CardSkeleton />
                 ) : roles.length === 0 || permissions.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     {roles.length === 0 ? 'No roles found. ' : ''}
@@ -300,6 +304,27 @@ export default function PermissionMatrixPage() {
                     Create some first on the Roles page.
                   </div>
                 ) : (
+                  <>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="relative flex-1 max-w-xs">
+                      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Filter permissions..."
+                        value={permSearch}
+                        onChange={(e) => setPermSearch(e.target.value)}
+                        className="pl-9"
+                        aria-label="Filter permissions"
+                      />
+                    </div>
+                    <Button
+                      variant={differencesOnly ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setDifferencesOnly(!differencesOnly)}
+                      aria-pressed={differencesOnly}
+                    >
+                      Differences only
+                    </Button>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full border-collapse">
                       <thead>
@@ -320,7 +345,15 @@ export default function PermissionMatrixPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {permissions.map((perm, index) => (
+                        {permissions.filter((perm) => {
+                          if (permSearch && !perm.name.toLowerCase().includes(permSearch.toLowerCase())) return false;
+                          if (differencesOnly) {
+                            const states = roles.map(role => rolePermissions[role.id]?.has(perm.id) ?? false);
+                            const allSame = states.every(s => s === states[0]);
+                            if (allSame) return false;
+                          }
+                          return true;
+                        }).map((perm, index) => (
                           <tr key={perm.id} className={index % 2 === 0 ? 'bg-background' : 'bg-muted/30'}>
                             <td className="p-3 sticky left-0 bg-inherit border-b">
                               <div>
@@ -353,6 +386,7 @@ export default function PermissionMatrixPage() {
                       </tbody>
                     </table>
                   </div>
+                  </>
                 )}
               </CardContent>
             </Card>

@@ -55,7 +55,7 @@ export function TopCommandsChart({ data, isLoading }: TopCommandsChartProps) {
             {isLoading ? 'Loading command data...' : 'No command usage data available yet'}
           </div>
         ) : (
-          <div className="h-64">
+          <div className="h-64" role="img" aria-label={`Top voice commands chart showing ${chartData.length} most used commands by invocation count`}>
             <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
               <BarChart data={chartData} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" horizontal={false} />

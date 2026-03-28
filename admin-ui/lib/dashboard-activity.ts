@@ -23,6 +23,9 @@ export interface DashboardActivityChartPoint {
   name: string;
   requests: number;
   users: number;
+  errors?: number;
+  latencyAvgMs?: number;
+  costUsd?: number;
 }
 
 type DashboardActivityApiPoint = {
@@ -178,3 +181,40 @@ export const buildDashboardActivityChartData = (
     users: point.users,
   };
 });
+
+/**
+ * Merge per-day usage overlay data (errors, latency, cost) into chart points.
+ * Only works for 7d and 30d ranges (day granularity). 24h (hour) is too fine-grained
+ * for daily aggregates — overlays are left undefined for hourly charts.
+ */
+export interface DailyOverlayRow {
+  day: string;
+  errors?: number;
+  latencyAvgMs?: number | null;
+  costUsd?: number | null;
+}
+
+export const mergeOverlayData = (
+  chartPoints: DashboardActivityChartPoint[],
+  overlayRows: DailyOverlayRow[],
+): DashboardActivityChartPoint[] => {
+  if (overlayRows.length === 0) return chartPoints;
+
+  const byDay = new Map<string, DailyOverlayRow>();
+  for (const row of overlayRows) {
+    byDay.set(row.day, row);
+  }
+
+  return chartPoints.map((point) => {
+    // Extract YYYY-MM-DD from bucketStart ISO string
+    const dayKey = point.bucketStart.slice(0, 10);
+    const overlay = byDay.get(dayKey);
+    if (!overlay) return point;
+    return {
+      ...point,
+      errors: overlay.errors ?? undefined,
+      latencyAvgMs: overlay.latencyAvgMs ?? undefined,
+      costUsd: overlay.costUsd ?? undefined,
+    };
+  });
+};

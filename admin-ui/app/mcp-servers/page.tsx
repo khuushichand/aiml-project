@@ -65,6 +65,7 @@ export default function MCPServersPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'modules' | 'tools'>('overview');
+  const [toolUsageByTool, setToolUsageByTool] = useState<Record<string, { calls: number; avg_latency_ms: number }>>({});
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -76,6 +77,7 @@ export default function MCPServersPage() {
         api.getMCPTools(),
         api.getMCPModulesHealth(),
         api.getMCPMetrics(),
+        api.getMCPToolUsage({ period_seconds: '3600' }),
       ]);
 
       if (results[0].status === 'fulfilled') setMcpStatus(results[0].value as MCPStatus);
@@ -95,6 +97,14 @@ export default function MCPServersPage() {
         setHealth(Array.isArray(healthList) ? healthList as MCPHealthResult[] : []);
       }
       if (results[4].status === 'fulfilled') setMetrics(results[4].value as MCPMetrics);
+      if (results[5].status === 'fulfilled') {
+        const usageResult = results[5].value as {
+          tools?: Record<string, { calls: number; avg_latency_ms: number }>;
+        };
+        setToolUsageByTool(usageResult?.tools ?? {});
+      } else {
+        setToolUsageByTool({});
+      }
 
       const failures = results.filter(r => r.status === 'rejected');
       if (failures.length === results.length) {
@@ -333,6 +343,7 @@ export default function MCPServersPage() {
                       <TableRow>
                         <TableHead>Tool Name</TableHead>
                         <TableHead>Module</TableHead>
+                        <TableHead>Usage (1h)</TableHead>
                         <TableHead>Description</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -341,6 +352,23 @@ export default function MCPServersPage() {
                         <TableRow key={i}>
                           <TableCell className="font-mono text-sm">{tool.name}</TableCell>
                           <TableCell><Badge variant="outline">{tool.module || '-'}</Badge></TableCell>
+                          <TableCell className="text-xs">
+                            {(() => {
+                              const toolKey = tool.module ? `${tool.module}.${tool.name}` : tool.name;
+                              const toolUsage = toolUsageByTool[toolKey];
+                              if (!toolUsage || toolUsage.calls === 0) return <span className="text-muted-foreground">-</span>;
+                              return (
+                                <span
+                                  aria-label={`${toolUsage.calls} calls, ${toolUsage.avg_latency_ms} milliseconds average latency`}
+                                >
+                                  {toolUsage.calls} call{toolUsage.calls !== 1 ? 's' : ''}
+                                  <span className="sr-only">
+                                    , {toolUsage.avg_latency_ms}ms average latency
+                                  </span>
+                                </span>
+                              );
+                            })()}
+                          </TableCell>
                           <TableCell className="text-xs text-muted-foreground max-w-md truncate">{tool.description || '-'}</TableCell>
                         </TableRow>
                       ))}

@@ -35,6 +35,9 @@ export interface DashboardUIStats {
   enabledProviders: number;
   storageUsedMb: number;
   storageQuotaMb: number;
+  activeAcpSessions: number | null;
+  tokensToday: { prompt: number; completion: number; total: number } | null;
+  mcpInvocationsToday: number | null;
 }
 
 const extractOverrides = (statsResponse?: unknown): Partial<DashboardUIStats> => {
@@ -115,7 +118,8 @@ export function buildDashboardUIStats({
   (Object.keys(overrides) as Array<keyof DashboardUIStats>).forEach((key) => {
     const value = overrides[key];
     if (typeof value === 'number' && Number.isFinite(value)) {
-      merged[key] = value;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic numeric override merge
+      (merged as any)[key] = value;
     }
   });
 

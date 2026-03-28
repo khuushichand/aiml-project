@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
 import { isAlertSnoozed } from '@/lib/monitoring-alerts';
@@ -123,6 +123,7 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     success,
     setSuccess,
   } = useMonitoringMessages();
+  const loadInFlightRef = useRef<Promise<void> | null>(null);
 
   const { loadData } = useMonitoringDataLoader({
     alertsRef,
@@ -147,6 +148,19 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
   });
 
+  const guardedLoadData = useCallback(async () => {
+    if (loadInFlightRef.current) {
+      return loadInFlightRef.current;
+    }
+    const pendingLoad = Promise.resolve(loadData()).finally(() => {
+      if (loadInFlightRef.current === pendingLoad) {
+        loadInFlightRef.current = null;
+      }
+    });
+    loadInFlightRef.current = pendingLoad;
+    return pendingLoad;
+  }, [loadData]);
+
   const {
     showCreateWatchlist,
     setShowCreateWatchlist,
@@ -160,7 +174,7 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     confirm,
     setError,
     setSuccess,
-    onReloadRequested: loadData,
+    onReloadRequested: guardedLoadData,
   });
 
   const {
@@ -175,7 +189,7 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     setAlerts,
     setError,
     setSuccess,
-    onReloadRequested: loadData,
+    onReloadRequested: guardedLoadData,
   });
 
   const {
@@ -206,8 +220,16 @@ export const useMonitoringPageController = (): MonitoringPageController => {
   });
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
+    void guardedLoadData();
+  }, [guardedLoadData]);
+
+  // Auto-refresh dashboard data every 60 seconds
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  useEffect(() => {
+    if (!autoRefreshEnabled) return;
+    const id = setInterval(() => { void guardedLoadData(); }, 60_000);
+    return () => clearInterval(id);
+  }, [autoRefreshEnabled, guardedLoadData]);
 
   const activeAlertsCount = useMemo(
     () =>
@@ -219,9 +241,11 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     () => ({
       lastUpdated,
       loading,
-      onRefresh: loadData,
+      onRefresh: guardedLoadData,
+      autoRefreshEnabled,
+      onToggleAutoRefresh: () => setAutoRefreshEnabled((prev) => !prev),
     }),
-    [lastUpdated, loading, loadData]
+    [lastUpdated, loading, guardedLoadData, autoRefreshEnabled]
   );
 
   const feedbackBannersProps = useMemo<ComponentProps<typeof MonitoringFeedbackBanners>>(

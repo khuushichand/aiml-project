@@ -50,16 +50,21 @@ type UsageTabConfig = {
   implemented: boolean;
 };
 
-const TABS: UsageTabConfig[] = [
+const PRIMARY_TABS: UsageTabConfig[] = [
   { value: 'status', label: 'Status', implemented: true },
   { value: 'quota', label: 'Quota', implemented: true },
+  { value: 'models', label: 'Models', implemented: true },
+];
+
+const SECONDARY_TABS: UsageTabConfig[] = [
   { value: 'providers', label: 'Providers', implemented: true },
   { value: 'access', label: 'Access', implemented: true },
   { value: 'network', label: 'Network', implemented: true },
-  { value: 'models', label: 'Models', implemented: true },
   { value: 'conversations', label: 'Conversations', implemented: true },
   { value: 'log', label: 'Log', implemented: true },
 ];
+
+const TABS: UsageTabConfig[] = [...PRIMARY_TABS, ...SECONDARY_TABS];
 
 const RANGE_OPTIONS: RouterAnalyticsRange[] = ['realtime', '1h', '8h', '24h', '7d', '30d'];
 
@@ -109,6 +114,12 @@ const formatDateTime = (value?: string | null): string => {
   return parsed.toLocaleString();
 };
 
+const renderTokenHeader = (shortLabel: string, fullLabel: string) => (
+  <TableHead className="text-right" aria-label={fullLabel}>
+    <abbr title={fullLabel}>{shortLabel}</abbr>
+  </TableHead>
+);
+
 function BreakdownCard({ title, rows, keyLabel }: { title: string; rows: RouterAnalyticsBreakdownRow[]; keyLabel: string }) {
   return (
     <Card>
@@ -121,8 +132,8 @@ function BreakdownCard({ title, rows, keyLabel }: { title: string; rows: RouterA
             <TableRow>
               <TableHead>{keyLabel}</TableHead>
               <TableHead className="text-right">Requests</TableHead>
-              <TableHead className="text-right">PP</TableHead>
-              <TableHead className="text-right">TG</TableHead>
+              {renderTokenHeader('PP', 'Prompt Tokens')}
+              {renderTokenHeader('TG', 'Total Generated Tokens')}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -525,14 +536,15 @@ export default function UsagePage() {
 
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as UsageTab)}>
             <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-md border bg-muted/40 p-1">
-              {TABS.map((tab) => (
+              {PRIMARY_TABS.map((tab) => (
                 <TabsTrigger key={tab.value} value={tab.value} className="relative min-w-fit px-3 py-2">
                   {tab.label}
-                  {!tab.implemented && (
-                    <Badge variant="secondary" className="ml-2 text-[10px]">
-                      Soon
-                    </Badge>
-                  )}
+                </TabsTrigger>
+              ))}
+              <span aria-hidden="true" className="mx-1 text-muted-foreground text-xs self-center">|</span>
+              {SECONDARY_TABS.map((tab) => (
+                <TabsTrigger key={tab.value} value={tab.value} className="relative min-w-fit px-3 py-2 text-muted-foreground">
+                  {tab.label}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -744,8 +756,8 @@ export default function UsagePage() {
                         <TableRow>
                           <TableHead>Provider</TableHead>
                           <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right">PP</TableHead>
-                          <TableHead className="text-right">TG</TableHead>
+                          {renderTokenHeader('PP', 'Prompt Tokens')}
+                          {renderTokenHeader('TG', 'Total Generated Tokens')}
                           <TableHead className="text-right">Cost USD</TableHead>
                           <TableHead className="text-right">Latency ms</TableHead>
                           <TableHead className="text-right">Errors</TableHead>
@@ -929,8 +941,8 @@ export default function UsagePage() {
                           <TableHead>Model</TableHead>
                           <TableHead>Provider</TableHead>
                           <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right">PP</TableHead>
-                          <TableHead className="text-right">TG</TableHead>
+                          {renderTokenHeader('PP', 'Prompt Tokens')}
+                          {renderTokenHeader('TG', 'Total Generated Tokens')}
                           <TableHead className="text-right">Cost USD</TableHead>
                           <TableHead className="text-right">Latency ms</TableHead>
                           <TableHead className="text-right">Errors</TableHead>
@@ -1016,8 +1028,8 @@ export default function UsagePage() {
                         <TableRow>
                           <TableHead>Conversation</TableHead>
                           <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right">PP</TableHead>
-                          <TableHead className="text-right">TG</TableHead>
+                          {renderTokenHeader('PP', 'Prompt Tokens')}
+                          {renderTokenHeader('TG', 'Total Generated Tokens')}
                           <TableHead className="text-right">Cost USD</TableHead>
                           <TableHead className="text-right">Latency ms</TableHead>
                           <TableHead className="text-right">Errors</TableHead>

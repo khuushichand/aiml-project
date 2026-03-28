@@ -28,6 +28,12 @@ type StatsGridProps = {
 
 const CARD_COUNT = 8;
 
+function formatCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 const formatTrendValue = (trend: MetricTrend): string => {
   if (trend.percentChange !== null) {
     return `${Math.abs(trend.percentChange).toFixed(1)}%`;
@@ -188,7 +194,14 @@ export const StatsGrid = ({
               {`${(stats.storageUsedMb / 1024).toFixed(1)} GB`}
             </div>
             <div className="mt-2">
-              <div className="h-2 w-full rounded-full bg-gray-200">
+              <div
+                role="progressbar"
+                aria-valuenow={Math.round(storagePercentage)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={`Storage usage: ${storagePercentage.toFixed(0)}%`}
+                className="h-2 w-full rounded-full bg-gray-200"
+              >
                 <div
                   className={`h-2 rounded-full ${
                     storagePercentage > 90 ? 'bg-red-500'
@@ -277,6 +290,47 @@ export const StatsGrid = ({
             />
           </CardContent>
         </Card>
+
+        {stats.activeAcpSessions != null && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Active Sessions</CardTitle>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.activeAcpSessions}</div>
+              <p className="text-xs text-muted-foreground">ACP agent sessions</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {stats.tokensToday && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Tokens Today</CardTitle>
+              <Cpu className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{formatCompact(stats.tokensToday.total)}</div>
+              <p className="text-xs text-muted-foreground">
+                {formatCompact(stats.tokensToday.prompt)} prompt · {formatCompact(stats.tokensToday.completion)} completion
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {stats.mcpInvocationsToday != null && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">MCP Calls</CardTitle>
+              <Workflow className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{formatCompact(stats.mcpInvocationsToday)}</div>
+              <p className="text-xs text-muted-foreground">Tool invocations today</p>
+            </CardContent>
+          </Card>
+        )}
       </>
     )}
   </div>

@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import OrganizationDetailPage from '../page';
 import { api } from '@/lib/api-client';
 
@@ -154,21 +155,50 @@ afterEach(() => {
 
 describe('OrganizationDetailPage billing state', () => {
   it('clears prior billing details when navigating to an org whose billing requests fail', async () => {
+    const user = userEvent.setup();
     const { rerender } = render(<OrganizationDetailPage />);
 
     await screen.findByText('Org 1');
-    expect(await screen.findByText('active')).toBeInTheDocument();
-    expect(screen.getByTestId('invoice-table').textContent).toBe('1');
+    await user.click(screen.getByRole('tab', { name: /billing/i }));
+    expect((await screen.findByTestId('invoice-table')).textContent).toBe('1');
+    expect(screen.getByTestId('usage-meter').textContent).toBe('42');
 
     currentOrgId = '2';
     rerender(<OrganizationDetailPage />);
 
     await screen.findByText('Org 2');
+    await user.click(screen.getByRole('tab', { name: /billing/i }));
     await waitFor(() => {
       expect(screen.getByText('No active subscription.')).toBeInTheDocument();
     });
     expect(screen.queryByText('active')).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoice-table')).not.toBeInTheDocument();
     expect(screen.queryByTestId('usage-meter')).not.toBeInTheDocument();
+  });
+
+  it('shows a no-results message when member search filters out every row', async () => {
+    const user = userEvent.setup();
+    apiMock.getOrgMembers.mockResolvedValue([
+      {
+        user_id: 42,
+        role: 'member',
+        joined_at: '2026-01-01T00:00:00Z',
+        user: {
+          username: 'alice',
+          email: 'alice@example.com',
+        },
+      },
+    ]);
+
+    render(<OrganizationDetailPage />);
+
+    await screen.findByText('alice');
+
+    await user.type(screen.getByPlaceholderText('Search members...'), 'missing-user');
+
+    await waitFor(() => {
+      expect(screen.getByText('No members match your search.')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('alice')).not.toBeInTheDocument();
   });
 });

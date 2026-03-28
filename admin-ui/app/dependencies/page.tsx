@@ -264,6 +264,7 @@ export default function DependenciesPage() {
   const [availabilityByProvider, setAvailabilityByProvider] = useState<Record<string, number[]>>({});
   const [providerChecks, setProviderChecks] = useState<Record<string, ProviderHealthCheck>>({});
   const [prometheusAvailable, setPrometheusAvailable] = useState(false);
+  const [uptimeByService, setUptimeByService] = useState<Record<string, Array<{ bucket: string; uptime_pct: number; probes: number }>>>({});
 
   const runProviderCheck = useCallback(async (provider: Provider): Promise<Omit<ProviderHealthCheck, 'testing'>> => {
     const started = performance.now();
@@ -347,7 +348,7 @@ export default function DependenciesPage() {
     const summaryWindow = get24HourWindow();
     const trendWindow = getTrendWindow(TREND_DAYS);
 
-    const [providersResult, usageSummaryResult, usageTrendResult, metricsResult] = await Promise.allSettled([
+    const [providersResult, usageSummaryResult, usageTrendResult, metricsResult, uptimeResult] = await Promise.allSettled([
       api.getLLMProviders(),
       api.getLlmUsageSummary({
         group_by: 'provider',
@@ -360,6 +361,7 @@ export default function DependenciesPage() {
         end: trendWindow.end,
       }),
       api.getMetricsText(),
+      api.getDependenciesUptimeHistory({ range_days: '30' }),
     ]);
 
     const nextErrors: string[] = [];
@@ -381,6 +383,9 @@ export default function DependenciesPage() {
     }
     if (usageTrendResult.status === 'rejected') {
       nextErrors.push(`Usage trend unavailable: ${usageTrendResult.reason instanceof Error ? usageTrendResult.reason.message : 'Request failed'}`);
+    }
+    if (uptimeResult.status === 'rejected') {
+      nextErrors.push(`Uptime history unavailable: ${uptimeResult.reason instanceof Error ? uptimeResult.reason.message : 'Request failed'}`);
     }
 
     const usageMap: Record<string, ProviderUsageSummary> = {};
@@ -432,10 +437,15 @@ export default function DependenciesPage() {
       : '';
     setPrometheusAvailable(metricsText.length > 0 && hasPrometheusProviderData(metricsText));
 
+    const uptimeData = uptimeResult.status === 'fulfilled'
+      ? (uptimeResult.value?.services ?? {})
+      : {};
+
     setProviders(parsedProviders);
     setUsageByProvider(usageMap);
     setAvailabilityByProvider(availabilityMap);
     setProviderChecks((prev) => reconcileProviderChecks(prev, parsedProviders));
+    setUptimeByService(uptimeData);
     setErrors(nextErrors);
     setLastUpdatedAt(new Date().toISOString());
     setLoading(false);
@@ -605,6 +615,7 @@ export default function DependenciesPage() {
                       <TableHead>Error Rate (24h)</TableHead>
                       <TableHead>Last Success</TableHead>
                       <TableHead className="text-right">Availability (7d)</TableHead>
+                      <TableHead className="text-right">Uptime (30d)</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -674,6 +685,21 @@ export default function DependenciesPage() {
                                 Prometheus metrics unavailable
                               </span>
                             )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {(() => {
+                              const uptimeHistory = uptimeByService[key] || uptimeByService[provider.name];
+                              if (!uptimeHistory || uptimeHistory.length === 0) {
+                                return <span className="text-xs text-muted-foreground">No data</span>;
+                              }
+                              const uptimeSeries = uptimeHistory.map((h) => h.uptime_pct);
+                              return (
+                                <AvailabilitySparkline
+                                  providerName={`${provider.name} uptime`}
+                                  series={uptimeSeries}
+                                />
+                              );
+                            })()}
                           </TableCell>
                           <TableCell className="text-right">
                             <Button

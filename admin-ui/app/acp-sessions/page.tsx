@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,6 +14,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { RefreshCw, MessageSquare, XCircle, Wifi, WifiOff } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
@@ -34,6 +37,7 @@ interface ACPSession {
   };
   tags: string[];
   has_websocket: boolean;
+  agent_budget?: number | null;
 }
 
 interface ACPSessionListResponse {
@@ -58,6 +62,7 @@ export default function ACPSessionsPage() {
     agentType: '',
     userId: '',
   });
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -83,6 +88,13 @@ export default function ACPSessionsPage() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Auto-refresh every 15 seconds
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => { void loadSessions(); }, 15_000);
+    return () => clearInterval(id);
+  }, [autoRefresh, loadSessions]);
 
   const handleApplyFilters = useCallback(() => {
     setAppliedFilters({
@@ -119,6 +131,8 @@ export default function ACPSessionsPage() {
         return <Badge variant="secondary">Closed</Badge>;
       case 'error':
         return <Badge variant="destructive">Error</Badge>;
+      case 'budget_exceeded':
+        return <Badge variant="destructive">Budget Exceeded</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -137,16 +151,41 @@ export default function ACPSessionsPage() {
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold">ACP Sessions</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold">ACP Sessions</h1>
+                {autoRefresh && (
+                  <Badge variant="default" className="bg-green-600 animate-pulse text-xs">Live</Badge>
+                )}
+              </div>
               <p className="text-muted-foreground">Monitor and manage Agent Client Protocol sessions across all users</p>
             </div>
-            <AccessibleIconButton
-              icon={RefreshCw}
-              label="Refresh"
-              onClick={loadSessions}
-              disabled={loading}
-              className={loading ? 'animate-spin' : ''}
-            />
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setAutoRefresh(!autoRefresh)}
+                className="text-xs"
+              >
+                Auto-refresh: {autoRefresh ? 'ON' : 'OFF'}
+              </Button>
+              <ExportMenu
+                onExport={(format: ExportFormat) => {
+                  exportData({
+                    data: sessions as unknown as Record<string, unknown>[],
+                    filename: 'acp-sessions',
+                    format,
+                  });
+                }}
+                disabled={sessions.length === 0}
+              />
+              <AccessibleIconButton
+                icon={RefreshCw}
+                label="Refresh"
+                onClick={loadSessions}
+                disabled={loading}
+                className={loading ? 'animate-spin' : ''}
+              />
+            </div>
           </div>
 
           {error && (
@@ -212,6 +251,9 @@ export default function ACPSessionsPage() {
                         <TableHead>Status</TableHead>
                         <TableHead>Messages</TableHead>
                         <TableHead>Tokens</TableHead>
+                        <TableHead title="Estimated at blended $3/M tokens — actual cost varies by model">
+                          Est. Cost <span className="text-muted-foreground cursor-help">&#9432;</span>
+                        </TableHead>
                         <TableHead>WS</TableHead>
                         <TableHead>Created</TableHead>
                         <TableHead>Actions</TableHead>
@@ -226,16 +268,52 @@ export default function ACPSessionsPage() {
                               <span className="text-muted-foreground">{session.session_id.slice(0, 12)}...</span>
                             </div>
                           </TableCell>
-                          <TableCell>{session.user_id}</TableCell>
+                          <TableCell>
+                            <Link href={`/users/${session.user_id}`} className="text-primary hover:underline">
+                              User {session.user_id}
+                            </Link>
+                          </TableCell>
                           <TableCell>
                             <Badge variant="outline">{session.agent_type}</Badge>
                           </TableCell>
                           <TableCell>{getStatusBadge(session.status)}</TableCell>
                           <TableCell>{session.message_count}</TableCell>
                           <TableCell>
-                            <span className="text-xs font-mono" title={`Prompt: ${session.usage.prompt_tokens} | Completion: ${session.usage.completion_tokens}`}>
-                              {formatTokens(session.usage.total_tokens)}
-                            </span>
+                            {session.agent_budget ? (
+                              <div className="flex flex-col gap-1">
+                                <span className="text-xs font-mono">
+                                  {formatTokens(session.usage.total_tokens)} / {formatTokens(session.agent_budget)}
+                                </span>
+                                <div
+                                  role="progressbar"
+                                  aria-valuenow={Math.round((session.usage.total_tokens / session.agent_budget) * 100)}
+                                  aria-valuemin={0}
+                                  aria-valuemax={100}
+                                  aria-label="Token budget usage"
+                                  className="h-1.5 w-full rounded-full bg-muted overflow-hidden"
+                                >
+                                  <div
+                                    className={`h-full rounded-full transition-all ${
+                                      session.usage.total_tokens / session.agent_budget > 0.9 ? 'bg-red-500' :
+                                      session.usage.total_tokens / session.agent_budget > 0.7 ? 'bg-yellow-500' :
+                                      'bg-green-500'
+                                    }`}
+                                    style={{ width: `${Math.min(100, (session.usage.total_tokens / session.agent_budget) * 100)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-xs font-mono" title={`Prompt: ${session.usage.prompt_tokens} | Completion: ${session.usage.completion_tokens}`}>
+                                {formatTokens(session.usage.total_tokens)}
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-sm">
+                            {(() => {
+                              // Rough estimate: $0.003/1K tokens (blended input/output average)
+                              const cost = session.usage.total_tokens * 0.000003;
+                              return cost > 0 ? `$${cost.toFixed(4)}` : '—';
+                            })()}
                           </TableCell>
                           <TableCell>
                             {session.has_websocket ? (
