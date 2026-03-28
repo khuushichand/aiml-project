@@ -477,6 +477,28 @@ class ACPSessionUsageResponse(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Agent Metrics (Admin aggregation)
+# -----------------------------------------------------------------------------
+
+
+class ACPAgentMetrics(BaseModel):
+    """Aggregated runtime metrics for a single agent type."""
+    agent_type: str = Field(..., description="Agent type identifier")
+    session_count: int = Field(default=0, description="Total number of sessions")
+    active_sessions: int = Field(default=0, description="Currently active sessions")
+    total_prompt_tokens: int = Field(default=0, description="Sum of prompt tokens across all sessions")
+    total_completion_tokens: int = Field(default=0, description="Sum of completion tokens across all sessions")
+    total_tokens: int = Field(default=0, description="Sum of total tokens across all sessions")
+    total_messages: int = Field(default=0, description="Sum of messages across all sessions")
+    last_used_at: str | None = Field(default=None, description="ISO 8601 timestamp of most recent activity")
+
+
+class ACPAgentMetricsListResponse(BaseModel):
+    """Response for the agent metrics aggregation endpoint."""
+    items: list[ACPAgentMetrics] = Field(default_factory=list)
+
+
+# -----------------------------------------------------------------------------
 # Agent Configuration (Admin-managed)
 # -----------------------------------------------------------------------------
 

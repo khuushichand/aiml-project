@@ -14,6 +14,8 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentConfigCreate,
     ACPAgentConfigListResponse,
     ACPAgentConfigResponse,
+    ACPAgentMetrics,
+    ACPAgentMetricsListResponse,
     ACPPermissionPolicyCreate,
     ACPPermissionPolicyListResponse,
     ACPPermissionPolicyResponse,
@@ -122,6 +124,20 @@ async def admin_list_agent_configs(
     return ACPAgentConfigListResponse(
         agents=[ACPAgentConfigResponse(**c.to_dict()) for c in configs],
         total=len(configs),
+    )
+
+
+@router.get("/acp/agents/metrics", response_model=ACPAgentMetricsListResponse)
+async def get_acp_agent_metrics() -> ACPAgentMetricsListResponse:
+    """Aggregate runtime metrics per ACP agent type.
+
+    Returns per-agent totals for sessions, active sessions, tokens,
+    messages, and the timestamp of the most recent activity.
+    """
+    store = await get_acp_session_store()
+    metrics = await store.get_agent_metrics()
+    return ACPAgentMetricsListResponse(
+        items=[ACPAgentMetrics(**m) for m in metrics],
     )
 
 

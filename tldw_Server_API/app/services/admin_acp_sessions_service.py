@@ -574,6 +574,16 @@ class ACPSessionStore:
 
             return self._dict_to_record(d, messages)
 
+    # -- Aggregation --------------------------------------------------------
+
+    async def get_agent_metrics(self) -> list[dict[str, Any]]:
+        """Aggregate session metrics per agent type.
+
+        Delegates to the SQLite backend for an efficient GROUP BY query.
+        Returns a list of dicts sorted by total_tokens descending.
+        """
+        return self._db.aggregate_metrics_by_agent()
+
     # -- Agent Config CRUD --------------------------------------------------
 
     async def create_agent_config(self, data: dict[str, Any]) -> AgentConfig:

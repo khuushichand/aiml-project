@@ -587,6 +587,44 @@ class ACPSessionsDB:
 
         return [self._row_to_dict(r) for r in rows], total
 
+    def aggregate_metrics_by_agent(self) -> list[dict[str, Any]]:
+        """Aggregate session metrics grouped by agent_type.
+
+        Returns a list of dicts sorted by total_tokens descending, each with:
+        agent_type, session_count, active_sessions, total_prompt_tokens,
+        total_completion_tokens, total_tokens, total_messages, last_used_at.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT
+                agent_type,
+                COUNT(*)                                       AS session_count,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_sessions,
+                COALESCE(SUM(prompt_tokens), 0)                AS total_prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0)            AS total_completion_tokens,
+                COALESCE(SUM(total_tokens), 0)                 AS total_tokens,
+                COALESCE(SUM(message_count), 0)                AS total_messages,
+                MAX(COALESCE(last_activity_at, created_at))    AS last_used_at
+            FROM sessions
+            GROUP BY agent_type
+            ORDER BY total_tokens DESC
+            """
+        ).fetchall()
+        return [
+            {
+                "agent_type": r["agent_type"],
+                "session_count": r["session_count"],
+                "active_sessions": r["active_sessions"],
+                "total_prompt_tokens": r["total_prompt_tokens"],
+                "total_completion_tokens": r["total_completion_tokens"],
+                "total_tokens": r["total_tokens"],
+                "total_messages": r["total_messages"],
+                "last_used_at": r["last_used_at"],
+            }
+            for r in rows
+        ]
+
     # ------------------------------------------------------------------
     # Text normalization (local helper — no external imports)
     # ------------------------------------------------------------------
