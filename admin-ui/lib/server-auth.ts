@@ -133,6 +133,7 @@ export const appendProxyHeaders = (request: NextRequest, headers: Headers): void
     'if-none-match',
     'if-modified-since',
     'range',
+    'x-request-id',
   ];
 
   for (const name of passthroughHeaders) {

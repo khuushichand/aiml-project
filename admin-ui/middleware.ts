@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildApiUrl } from '@/lib/api-config';
+import { generateRequestId } from '@/lib/correlation-id';
 
 const AUTH_COOKIE_NAMES = ['access_token', 'x_api_key', 'x-api-key'] as const;
 
@@ -329,8 +330,12 @@ const hasAuthSession = async (request: NextRequest): Promise<boolean> => {
 };
 
 export async function middleware(request: NextRequest) {
+  const requestId = request.headers.get('x-request-id') || generateRequestId();
+
   if (await hasAuthSession(request)) {
-    return NextResponse.next();
+    const response = NextResponse.next();
+    response.headers.set('x-request-id', requestId);
+    return response;
   }
 
   const loginUrl = request.nextUrl.clone();
@@ -339,7 +344,9 @@ export async function middleware(request: NextRequest) {
     'redirectTo',
     `${request.nextUrl.pathname}${request.nextUrl.search}`
   );
-  return NextResponse.redirect(loginUrl);
+  const response = NextResponse.redirect(loginUrl);
+  response.headers.set('x-request-id', requestId);
+  return response;
 }
 
 export const config = {
