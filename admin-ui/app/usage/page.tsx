@@ -114,6 +114,12 @@ const formatDateTime = (value?: string | null): string => {
   return parsed.toLocaleString();
 };
 
+const renderTokenHeader = (shortLabel: string, fullLabel: string) => (
+  <TableHead className="text-right" aria-label={fullLabel}>
+    <abbr title={fullLabel}>{shortLabel}</abbr>
+  </TableHead>
+);
+
 function BreakdownCard({ title, rows, keyLabel }: { title: string; rows: RouterAnalyticsBreakdownRow[]; keyLabel: string }) {
   return (
     <Card>
@@ -126,8 +132,8 @@ function BreakdownCard({ title, rows, keyLabel }: { title: string; rows: RouterA
             <TableRow>
               <TableHead>{keyLabel}</TableHead>
               <TableHead className="text-right">Requests</TableHead>
-              <TableHead className="text-right" title="Prompt Tokens">PP</TableHead>
-              <TableHead className="text-right" title="Total Generated Tokens">TG</TableHead>
+              {renderTokenHeader('PP', 'Prompt Tokens')}
+              {renderTokenHeader('TG', 'Total Generated Tokens')}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -535,7 +541,7 @@ export default function UsagePage() {
                   {tab.label}
                 </TabsTrigger>
               ))}
-              <span className="mx-1 text-muted-foreground text-xs self-center">|</span>
+              <span aria-hidden="true" className="mx-1 text-muted-foreground text-xs self-center">|</span>
               {SECONDARY_TABS.map((tab) => (
                 <TabsTrigger key={tab.value} value={tab.value} className="relative min-w-fit px-3 py-2 text-muted-foreground">
                   {tab.label}
@@ -750,8 +756,8 @@ export default function UsagePage() {
                         <TableRow>
                           <TableHead>Provider</TableHead>
                           <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right" title="Prompt Tokens">PP</TableHead>
-                          <TableHead className="text-right" title="Total Generated Tokens">TG</TableHead>
+                          {renderTokenHeader('PP', 'Prompt Tokens')}
+                          {renderTokenHeader('TG', 'Total Generated Tokens')}
                           <TableHead className="text-right">Cost USD</TableHead>
                           <TableHead className="text-right">Latency ms</TableHead>
                           <TableHead className="text-right">Errors</TableHead>
@@ -935,8 +941,8 @@ export default function UsagePage() {
                           <TableHead>Model</TableHead>
                           <TableHead>Provider</TableHead>
                           <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right" title="Prompt Tokens">PP</TableHead>
-                          <TableHead className="text-right" title="Total Generated Tokens">TG</TableHead>
+                          {renderTokenHeader('PP', 'Prompt Tokens')}
+                          {renderTokenHeader('TG', 'Total Generated Tokens')}
                           <TableHead className="text-right">Cost USD</TableHead>
                           <TableHead className="text-right">Latency ms</TableHead>
                           <TableHead className="text-right">Errors</TableHead>
@@ -1022,8 +1028,8 @@ export default function UsagePage() {
                         <TableRow>
                           <TableHead>Conversation</TableHead>
                           <TableHead className="text-right">Requests</TableHead>
-                          <TableHead className="text-right" title="Prompt Tokens">PP</TableHead>
-                          <TableHead className="text-right" title="Total Generated Tokens">TG</TableHead>
+                          {renderTokenHeader('PP', 'Prompt Tokens')}
+                          {renderTokenHeader('TG', 'Total Generated Tokens')}
                           <TableHead className="text-right">Cost USD</TableHead>
                           <TableHead className="text-right">Latency ms</TableHead>
                           <TableHead className="text-right">Errors</TableHead>

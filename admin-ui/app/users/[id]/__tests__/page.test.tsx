@@ -386,5 +386,6 @@ describe('UserDetailPage password reset', () => {
     expect(await screen.findByText('Direct override')).toBeInTheDocument();
     expect((await screen.findAllByText(/Role:/i)).length).toBeGreaterThan(0);
     expect(await screen.findByText('Inherited')).toBeInTheDocument();
+    expect(screen.getByLabelText('Filter permissions')).toBeInTheDocument();
   });
 });

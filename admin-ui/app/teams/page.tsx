@@ -33,6 +33,8 @@ const teamSchema = z.object({
 
 type TeamFormData = z.infer<typeof teamSchema>;
 
+const ALL_ORGANIZATIONS_SENTINEL = '__all__';
+
 function TeamsPageContent() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -56,6 +58,9 @@ function TeamsPageContent() {
   const [deletingTeamId, setDeletingTeamId] = useState<number | null>(null);
   const confirm = useConfirm();
   const { warning, success, error: showError } = useToast();
+  const isAllOrganizations = selectedOrgId === ALL_ORGANIZATIONS_SENTINEL;
+  const scopedOrganizationId = isAllOrganizations ? undefined : selectedOrgId;
+  const canBrowseTeams = Boolean(scopedOrganizationId || isAllOrganizations);
   const teamForm = useForm<TeamFormData>({
     resolver: zodResolver(teamSchema),
     defaultValues: {
@@ -93,7 +98,7 @@ function TeamsPageContent() {
   }, [loadOrganizations]);
 
   useEffect(() => {
-    if (!selectedOrgId && organizations.length > 0) {
+    if (selectedOrgId === undefined && organizations.length > 0) {
       setSelectedOrgId(String(organizations[0].id));
     }
   }, [organizations, selectedOrgId, setSelectedOrgId]);
@@ -105,9 +110,9 @@ function TeamsPageContent() {
   }, [showCreateForm, teamForm]);
 
   useEffect(() => {
-    if (selectedOrgId) {
-      loadTeams(selectedOrgId);
-    } else if (organizations.length > 0) {
+    if (scopedOrganizationId) {
+      loadTeams(scopedOrganizationId);
+    } else if (isAllOrganizations && organizations.length > 0) {
       // "All Organizations" mode: fetch teams for each org
       setLoading(true);
       Promise.allSettled(organizations.map(org => api.getTeams(String(org.id))))
@@ -119,23 +124,23 @@ function TeamsPageContent() {
     } else {
       setTeams([]);
     }
-  }, [loadTeams, selectedOrgId, organizations]);
+  }, [isAllOrganizations, loadTeams, organizations, scopedOrganizationId]);
 
   const handleSubmit = teamForm.handleSubmit(async (data) => {
-    if (!selectedOrgId) {
+    if (!scopedOrganizationId) {
       warning('Select organization', 'Please select an organization first.');
       return;
     }
     try {
       setCreatingTeam(true);
-      await api.createTeam(selectedOrgId, {
+      await api.createTeam(scopedOrganizationId, {
         name: data.name,
         description: data.description?.trim() || undefined,
       });
       setShowCreateForm(false);
       teamForm.reset();
       success('Team created', `${data.name} has been created.`);
-      await loadTeams(selectedOrgId);
+      await loadTeams(scopedOrganizationId);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Please try again.';
       console.error('Failed to create team:', error);
@@ -170,7 +175,8 @@ function TeamsPageContent() {
   };
 
   const handleUpdateTeam = async () => {
-    if (!editingTeam || !selectedOrgId) return;
+    const targetOrgId = isAllOrganizations ? String(editingTeam?.org_id ?? '') : scopedOrganizationId;
+    if (!editingTeam || !targetOrgId) return;
     const trimmedName = editName.trim();
     if (!trimmedName) {
       setEditError('Team name is required.');
@@ -180,13 +186,27 @@ function TeamsPageContent() {
     try {
       setUpdatingTeam(true);
       setEditError('');
-      await api.updateTeam(selectedOrgId, String(editingTeam.id), {
+      await api.updateTeam(targetOrgId, String(editingTeam.id), {
         name: trimmedName,
         description: editDescription.trim() || undefined,
       });
       success('Team updated', `${trimmedName} has been updated.`);
       closeEditTeamDialog();
-      await loadTeams(selectedOrgId);
+      if (isAllOrganizations) {
+        setTeams((currentTeams) =>
+          currentTeams.map((team) =>
+            team.id === editingTeam.id
+              ? {
+                  ...team,
+                  name: trimmedName,
+                  description: editDescription.trim() || undefined,
+                }
+              : team
+          )
+        );
+      } else {
+        await loadTeams(targetOrgId);
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to update team.';
       setEditError(message);
@@ -197,7 +217,8 @@ function TeamsPageContent() {
   };
 
   const handleDeleteTeam = async (team: Team) => {
-    if (!selectedOrgId) return;
+    const targetOrgId = isAllOrganizations ? String(team.org_id ?? '') : scopedOrganizationId;
+    if (!targetOrgId) return;
     try {
       const membersResponse = await api.getTeamMembers(String(team.id));
       const memberCount = Array.isArray(membersResponse)
@@ -220,9 +241,13 @@ function TeamsPageContent() {
       if (!confirmed) return;
 
       setDeletingTeamId(team.id);
-      await api.deleteTeam(selectedOrgId, String(team.id));
+      await api.deleteTeam(targetOrgId, String(team.id));
       success('Team deleted', `${team.name} has been deleted.`);
-      await loadTeams(selectedOrgId);
+      if (isAllOrganizations) {
+        setTeams((currentTeams) => currentTeams.filter((currentTeam) => currentTeam.id !== team.id));
+      } else {
+        await loadTeams(targetOrgId);
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to delete team.';
       showError('Delete team failed', message);
@@ -267,7 +292,7 @@ function TeamsPageContent() {
                 />
                 <Button
                   onClick={() => setShowCreateForm(!showCreateForm)}
-                  disabled={!selectedOrgId}
+                  disabled={!scopedOrganizationId}
                 >
                   <Plus className="mr-2 h-4 w-4" />
                   New Team
@@ -301,11 +326,11 @@ function TeamsPageContent() {
                   />
                 ) : (
                   <Select
-                    value={selectedOrgId || '__all__'}
-                    onChange={(e) => handleOrgChange(e.target.value === '__all__' ? '' : e.target.value)}
+                    value={selectedOrgId ?? ''}
+                    onChange={(e) => handleOrgChange(e.target.value)}
                     className="max-w-md"
                   >
-                    <option value="__all__">All Organizations</option>
+                    <option value={ALL_ORGANIZATIONS_SENTINEL}>All Organizations</option>
                     {organizations.map((org) => (
                       <option key={org.id} value={org.id}>
                         {org.name} ({org.slug})
@@ -316,7 +341,7 @@ function TeamsPageContent() {
               </CardContent>
             </Card>
 
-            {showCreateForm && selectedOrgId && (
+            {showCreateForm && scopedOrganizationId && (
               <Card className="mb-6">
                 <CardHeader>
                   <CardTitle>Create Team</CardTitle>
@@ -363,7 +388,7 @@ function TeamsPageContent() {
                     value={searchQuery || ''}
                     onChange={(e) => handleSearchChange(e.target.value)}
                     className="pl-10"
-                    disabled={!selectedOrgId}
+                    disabled={!canBrowseTeams}
                   />
                 </div>
               </CardContent>
@@ -373,13 +398,15 @@ function TeamsPageContent() {
               <CardHeader>
                 <CardTitle>Teams List</CardTitle>
                 <CardDescription>
-                  {selectedOrgId
-                    ? `Teams in ${organizations.find(o => String(o.id) === selectedOrgId)?.name || 'selected organization'}`
-                    : 'Select an organization to view teams'}
+                  {isAllOrganizations
+                    ? 'Teams across all organizations'
+                    : scopedOrganizationId
+                      ? `Teams in ${organizations.find(o => String(o.id) === scopedOrganizationId)?.name || 'selected organization'}`
+                      : 'Select an organization to view teams'}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {!selectedOrgId ? (
+                {!canBrowseTeams ? (
                   <EmptyState
                     icon={Users}
                     title="Select an organization"
@@ -416,7 +443,11 @@ function TeamsPageContent() {
                           }
                         : {
                             label: 'Create team',
-                            onClick: () => setShowCreateForm(true),
+                            onClick: () => {
+                              if (scopedOrganizationId) {
+                                setShowCreateForm(true);
+                              }
+                            },
                           },
                     ]}
                   />

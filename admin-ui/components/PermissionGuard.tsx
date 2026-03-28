@@ -286,7 +286,8 @@ const usePermissionGuardDecision = ({
 };
 
 const renderRouteLoading = () => (
-  <div className="flex h-screen items-center justify-center">
+  <div className="flex h-screen items-center justify-center" role="status" aria-live="polite" aria-atomic="true">
+    <span className="sr-only">Loading protected page</span>
     <CardSkeleton />
   </div>
 );

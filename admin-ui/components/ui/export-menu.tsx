@@ -26,14 +26,14 @@ export function ExportMenu({ onExport, disabled = false, label = 'Export' }: Exp
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem onClick={() => onExport('csv')} className="flex items-center gap-2 cursor-pointer">
+        <DropdownMenuItem onSelect={() => onExport('csv')} className="flex items-center gap-2 cursor-pointer">
           <FileSpreadsheet className="h-4 w-4 text-green-600" />
           <div>
             <div className="font-medium">Export as CSV</div>
             <div className="text-xs text-muted-foreground">Spreadsheet format</div>
           </div>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onExport('json')} className="flex items-center gap-2 cursor-pointer">
+        <DropdownMenuItem onSelect={() => onExport('json')} className="flex items-center gap-2 cursor-pointer">
           <FileJson className="h-4 w-4 text-blue-600" />
           <div>
             <div className="font-medium">Export as JSON</div>

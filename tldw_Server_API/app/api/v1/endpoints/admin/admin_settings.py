@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
@@ -39,7 +39,7 @@ async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> NotesTi
 
 
 class RiskWeightsResponse(BaseModel):
-    weights: dict[str, Any] = {}
+    weights: dict[str, Any] = Field(default_factory=dict)
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -53,7 +53,7 @@ async def get_security_risk_weights(
 ) -> RiskWeightsResponse:
     """Get the security risk score weights configuration."""
     result = await admin_settings_service.get_risk_weights()
-    return RiskWeightsResponse(weights=result if isinstance(result, dict) else {})
+    return RiskWeightsResponse(weights=result)
 
 
 @router.post("/security/risk-weights", response_model=RiskWeightsResponse)
@@ -63,4 +63,4 @@ async def set_security_risk_weights(
 ) -> RiskWeightsResponse:
     """Update the security risk score weights configuration."""
     result = await admin_settings_service.set_risk_weights(payload.weights)
-    return RiskWeightsResponse(weights=result if isinstance(result, dict) else {})
+    return RiskWeightsResponse(weights=result)

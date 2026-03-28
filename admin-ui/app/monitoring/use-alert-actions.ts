@@ -64,7 +64,7 @@ export const useAlertActions = ({
       // Rollback on failure
       setAlerts((prev) =>
         prev.map((a) =>
-          a.id === alert.id ? { ...a, acknowledged_at: undefined } : a,
+          a.id === alert.id ? { ...a, acknowledged: false, acknowledged_at: undefined } : a,
         ),
       );
       console.error('Failed to acknowledge alert:', err);

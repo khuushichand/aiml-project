@@ -1269,7 +1269,9 @@ export default function JobsPage() {
                         const canRequeue = normalizedStatus === 'quarantined';
 
                         // SLA breach detection
-                        const matchingSla = slaPolicies.find(p => p.enabled && (!p.job_type || p.job_type === job.job_type));
+                        const matchingSla =
+                          slaPolicies.find((policy) => policy.enabled && policy.job_type === job.job_type)
+                          ?? slaPolicies.find((policy) => policy.enabled && !policy.job_type);
                         const jobDurationSec = job.started_at && job.completed_at
                           ? (new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()) / 1000
                           : job.started_at

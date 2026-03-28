@@ -615,7 +615,18 @@ export default function ResourceGovernorPage() {
         return;
       }
 
-      const user = scopeUsers.find((entry) => String(entry.id) === userIdValue);
+      const normalizedUserValue = userIdValue.toLowerCase();
+      const matchingSuggestion = userSuggestions.find(
+        (entry) =>
+          String(entry.id) === userIdValue ||
+          entry.username.toLowerCase() === normalizedUserValue
+      );
+      const resolvedUserId = matchingSuggestion ? String(matchingSuggestion.id) : userIdValue;
+      const user = scopeUsers.find(
+        (entry) =>
+          String(entry.id) === resolvedUserId ||
+          entry.username?.toLowerCase() === normalizedUserValue
+      );
       if (!user) {
         setResolutionError(`User ${userIdValue} was not found in the current admin scope.`);
         return;

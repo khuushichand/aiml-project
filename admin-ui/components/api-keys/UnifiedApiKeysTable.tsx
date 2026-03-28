@@ -100,8 +100,18 @@ export const UnifiedApiKeysTable = ({
           <TableHead>Created</TableHead>
           <TableHead>Last Used</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead title="Green: <90 days, Yellow: 90-180 days, Red: >180 days">
-            Age <span className="text-muted-foreground cursor-help">&#9432;</span>
+          <TableHead>
+            Age
+            <span
+              aria-hidden="true"
+              className="text-muted-foreground cursor-help"
+              title="Green: <90 days, Yellow: 90-180 days, Red: >180 days"
+            >
+              &#9432;
+            </span>
+            <span className="sr-only">
+              Green under 90 days, yellow 90 to 180 days, red over 180 days.
+            </span>
           </TableHead>
           <TableHead>Expiry</TableHead>
           <TableHead>Activity</TableHead>

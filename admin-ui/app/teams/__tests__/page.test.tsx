@@ -12,6 +12,9 @@ const toastErrorMock = vi.hoisted(() => vi.fn());
 const setPageMock = vi.hoisted(() => vi.fn());
 const setPageSizeMock = vi.hoisted(() => vi.fn());
 const resetPaginationMock = vi.hoisted(() => vi.fn());
+const setSelectedOrgIdMock = vi.hoisted(() => vi.fn());
+
+let currentSelectedOrgId = '10';
 
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a>,
@@ -41,7 +44,7 @@ vi.mock('@/components/ui/toast', () => ({
 
 vi.mock('@/lib/use-url-state', () => ({
   useUrlState: (key: string, options?: { defaultValue?: string }) => {
-    if (key === 'org') return ['10', vi.fn()];
+    if (key === 'org') return [currentSelectedOrgId, setSelectedOrgIdMock];
     return [options?.defaultValue ?? '', vi.fn()];
   },
   useUrlPagination: () => ({
@@ -76,9 +79,11 @@ type ApiMock = {
 const apiMock = api as unknown as ApiMock;
 
 beforeEach(() => {
+  currentSelectedOrgId = '10';
   confirmMock.mockResolvedValue(true);
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
+  setSelectedOrgIdMock.mockClear();
 
   apiMock.getOrganizations.mockResolvedValue([
     {
@@ -145,5 +150,58 @@ describe('TeamsPage edit and delete flows', () => {
     await waitFor(() => {
       expect(apiMock.deleteTeam).toHaveBeenCalledWith('10', '5');
     });
+  });
+
+  it('keeps the all-organizations sentinel stable and aggregates teams across orgs', async () => {
+    currentSelectedOrgId = '__all__';
+    apiMock.getOrganizations.mockResolvedValue([
+      {
+        id: 10,
+        name: 'Acme',
+        slug: 'acme',
+      },
+      {
+        id: 12,
+        name: 'Beta',
+        slug: 'beta',
+      },
+    ]);
+    apiMock.getTeams.mockImplementation(async (orgId: string) => {
+      if (orgId === '10') {
+        return [
+          {
+            id: 5,
+            org_id: 10,
+            name: 'Team One',
+            description: 'Team one description',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ];
+      }
+      if (orgId === '12') {
+        return [
+          {
+            id: 7,
+            org_id: 12,
+            name: 'Team Two',
+            description: 'Team two description',
+            created_at: '2026-01-02T00:00:00Z',
+            updated_at: '2026-01-02T00:00:00Z',
+          },
+        ];
+      }
+      return [];
+    });
+
+    render(<TeamsPage />);
+
+    await screen.findByText('Team One');
+    expect(await screen.findByText('Team Two')).toBeInTheDocument();
+    expect(screen.getByText('Teams across all organizations')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New Team' })).toBeDisabled();
+    expect(screen.getByPlaceholderText('Search teams by name or description...').getAttribute('disabled')).toBeNull();
+    expect(apiMock.getTeams).toHaveBeenCalledWith('10');
+    expect(apiMock.getTeams).toHaveBeenCalledWith('12');
   });
 });

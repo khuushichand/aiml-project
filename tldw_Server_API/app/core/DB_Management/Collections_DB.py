@@ -531,6 +531,15 @@ class CollectionsDatabase:
                 columns.add(str(name))
         return columns
 
+    def _table_columns(self, table: str) -> set[str]:
+        if self.backend.backend_type == BackendType.SQLITE:
+            return self._sqlite_columns(table)
+        return {
+            str(row["name"])
+            for row in self.backend.get_table_info(table)
+            if row.get("name")
+        }
+
     def _backfill_audiobook_project_ids(self) -> None:
         try:
             rows = self.backend.execute(
@@ -1559,11 +1568,9 @@ class CollectionsDatabase:
                     raise
         # Backfill user_notifications columns
         notif_columns: set[str] = set()
-        if self.backend.backend_type == BackendType.SQLITE:
-            try:
-                notif_columns = self._sqlite_columns("user_notifications")
-            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
-                pass
+        if self.backend.table_exists("user_notifications"):
+            with contextlib.suppress(*_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
+                notif_columns = self._table_columns("user_notifications")
         if notif_columns and "delivery_status" not in notif_columns:
             try:
                 self.backend.execute(
@@ -4478,18 +4485,19 @@ class CollectionsDatabase:
         notification_id: int,
         status: str,
         delivered_at: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Update the delivery_status (and optionally delivered_at) of a notification."""
         if delivered_at:
-            self.backend.execute(
+            cursor = self.backend.execute(
                 "UPDATE user_notifications SET delivery_status = ?, delivered_at = ? WHERE id = ? AND user_id = ?",
                 (status, delivered_at, notification_id, self.user_id),
             )
         else:
-            self.backend.execute(
+            cursor = self.backend.execute(
                 "UPDATE user_notifications SET delivery_status = ? WHERE id = ? AND user_id = ?",
                 (status, notification_id, self.user_id),
             )
+        return bool(cursor.rowcount and cursor.rowcount > 0)
 
     def list_user_notifications(
         self,

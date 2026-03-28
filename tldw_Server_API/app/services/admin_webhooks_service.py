@@ -132,48 +132,75 @@ class AdminWebhooksService:
         active_only: bool = False,
     ) -> tuple[list[WebhookRecord], int]:
         pool = await self._get_pool()
-        where = "WHERE active = 1" if active_only else ""
-        count_row = await pool.fetchone(
-            f"SELECT COUNT(*) as cnt FROM admin_webhooks {where}",
-        )
+        if active_only:
+            count_row = await pool.fetchone(
+                "SELECT COUNT(*) as cnt FROM admin_webhooks WHERE active = ?",
+                (1,),
+            )
+            rows = await pool.fetchall(
+                "SELECT * FROM admin_webhooks WHERE active = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (1, limit, offset),
+            )
+        else:
+            count_row = await pool.fetchone(
+                "SELECT COUNT(*) as cnt FROM admin_webhooks",
+            )
+            rows = await pool.fetchall(
+                "SELECT * FROM admin_webhooks ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
         total = count_row["cnt"] if count_row else 0
-
-        rows = await pool.fetchall(
-            f"SELECT * FROM admin_webhooks {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        )
         return [self._row_to_record(r) for r in rows], total
 
     async def update_webhook(
         self, webhook_id: int, **fields: Any,
     ) -> WebhookRecord | None:
         pool = await self._get_pool()
-        allowed = {
-            "url", "event_types", "description", "secret",
-            "active", "retry_count", "timeout_seconds",
-        }
-        updates: list[str] = []
-        values: list[Any] = []
-        for key, val in fields.items():
-            if key not in allowed or val is None:
-                continue
-            if key == "event_types":
-                val = json.dumps(val)
-            if key == "active":
-                val = int(val)
-            updates.append(f"{key} = ?")
-            values.append(val)
+        serialized_event_types = (
+            json.dumps(fields["event_types"]) if fields.get("event_types") is not None else None
+        )
+        active_value = int(fields["active"]) if fields.get("active") is not None else None
 
-        if not updates:
+        has_changes = any(
+            fields.get(key) is not None
+            for key in (
+                "url",
+                "event_types",
+                "description",
+                "secret",
+                "active",
+                "retry_count",
+                "timeout_seconds",
+            )
+        )
+        if not has_changes:
             return await self.get_webhook(webhook_id)
 
-        updates.append("updated_at = ?")
-        values.append(datetime.now(timezone.utc).isoformat())
-        values.append(webhook_id)
-
         await pool.execute(
-            f"UPDATE admin_webhooks SET {', '.join(updates)} WHERE id = ?",
-            tuple(values),
+            """
+            UPDATE admin_webhooks
+            SET
+                url = COALESCE(?, url),
+                event_types = COALESCE(?, event_types),
+                description = COALESCE(?, description),
+                secret = COALESCE(?, secret),
+                active = COALESCE(?, active),
+                retry_count = COALESCE(?, retry_count),
+                timeout_seconds = COALESCE(?, timeout_seconds),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                fields.get("url"),
+                serialized_event_types,
+                fields.get("description"),
+                fields.get("secret"),
+                active_value,
+                fields.get("retry_count"),
+                fields.get("timeout_seconds"),
+                datetime.now(timezone.utc).isoformat(),
+                webhook_id,
+            ),
         )
         return await self.get_webhook(webhook_id)
 
@@ -212,7 +239,10 @@ class AdminWebhooksService:
         last_attempt = 0
 
         max_attempts = max(1, webhook.retry_count + 1)
-        async with httpx.AsyncClient(timeout=webhook.timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=webhook.timeout_seconds,
+            follow_redirects=False,
+        ) as client:
             for attempt in range(max_attempts):
                 last_attempt = attempt
                 if attempt > 0:

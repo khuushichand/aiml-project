@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -94,21 +94,58 @@ function OnboardingPageContent() {
 
   const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
   const [slugChecking, setSlugChecking] = useState(false);
+  const slugCheckSequence = useRef(0);
+  const slugCheckPromise = useRef<Promise<boolean | null> | null>(null);
+  const latestRequestedSlug = useRef<string | null>(null);
+  const latestResolvedSlug = useRef<string | null>(null);
+  const latestResolvedAvailability = useRef<boolean | null>(null);
 
-  const checkSlugAvailability = useCallback(async (slug: string) => {
-    if (!slug || slug.length < 2) { setSlugAvailable(null); return; }
-    setSlugChecking(true);
-    try {
-      const orgs = await api.getOrganizations({ q: slug });
-      const taken = (Array.isArray(orgs) ? orgs : []).some(
-        (o: { slug?: string }) => o.slug === slug
-      );
-      setSlugAvailable(!taken);
-    } catch {
-      setSlugAvailable(null);
-    } finally {
-      setSlugChecking(false);
+  const checkSlugAvailability = useCallback(async (slug: string): Promise<boolean | null> => {
+    const normalizedSlug = slug.trim();
+    const sequence = ++slugCheckSequence.current;
+    latestRequestedSlug.current = normalizedSlug;
+    if (!normalizedSlug || normalizedSlug.length < 2) {
+      if (sequence === slugCheckSequence.current) {
+        setSlugAvailable(null);
+        setSlugChecking(false);
+        latestResolvedSlug.current = normalizedSlug;
+        latestResolvedAvailability.current = null;
+        slugCheckPromise.current = null;
+      }
+      return null;
     }
+    setSlugChecking(true);
+    const requestPromise = (async () => {
+      try {
+        const orgs = await api.getOrganizations({ q: normalizedSlug });
+        const taken = (Array.isArray(orgs) ? orgs : []).some(
+          (o: { slug?: string }) => o.slug === normalizedSlug
+        );
+        const available = !taken;
+        if (sequence === slugCheckSequence.current) {
+          setSlugAvailable(available);
+          latestResolvedSlug.current = normalizedSlug;
+          latestResolvedAvailability.current = available;
+        }
+        return available;
+      } catch {
+        if (sequence === slugCheckSequence.current) {
+          setSlugAvailable(null);
+          latestResolvedSlug.current = normalizedSlug;
+          latestResolvedAvailability.current = null;
+        }
+        return null;
+      } finally {
+        if (sequence === slugCheckSequence.current) {
+          setSlugChecking(false);
+          if (slugCheckPromise.current === requestPromise) {
+            slugCheckPromise.current = null;
+          }
+        }
+      }
+    })();
+    slugCheckPromise.current = requestPromise;
+    return requestPromise;
   }, []);
 
   const fetchPlans = useCallback(async () => {
@@ -143,6 +180,17 @@ function OnboardingPageContent() {
     if (currentStep === 1) {
       const valid = await trigger(['name', 'slug', 'owner_email']);
       if (!valid) return;
+      const slug = getValues('slug').trim();
+      const availability =
+        latestResolvedSlug.current === slug
+          ? latestResolvedAvailability.current
+          : latestRequestedSlug.current === slug && slugCheckPromise.current
+            ? await slugCheckPromise.current
+            : await checkSlugAvailability(slug);
+      if (availability !== true) {
+        showError(availability === false ? 'Slug is already taken' : 'Unable to verify slug availability');
+        return;
+      }
       setCurrentStep(2);
     } else if (currentStep === 2) {
       if (!selectedPlanId) {

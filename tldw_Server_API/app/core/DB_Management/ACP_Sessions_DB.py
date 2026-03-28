@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_created_agent ON sessions(created_at, agent_type);
 CREATE INDEX IF NOT EXISTS idx_sessions_forked ON sessions(forked_from);
 
 CREATE TABLE IF NOT EXISTS session_messages (

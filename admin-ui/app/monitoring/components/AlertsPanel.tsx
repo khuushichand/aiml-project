@@ -261,7 +261,14 @@ export default function AlertsPanel({
           </div>
         </details>
         <div className="mt-4 text-center">
-          <Button variant="link" size="sm" className="text-xs text-muted-foreground">
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="text-xs text-muted-foreground"
+            disabled
+            title="Preset alert rules are not available yet"
+          >
             Create Alert Rule for common patterns
           </Button>
         </div>

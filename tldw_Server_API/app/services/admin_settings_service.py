@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -9,6 +11,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     AdminCleanupSettingsUpdate,
     NotesTitleSettingsUpdate,
 )
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.config import settings as app_settings
 
 
@@ -95,29 +98,95 @@ _DEFAULT_RISK_WEIGHTS: dict[str, Any] = {
     "suspicious_activity": {"weight": 4, "cap": 20},
 }
 
-# In-memory store — persisted across requests within a single process
-_risk_weights: dict[str, Any] | None = None
+_ADMIN_SETTINGS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS admin_settings (
+    setting_key TEXT PRIMARY KEY,
+    value_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+_RISK_WEIGHTS_SETTING_KEY = "security_risk_weights"
+
+
+def _copy_default_risk_weights() -> dict[str, Any]:
+    return {key: dict(value) for key, value in _DEFAULT_RISK_WEIGHTS.items()}
+
+
+def _validate_risk_weights(weights: dict[str, Any] | None) -> dict[str, Any]:
+    normalized = weights if isinstance(weights, dict) else {}
+    validated: dict[str, Any] = {}
+    for key, defaults in _DEFAULT_RISK_WEIGHTS.items():
+        candidate = normalized.get(key)
+        if not isinstance(candidate, dict):
+            validated[key] = dict(defaults)
+            continue
+
+        try:
+            weight = int(candidate.get("weight", defaults["weight"]))
+        except (TypeError, ValueError):
+            weight = defaults["weight"]
+        try:
+            cap = int(candidate.get("cap", defaults["cap"]))
+        except (TypeError, ValueError):
+            cap = defaults["cap"]
+
+        validated[key] = {
+            "weight": max(0, min(10, weight)),
+            "cap": max(0, min(100, cap)),
+        }
+    return validated
+
+
+async def _ensure_admin_settings_table():
+    pool = await get_db_pool()
+    await pool.execute(_ADMIN_SETTINGS_TABLE_DDL)
+    return pool
 
 
 async def get_risk_weights() -> dict[str, Any]:
     """Return the current risk weight configuration."""
-    global _risk_weights
-    if _risk_weights is None:
-        _risk_weights = dict(_DEFAULT_RISK_WEIGHTS)
-    return {"weights": _risk_weights}
+    try:
+        pool = await _ensure_admin_settings_table()
+        row = await pool.fetchone(
+            "SELECT value_json FROM admin_settings WHERE setting_key = ?",
+            _RISK_WEIGHTS_SETTING_KEY,
+        )
+        raw_payload = row.get("value_json") if row else None
+        if not raw_payload:
+            return _copy_default_risk_weights()
+        try:
+            payload = json.loads(str(raw_payload))
+        except json.JSONDecodeError as exc:
+            logger.warning("Failed to decode persisted risk weights; falling back to defaults: {}", exc)
+            return _copy_default_risk_weights()
+        return _validate_risk_weights(payload)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to get risk weights: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to get risk weights") from exc
 
 
 async def set_risk_weights(weights: dict[str, Any]) -> dict[str, Any]:
     """Update risk weight configuration."""
-    global _risk_weights
-    # Validate structure
-    validated: dict[str, Any] = {}
-    for key in _DEFAULT_RISK_WEIGHTS:
-        if key in weights and isinstance(weights[key], dict):
-            w = max(0, min(10, int(weights[key].get("weight", _DEFAULT_RISK_WEIGHTS[key]["weight"]))))
-            c = max(0, min(100, int(weights[key].get("cap", _DEFAULT_RISK_WEIGHTS[key]["cap"]))))
-            validated[key] = {"weight": w, "cap": c}
-        else:
-            validated[key] = dict(_DEFAULT_RISK_WEIGHTS[key])
-    _risk_weights = validated
-    return {"weights": _risk_weights}
+    try:
+        validated = _validate_risk_weights(weights)
+        pool = await _ensure_admin_settings_table()
+        await pool.execute(
+            """
+            INSERT INTO admin_settings (setting_key, value_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(setting_key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at = excluded.updated_at
+            """,
+            _RISK_WEIGHTS_SETTING_KEY,
+            json.dumps(validated, sort_keys=True),
+            datetime.now(timezone.utc).isoformat(),
+        )
+        return validated
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to set risk weights: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to set risk weights") from exc

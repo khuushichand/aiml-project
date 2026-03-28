@@ -1023,36 +1023,71 @@ async def get_cost_attribution(
     """Aggregate LLM cost by user or org over the given time range."""
     try:
         is_pg = _is_postgres_connection(db)
-        group_col = "user_id" if group_by == "user" else "org_id"
 
         if is_pg:
-            rows = await db.fetch(f"""
+            pg_query = (
+                """
                 SELECT
-                    {group_col} as entity_id,
+                    user_id as entity_id,
                     COUNT(*) as request_count,
                     COALESCE(SUM(total_tokens), 0) as total_tokens,
                     COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
                     COALESCE(SUM(completion_tokens), 0) as completion_tokens
                 FROM llm_usage_v2
-                WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '{int(range_days)} days'
-                GROUP BY {group_col}
+                WHERE created_at >= CURRENT_TIMESTAMP - ($1 * INTERVAL '1 day')
+                GROUP BY user_id
                 ORDER BY total_tokens DESC
                 LIMIT 50
-            """)
+                """
+                if group_by == "user"
+                else
+                """
+                SELECT
+                    org_id as entity_id,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as completion_tokens
+                FROM llm_usage_v2
+                WHERE created_at >= CURRENT_TIMESTAMP - ($1 * INTERVAL '1 day')
+                GROUP BY org_id
+                ORDER BY total_tokens DESC
+                LIMIT 50
+                """
+            )
+            rows = await db.fetch(pg_query, int(range_days))
         else:
-            cursor = await db.execute(f"""
+            sqlite_query = (
+                """
                 SELECT
-                    {group_col} as entity_id,
+                    user_id as entity_id,
                     COUNT(*) as request_count,
                     COALESCE(SUM(total_tokens), 0) as total_tokens,
                     COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
                     COALESCE(SUM(completion_tokens), 0) as completion_tokens
                 FROM llm_usage_v2
-                WHERE datetime(created_at) >= datetime('now', '-{int(range_days)} days')
-                GROUP BY {group_col}
+                WHERE datetime(created_at) >= datetime('now', ?)
+                GROUP BY user_id
                 ORDER BY total_tokens DESC
                 LIMIT 50
-            """)
+                """
+                if group_by == "user"
+                else
+                """
+                SELECT
+                    org_id as entity_id,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as completion_tokens
+                FROM llm_usage_v2
+                WHERE datetime(created_at) >= datetime('now', ?)
+                GROUP BY org_id
+                ORDER BY total_tokens DESC
+                LIMIT 50
+                """
+            )
+            cursor = await db.execute(sqlite_query, (f"-{int(range_days)} days",))
             rows = await cursor.fetchall()
 
         items = []
@@ -1072,5 +1107,5 @@ async def get_cost_attribution(
             "items": items,
         }
     except Exception as exc:
-        logger.warning(f"Failed to get cost attribution: {exc}")
-        return {"group_by": group_by, "range_days": range_days, "items": []}
+        logger.exception("Failed to get cost attribution")
+        raise HTTPException(status_code=503, detail="Cost attribution is currently unavailable") from exc

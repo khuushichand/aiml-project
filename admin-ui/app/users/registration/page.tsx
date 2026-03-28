@@ -19,15 +19,19 @@ import type { RegistrationCode } from '@/types';
 export default function RegistrationPage() {
   const [codes, setCodes] = useState<RegistrationCode[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const toast = useToast();
   const confirm = useConfirm();
 
   const loadCodes = useCallback(async () => {
     try {
       setLoading(true);
+      setLoadError('');
       const data = await api.getRegistrationCodes();
       setCodes(Array.isArray(data) ? data : []);
     } catch {
+      setCodes([]);
+      setLoadError('Failed to load registration codes');
       toast.error('Failed to load registration codes');
     } finally {
       setLoading(false);
@@ -91,6 +95,19 @@ export default function RegistrationPage() {
             <CardContent>
               {loading ? (
                 <CardSkeleton />
+              ) : loadError ? (
+                <div className="space-y-4">
+                  <EmptyState
+                    icon={UserPlus}
+                    title="Unable to load registration codes"
+                    description="The registration code list could not be loaded. Retry to fetch the latest data."
+                  />
+                  <div className="flex justify-center">
+                    <Button type="button" variant="outline" onClick={() => loadCodes()}>
+                      Retry
+                    </Button>
+                  </div>
+                </div>
               ) : codes.length === 0 ? (
                 <EmptyState
                   icon={UserPlus}

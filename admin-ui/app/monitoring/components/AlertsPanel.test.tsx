@@ -121,4 +121,25 @@ describe('AlertsPanel', () => {
     expect(screen.getByTestId('alert-snooze-button-alert-1')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Escalate' })).toBeDisabled();
   });
+
+  it('renders the common-patterns CTA in a disabled state until presets are wired', () => {
+    render(
+      <AlertsPanel
+        alerts={[baseAlert]}
+        history={[]}
+        showSnoozed={false}
+        assignableUsers={[]}
+        loading={false}
+        onToggleShowSnoozed={vi.fn()}
+        onAcknowledge={vi.fn()}
+        onDismiss={vi.fn()}
+        onAssign={vi.fn()}
+        onSnooze={vi.fn()}
+        onEscalate={vi.fn()}
+        localActionsEnabled
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Create Alert Rule for common patterns' })).toBeDisabled();
+  });
 });

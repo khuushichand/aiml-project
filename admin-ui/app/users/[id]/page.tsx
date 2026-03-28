@@ -1021,6 +1021,7 @@ export default function UserDetailPage() {
                       <div className="mt-2 mb-2">
                         <input
                           type="text"
+                          aria-label="Filter permissions"
                           placeholder="Filter permissions..."
                           value={permFilter}
                           onChange={(e) => setPermFilter(e.target.value)}

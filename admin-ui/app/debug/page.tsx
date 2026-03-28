@@ -34,6 +34,15 @@ type BudgetSummary = {
   reset_at?: string;
 };
 
+const parsePositiveUserId = (rawValue: string): number | null => {
+  const trimmed = rawValue.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
 export default function DebugPage() {
   const allowedRoles = isSingleUserMode()
     ? ['admin', 'super_admin', 'owner']
@@ -281,60 +290,62 @@ export default function DebugPage() {
             </Card>
           </div>
 
-          {/* User Lookup Tool */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Search className="h-5 w-5" />
-                Lookup by User ID
-              </CardTitle>
-              <CardDescription>Retrieve user details by numeric ID instead of raw API key</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <UserLookupTool />
-            </CardContent>
-          </Card>
-          {/* Permission Resolver */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Key className="h-5 w-5" />
-                Permission Resolver
-              </CardTitle>
-              <CardDescription>Resolve effective permissions for a user by ID</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <PermissionResolverTool />
-            </CardContent>
-          </Card>
+          <div className="grid gap-6 lg:grid-cols-2">
+            {/* User Lookup Tool */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Search className="h-5 w-5" />
+                  Lookup by User ID
+                </CardTitle>
+                <CardDescription>Retrieve user details by numeric ID instead of raw API key</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <UserLookupTool />
+              </CardContent>
+            </Card>
+            {/* Permission Resolver */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Key className="h-5 w-5" />
+                  Permission Resolver
+                </CardTitle>
+                <CardDescription>Resolve effective permissions for a user by ID</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <PermissionResolverTool />
+              </CardContent>
+            </Card>
 
-          {/* Token Validator */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Search className="h-5 w-5" />
-                Token Validator
-              </CardTitle>
-              <CardDescription>Decode and validate a JWT token</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <TokenValidatorTool />
-            </CardContent>
-          </Card>
+            {/* Token Validator */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Search className="h-5 w-5" />
+                  Token Validator
+                </CardTitle>
+                <CardDescription>Decode and validate a JWT token</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <TokenValidatorTool />
+              </CardContent>
+            </Card>
 
-          {/* Rate Limit Simulator */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Gauge className="h-5 w-5" />
-                Rate Limit Simulator
-              </CardTitle>
-              <CardDescription>Check what rate limits apply for a given user and endpoint</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <RateLimitSimTool />
-            </CardContent>
-          </Card>
+            {/* Rate Limit Simulator */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Gauge className="h-5 w-5" />
+                  Rate Limit Simulator
+                </CardTitle>
+                <CardDescription>Check what rate limits apply for a given user and endpoint</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <RateLimitSimTool />
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </ResponsiveLayout>
     </PermissionGuard>
@@ -348,10 +359,11 @@ function PermissionResolverTool() {
   const [error, setError] = useState('');
 
   const handleResolve = async () => {
-    if (!userId.trim()) { setError('Enter a user ID'); return; }
+    const parsedUserId = parsePositiveUserId(userId);
+    if (parsedUserId === null) { setError('Enter a valid positive user ID'); return; }
     setLoading(true); setError(''); setResult(null);
     try {
-      const data = await api.debugResolvePermissions(parseInt(userId.trim()));
+      const data = await api.debugResolvePermissions(parsedUserId);
       setResult(data as unknown as Record<string, unknown>);
     } catch (err) { setError(err instanceof Error ? err.message : 'Failed'); }
     finally { setLoading(false); }
@@ -415,12 +427,13 @@ function UserLookupTool() {
   const [error, setError] = useState('');
 
   const handleLookup = async () => {
-    if (!userId.trim()) { setError('Enter a user ID'); return; }
+    const parsedUserId = parsePositiveUserId(userId);
+    if (parsedUserId === null) { setError('Enter a valid positive user ID'); return; }
     setLoading(true);
     setError('');
     setResult(null);
     try {
-      const user = await api.getUser(userId.trim());
+      const user = await api.getUser(String(parsedUserId));
       setResult(user as unknown as Record<string, unknown>);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'User not found');
@@ -460,8 +473,8 @@ function RateLimitSimTool() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
   const handleSimulate = async () => {
-    const uid = parseInt(userId, 10);
-    if (!Number.isFinite(uid) || uid <= 0) { setError('Enter a valid user ID'); return; }
+    const uid = parsePositiveUserId(userId);
+    if (uid === null) { setError('Enter a valid positive user ID'); return; }
     if (!endpoint.trim()) { setError('Enter an endpoint path'); return; }
     setLoading(true); setError(''); setResult(null);
     try {

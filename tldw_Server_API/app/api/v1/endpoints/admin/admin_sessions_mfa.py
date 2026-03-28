@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -90,7 +90,8 @@ async def admin_get_user_mfa_status(
 
 
 class BulkMfaStatusResponse(BaseModel):
-    mfa_status: dict[str, bool]
+    mfa_status: dict[str, bool] = Field(default_factory=dict)
+    failed_user_ids: list[int] = Field(default_factory=list)
 
 
 @router.get("/users/mfa/bulk", response_model=BulkMfaStatusResponse)
@@ -99,18 +100,28 @@ async def admin_get_bulk_mfa_status(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> BulkMfaStatusResponse:
     """Fetch MFA status for multiple users in a single request."""
-    user_ids = [int(uid.strip()) for uid in ids.split(",") if uid.strip().isdigit()][:200]
+    raw_ids = [uid.strip() for uid in ids.split(",") if uid.strip()]
+    if not raw_ids:
+        raise HTTPException(status_code=400, detail="Invalid user IDs")
+    if len(raw_ids) > 200:
+        raise HTTPException(status_code=400, detail="Too many user IDs")
+    if any(not uid.isdigit() for uid in raw_ids):
+        raise HTTPException(status_code=400, detail="Invalid user IDs")
+    user_ids = [int(uid) for uid in raw_ids]
 
-    async def _fetch_one(uid: int) -> tuple[str, bool]:
+    async def _fetch_one(uid: int) -> tuple[int, bool | None]:
         try:
             status = await admin_sessions_mfa_service.get_user_mfa_status(principal, uid)
-            return str(uid), bool(status.get("enabled", False)) if isinstance(status, dict) else False
+            enabled = bool(status.get("enabled", False)) if isinstance(status, dict) else False
+            return uid, enabled
         except Exception as exc:
             logger.warning("bulk MFA status: failed for user {}: {}", uid, exc)
-            return str(uid), False
+            return uid, None
 
     pairs = await asyncio.gather(*[_fetch_one(uid) for uid in user_ids])
-    return BulkMfaStatusResponse(mfa_status=dict(pairs))
+    mfa_status = {str(uid): enabled for uid, enabled in pairs if enabled is not None}
+    failed_user_ids = [uid for uid, enabled in pairs if enabled is None]
+    return BulkMfaStatusResponse(mfa_status=mfa_status, failed_user_ids=failed_user_ids)
 
 
 @router.post("/users/{user_id}/mfa/disable", response_model=MessageResponse)

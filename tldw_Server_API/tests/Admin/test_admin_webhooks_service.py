@@ -157,10 +157,10 @@ async def test_update_webhook_skips_none_fields(svc: AdminWebhooksService):
         "created_by": None, "created_at": None, "updated_at": None,
     }
     record = await svc.update_webhook(1, url="https://updated.com", description=None)
-    # description=None should be skipped
+    # description=None should leave the existing value untouched.
     call_args = svc.db_pool.execute.call_args
-    sql = call_args[0][0]
-    assert "description" not in sql
+    params = call_args[0][1]
+    assert params[2] is None
 
 
 @pytest.mark.asyncio
@@ -205,6 +205,7 @@ async def test_deliver_success(svc: AdminWebhooksService):
 
         entry = await svc.deliver(wh, "test.event", {"key": "value"})
         assert entry.status_code == 200
+        mock_client_cls.assert_called_once_with(timeout=5, follow_redirects=False)
         mock_client.post.assert_awaited_once()
 
 

@@ -319,6 +319,7 @@ export default function PermissionMatrixPage() {
                       variant={differencesOnly ? 'default' : 'outline'}
                       size="sm"
                       onClick={() => setDifferencesOnly(!differencesOnly)}
+                      aria-pressed={differencesOnly}
                     >
                       Differences only
                     </Button>

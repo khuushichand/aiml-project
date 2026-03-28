@@ -19,9 +19,10 @@ export function LiveRegion({
   politeness = 'polite',
   className,
 }: LiveRegionProps) {
+  const statusRole = politeness === 'polite' ? 'status' : undefined;
   return (
     <div
-      role="status"
+      role={statusRole}
       aria-live={politeness}
       aria-atomic="true"
       className={className}

@@ -1,6 +1,9 @@
 import pytest
 
 from tldw_Server_API.app.services.admin_budgets_service import (
+    _flatten_budget_payload,
+    _inflate_budget_payload,
+    _normalize_budget_payload,
     build_budget_change_log,
     merge_budget_settings,
 )
@@ -157,3 +160,40 @@ def test_merge_budget_settings_provider_budgets_merges_keys():
         clear=False,
     )
     assert merged["provider_budgets"]["openai"] == {"month_usd": 100, "day_usd": 5}
+
+
+def test_budget_payload_roundtrip_preserves_provider_budgets():
+    flat = {
+        "budget_month_usd": 100.0,
+        "provider_budgets": {
+            "openai": {"month_usd": 50},
+            "anthropic": {"month_usd": 80},
+        },
+    }
+
+    inflated = _inflate_budget_payload(flat)
+    assert inflated["provider_budgets"] == flat["provider_budgets"]
+
+    normalized = _normalize_budget_payload(inflated)
+    flattened = _flatten_budget_payload(normalized)
+    assert flattened["provider_budgets"] == flat["provider_budgets"]
+    assert flattened["budget_month_usd"] == 100.0
+
+
+def test_build_budget_change_log_tracks_provider_budget_updates():
+    existing = {"provider_budgets": {"openai": {"month_usd": 50}}}
+    updates = {
+        "provider_budgets": {
+            "openai": {"month_usd": 100},
+            "anthropic": {"month_usd": 80},
+        }
+    }
+
+    merged = merge_budget_settings(existing, updates=updates, clear=False)
+    changes = build_budget_change_log(existing, merged, updates, clear_budgets=False)
+    by_field = {entry["field_name"]: entry for entry in changes}
+
+    assert by_field["budgets.provider_budgets.openai.month_usd"]["old_value"] == 50
+    assert by_field["budgets.provider_budgets.openai.month_usd"]["new_value"] == 100
+    assert by_field["budgets.provider_budgets.anthropic.month_usd"]["old_value"] is None
+    assert by_field["budgets.provider_budgets.anthropic.month_usd"]["new_value"] == 80

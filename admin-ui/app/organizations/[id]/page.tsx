@@ -476,6 +476,16 @@ export default function OrganizationDetailPage() {
     );
   }
 
+  const filteredMembers = members.filter((member) => {
+    if (!memberSearch) return true;
+    const query = memberSearch.toLowerCase();
+    return (
+      member.user?.username?.toLowerCase().includes(query) ||
+      member.user?.email?.toLowerCase().includes(query) ||
+      String(member.user_id).includes(query)
+    );
+  });
+
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
@@ -743,6 +753,10 @@ export default function OrganizationDetailPage() {
                     <div className="text-center text-muted-foreground py-8">
                       No members yet. Add or invite members to get started.
                     </div>
+                  ) : filteredMembers.length === 0 ? (
+                    <div className="text-center text-muted-foreground py-8">
+                      No members match your search.
+                    </div>
                   ) : (
                     <Table>
                       <TableHeader>
@@ -754,13 +768,7 @@ export default function OrganizationDetailPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {members.filter(m => {
-                          if (!memberSearch) return true;
-                          const q = memberSearch.toLowerCase();
-                          return (m.user?.username?.toLowerCase().includes(q)) ||
-                            (m.user?.email?.toLowerCase().includes(q)) ||
-                            String(m.user_id).includes(q);
-                        }).map((member) => (
+                        {filteredMembers.map((member) => (
                           <TableRow key={member.user_id}>
                             <TableCell>
                               <div>

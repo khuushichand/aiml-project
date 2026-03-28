@@ -203,7 +203,7 @@ export const api = {
     }),
   getUserMfaStatus: (userId: string) => requestJson(`/admin/users/${userId}/mfa`),
   getUserMfaStatusBulk: (userIds: number[]) =>
-    requestJson<{ mfa_status: Record<string, boolean> }>(`/admin/users/mfa/bulk?ids=${userIds.join(',')}`),
+    requestJson<{ mfa_status: Record<string, boolean>; failed_user_ids: number[] }>(`/admin/users/mfa/bulk?ids=${userIds.join(',')}`),
   disableUserMfa: (userId: string, data: { reason: string; admin_password?: string | null }) =>
     requestJson(`/admin/users/${userId}/mfa/disable`, {
       method: 'POST',
@@ -1243,6 +1243,7 @@ export const api = {
     return requestJson<{
       period_seconds: number;
       modules: Record<string, { calls: number; avg_latency_ms: number }>;
+      tools: Record<string, { calls: number; avg_latency_ms: number }>;
     }>(`/admin/mcp/tool-usage${qs ? `?${qs}` : ''}`);
   },
 

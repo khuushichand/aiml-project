@@ -65,7 +65,7 @@ export default function MCPServersPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'modules' | 'tools'>('overview');
-  const [toolUsageByModule, setToolUsageByModule] = useState<Record<string, { calls: number; avg_latency_ms: number }>>({});
+  const [toolUsageByTool, setToolUsageByTool] = useState<Record<string, { calls: number; avg_latency_ms: number }>>({});
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -98,8 +98,10 @@ export default function MCPServersPage() {
       }
       if (results[4].status === 'fulfilled') setMetrics(results[4].value as MCPMetrics);
       if (results[5].status === 'fulfilled') {
-        const usageResult = results[5].value as { modules?: Record<string, { calls: number; avg_latency_ms: number }> };
-        setToolUsageByModule(usageResult?.modules ?? {});
+        const usageResult = results[5].value as {
+          tools?: Record<string, { calls: number; avg_latency_ms: number }>;
+        };
+        setToolUsageByTool(usageResult?.tools ?? {});
       }
 
       const failures = results.filter(r => r.status === 'rejected');
@@ -350,11 +352,12 @@ export default function MCPServersPage() {
                           <TableCell><Badge variant="outline">{tool.module || '-'}</Badge></TableCell>
                           <TableCell className="text-xs">
                             {(() => {
-                              const modUsage = toolUsageByModule[tool.module || ''];
-                              if (!modUsage || modUsage.calls === 0) return <span className="text-muted-foreground">-</span>;
+                              const toolKey = tool.module ? `${tool.module}.${tool.name}` : tool.name;
+                              const toolUsage = toolUsageByTool[toolKey];
+                              if (!toolUsage || toolUsage.calls === 0) return <span className="text-muted-foreground">-</span>;
                               return (
-                                <span title={`${modUsage.avg_latency_ms}ms avg latency`}>
-                                  {modUsage.calls} call{modUsage.calls !== 1 ? 's' : ''}
+                                <span title={`${toolUsage.avg_latency_ms}ms avg latency`}>
+                                  {toolUsage.calls} call{toolUsage.calls !== 1 ? 's' : ''}
                                 </span>
                               );
                             })()}

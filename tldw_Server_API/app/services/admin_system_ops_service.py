@@ -178,22 +178,28 @@ def _normalize_incident_record(value: Any) -> dict[str, Any]:
     incident.setdefault("runbook_url", None)
 
     # Compute SLA metrics (time to acknowledge, time to resolve)
-    created_at = _parse_iso(incident.get("created_at"))
-    resolved_at = _parse_iso(incident.get("resolved_at"))
+    created_at_raw = incident.get("created_at")
+    resolved_at_raw = incident.get("resolved_at")
+    created_at = _parse_iso(created_at_raw) if created_at_raw else None
+    resolved_at = _parse_iso(resolved_at_raw) if resolved_at_raw else None
     timeline = incident.get("timeline") or []
 
     # Time to acknowledge = time of first status change after creation
     first_event_at = None
     for event in timeline:
         event_time = _parse_iso(event.get("created_at") if isinstance(event, dict) else None)
-        if event_time and event_time > created_at:
+        if created_at and event_time and event_time >= created_at:
             first_event_at = event_time
             break
     incident["time_to_acknowledge_seconds"] = (
-        int((first_event_at - created_at).total_seconds()) if first_event_at else None
+        int((first_event_at - created_at).total_seconds())
+        if created_at and first_event_at and first_event_at >= created_at
+        else None
     )
     incident["time_to_resolve_seconds"] = (
-        int((resolved_at - created_at).total_seconds()) if resolved_at else None
+        int((resolved_at - created_at).total_seconds())
+        if created_at and resolved_at and resolved_at >= created_at
+        else None
     )
 
     return incident

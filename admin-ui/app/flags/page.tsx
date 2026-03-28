@@ -413,6 +413,10 @@ export default function FlagsPage() {
         enabled: newEnabled,
         org_id: flag.org_id,
         user_id: flag.user_id,
+        description: flag.description ?? undefined,
+        target_user_ids: flag.target_user_ids ?? [],
+        rollout_percent: flag.rollout_percent ?? 100,
+        variant_value: flag.variant_value ?? undefined,
       });
     } catch (err: unknown) {
       // Rollback on failure
@@ -736,9 +740,11 @@ export default function FlagsPage() {
                           <TableCell>{flag.scope}</TableCell>
                           <TableCell>
                             <button
+                              type="button"
                               onClick={() => void handleToggleFlag(flag)}
                               className="cursor-pointer hover:opacity-80"
                               title={`Click to ${flag.enabled ? 'disable' : 'enable'}`}
+                              aria-pressed={flag.enabled}
                             >
                               <Badge variant={flag.enabled ? 'default' : 'outline'}>
                                 {flag.enabled ? 'Enabled' : 'Disabled'}

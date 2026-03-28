@@ -110,6 +110,8 @@ async def admin_get_budget_forecast(
             "monthly_limit_usd": monthly_usd,
             "note": "Detailed burn-rate projection requires usage aggregation — coming in a future release.",
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Budget forecast failed for org {}: {}", org_id, exc)
         raise HTTPException(status_code=500, detail="Budget forecast failed") from exc

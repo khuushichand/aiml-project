@@ -7,9 +7,12 @@ from datetime import date, datetime
 # Imports
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, SecretStr, field_validator
+
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 
 
 def _blank_string_to_none(value: Any) -> Any:
@@ -29,6 +32,20 @@ def unwrap_optional_secret(value: Any) -> str | None:
         raw_value = str(value)
     normalized = raw_value.strip()
     return normalized or None
+
+
+def validate_admin_webhook_url(value: str) -> str:
+    """Enforce public http(s) webhook targets allowed by the egress policy."""
+    stripped = value.strip()
+    parsed = urlsplit(stripped)
+    if parsed.username or parsed.password:
+        raise ValueError("Webhook URL must not include embedded credentials")
+
+    policy = evaluate_url_policy(stripped)
+    if not policy.allowed:
+        reason = policy.reason or "blocked by egress policy"
+        raise ValueError(f"Webhook URL is not allowed: {reason}")
+    return stripped
 
 #######################################################################################################################
 #
@@ -2181,11 +2198,8 @@ class AdminWebhookCreateRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url_scheme(cls, v: str) -> str:
-        """Only allow http/https URLs to prevent SSRF."""
-        stripped = v.strip()
-        if not stripped.startswith(("http://", "https://")):
-            raise ValueError("Webhook URL must use http:// or https:// scheme")
-        return stripped
+        """Only allow webhook URLs that pass egress safety checks."""
+        return validate_admin_webhook_url(v)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2204,13 +2218,10 @@ class AdminWebhookUpdateRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url_scheme(cls, v: str | None) -> str | None:
-        """Only allow http/https URLs to prevent SSRF."""
+        """Only allow webhook URLs that pass egress safety checks."""
         if v is None:
             return v
-        stripped = v.strip()
-        if not stripped.startswith(("http://", "https://")):
-            raise ValueError("Webhook URL must use http:// or https:// scheme")
-        return stripped
+        return validate_admin_webhook_url(v)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2226,8 +2237,8 @@ class AdminWebhookResponse(BaseModel):
     retry_count: int
     timeout_seconds: int
     created_by: int | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2260,8 +2271,8 @@ class AdminWebhookDeliveryLogEntry(BaseModel):
     latency_ms: int | None = None
     retry_attempt: int = 0
     error_message: str | None = None
-    delivered_at: str | None = None
-    created_at: str | None = None
+    delivered_at: datetime | None = None
+    created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

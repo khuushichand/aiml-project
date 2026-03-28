@@ -517,9 +517,19 @@ export default function UserApiKeysPage() {
                                 });
                                 if (!ok) return;
                                 try {
+                                  setError('');
+                                  setSuccess('');
                                   await api.deleteUserVirtualKey(userId, String(key.id));
-                                  loadVirtualKeys();
-                                } catch (err) { console.error('Failed to delete virtual key:', err); }
+                                  await loadVirtualKeys();
+                                  setSuccess('Virtual API key deleted successfully');
+                                } catch (err: unknown) {
+                                  console.error('Failed to delete virtual key:', err);
+                                  setError(
+                                    err instanceof Error && err.message
+                                      ? err.message
+                                      : 'Failed to delete virtual API key'
+                                  );
+                                }
                               }}
                             />
                           </TableCell>
