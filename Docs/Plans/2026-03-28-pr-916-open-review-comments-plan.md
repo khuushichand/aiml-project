@@ -20,6 +20,12 @@
 
 ## Stage 4: Verify Touched Scope and Security
 **Goal**: Run targeted verification and the required Bandit scan before reporting completion.
-**Success Criteria**: File-level checks pass, the worktree diff contains only the PR #916 follow-up fixes plus plan/test artifacts, and security verification is documented as non-applicable when no Python production files are touched.
+**Success Criteria**: File-level checks pass, the worktree diff contains only the PR #916 follow-up fixes plus plan/test artifacts, and Bandit passes on the touched Python production scope.
 **Tests**: Targeted workflow/compose checks; `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r <touched_paths> -f json -o /tmp/bandit_pr916_open_review_comments.json`
 **Status**: Complete
+
+## Stage 5: Resolve Remaining PR Threads
+**Goal**: Close the remaining unresolved PR #916 review threads with either code fixes or factual replies.
+**Success Criteria**: Live unresolved threads are reduced to zero; stale findings are resolved with code references, and incorrect findings are resolved with supporting evidence.
+**Tests**: `gh api graphql` unresolved-thread query; targeted local test evidence linked in replies
+**Status**: In Progress

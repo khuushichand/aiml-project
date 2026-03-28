@@ -70,6 +70,33 @@ const CHAT_COMPLETION_ERROR_MESSAGE = "Chat completion failed."
 const CHAT_COMPLETION_ERRORS_MESSAGE =
   "One or more internal errors were suppressed."
 
+const isSuspiciousChatCompletionString = (value: string): boolean =>
+  /traceback|stack(?:\s*trace)?|exception|error|\/Users\/|[A-Za-z]:\\|\.py:\d+/i.test(
+    value
+  )
+
+const normalizeChatCompletionResponseBody = (
+  value: unknown
+): Record<string, unknown> | unknown[] => {
+  if (typeof value === "string") {
+    if (isSuspiciousChatCompletionString(value)) {
+      return {
+        error: CHAT_COMPLETION_ERROR_MESSAGE,
+        errors: [CHAT_COMPLETION_ERRORS_MESSAGE]
+      }
+    }
+    return { content: value }
+  }
+  const sanitized = sanitizeChatCompletionPayload(value)
+  if (Array.isArray(sanitized)) {
+    return sanitized
+  }
+  if (sanitized && typeof sanitized === "object") {
+    return sanitized as Record<string, unknown>
+  }
+  return { content: sanitized ?? "" }
+}
+
 const sanitizeChatCompletionPayload = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeChatCompletionPayload(item))
@@ -223,15 +250,13 @@ export const chatRagMethods = {
     // bgRequest returns parsed data; for non-streaming chat we expect a JSON structure or text. To keep existing consumers happy, wrap as Response-like
     // For simplicity, return a minimal object with json() and text()
     const data = res as any
-    const safeData =
-      typeof data === "string" ? data : sanitizeChatCompletionPayload(data)
+    const safeData = normalizeChatCompletionResponseBody(data)
     return new Response(
-      typeof safeData === "string" ? safeData : JSON.stringify(safeData),
+      JSON.stringify(safeData),
       {
         status: 200,
         headers: {
-          'content-type':
-            typeof safeData === 'string' ? 'text/plain' : 'application/json'
+          'content-type': 'application/json'
         }
       }
     )

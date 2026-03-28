@@ -331,7 +331,7 @@ def _evaluate_kokoro_runtime(adapter: Any) -> tuple[bool, Optional[str], dict[st
         has_backend = _module_spec_available("kokoro_onnx")
         espeak_path = _discover_kokoro_espeak_library(adapter)
         diagnostics["kokoro_onnx_available"] = has_backend
-        diagnostics["espeak_lib_path"] = espeak_path
+        diagnostics["espeak_lib_path"] = _sanitize_health_path_value(espeak_path)
         diagnostics["espeak_lib_exists"] = bool(espeak_path and os.path.exists(espeak_path))
         if not has_backend:
             return False, "kokoro_onnx_missing", diagnostics
@@ -344,6 +344,19 @@ def _evaluate_kokoro_runtime(adapter: Any) -> tuple[bool, Optional[str], dict[st
     if not has_pipeline:
         return False, "kokoro_pipeline_missing", diagnostics
     return True, None, diagnostics
+
+
+def _sanitize_health_path_value(value: Any) -> Any:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    expanded = os.path.expanduser(text)
+    if os.path.isabs(expanded):
+        name = os.path.basename(expanded)
+        return name or "<redacted>"
+    return text
 
 
 @router.get("/health")
@@ -473,14 +486,14 @@ async def get_tts_health(request: Request, tts_service: TTSServiceV2 = Depends(g
                 kokoro_info = {
                     "backend": backend,
                     "device": str(getattr(adapter, "device", "unknown")),
-                    "model_path": getattr(adapter, "model_path", None),
-                    "voices_json": getattr(adapter, "voices_json", None),
+                    "model_path": _sanitize_health_path_value(getattr(adapter, "model_path", None)),
+                    "voices_json": _sanitize_health_path_value(getattr(adapter, "voices_json", None)),
                     "runtime_ready": runtime_ready,
                     "runtime_reason": runtime_reason,
                 }
                 try:
                     es_env = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
-                    kokoro_info["espeak_lib_env"] = es_env
+                    kokoro_info["espeak_lib_env"] = _sanitize_health_path_value(es_env)
                     kokoro_info["espeak_lib_path"] = runtime_diagnostics.get("espeak_lib_path")
                     kokoro_info["espeak_lib_exists"] = bool(runtime_diagnostics.get("espeak_lib_exists"))
                 except Exception as exc:
