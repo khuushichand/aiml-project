@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import AuditPage from '../page';
 import { api } from '@/lib/api-client';
 import { formatAxeViolations, getCriticalAndSeriousAxeViolations } from '@/test-utils/axe';
+import { getScopedItem, setScopedItem } from '@/lib/scoped-storage';
 
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
@@ -147,7 +148,7 @@ describe('AuditPage', () => {
     await user.click(screen.getByRole('button', { name: 'Save Current Filters' }));
 
     await waitFor(() => {
-      const persisted = window.localStorage.getItem('admin.audit.saved-searches.v1');
+      const persisted = getScopedItem('admin.audit.saved-searches.v1');
       expect(persisted).toContain('Create events');
       expect(persisted).toContain('user.create');
     });
@@ -185,7 +186,7 @@ describe('AuditPage', () => {
         lastMatchedEventId: 'evt-1',
       },
     ];
-    window.localStorage.setItem('admin.audit.saved-searches.v1', JSON.stringify(savedSearches));
+    setScopedItem('admin.audit.saved-searches.v1', JSON.stringify(savedSearches));
 
     apiMock.getAuditLogs.mockImplementation(async (params?: Record<string, string>) => {
       if (params?.action === 'login.failed') {

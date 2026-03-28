@@ -1,5 +1,7 @@
 'use client';
 
+import { clearScopedStorage } from '@/lib/scoped-storage';
+
 const AUTH_CHANGE_EVENT = 'tldw-admin-auth-change';
 const SESSION_MARKER_COOKIE = 'admin_session';
 const AUTH_MODE_COOKIE = 'admin_auth_mode';
@@ -346,6 +348,7 @@ export async function logout(): Promise<void> {
       // Ignore errors - local auth state must still be cleared.
     });
   } finally {
+    clearScopedStorage();
     clearStoredUser();
     clearJwtStorage();
     clearApiKeyStorage();

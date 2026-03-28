@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import UsersPage from '../page';
 import { api } from '@/lib/api-client';
 import { formatAxeViolations, getCriticalAndSeriousAxeViolations } from '@/test-utils/axe';
+import { getScopedItem } from '@/lib/scoped-storage';
 
 const confirmMock = vi.hoisted(() => vi.fn());
 const privilegedActionMock = vi.hoisted(() => vi.fn());
@@ -357,7 +358,7 @@ describe('UsersPage', () => {
     await waitFor(() => {
       expect(toastSuccessMock).toHaveBeenCalledWith('Saved view', 'Bob only has been added.');
     });
-    expect(window.localStorage.getItem('admin_users_saved_views')).toContain('Bob only');
+    expect(getScopedItem('admin_users_saved_views')).toContain('Bob only');
 
     await user.clear(searchInput);
     await waitFor(() => {
@@ -382,7 +383,7 @@ describe('UsersPage', () => {
       );
     });
     await waitFor(() => {
-      expect(window.localStorage.getItem('admin_users_saved_views') ?? '').not.toContain('Bob only');
+      expect(getScopedItem('admin_users_saved_views') ?? '').not.toContain('Bob only');
     });
   });
 });

@@ -33,6 +33,7 @@ import { PlanBadge } from '@/components/PlanBadge';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import Link from 'next/link';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
+import { getScopedItem, setScopedItem } from '@/lib/scoped-storage';
 
 type SavedOrgView = {
   id: string;
@@ -95,9 +96,8 @@ function OrganizationsPageContent() {
   } = useUrlPagination();
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
     try {
-      const stored = window.localStorage.getItem(SAVED_VIEWS_STORAGE_KEY);
+      const stored = getScopedItem(SAVED_VIEWS_STORAGE_KEY);
       if (!stored) return;
       const parsed = JSON.parse(stored);
       if (Array.isArray(parsed)) {
@@ -110,9 +110,8 @@ function OrganizationsPageContent() {
 
   const persistSavedViews = useCallback((views: SavedOrgView[]) => {
     setSavedViews(views);
-    if (typeof window === 'undefined') return;
     try {
-      window.localStorage.setItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(views));
+      setScopedItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(views));
     } catch (err) {
       console.warn('Failed to persist saved organization views:', err);
     }

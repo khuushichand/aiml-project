@@ -14,6 +14,7 @@ import {
 import { api } from '@/lib/api-client';
 import { Organization } from '@/types';
 import { usePermissions } from '@/components/PermissionGuard';
+import { getScopedItem, setScopedItem, removeScopedItem } from '@/lib/scoped-storage';
 
 interface OrgContextType {
   organizations: Organization[];
@@ -54,14 +55,11 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
 
   const handleSetSelectedOrg = useCallback((org: Organization | null) => {
     setSelectedOrg(org);
-    if (typeof window === 'undefined') {
-      return;
-    }
     try {
       if (org) {
-        localStorage.setItem(ORG_SELECTION_STORAGE_KEY, String(org.id));
+        setScopedItem(ORG_SELECTION_STORAGE_KEY, String(org.id));
       } else {
-        localStorage.removeItem(ORG_SELECTION_STORAGE_KEY);
+        removeScopedItem(ORG_SELECTION_STORAGE_KEY);
       }
     } catch (error) {
       console.warn('Failed to persist org selection:', error);
@@ -87,18 +85,16 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
       return;
     }
     let storedId: number | null = null;
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = localStorage.getItem(ORG_SELECTION_STORAGE_KEY);
-        if (stored) {
-          const parsed = Number.parseInt(stored, 10);
-          if (!Number.isNaN(parsed)) {
-            storedId = parsed;
-          }
+    try {
+      const stored = getScopedItem(ORG_SELECTION_STORAGE_KEY);
+      if (stored) {
+        const parsed = Number.parseInt(stored, 10);
+        if (!Number.isNaN(parsed)) {
+          storedId = parsed;
         }
-      } catch (error) {
-        console.warn('Failed to load persisted org selection:', error);
       }
+    } catch (error) {
+      console.warn('Failed to load persisted org selection:', error);
     }
 
     if (storedId !== null) {
@@ -107,12 +103,10 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
         handleSetSelectedOrg(storedOrg);
         return;
       }
-      if (typeof window !== 'undefined') {
-        try {
-          localStorage.removeItem(ORG_SELECTION_STORAGE_KEY);
-        } catch (error) {
-          console.warn('Failed to clear invalid org selection:', error);
-        }
+      try {
+        removeScopedItem(ORG_SELECTION_STORAGE_KEY);
+      } catch (error) {
+        console.warn('Failed to clear invalid org selection:', error);
       }
     }
 

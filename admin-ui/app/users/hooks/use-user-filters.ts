@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useUrlState } from '@/lib/use-url-state';
+import { getScopedItem, setScopedItem } from '@/lib/scoped-storage';
 
 export type SavedUserView = {
   id: string;
@@ -22,7 +23,7 @@ const readSavedViews = (): SavedUserView[] => {
   if (typeof window === 'undefined') return [];
   let stored: string | null = null;
   try {
-    stored = window.localStorage.getItem(SAVED_VIEWS_STORAGE_KEY);
+    stored = getScopedItem(SAVED_VIEWS_STORAGE_KEY);
     if (stored === cachedSavedViewsRaw) {
       return cachedSavedViews;
     }
@@ -90,7 +91,7 @@ export function useUserFilters({ resetPagination }: UseUserFiltersOptions) {
       const serialized = JSON.stringify(views);
       cachedSavedViewsRaw = serialized;
       cachedSavedViews = views;
-      window.localStorage.setItem(SAVED_VIEWS_STORAGE_KEY, serialized);
+      setScopedItem(SAVED_VIEWS_STORAGE_KEY, serialized);
       emitSavedViewsChange();
     } catch (error) {
       console.warn('Failed to persist saved user views:', error);

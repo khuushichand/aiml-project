@@ -25,6 +25,7 @@ import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useToast } from '@/components/ui/toast';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { getScopedItem, setScopedItem } from '@/lib/scoped-storage';
 
 type AuditFilters = {
   user: string;
@@ -376,7 +377,7 @@ function AuditPageContent() {
   }, [filters]);
 
   useEffect(() => {
-    const parsed = parseSavedSearches(window.localStorage.getItem(SAVED_SEARCHES_STORAGE_KEY));
+    const parsed = parseSavedSearches(getScopedItem(SAVED_SEARCHES_STORAGE_KEY));
     setSavedSearches(parsed);
     savedSearchesRef.current = parsed;
     storageHydratedRef.current = true;
@@ -385,7 +386,7 @@ function AuditPageContent() {
   useEffect(() => {
     if (!storageHydratedRef.current) return;
     savedSearchesRef.current = savedSearches;
-    window.localStorage.setItem(SAVED_SEARCHES_STORAGE_KEY, JSON.stringify(savedSearches));
+    setScopedItem(SAVED_SEARCHES_STORAGE_KEY, JSON.stringify(savedSearches));
   }, [savedSearches]);
 
   const loadLogs = useCallback(async (activeFilters: AuditFilters, page: number, size: number) => {

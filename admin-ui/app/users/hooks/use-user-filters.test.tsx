@@ -2,6 +2,7 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUserFilters } from './use-user-filters';
+import { getScopedItem } from '@/lib/scoped-storage';
 
 vi.mock('@/lib/use-url-state', async () => {
   const React = await import('react');
@@ -51,7 +52,7 @@ describe('useUserFilters', () => {
       expect(result.current.savedViews).toHaveLength(1);
       expect(result.current.activeViewId).toBe(savedViewId);
     });
-    expect(localStorage.getItem('admin_users_saved_views')).toContain('Bob only');
+    expect(getScopedItem('admin_users_saved_views')).toContain('Bob only');
 
     act(() => {
       result.current.handleSearchChange('');
@@ -71,6 +72,6 @@ describe('useUserFilters', () => {
       expect(result.current.savedViews).toHaveLength(0);
       expect(result.current.activeViewId).toBe('');
     });
-    expect(localStorage.getItem('admin_users_saved_views')).toBe('[]');
+    expect(getScopedItem('admin_users_saved_views')).toBe('[]');
   });
 });
