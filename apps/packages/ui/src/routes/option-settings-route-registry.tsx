@@ -58,7 +58,7 @@ const OptionSettingsPromptStudio = createSettingsRoute(
   () => import("~/components/Option/Settings/prompt-studio"),
   "PromptStudioSettings"
 )
-const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
+const OptionSettingsMcpHub = lazy(() => import("./option-settings-mcp-hub"))
 const OptionChatSettings = createSettingsRoute(
   () => import("~/components/Option/Settings/ChatSettings"),
   "ChatSettings"
@@ -114,7 +114,7 @@ export const optionSettingsRoutes: RouteDefinition[] = [
   {
     kind: "options",
     path: "/settings/mcp-hub",
-    element: <OptionMcpHub />,
+    element: <OptionSettingsMcpHub />,
   },
   {
     kind: "options",
