@@ -668,14 +668,17 @@ async def chat_with_shared_workspace(
         from ....core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 
         with managed_media_db_for_owner(share["owner_user_id"]) as owner_media:
+            owner_media_db_path = get_media_db_path_for_rag(owner_media)
             result = await unified_rag_pipeline(
                 query=body.query,
-                media_db_path=get_media_db_path_for_rag(owner_media),
+                media_db_path=owner_media_db_path,
                 notes_db_path=owner_chacha.db_path if hasattr(owner_chacha, "db_path") else None,
                 api_name=body.api_name,
                 model=body.model,
                 system_message=body.system_message,
                 index_namespace=f"user_{share['owner_user_id']}_media_embeddings",
+                media_db=owner_media,
+                chacha_db=owner_chacha,
             )
 
         await audit.log(

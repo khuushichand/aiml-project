@@ -955,6 +955,35 @@ def _sources_to_data_sources(sources: list[str]) -> list[DataSource]:
     return data_sources
 
 
+def _resolve_sqlite_rag_db_path(
+    explicit_path: Optional[str],
+    *,
+    db: Any = None,
+) -> Optional[str]:
+    """Return a usable SQLite path, suppressing Postgres placeholder values."""
+    raw_path = explicit_path
+    if raw_path is None and db is not None:
+        raw_path = getattr(db, "db_path_str", None)
+        if raw_path is None:
+            raw_path = getattr(db, "db_path", None)
+    if raw_path is None:
+        return None
+
+    normalized = str(raw_path).strip()
+    if not normalized:
+        return None
+
+    backend_type = getattr(db, "backend_type", None)
+    if backend_type is None:
+        backend = getattr(db, "backend", None)
+        backend_type = getattr(backend, "backend_type", None)
+    backend_name = str(getattr(backend_type, "name", backend_type or "")).upper()
+
+    if backend_name == "POSTGRESQL" and normalized in {":memory:", "/:memory:"}:
+        return None
+    return normalized
+
+
 async def unified_rag_pipeline(
     # ========== REQUIRED PARAMETERS ==========
     query: str,
@@ -1374,6 +1403,7 @@ async def unified_rag_pipeline(
 
     # Normalize common alias/compat args
     expand_query = expand_query or kwargs.get("enable_expansion", False)
+    media_db_path = _resolve_sqlite_rag_db_path(media_db_path, db=media_db)
 
     # ========== SEARCH DEPTH MODE PRESETS ==========
     # Apply parameter presets based on search_depth_mode. Individual parameter
@@ -1611,14 +1641,7 @@ async def unified_rag_pipeline(
             and SQLRetriever is not None
             and any(src == DataSource.SQL for src in resolved_data_sources)
         ):
-            sql_db_path = media_db_path
-            if sql_db_path is None:
-                try:
-                    db_path_val = getattr(media_db, "db_path", None)
-                    if db_path_val:
-                        sql_db_path = str(db_path_val)
-                except (AttributeError, RuntimeError, TypeError, ValueError):
-                    sql_db_path = None
+            sql_db_path = _resolve_sqlite_rag_db_path(media_db_path, db=media_db)
             if sql_db_path:
                 try:
                     sql_retriever = SQLRetriever(
@@ -2662,7 +2685,7 @@ async def unified_rag_pipeline(
                     # perform a direct Media DB FTS-only search. This guards against
                     # configuration or adapter issues that can cause hybrid retrieval
                     # to silently return an empty set even when media is present.
-                    if (not documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                    if (not documents) and (media_db_path or media_db is not None) and search_mode in ("fts", "hybrid"):
                         try:
                             from .database_retrievers import MediaDBRetriever as _MDBR
                             from .database_retrievers import RetrievalConfig as _RCfg
@@ -2678,6 +2701,7 @@ async def unified_rag_pipeline(
                                 db_path=media_db_path,
                                 config=fb_cfg,
                                 user_id=str(user_id or "0"),
+                                media_db=media_db,
                             )
                             fallback_docs = await fb_retriever.retrieve(
                                 query=query,
@@ -3144,7 +3168,7 @@ async def unified_rag_pipeline(
                 # This is especially important in local/test environments where
                 # vector stores or adapters may be misconfigured but the Media DB
                 # itself contains the uploaded content.
-                if (not result.documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                if (not result.documents) and (media_db_path or media_db is not None) and search_mode in ("fts", "hybrid"):
                     try:
                         from .database_retrievers import MediaDBRetriever as _MDBR
                         from .database_retrievers import RetrievalConfig as _RCfg
@@ -3160,6 +3184,7 @@ async def unified_rag_pipeline(
                             db_path=media_db_path,
                             config=fb_cfg,
                             user_id=str(user_id or "0"),
+                            media_db=media_db,
                         )
                         fallback_docs = await fb_retriever.retrieve(
                             query=query,

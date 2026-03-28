@@ -2891,9 +2891,12 @@ class MultiDatabaseRetriever:
         self.retrievers: dict[DataSource, BaseRetriever] = {}
 
         # Initialize retrievers for available databases
-        if "media_db" in db_paths:
+        media_db_path = db_paths.get("media_db")
+        if media_db_path is not None or media_db is not None:
             self.retrievers[DataSource.MEDIA_DB] = MediaDBRetriever(
-                db_paths["media_db"], user_id=user_id, media_db=media_db
+                media_db_path,
+                user_id=user_id,
+                media_db=media_db,
             )
 
         if "notes_db" in db_paths:

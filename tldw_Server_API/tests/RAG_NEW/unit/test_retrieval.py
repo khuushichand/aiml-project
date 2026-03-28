@@ -2,11 +2,13 @@
 
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable
 
 import pytest
 
 import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.media_db.media_database import (
     MediaDatabase,
 )
@@ -715,6 +717,50 @@ class TestMultiDatabaseRetriever:
         retriever = MultiDatabaseRetriever(db_paths, user_id="test-user")
         docs = await retriever.retrieve("retrieval", sources=["nonexistent_source"])  # type: ignore[arg-type]
         assert docs == []
+
+    @pytest.mark.asyncio
+    async def test_retrieve_uses_media_adapter_without_sqlite_path(self, monkeypatch):
+        fake_media_db = SimpleNamespace(backend_type=BackendType.POSTGRESQL)
+        search_calls: list[tuple[object, dict[str, object]]] = []
+
+        monkeypatch.setattr(retr_mod.MediaDBRetriever, "_initialize_vector_store", lambda self: None)
+
+        def _fake_search_media(media_db, **kwargs):
+            search_calls.append((media_db, kwargs))
+            return (
+                [
+                    {
+                        "id": 101,
+                        "title": "Adapter-backed media",
+                        "content": "retrieval through adapter only",
+                        "type": "article",
+                        "url": "https://example.com/item",
+                        "ingestion_date": "2025-01-01T00:00:00",
+                        "transcription_model": None,
+                        "last_modified": "2025-01-02T00:00:00",
+                        "rank": 0.9,
+                    }
+                ],
+                1,
+            )
+
+        monkeypatch.setattr(retr_mod, "search_media", _fake_search_media)
+
+        retriever = retr_mod.MultiDatabaseRetriever({}, user_id="test-user", media_db=fake_media_db)
+        config = retr_mod.RetrievalConfig(
+            max_results=3,
+            use_fts=True,
+            use_vector=False,
+            include_metadata=True,
+        )
+
+        docs = await retriever.retrieve("adapter", sources=[DataSource.MEDIA_DB], config=config)
+
+        assert docs
+        assert docs[0].id == "101"
+        assert docs[0].source == DataSource.MEDIA_DB
+        assert docs[0].metadata["source"] == "media_db"
+        assert search_calls and search_calls[0][0] is fake_media_db
 
 
 @pytest.mark.unit
