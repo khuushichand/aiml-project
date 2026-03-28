@@ -266,6 +266,289 @@ def test_deck_endpoints_reject_unknown_workspace_ids(
     assert "missing-ws" in update_response.json()["detail"]
 
 
+def test_flashcard_visibility_endpoints_respect_default_general_only_and_explicit_scope(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    flashcards_db.upsert_workspace("ws-1", "Workspace One")
+
+    workspace_deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Workspace Deck", "workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_deck_response.status_code == 200
+    workspace_deck_id = workspace_deck_response.json()["id"]
+
+    general_deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "General Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert general_deck_response.status_code == 200
+    general_deck_id = general_deck_response.json()["id"]
+
+    workspace_card_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": workspace_deck_id,
+            "front": "Workspace Front",
+            "back": "Workspace Back",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_card_response.status_code == 200
+    workspace_card = workspace_card_response.json()
+
+    general_card_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": general_deck_id,
+            "front": "General Front",
+            "back": "General Back",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert general_card_response.status_code == 200
+    general_card = general_card_response.json()
+
+    default_list = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert default_list.status_code == 200
+    default_items = default_list.json()["items"]
+    assert default_list.json()["total"] == 1
+    assert any(item["uuid"] == general_card["uuid"] for item in default_items)
+    assert all(item["deck_id"] != workspace_deck_id for item in default_items)
+
+    workspace_list = client_with_flashcards_db.get(
+        "/api/v1/flashcards",
+        params={"workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_list.status_code == 200
+    assert workspace_list.json()["total"] == 1
+    assert {item["uuid"] for item in workspace_list.json()["items"]} == {workspace_card["uuid"]}
+
+    all_list = client_with_flashcards_db.get(
+        "/api/v1/flashcards",
+        params={"include_workspace_items": True},
+        headers=AUTH_HEADERS,
+    )
+    assert all_list.status_code == 200
+    assert all_list.json()["total"] == 2
+    assert {item["uuid"] for item in all_list.json()["items"]} == {general_card["uuid"], workspace_card["uuid"]}
+
+    deck_list = client_with_flashcards_db.get(
+        "/api/v1/flashcards",
+        params={"deck_id": workspace_deck_id},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_list.status_code == 200
+    assert deck_list.json()["total"] == 1
+    assert {item["uuid"] for item in deck_list.json()["items"]} == {workspace_card["uuid"]}
+
+    default_next = client_with_flashcards_db.get("/api/v1/flashcards/review/next", headers=AUTH_HEADERS)
+    assert default_next.status_code == 200
+    assert default_next.json()["card"]["uuid"] == general_card["uuid"]
+
+    workspace_next = client_with_flashcards_db.get(
+        "/api/v1/flashcards/review/next",
+        params={"workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_next.status_code == 200
+    assert workspace_next.json()["card"]["uuid"] == workspace_card["uuid"]
+
+    deck_next = client_with_flashcards_db.get(
+        "/api/v1/flashcards/review/next",
+        params={"deck_id": workspace_deck_id},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_next.status_code == 200
+    assert deck_next.json()["card"]["uuid"] == workspace_card["uuid"]
+
+    default_export = client_with_flashcards_db.get("/api/v1/flashcards/export", headers=AUTH_HEADERS)
+    assert default_export.status_code == 200
+    default_export_text = default_export.content.decode("utf-8")
+    assert "General Front" in default_export_text
+    assert "Workspace Front" not in default_export_text
+
+    workspace_export = client_with_flashcards_db.get(
+        "/api/v1/flashcards/export",
+        params={"workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_export.status_code == 200
+    workspace_export_text = workspace_export.content.decode("utf-8")
+    assert "Workspace Front" in workspace_export_text
+    assert "General Front" not in workspace_export_text
+
+    deck_export = client_with_flashcards_db.get(
+        "/api/v1/flashcards/export",
+        params={"deck_id": workspace_deck_id},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_export.status_code == 200
+    deck_export_text = deck_export.content.decode("utf-8")
+    assert "Workspace Front" in deck_export_text
+    assert "General Front" not in deck_export_text
+
+
+def test_flashcard_analytics_summary_endpoint_respects_workspace_visibility(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    flashcards_db.upsert_workspace("ws-1", "Workspace One")
+
+    general_deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "General Analytics Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert general_deck_response.status_code == 200
+    general_deck_id = general_deck_response.json()["id"]
+
+    workspace_deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Workspace Analytics Deck", "workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_deck_response.status_code == 200
+    workspace_deck_id = workspace_deck_response.json()["id"]
+
+    review_card_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": workspace_deck_id,
+            "front": "Workspace Review Front",
+            "back": "Workspace Review Back",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert review_card_response.status_code == 200
+    workspace_card = review_card_response.json()
+
+    review_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": workspace_card["uuid"], "rating": 4},
+        headers=AUTH_HEADERS,
+    )
+    assert review_response.status_code == 200
+
+    default_summary = client_with_flashcards_db.get(
+        "/api/v1/flashcards/analytics/summary",
+        headers=AUTH_HEADERS,
+    )
+    assert default_summary.status_code == 200
+    default_payload = default_summary.json()
+    assert default_payload["reviewed_today"] == 0
+    assert all(deck["deck_id"] != workspace_deck_id for deck in default_payload["decks"])
+
+    workspace_summary = client_with_flashcards_db.get(
+        "/api/v1/flashcards/analytics/summary",
+        params={"workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_summary.status_code == 200
+    workspace_payload = workspace_summary.json()
+    assert workspace_payload["reviewed_today"] == 1
+    assert {deck["deck_id"] for deck in workspace_payload["decks"]} == {workspace_deck_id}
+
+    all_summary = client_with_flashcards_db.get(
+        "/api/v1/flashcards/analytics/summary",
+        params={"include_workspace_items": True},
+        headers=AUTH_HEADERS,
+    )
+    assert all_summary.status_code == 200
+    all_payload = all_summary.json()
+    assert all_payload["reviewed_today"] == 1
+    assert {deck["deck_id"] for deck in all_payload["decks"]} == {general_deck_id, workspace_deck_id}
+
+    deck_summary = client_with_flashcards_db.get(
+        "/api/v1/flashcards/analytics/summary",
+        params={"deck_id": workspace_deck_id},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_summary.status_code == 200
+    deck_payload = deck_summary.json()
+    assert deck_payload["reviewed_today"] == 1
+    assert {deck["deck_id"] for deck in deck_payload["decks"]} == {workspace_deck_id}
+
+
+def test_flashcard_analytics_summary_endpoint_keeps_empty_targeted_deck_visible(
+    client_with_flashcards_db: TestClient,
+):
+    empty_deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Empty Analytics Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert empty_deck_response.status_code == 200
+    empty_deck_id = empty_deck_response.json()["id"]
+
+    summary = client_with_flashcards_db.get(
+        "/api/v1/flashcards/analytics/summary",
+        params={"deck_id": empty_deck_id},
+        headers=AUTH_HEADERS,
+    )
+
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["reviewed_today"] == 0
+    assert len(payload["decks"]) == 1
+    assert payload["decks"][0]["deck_id"] == empty_deck_id
+    assert payload["decks"][0]["total"] == 0
+    assert payload["decks"][0]["new"] == 0
+    assert payload["decks"][0]["learning"] == 0
+    assert payload["decks"][0]["due"] == 0
+    assert payload["decks"][0]["mature"] == 0
+
+
+def test_flashcard_analytics_summary_endpoint_excludes_deleted_deck_reviews(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    deck_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Deleted Analytics Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert deck_response.status_code == 200
+    deck_id = deck_response.json()["id"]
+
+    card_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards",
+        json={
+            "deck_id": deck_id,
+            "front": "Front",
+            "back": "Back",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert card_response.status_code == 200
+    card_uuid = card_response.json()["uuid"]
+
+    review_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/review",
+        json={"card_uuid": card_uuid, "rating": 4},
+        headers=AUTH_HEADERS,
+    )
+    assert review_response.status_code == 200
+
+    conn = flashcards_db.get_connection()
+    conn.execute("UPDATE decks SET deleted = 1 WHERE id = ?", (deck_id,))
+    conn.commit()
+
+    summary = client_with_flashcards_db.get(
+        "/api/v1/flashcards/analytics/summary",
+        params={"include_workspace_items": True},
+        headers=AUTH_HEADERS,
+    )
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["reviewed_today"] == 0
+    assert all(deck["deck_id"] != deck_id for deck in payload["decks"])
+
+
 def test_upload_flashcard_asset_rejects_invalid_or_oversized_upload(
     client_with_flashcards_db: TestClient,
     monkeypatch,
@@ -2116,7 +2399,11 @@ def test_import_json_reuses_workspace_owned_deck_by_name(
     body = response.json()
     assert body["imported"] == 1
 
-    cards_response = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    cards_response = client_with_flashcards_db.get(
+        "/api/v1/flashcards",
+        params={"deck_id": workspace_deck_id},
+        headers=AUTH_HEADERS,
+    )
     assert cards_response.status_code == 200
     cards = cards_response.json()["items"]
     assert len(cards) == 1

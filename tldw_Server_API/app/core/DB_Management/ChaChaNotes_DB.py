@@ -20682,8 +20682,28 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to add flashcards in bulk: {exc}") from exc  # noqa: TRY003
 
+    def _flashcard_visibility_filter(
+        self,
+        *,
+        deck_id: int | None = None,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
+        deck_alias: str = "d",
+        deck_id_column: str = "f.deck_id",
+    ) -> tuple[str, tuple[Any, ...], bool]:
+        """Return the visibility predicate and whether a deck join is required."""
+        if deck_id is not None:
+            return f"{deck_id_column} = ?", (deck_id,), False
+        if workspace_id is not None:
+            return f"{deck_alias}.workspace_id = ?", (workspace_id,), True
+        if not include_workspace_items:
+            return f"{deck_alias}.workspace_id IS NULL", tuple(), True
+        return "", tuple(), False
+
     def list_flashcards(self,
                         deck_id: int | None = None,
+                        workspace_id: str | None = None,
+                        include_workspace_items: bool = False,
                         tag: str | None = None,
                         due_status: str = 'all',
                         q: str | None = None,
@@ -20700,9 +20720,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 where_clauses.append("f.deleted = FALSE")
             else:
                 where_clauses.append("f.deleted = 0")
-        if deck_id is not None:
-            where_clauses.append("f.deck_id = ?")
-            params.append(deck_id)
+        visibility_clause, visibility_params, _ = self._flashcard_visibility_filter(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
+        if visibility_clause:
+            where_clauses.append(visibility_clause)
+            params.extend(visibility_params)
         # due filter
         now_iso = self._get_current_utc_timestamp_iso()
         if due_status == 'new':
@@ -20767,6 +20792,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def count_flashcards(self,
                          deck_id: int | None = None,
+                         workspace_id: str | None = None,
+                         include_workspace_items: bool = False,
                          tag: str | None = None,
                          due_status: str = 'all',
                          q: str | None = None,
@@ -20780,9 +20807,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 where_clauses.append("f.deleted = FALSE")
             else:
                 where_clauses.append("f.deleted = 0")
-        if deck_id is not None:
-            where_clauses.append("f.deck_id = ?")
-            params.append(deck_id)
+        visibility_clause, visibility_params, needs_deck_join = self._flashcard_visibility_filter(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
+        visibility_join = " LEFT JOIN decks d ON d.id = f.deck_id" if needs_deck_join else ""
+        if visibility_clause:
+            where_clauses.append(visibility_clause)
+            params.extend(visibility_params)
 
         now_iso = self._get_current_utc_timestamp_iso()
         if due_status == 'new':
@@ -20820,7 +20853,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # DISTINCT avoids double-counting when tag join introduces duplicates
         query = """
             SELECT COUNT(DISTINCT f.id) AS cnt
-              FROM flashcards f
+              FROM flashcards f{visibility_join}
               {join_tag}
              WHERE {where_sql} {fts_filter}
         """.format_map(locals())  # nosec B608
@@ -20911,40 +20944,49 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_next_review_card(
         self,
         deck_id: int | None = None,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
     ) -> tuple[dict[str, Any] | None, str]:
         """Return the next reviewable card using backend queue priority."""
         deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
         now_iso = self._get_current_utc_timestamp_iso()
+        visibility_clause, visibility_params, needs_deck_join = self._flashcard_visibility_filter(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
+        visibility_join = " LEFT JOIN decks d ON d.id = f.deck_id" if needs_deck_join else ""
+        visibility_suffix = f" AND {visibility_clause}" if visibility_clause else ""
         if deck_id is None:
             selections: tuple[tuple[str, str, tuple[Any, ...]], ...] = (
                 (
                     "learning_due",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state IN ('learning', 'relearning') "
-                        "AND due_at IS NOT NULL AND due_at <= ? "
-                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                        f"SELECT uuid FROM flashcards f{visibility_join} "  # nosec B608
+                        "WHERE f.deleted = ? AND f.queue_state IN ('learning', 'relearning') "
+                        f"AND f.due_at IS NOT NULL AND f.due_at <= ?{visibility_suffix} "
+                        "ORDER BY f.due_at ASC, f.created_at ASC LIMIT 1"
                     ),
-                    (deleted_value, now_iso),
+                    (deleted_value, now_iso, *visibility_params),
                 ),
                 (
                     "review_due",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state = 'review' "
-                        "AND due_at IS NOT NULL AND due_at <= ? "
-                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                        f"SELECT uuid FROM flashcards f{visibility_join} "  # nosec B608
+                        "WHERE f.deleted = ? AND f.queue_state = 'review' "
+                        f"AND f.due_at IS NOT NULL AND f.due_at <= ?{visibility_suffix} "
+                        "ORDER BY f.due_at ASC, f.created_at ASC LIMIT 1"
                     ),
-                    (deleted_value, now_iso),
+                    (deleted_value, now_iso, *visibility_params),
                 ),
                 (
                     "new",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state = 'new' "
-                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                        f"SELECT uuid FROM flashcards f{visibility_join} "  # nosec B608
+                        f"WHERE f.deleted = ? AND f.queue_state = 'new'{visibility_suffix} "
+                        "ORDER BY f.created_at ASC, f.id ASC LIMIT 1"
                     ),
-                    (deleted_value,),
+                    (deleted_value, *visibility_params),
                 ),
             )
         else:
@@ -20952,29 +20994,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 (
                     "learning_due",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state IN ('learning', 'relearning') "
-                        "AND due_at IS NOT NULL AND due_at <= ? AND deck_id = ? "
-                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                        "SELECT uuid FROM flashcards f "
+                        "WHERE f.deleted = ? AND f.queue_state IN ('learning', 'relearning') "
+                        "AND f.due_at IS NOT NULL AND f.due_at <= ? AND f.deck_id = ? "
+                        "ORDER BY f.due_at ASC, f.created_at ASC LIMIT 1"
                     ),
                     (deleted_value, now_iso, deck_id),
                 ),
                 (
                     "review_due",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state = 'review' "
-                        "AND due_at IS NOT NULL AND due_at <= ? AND deck_id = ? "
-                        "ORDER BY due_at ASC, created_at ASC LIMIT 1"
+                        "SELECT uuid FROM flashcards f "
+                        "WHERE f.deleted = ? AND f.queue_state = 'review' "
+                        "AND f.due_at IS NOT NULL AND f.due_at <= ? AND f.deck_id = ? "
+                        "ORDER BY f.due_at ASC, f.created_at ASC LIMIT 1"
                     ),
                     (deleted_value, now_iso, deck_id),
                 ),
                 (
                     "new",
                     (
-                        "SELECT uuid FROM flashcards "
-                        "WHERE deleted = ? AND queue_state = 'new' AND deck_id = ? "
-                        "ORDER BY created_at ASC, id ASC LIMIT 1"
+                        "SELECT uuid FROM flashcards f "
+                        "WHERE f.deleted = ? AND f.queue_state = 'new' AND f.deck_id = ? "
+                        "ORDER BY f.created_at ASC, f.id ASC LIMIT 1"
                     ),
                     (deleted_value, deck_id),
                 ),
@@ -21128,7 +21170,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to review flashcard: {e}") from e  # noqa: TRY003
 
-    def get_flashcard_analytics_summary(self, deck_id: int | None = None) -> dict[str, Any]:
+    def get_flashcard_analytics_summary(
+        self,
+        deck_id: int | None = None,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
+    ) -> dict[str, Any]:
         """Return review analytics summary and per-deck progress counts."""
         now_dt = datetime.now(timezone.utc)
         today_start_dt = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -21137,8 +21184,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         today_start_iso = today_start_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         tomorrow_start_iso = tomorrow_start_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         normalized_deck_id = int(deck_id) if deck_id is not None else None
-        deck_filter_clause = " AND f.deck_id = ?" if normalized_deck_id is not None else ""
-        deck_filter_params: tuple[Any, ...] = ((normalized_deck_id,) if normalized_deck_id is not None else tuple())
+        visibility_clause, visibility_params, needs_deck_join = self._flashcard_visibility_filter(
+            deck_id=normalized_deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
+        visibility_join = " LEFT JOIN decks d ON d.id = f.deck_id" if needs_deck_join else ""
+        visibility_suffix = f" AND {visibility_clause}" if visibility_clause else ""
+        metrics_join = visibility_join or " LEFT JOIN decks d ON d.id = f.deck_id"
+        metrics_suffix = f"{visibility_suffix} AND (d.id IS NULL OR d.deleted = 0)"
+        deck_rows_clause, deck_rows_params, _ = self._flashcard_visibility_filter(
+            deck_id=normalized_deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            deck_alias="d",
+            deck_id_column="d.id",
+        )
+        deck_rows_suffix = f" AND {deck_rows_clause}" if deck_rows_clause else ""
 
         try:
             # Daily review metrics
@@ -21150,9 +21212,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     AVG(answer_time_ms) AS avg_answer_time_ms_today
                 FROM flashcard_reviews fr
                 JOIN flashcards f ON f.id = fr.card_id AND f.deleted = 0
-                WHERE fr.reviewed_at >= ? AND fr.reviewed_at < ?{deck_filter_clause}
+                {metrics_join}
+                WHERE fr.reviewed_at >= ? AND fr.reviewed_at < ?{metrics_suffix}
                 """.format_map(locals()),  # nosec B608
-                (today_start_iso, tomorrow_start_iso, *deck_filter_params),
+                (today_start_iso, tomorrow_start_iso, *visibility_params),
             ).fetchone()
 
             reviewed_today = int((daily_row["reviewed_today"] if daily_row else 0) or 0)
@@ -21174,11 +21237,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 SELECT DISTINCT substr(fr.reviewed_at, 1, 10) AS review_day
                 FROM flashcard_reviews fr
                 JOIN flashcards f ON f.id = fr.card_id AND f.deleted = 0
-                WHERE 1 = 1{deck_filter_clause}
+                {metrics_join}
+                WHERE 1 = 1{metrics_suffix}
                 ORDER BY review_day DESC
                 LIMIT 400
                 """.format_map(locals()),  # nosec B608
-                deck_filter_params,
+                visibility_params,
             ).fetchall()
             reviewed_days = {
                 str(row["review_day"])
@@ -21192,8 +21256,6 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 cursor_day = cursor_day - timedelta(days=1)
 
             # Per-deck progress counts
-            deck_scope_clause = " AND d.id = ?" if normalized_deck_id is not None else ""
-            deck_scope_params: tuple[Any, ...] = ((normalized_deck_id,) if normalized_deck_id is not None else tuple())
             deck_rows = self.execute_query(
                 """
                 SELECT
@@ -21208,11 +21270,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 LEFT JOIN flashcards f
                     ON f.deck_id = d.id
                    AND f.deleted = 0
-                WHERE d.deleted = 0{deck_scope_clause}
+                WHERE d.deleted = 0{deck_rows_suffix}
                 GROUP BY d.id, d.name
                 ORDER BY d.name ASC
                 """.format_map(locals()),  # nosec B608
-                (now_iso, MATURE_INTERVAL_DAYS, *deck_scope_params),
+                (now_iso, MATURE_INTERVAL_DAYS, *deck_rows_params),
             ).fetchall()
 
             decks = []
@@ -21245,6 +21307,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
     def export_flashcards_csv(self,
                               deck_id: int | None = None,
+                              workspace_id: str | None = None,
+                              include_workspace_items: bool = False,
                               tag: str | None = None,
                               q: str | None = None,
                               *,
@@ -21256,7 +21320,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             delimiter: field separator (default tab)
             include_header: include a header row
         """
-        rows = self.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
+        rows = self.list_flashcards(
+            deck_id=deck_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            tag=tag,
+            q=q,
+            due_status='all',
+            include_deleted=False,
+            limit=100000,
+            offset=0,
+        )
         output_lines: list[str] = []
         if include_header:
             base_cols = ["Deck", "Front", "Back", "Tags", "Notes"]
