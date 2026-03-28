@@ -214,6 +214,19 @@ command   := WORD+
 - `||` executes next pipeline only if prior exit code is non-zero
 - `;` executes next pipeline regardless of prior result
 
+#### v1 pipe contract
+
+The command runtime is text-stream-first.
+
+Rules for v1:
+
+- pipe payloads are UTF-8 text only
+- commands with structured results must serialize to JSON or NDJSON text when they participate in pipes
+- artifact-producing commands are terminal by default unless they expose an explicit text-rendering subcommand
+- `json` is the canonical bridge command for inspecting or transforming structured text output
+
+This prevents command adapters from inventing incompatible in-memory payload formats while still letting domain commands participate in Unix-style composition.
+
 #### Command registry
 
 Each command should carry explicit metadata:
@@ -272,6 +285,19 @@ Execution flow:
 4. Preserve deny and approval outcomes exactly as they exist today.
 5. Convert those outcomes into CLI-native result messages without altering the underlying authority.
 
+#### Chain preflight and partial execution rules
+
+Mutating chains need stricter behavior than read-only chains.
+
+Rules for v1:
+
+- if a chain contains any write-capable or approval-gated step, the runtime resolves and preflights the full chain before executing the first mutating step
+- if any step is denied or requires approval that has not been granted, the chain does not begin execution
+- once execution begins, the chain is still operationally non-atomic; runtime failures can still occur after earlier steps have succeeded
+- when a mutating chain fails after execution has started, the result must clearly indicate partial execution so the agent does not assume rollback happened automatically
+
+This keeps approval behavior predictable without pretending the runtime can provide full transactional rollback across arbitrary MCP-backed operations.
+
 Rules:
 
 - no second allowlist model
@@ -297,6 +323,16 @@ This is the primary agent-usability layer.
 #### Startup command index
 
 At session start, agents receive a compact injected command index with one-line summaries only, grouped by domain.
+
+The visible command list must be derived from the caller's effective policy and scope, not from the global registry.
+
+Rules:
+
+- do not advertise commands that cannot resolve to any currently allowed backend capability
+- prefer annotating visible commands with posture such as read-only, approval-required, or limited
+- ensure persona scope, ACP runtime policy, catalog scoping, and workspace/path restrictions can narrow what the agent sees
+
+The command surface should reduce decision burden, not teach the agent commands it is guaranteed to have rejected.
 
 Suggested grouping:
 
@@ -352,6 +388,22 @@ This teaches the model how to continue using the same command surface instead of
 
 The long-term target is broad mixed use. v1 should still start with a narrow but cross-domain command set.
 
+The current MCP module inventory does not yet expose generic filesystem primitives such as workspace-bounded list/read/write operations. That means v1 cannot be treated as a routing-only project.
+
+Phase 1 foundation work should explicitly add a small MCP-native filesystem/text capability surface for workspace-bounded file access. Suggested primitives:
+
+- `fs.list`
+- `fs.read_text`
+- `fs.write_text`
+
+Command mapping expectations:
+
+- `ls`, `cat`, and `write` adapt to the new filesystem primitives
+- `grep`, `head`, `tail`, and `json` are pure runtime text transforms and do not require new backend modules
+- `search`, `knowledge`, `media`, `memory`, `agent`, `workflow`, `mcp`, and `sandbox` should map to existing MCP capabilities where available
+
+This keeps the design honest about implementation scope while preserving the intended v1 command set.
+
 #### Files and text
 
 - `ls`
@@ -401,6 +453,8 @@ This lets the platform validate the interface thesis before removing escape hatc
 
 - implement `run(command)` in MCP Unified
 - add parser, registry, execution layer, and presentation layer
+- add workspace-bounded filesystem MCP primitives required for `ls`, `cat`, and `write`
+- add chain preflight for write-capable or approval-gated command chains
 - add the first command families
 - expose only to selected agent surfaces for evaluation
 
