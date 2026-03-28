@@ -10,6 +10,10 @@ export default defineConfig({
       '@': path.resolve(__dirname, '../packages/ui/src'),
       '~': path.resolve(__dirname, '../packages/ui/src'),
       '@web': path.resolve(__dirname, '.'),
+      'react-router-dom': path.resolve(
+        __dirname,
+        '../packages/ui/node_modules/react-router-dom'
+      ),
     },
   },
   test: {
