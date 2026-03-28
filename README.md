@@ -15,7 +15,7 @@
   </p>
 
   <p>Process media with 16+ LLM providers and OpenAI-compatible APIs for Chat, Embeddings, and Evals.</p>
-  <p>Hosted SaaS and browser extension coming soon.</p>
+  <p>Browser extension support is included in-repo; hosted deployment tooling is still evolving.</p>
   <p><strong>Your local open-source platform for media analysis, knowledge work, and LLM-backed creation.</strong></p>
 </div>
 
@@ -27,17 +27,17 @@
 
 - [Overview](#overview)
 - [Current Status](#current-status)
-- [What's New (compared to Gradio)](#whats-new-compared-to-gradio)
+- [What's New (in the last few releases)](#whats-new-in-the-last-few-releases)
 - [Privacy & Security](#privacy--security)
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
 - [Quickstart](#quickstart)
   - [Preflight Check (Recommended)](#preflight-check-recommended)
   - [At-a-Glance Commands](#at-a-glance-commands)
-  - [No-Docker Path (Makefile)](#no-docker-path-makefile)
+  - [No-Docker Path (Makefile, Development)](#no-docker-path-makefile-development)
   - [No-Make Path (Windows-Friendly)](#no-make-path-windows-friendly)
   - [Manual Setup](#manual-setup)
-  - [Tire Kicker: Add the WebUI](#tire-kicker-add-the-webui)
+  - [Local Profile: Add the WebUI](#local-profile-add-the-webui)
   - [Run the Web UI (WIP)](#run-the-web-ui-wip)
   - [Docker Compose](#docker-compose)
   - [Supporting Services via Docker](#supporting-services-via-docker)
@@ -71,7 +71,7 @@
 ## Overview
 **tldw_server** is an open-source, API-first platform for ingesting media, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more.
 It runs a FastAPI server with OpenAI-compatible Chat, Audio, Embeddings, and Evals APIs, a unified RAG pipeline, and integrations with local or hosted LLM providers.
-The primary client is the Next.js WebUI (WIP) plus an Admin UI.
+The primary clients are the Next.js WebUI and Admin UI, with browser-extension support in the repo as well.
 Long-term vision: a personal research assistant inspired by "The Young Lady's Illustrated Primer" that helps people learn, reason about, and retain what they watch or read.
 
 Good fit for:
@@ -104,7 +104,7 @@ Optional add-on:
 ## Current Status
 
 Latest release:
-- 0.1.26 (2026-03-15) Beta status -  Expect rough edges;
+- 0.1.28 (2026-03-15) Beta status - expect rough edges;
   * please report issues.
 - See `CHANGELOG.md` for release history.
 
