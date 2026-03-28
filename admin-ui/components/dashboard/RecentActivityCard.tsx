@@ -70,6 +70,7 @@ export const RecentActivityCard = ({
   formatTimeAgo,
 }: RecentActivityCardProps) => {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
+  const [severityFilter, setSeverityFilter] = useState<'all' | ActivitySeverity>('all');
   const activityWithMetadata = useMemo(() => recentActivity.map((log) => ({
     ...log,
     severity: getActivitySeverity(log),
@@ -77,6 +78,10 @@ export const RecentActivityCard = ({
     actorLabel: log.username?.trim() ? log.username : `User ${log.user_id}`,
     detailText: formatAuditDetails(log),
   })), [recentActivity]);
+  const filteredActivity = useMemo(
+    () => activityWithMetadata.filter((activity) => severityFilter === 'all' || activity.severity === severityFilter),
+    [activityWithMetadata, severityFilter]
+  );
 
   return (
     <Card>
@@ -95,6 +100,28 @@ export const RecentActivityCard = ({
           </Button>
         </Link>
       </CardHeader>
+      {!loading && recentActivity.length > 0 && (
+        <div className="px-6 pb-2 flex gap-1 flex-wrap">
+          {(['all', 'critical', 'warning', 'info'] as const).map((level) => {
+            const count = level === 'all'
+              ? activityWithMetadata.length
+              : activityWithMetadata.filter(a => a.severity === level).length;
+            return (
+              <Button
+                key={level}
+                variant={severityFilter === level ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setSeverityFilter(level)}
+                className="text-xs"
+                aria-pressed={severityFilter === level}
+              >
+                {level === 'all' ? 'All' : level.charAt(0).toUpperCase() + level.slice(1)}
+                <Badge variant="secondary" className="ml-1 text-xs">{count}</Badge>
+              </Button>
+            );
+          })}
+        </div>
+      )}
       <CardContent>
         {loading ? (
           <div className="space-y-4">
@@ -110,9 +137,11 @@ export const RecentActivityCard = ({
           </div>
         ) : recentActivity.length === 0 ? (
           <p className="text-center text-muted-foreground py-8">No recent activity</p>
+        ) : filteredActivity.length === 0 ? (
+          <p className="py-8 text-center text-muted-foreground">No activity matches the selected severity.</p>
         ) : (
           <div className="space-y-3">
-            {activityWithMetadata.map((log) => {
+            {filteredActivity.map((log) => {
               const logId = String(log.id);
               const expanded = expandedIds[logId] === true;
               return (

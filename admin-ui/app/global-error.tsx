@@ -14,8 +14,26 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
 
   return (
     <html lang="en">
+      <head>
+        <style dangerouslySetInnerHTML={{ __html: `
+          @media (prefers-color-scheme: dark) {
+            .global-error-bg { background-color: #1a1a2e !important; }
+            .global-error-card { background-color: #16213e !important; color: #e0e0e0 !important; }
+            .global-error-card p { color: #a0a0b0 !important; }
+            .global-error-title { color: #e0e0e0 !important; }
+            .global-error-detail { background-color: #1e2a3a !important; }
+            .global-error-icon { background-color: #3b1d1d !important; }
+            .global-error-icon svg { stroke: #f87171 !important; }
+            .global-error-message { color: #f87171 !important; }
+            .global-error-retry,
+            .global-error-btn { background-color: #2563eb !important; color: white !important; border-color: #2563eb !important; }
+            .global-error-home { background-color: #16213e !important; color: #e0e0e0 !important; border-color: #334155 !important; }
+          }
+        `}} />
+      </head>
       <body>
         <div
+          className="global-error-bg"
           style={{
             minHeight: '100vh',
             display: 'flex',
@@ -27,6 +45,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
           }}
         >
           <div
+            className="global-error-card"
             style={{
               maxWidth: '28rem',
               width: '100%',
@@ -38,6 +57,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
             }}
           >
             <div
+              className="global-error-icon"
               style={{
                 width: '3rem',
                 height: '3rem',
@@ -65,7 +85,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
               </svg>
             </div>
 
-            <h1 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.5rem' }}>
+            <h1 className="global-error-title" style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.5rem' }}>
               Critical Error
             </h1>
             <p style={{ color: '#6b7280', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
@@ -73,6 +93,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
             </p>
 
             <div
+              className="global-error-detail"
               style={{
                 backgroundColor: '#f3f4f6',
                 borderRadius: '0.375rem',
@@ -80,7 +101,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
                 marginBottom: '1.5rem',
               }}
             >
-              <p style={{ color: '#dc2626', fontSize: '0.875rem', fontWeight: 500 }}>
+              <p className="global-error-message" style={{ color: '#dc2626', fontSize: '0.875rem', fontWeight: 500 }}>
                 {error.message || 'Unknown error'}
               </p>
               {error.digest && (
@@ -92,6 +113,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
 
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
+                className="global-error-retry global-error-btn"
                 onClick={reset}
                 style={{
                   flex: 1,
@@ -108,6 +130,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
                 Try Again
               </button>
               <button
+                className="global-error-home"
                 onClick={() => (window.location.href = '/')}
                 style={{
                   flex: 1,

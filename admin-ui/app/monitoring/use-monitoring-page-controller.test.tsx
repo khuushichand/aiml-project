@@ -280,16 +280,19 @@ describe('useMonitoringPageController', () => {
     });
     expect(loadData).toHaveBeenCalledTimes(initialLoadCalls + 1);
 
-    expect(useWatchlistActionsMock).toHaveBeenCalledWith(
+    const watchlistActionsArgs = useWatchlistActionsMock.mock.calls[0]?.[0];
+    expect(watchlistActionsArgs).toEqual(
       expect.objectContaining({
         confirm: confirmFn,
-        onReloadRequested: loadData,
+        onReloadRequested: expect.any(Function),
       })
     );
-    expect(useAlertActionsMock).toHaveBeenCalledWith(
+
+    const alertActionsArgs = useAlertActionsMock.mock.calls[0]?.[0];
+    expect(alertActionsArgs).toEqual(
       expect.objectContaining({
         confirm: confirmFn,
-        onReloadRequested: loadData,
+        onReloadRequested: expect.any(Function),
       })
     );
     expect(useNotificationActionsMock).toHaveBeenCalledWith(
@@ -336,5 +339,42 @@ describe('useMonitoringPageController', () => {
     expect(result.current.managementPanelsProps.alertsPanelProps.onToggleShowSnoozed).toBe(
       toggleSnoozed
     );
+  });
+
+  it('does not start overlapping auto-refresh loads while a request is still in flight', async () => {
+    vi.useFakeTimers();
+
+    let resolveLoad: (() => void) | null = null;
+    loadData.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveLoad = resolve;
+        })
+    );
+
+    renderHook(() => useMonitoringPageController());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(loadData).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(120_000);
+    });
+
+    expect(loadData).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveLoad?.();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(loadData).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });

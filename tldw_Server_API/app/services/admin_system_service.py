@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -19,6 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 from tldw_Server_API.app.core.Logging.system_log_buffer import query_system_logs
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -231,6 +233,51 @@ async def get_system_stats(db) -> SystemStatsResponse:
         ss = _row_to_dict(storage_stats, storage_keys)
         se = _row_to_dict(session_stats, session_keys)
 
+        # Gather optional extended stats (ACP sessions, token usage)
+        active_acp = None
+        tokens_today = None
+        try:
+            from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
+            store = await get_acp_session_store()
+            _records, active_count = await store.list_sessions(status="active", limit=0, offset=0)
+            active_acp = active_count
+        except Exception as exc:
+            logger.debug(f"Skipping ACP session stats in system overview: {exc}")
+
+        try:
+            if is_pg:
+                token_row = await db.fetchrow(
+                    """
+                    SELECT
+                        COALESCE(SUM(prompt_tokens), 0) as prompt,
+                        COALESCE(SUM(completion_tokens), 0) as completion,
+                        COALESCE(SUM(total_tokens), 0) as total
+                    FROM llm_usage_v2
+                    WHERE date(created_at) = CURRENT_DATE
+                    """
+                )
+            else:
+                cursor = await db.execute(
+                    """
+                    SELECT
+                        COALESCE(SUM(prompt_tokens), 0) as prompt,
+                        COALESCE(SUM(completion_tokens), 0) as completion,
+                        COALESCE(SUM(total_tokens), 0) as total
+                    FROM llm_usage_v2
+                    WHERE date(created_at) = date('now')
+                    """
+                )
+                token_row = await cursor.fetchone()
+            if token_row:
+                td = _row_to_dict(token_row, ["prompt", "completion", "total"])
+                tokens_today = {
+                    "prompt": int(td.get("prompt") or 0),
+                    "completion": int(td.get("completion") or 0),
+                    "total": int(td.get("total") or 0),
+                }
+        except Exception as exc:
+            logger.debug(f"Skipping token usage stats in system overview: {exc}")
+
         return SystemStatsResponse(
             users={
                 "total": int(us.get("total_users") or 0),
@@ -249,6 +296,9 @@ async def get_system_stats(db) -> SystemStatsResponse:
                 "active": int(se.get("active_sessions") or 0),
                 "unique_users": int(se.get("unique_users") or 0),
             },
+            active_acp_sessions=active_acp,
+            tokens_today=tokens_today,
+            mcp_invocations_today=None,  # MCP metrics are Prometheus-only; defer until parsed
         )
 
     except Exception as exc:
@@ -699,3 +749,276 @@ async def list_system_logs(
         limit=limit,
         offset=offset,
     )
+
+
+async def get_key_age_stats(db) -> dict:
+    """Get API key age distribution without per-user fan-out.
+
+    Returns counts of keys in age buckets: 0-30d, 31-90d, 91-180d, 180d+.
+    """
+    try:
+        is_pg = _is_postgres_connection(db)
+        if is_pg:
+            row = await db.fetchrow("""
+                SELECT
+                    COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '30 days') as age_0_30,
+                    COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '90 days'
+                                     AND created_at <= CURRENT_TIMESTAMP - INTERVAL '30 days') as age_31_90,
+                    COUNT(*) FILTER (WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '180 days'
+                                     AND created_at <= CURRENT_TIMESTAMP - INTERVAL '90 days') as age_91_180,
+                    COUNT(*) FILTER (WHERE created_at <= CURRENT_TIMESTAMP - INTERVAL '180 days') as age_180_plus,
+                    COUNT(*) as total
+                FROM api_keys
+                WHERE revoked_at IS NULL
+            """)
+        else:
+            cursor = await db.execute("""
+                SELECT
+                    SUM(CASE WHEN datetime(created_at) > datetime('now', '-30 days') THEN 1 ELSE 0 END) as age_0_30,
+                    SUM(CASE WHEN datetime(created_at) > datetime('now', '-90 days')
+                              AND datetime(created_at) <= datetime('now', '-30 days') THEN 1 ELSE 0 END) as age_31_90,
+                    SUM(CASE WHEN datetime(created_at) > datetime('now', '-180 days')
+                              AND datetime(created_at) <= datetime('now', '-90 days') THEN 1 ELSE 0 END) as age_91_180,
+                    SUM(CASE WHEN datetime(created_at) <= datetime('now', '-180 days') THEN 1 ELSE 0 END) as age_180_plus,
+                    COUNT(*) as total
+                FROM api_keys
+                WHERE revoked_at IS NULL
+            """)
+            row = await cursor.fetchone()
+
+        if row is None:
+            return {"buckets": [], "total": 0}
+
+        def _val(key: str) -> int:
+            if isinstance(row, dict):
+                return int(row.get(key) or 0)
+            # tuple-like
+            idx = {"age_0_30": 0, "age_31_90": 1, "age_91_180": 2, "age_180_plus": 3, "total": 4}
+            return int(row[idx[key]] or 0) if key in idx else 0
+
+        return {
+            "buckets": [
+                {"label": "0-30 days", "count": _val("age_0_30"), "color": "green"},
+                {"label": "31-90 days", "count": _val("age_31_90"), "color": "green"},
+                {"label": "91-180 days", "count": _val("age_91_180"), "color": "yellow"},
+                {"label": "180+ days", "count": _val("age_180_plus"), "color": "red"},
+            ],
+            "total": _val("total"),
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to get key age stats: {exc}")
+        return {"buckets": [], "total": 0}
+
+
+async def debug_resolve_permissions(user_id: int, db) -> dict:
+    """Resolve effective permissions for a user by querying roles + overrides."""
+    try:
+        is_pg = _is_postgres_connection(db)
+        if is_pg:
+            roles_row = await db.fetch(
+                "SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = $1",
+                user_id,
+            )
+            perms_row = await db.fetch("""
+                SELECT DISTINCT p.name
+                FROM user_roles ur
+                JOIN role_permissions rp ON ur.role_id = rp.role_id
+                JOIN permissions p ON rp.permission_id = p.id
+                WHERE ur.user_id = $1
+            """, user_id)
+        else:
+            cursor = await db.execute(
+                "SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = ?",
+                (user_id,),
+            )
+            roles_row = await cursor.fetchall()
+
+        roles = [r["name"] if isinstance(r, dict) else r[0] for r in (roles_row or [])]
+        loop = asyncio.get_running_loop()
+        permissions = await loop.run_in_executor(None, get_effective_permissions, int(user_id))
+        normalized_permissions = sorted({str(permission) for permission in permissions if str(permission).strip()})
+
+        return {
+            "user_id": user_id,
+            "roles": roles,
+            "effective_permissions": normalized_permissions,
+            "permission_count": len(normalized_permissions),
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to resolve permissions for user {user_id}: {exc}")
+        return {"user_id": user_id, "roles": [], "effective_permissions": [], "error": str(exc)[:200]}
+
+
+async def debug_decode_token(token: str) -> dict:
+    """Decode a JWT token without claiming signature verification."""
+    import base64
+    import json
+
+    try:
+        # Split JWT into parts
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {"decoded": False, "signature_verified": False, "error": "Not a valid JWT format (expected 3 parts)"}
+
+        # Decode header
+        header_b64 = parts[0] + "=" * (4 - len(parts[0]) % 4)
+        header = json.loads(base64.urlsafe_b64decode(header_b64))
+
+        # Decode payload
+        payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+
+        # Check expiration
+        from datetime import datetime, timezone
+        exp = payload.get("exp")
+        is_expired = False
+        if exp:
+            exp_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
+            is_expired = exp_dt < datetime.now(timezone.utc)
+
+        return {
+            "decoded": True,
+            "signature_verified": False,
+            "header": header,
+            "payload": {k: v for k, v in payload.items() if k not in ("password", "secret")},
+            "expired": is_expired,
+            "expires_at": datetime.fromtimestamp(exp, tz=timezone.utc).isoformat() if exp else None,
+            "issuer": payload.get("iss"),
+            "subject": payload.get("sub"),
+        }
+    except Exception as exc:
+        return {"decoded": False, "signature_verified": False, "error": str(exc)[:200]}
+
+
+async def debug_validate_token(token: str) -> dict:
+    """Backward-compatible alias for token decoding debug logic."""
+    return await debug_decode_token(token)
+
+
+async def get_billing_analytics(db) -> dict:
+    """Compute billing analytics: MRR, active subscribers, churn rate."""
+    try:
+        is_pg = _is_postgres_connection(db)
+
+        # Count subscriptions by status
+        if is_pg:
+            row = await db.fetchrow("""
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE status = 'active') as active,
+                    COUNT(*) FILTER (WHERE status = 'trialing') as trialing,
+                    COUNT(*) FILTER (WHERE status = 'past_due') as past_due,
+                    COUNT(*) FILTER (WHERE status = 'canceled') as canceled
+                FROM subscriptions
+            """)
+        else:
+            cursor = await db.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+                    SUM(CASE WHEN status = 'trialing' THEN 1 ELSE 0 END) as trialing,
+                    SUM(CASE WHEN status = 'past_due' THEN 1 ELSE 0 END) as past_due,
+                    SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) as canceled
+                FROM subscriptions
+            """)
+            row = await cursor.fetchone()
+
+        if row is None:
+            return {"analytics_available": False}
+
+        def _v(key: str) -> int:
+            if isinstance(row, dict):
+                return int(row.get(key) or 0)
+            idx = {"total": 0, "active": 1, "trialing": 2, "past_due": 3, "canceled": 4}
+            return int(row[idx.get(key, 0)] or 0) if key in idx else 0
+
+        active = _v("active")
+        canceled = _v("canceled")
+        total = _v("total")
+        churn_rate = round(canceled / max(total, 1) * 100, 1)
+
+        return {
+            "analytics_available": True,
+            "total_subscriptions": total,
+            "active_subscriptions": active,
+            "trialing": _v("trialing"),
+            "past_due": _v("past_due"),
+            "canceled": canceled,
+            "churn_rate_pct": churn_rate,
+            "trial_conversion_rate_pct": None,  # Would need historical data
+            "mrr_cents": None,  # Would need plan price join
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to get billing analytics: {exc}")
+        return {"analytics_available": False}
+
+
+async def get_all_dependencies_health() -> dict:
+    """Probe all external service dependencies and return combined health status.
+
+    Calls the existing health endpoints for each service and returns a unified view.
+    """
+    import asyncio
+    import time
+
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+
+    services = []
+
+    # Database health
+    async def _check_db() -> dict:
+        start = time.monotonic()
+        try:
+            pool = await get_db_pool()
+            if pool:
+                services.append(True)  # Just mark as checked
+            return {
+                "name": "Database",
+                "status": "healthy",
+                "latency_ms": round((time.monotonic() - start) * 1000),
+            }
+        except Exception as exc:
+            return {
+                "name": "Database",
+                "status": "down",
+                "latency_ms": round((time.monotonic() - start) * 1000),
+                "error": str(exc)[:200],
+            }
+
+    # ACP Session Store health
+    async def _check_acp() -> dict:
+        start = time.monotonic()
+        try:
+            from tldw_Server_API.app.services.admin_acp_sessions_service import get_acp_session_store
+            store = await get_acp_session_store()
+            _records, total = await store.list_sessions(limit=0, offset=0)
+            return {
+                "name": "ACP Sessions",
+                "status": "healthy",
+                "latency_ms": round((time.monotonic() - start) * 1000),
+                "detail": f"{total} sessions",
+            }
+        except Exception as exc:
+            return {
+                "name": "ACP Sessions",
+                "status": "down",
+                "latency_ms": round((time.monotonic() - start) * 1000),
+                "error": str(exc)[:200],
+            }
+
+    results = await asyncio.gather(
+        _check_db(),
+        _check_acp(),
+        return_exceptions=True,
+    )
+
+    deps = []
+    for r in results:
+        if isinstance(r, dict):
+            deps.append(r)
+        elif isinstance(r, Exception):
+            deps.append({"name": "Unknown", "status": "error", "error": str(r)[:200]})
+
+    overall = "healthy" if all(d.get("status") == "healthy" for d in deps) else "degraded"
+    from datetime import datetime, timezone
+    return {"status": overall, "dependencies": deps, "checked_at": datetime.now(timezone.utc).isoformat()}

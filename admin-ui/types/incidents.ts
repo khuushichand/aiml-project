@@ -28,7 +28,10 @@ export type IncidentItem = {
   assigned_to_label?: string | null;
   root_cause?: string | null;
   impact?: string | null;
+  runbook_url?: string | null;
   action_items?: IncidentActionItem[];
+  time_to_acknowledge_seconds?: number | null;
+  time_to_resolve_seconds?: number | null;
 };
 
 export type IncidentsResponse = {

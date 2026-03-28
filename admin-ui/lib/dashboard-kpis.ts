@@ -43,14 +43,14 @@ export interface BuildDashboardOperationalKpisResult {
   jobsSnapshot: JobSnapshot | null;
 }
 
-type UsageDailyRow = {
+export type UsageDailyRow = {
   day: string;
   requests: number;
   errors: number;
   latencyAvgMs: number | null;
 };
 
-type LlmDailyCostRow = {
+export type LlmDailyCostRow = {
   day: string;
   totalCostUsd: number;
 };
@@ -92,7 +92,7 @@ const compareDateDesc = (a: string, b: string) => {
   return a < b ? 1 : -1;
 };
 
-const aggregateUsageDailyRows = (payload: unknown): UsageDailyRow[] => {
+export const aggregateUsageDailyRows = (payload: unknown): UsageDailyRow[] => {
   const items = extractItems(payload);
   const byDay = new Map<string, {
     requests: number;
@@ -143,7 +143,7 @@ const aggregateUsageDailyRows = (payload: unknown): UsageDailyRow[] => {
     .sort((a, b) => compareDateDesc(a.day, b.day));
 };
 
-const extractLlmDailyCostRows = (payload: unknown): LlmDailyCostRow[] => {
+export const extractLlmDailyCostRows = (payload: unknown): LlmDailyCostRow[] => {
   const items = extractItems(payload);
 
   const rows = items

@@ -24,6 +24,10 @@ vi.mock('@/components/ui/confirm-dialog', () => ({
   useConfirm: () => confirmMock,
 }));
 
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => vi.fn().mockResolvedValue(true),
+}));
+
 vi.mock('@/components/ui/toast', () => ({
   useToast: () => ({
     success: toastSuccessMock,
@@ -37,6 +41,7 @@ vi.mock('@/lib/api-client', () => ({
     simulateResourceGovernorPolicy: vi.fn(),
     updateResourceGovernorPolicy: vi.fn(),
     deleteResourceGovernorPolicy: vi.fn(),
+    getUsers: vi.fn(),
     getUsersPage: vi.fn(),
     getUserOrgMemberships: vi.fn(),
     getLlmUsage: vi.fn(),
@@ -50,6 +55,7 @@ type ApiMock = {
   simulateResourceGovernorPolicy: ReturnType<typeof vi.fn>;
   updateResourceGovernorPolicy: ReturnType<typeof vi.fn>;
   deleteResourceGovernorPolicy: ReturnType<typeof vi.fn>;
+  getUsers: ReturnType<typeof vi.fn>;
   getUsersPage: ReturnType<typeof vi.fn>;
   getUserOrgMemberships: ReturnType<typeof vi.fn>;
   getLlmUsage: ReturnType<typeof vi.fn>;
@@ -66,6 +72,10 @@ beforeEach(() => {
   apiMock.getResourceGovernorPolicy.mockResolvedValue({ policies: [] });
   apiMock.simulateResourceGovernorPolicy.mockRejectedValue(new Error('simulate unavailable'));
   apiMock.updateResourceGovernorPolicy.mockResolvedValue({});
+  apiMock.getUsers.mockResolvedValue([
+    { id: 42, username: 'alice' },
+    { id: 7, username: 'bob' },
+  ]);
   apiMock.getUsersPage.mockResolvedValue({
     items: [
       { id: 42, username: 'alice', role: 'member' },
@@ -196,7 +206,7 @@ describe('ResourceGovernor policy form', () => {
     await waitFor(() => {
       expect(screen.queryByText('Loading scope context...')).not.toBeInTheDocument();
     });
-    await user.type(screen.getByLabelText('User ID'), '42');
+    await user.type(screen.getByLabelText(/User ID or name/i), '42');
     await user.click(screen.getByRole('button', { name: 'Resolve Policy' }));
 
     expect(
@@ -257,5 +267,41 @@ describe('ResourceGovernor policy form', () => {
     expect(row).not.toBeNull();
     expect(within(row as HTMLElement).getByText('chat.default')).toBeInTheDocument();
     expect(within(row as HTMLElement).getByText(/^5$/)).toBeInTheDocument();
+  });
+
+  it('resolves policy scope when admins enter a username instead of a numeric id', async () => {
+    const user = userEvent.setup();
+    apiMock.getResourceGovernorPolicy.mockResolvedValueOnce({
+      policies: [
+        {
+          id: 'p-global',
+          name: 'Default LLM',
+          scope: 'global',
+          resource_type: 'llm',
+          priority: 1,
+          enabled: true,
+        },
+        {
+          id: 'p-user',
+          name: 'Power User',
+          scope: 'user',
+          scope_id: '42',
+          resource_type: 'llm',
+          priority: 10,
+          enabled: true,
+        },
+      ],
+    });
+    render(<ResourceGovernorPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading scope context...')).not.toBeInTheDocument();
+    });
+    await user.type(screen.getByLabelText(/User ID or name/i), 'alice');
+    await user.click(screen.getByRole('button', { name: 'Resolve Policy' }));
+
+    expect(
+      await screen.findByText(/Global policy "Default LLM".*Winner: Power User/i)
+    ).toBeInTheDocument();
   });
 });

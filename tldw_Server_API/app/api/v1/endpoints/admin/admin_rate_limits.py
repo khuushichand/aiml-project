@@ -4,8 +4,9 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
+from pydantic import BaseModel
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -17,6 +18,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
 )
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.services import admin_rate_limits_service
 
 router = APIRouter()
 
@@ -61,6 +63,12 @@ def _get_is_postgres_backend_fn() -> Callable[[], Awaitable[bool]]:
     from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
 
     return admin_mod._is_postgres_backend
+
+
+def _require_platform_admin(principal: AuthPrincipal) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
+
+    admin_mod._require_platform_admin(principal)
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -223,3 +231,35 @@ async def upsert_user_rate_limit(
     except _RATE_LIMITS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to upsert user rate limit: {e}")
         raise HTTPException(status_code=500, detail="Failed to upsert user rate limit") from e
+
+
+class RateLimitSimRequest(BaseModel):
+    user_id: int
+    endpoint: str = ""
+
+
+class RateLimitSimResponse(BaseModel):
+    user_id: int
+    endpoint: str
+    effective_limit_per_min: int | None = None
+    effective_burst: int | None = None
+    limit_source: str = "none"
+    would_allow: bool = True
+    user_limits: list[dict[str, Any]] = []
+    role_limits: list[dict[str, Any]] = []
+
+
+@router.post("/debug/simulate-rate-limit", response_model=RateLimitSimResponse)
+async def simulate_rate_limit(
+    payload: RateLimitSimRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> RateLimitSimResponse:
+    """Simulate a rate-limit check for a given user/key and endpoint."""
+    _require_platform_admin(principal)
+    result = await admin_rate_limits_service.simulate_rate_limit(
+        db=db,
+        user_id=int(payload.user_id),
+        endpoint=payload.endpoint,
+    )
+    return RateLimitSimResponse(**result)

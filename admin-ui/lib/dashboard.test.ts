@@ -12,6 +12,9 @@ const baseStats: DashboardUIStats = {
   enabledProviders: 4,
   storageUsedMb: 120,
   storageQuotaMb: 500,
+  activeAcpSessions: null,
+  tokensToday: null,
+  mcpInvocationsToday: null,
 };
 
 describe('buildDashboardUIStats', () => {

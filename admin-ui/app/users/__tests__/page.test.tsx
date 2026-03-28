@@ -108,6 +108,7 @@ vi.mock('@/lib/api-client', () => ({
     getOrganizations: vi.fn(),
     getOrgInvites: vi.fn(),
     getUserMfaStatus: vi.fn(),
+    getUserMfaStatusBulk: vi.fn(),
     deleteUser: vi.fn(),
     updateUser: vi.fn(),
     createUser: vi.fn(),
@@ -192,6 +193,10 @@ beforeEach(() => {
     if (userId === '3') return { enabled: true };
     return { enabled: true };
   });
+  apiMock.getUserMfaStatusBulk.mockResolvedValue({
+    mfa_status: { '1': true, '2': false, '3': true },
+    failed_user_ids: [],
+  });
   apiMock.deleteUser.mockResolvedValue({});
   apiMock.updateUser.mockResolvedValue({});
   apiMock.createUser.mockResolvedValue({});
@@ -245,6 +250,13 @@ describe('UsersPage', () => {
 
     const deleteButton = within(row as HTMLElement).getByTitle('Cannot delete yourself');
     expect(deleteButton).toBeDisabled();
+  });
+
+  it('does not show the dormant badge for users who have never logged in', async () => {
+    render(<UsersPage />);
+
+    await screen.findByText('Bob');
+    expect(screen.queryAllByText('Dormant')).toHaveLength(0);
   });
 
   it('sends combined search and filter params to user API', async () => {
