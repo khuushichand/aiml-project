@@ -100,6 +100,7 @@ function IncidentsPageContent() {
 
   const [updateNotes, setUpdateNotes] = useState<Record<string, string>>({});
   const [updatingIncidents, setUpdatingIncidents] = useState<Set<string>>(new Set());
+  const [optimisticStatuses, setOptimisticStatuses] = useState<Record<string, IncidentItem['status']>>({});
   const [assignableUsers, setAssignableUsers] = useState<IncidentAssignableUser[]>([]);
   const [incidentWorkflow, setIncidentWorkflow] = useState<IncidentWorkflowMap>({});
   const [slaMetrics, setSlaMetrics] = useState<{
@@ -224,15 +225,30 @@ function IncidentsPageContent() {
     }
   };
 
-  const handleStatusChange = async (incidentId: string, nextStatus: IncidentItem['status']) => {
+  const handleStatusChange = async (incidentId: string, nextStatus: IncidentItem['status'], previousStatus: IncidentItem['status']) => {
+    // Optimistic update: show the new status immediately
+    setOptimisticStatuses((prev) => ({ ...prev, [incidentId]: nextStatus }));
+
     try {
       setIncidentUpdating(incidentId, true);
       await api.updateIncident(incidentId, {
         status: nextStatus,
         update_message: `Status changed to ${nextStatus}`,
       });
+      // Clear optimistic override before reload (reload will bring fresh data)
+      setOptimisticStatuses((prev) => {
+        const next = { ...prev };
+        delete next[incidentId];
+        return next;
+      });
       await reload();
     } catch (err: unknown) {
+      // Revert on error
+      setOptimisticStatuses((prev) => {
+        const next = { ...prev };
+        delete next[incidentId];
+        return next;
+      });
       const message = err instanceof Error && err.message ? err.message : 'Failed to update status';
       showError(message);
     } finally {
@@ -571,6 +587,7 @@ function IncidentsPageContent() {
             <div className="grid gap-4">
               {incidents.map((incident) => {
                 const isUpdating = updatingIncidents.has(incident.id);
+                const displayStatus = optimisticStatuses[incident.id] ?? incident.status;
                 const workflowState = ensureIncidentWorkflowState(incidentWorkflow, incident);
                 const currentAssigneeId = workflowState.assignedTo ?? '';
                 const currentAssigneeInOptions = currentAssigneeId
@@ -585,8 +602,8 @@ function IncidentsPageContent() {
                     <div>
                       <CardTitle className="flex items-center gap-2">
                         {incident.title}
-                        <Badge variant={incident.status === 'resolved' ? 'secondary' : 'outline'}>
-                          {incident.status}
+                        <Badge variant={displayStatus === 'resolved' ? 'secondary' : 'outline'}>
+                          {displayStatus}
                         </Badge>
                         <Badge variant={incident.severity === 'critical' ? 'destructive' : 'outline'}>
                           {incident.severity}
@@ -635,9 +652,9 @@ function IncidentsPageContent() {
                         <Label htmlFor={`status-${incident.id}`}>Status</Label>
                         <Select
                           id={`status-${incident.id}`}
-                          value={incident.status}
+                          value={displayStatus}
                           onChange={(e) => {
-                            void handleStatusChange(incident.id, e.target.value as IncidentItem['status']);
+                            void handleStatusChange(incident.id, e.target.value as IncidentItem['status'], displayStatus);
                           }}
                           disabled={isUpdating}
                         >
@@ -694,7 +711,7 @@ function IncidentsPageContent() {
                         </Select>
                       </div>
                     </div>
-                    {incident.status === 'resolved' && (
+                    {displayStatus === 'resolved' && (
                       <div
                         className="space-y-3 rounded-md border p-3"
                         data-testid={`incident-postmortem-${incident.id}`}

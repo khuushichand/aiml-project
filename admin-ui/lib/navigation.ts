@@ -76,6 +76,7 @@ const navigationItems = {
   logs: { name: 'Logs', href: '/logs', icon: ScrollText, role: ['admin', 'super_admin', 'owner'], keywords: ['system logs'] },
   flags: { name: 'Flags', href: '/flags', icon: Flag, role: ['admin', 'super_admin', 'owner'], keywords: ['feature flags', 'maintenance'] },
   incidents: { name: 'Incidents', href: '/incidents', icon: AlertTriangle, role: ['admin', 'super_admin', 'owner'], keywords: ['outages', 'response'] },
+  aiOps: { name: 'AI Operations', href: '/ai-ops', icon: Activity, role: ['admin', 'super_admin', 'owner'], keywords: ['ai', 'spend', 'tokens', 'agents', 'cost', 'operations'] },
   acpSessions: { name: 'ACP Sessions', href: '/acp-sessions', icon: MessageSquare, role: ['admin', 'super_admin', 'owner'], keywords: ['agent', 'chat', 'sessions', 'acp'] },
   acpAgents: { name: 'ACP Agents', href: '/acp-agents', icon: Bot, role: ['admin', 'super_admin', 'owner'], keywords: ['agent', 'config', 'custom agents'] },
   mcpServers: { name: 'MCP Servers', href: '/mcp-servers', icon: Server, role: ['admin', 'super_admin', 'owner'], keywords: ['mcp', 'tools', 'servers', 'model context protocol'] },
@@ -110,6 +111,7 @@ export const navigationSections: NavigationSection[] = [
   {
     title: 'AI & Models',
     items: [
+      navigationItems.aiOps,
       navigationItems.providers,
       navigationItems.byok,
       navigationItems.acpSessions,

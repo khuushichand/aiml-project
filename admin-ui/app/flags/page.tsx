@@ -221,6 +221,7 @@ export default function FlagsPage() {
   const [flagNote, setFlagNote] = useState('');
   const [flagSaving, setFlagSaving] = useState(false);
   const [deletingFlagId, setDeletingFlagId] = useState<string | null>(null);
+  const [togglingFlagId, setTogglingFlagId] = useState<string | null>(null);
 
   const flagParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -398,6 +399,39 @@ export default function FlagsPage() {
       showError(message);
     } finally {
       setFlagSaving(false);
+    }
+  };
+
+  const handleToggleFlag = async (flag: FeatureFlagItem) => {
+    const flagId = getFlagId(flag);
+    if (togglingFlagId === flagId) return;
+    const previousEnabled = flag.enabled;
+    const nextEnabled = !previousEnabled;
+
+    // Optimistic update: toggle immediately in UI
+    setFlags((prev) =>
+      prev.map((f) => (getFlagId(f) === flagId ? { ...f, enabled: nextEnabled } : f))
+    );
+    setTogglingFlagId(flagId);
+
+    try {
+      await api.upsertFeatureFlag(flag.key, {
+        scope: flag.scope,
+        enabled: nextEnabled,
+        org_id: flag.org_id ?? undefined,
+        user_id: flag.user_id ?? undefined,
+        note: `Toggled ${nextEnabled ? 'on' : 'off'} via quick toggle`,
+      });
+      success(`Flag "${flag.key}" ${nextEnabled ? 'enabled' : 'disabled'}`);
+    } catch (err: unknown) {
+      // Revert on error
+      setFlags((prev) =>
+        prev.map((f) => (getFlagId(f) === flagId ? { ...f, enabled: previousEnabled } : f))
+      );
+      const message = err instanceof Error && err.message ? err.message : 'Failed to toggle flag';
+      showError(message);
+    } finally {
+      setTogglingFlagId((prev) => (prev === flagId ? null : prev));
     }
   };
 
@@ -710,9 +744,18 @@ export default function FlagsPage() {
                           <TableCell className="font-medium">{flag.key}</TableCell>
                           <TableCell>{flag.scope}</TableCell>
                           <TableCell>
-                            <Badge variant={flag.enabled ? 'default' : 'outline'}>
-                              {flag.enabled ? 'Enabled' : 'Disabled'}
-                            </Badge>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleFlag(flag)}
+                              disabled={togglingFlagId === flagId}
+                              className="cursor-pointer border-0 bg-transparent p-0"
+                              title={`Click to ${flag.enabled ? 'disable' : 'enable'} flag`}
+                              aria-label={`Toggle flag ${flag.key} ${flag.enabled ? 'off' : 'on'}`}
+                            >
+                              <Badge variant={flag.enabled ? 'default' : 'outline'}>
+                                {togglingFlagId === flagId ? 'Toggling...' : (flag.enabled ? 'Enabled' : 'Disabled')}
+                              </Badge>
+                            </button>
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">
