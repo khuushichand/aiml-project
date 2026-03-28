@@ -7,6 +7,7 @@ import TeamsPage from '../page';
 import { api } from '@/lib/api-client';
 
 const confirmMock = vi.hoisted(() => vi.fn());
+const privilegedActionMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 const setPageMock = vi.hoisted(() => vi.fn());
@@ -29,6 +30,10 @@ vi.mock('@/components/ResponsiveLayout', () => ({
 
 vi.mock('@/components/ui/confirm-dialog', () => ({
   useConfirm: () => confirmMock,
+}));
+
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => privilegedActionMock,
 }));
 
 vi.mock('@/components/ui/toast', () => ({
@@ -77,6 +82,7 @@ const apiMock = api as unknown as ApiMock;
 
 beforeEach(() => {
   confirmMock.mockResolvedValue(true);
+  privilegedActionMock.mockResolvedValue({ reason: 'test', adminPassword: '' });
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
 

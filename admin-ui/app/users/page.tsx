@@ -1309,9 +1309,26 @@ function UsersPageContent() {
                                 </div>
                               </TableCell>
                               <TableCell className="text-muted-foreground text-sm">
-                                {user.last_login
-                                  ? new Date(user.last_login).toLocaleDateString()
-                                  : 'Never'}
+                                <div className="flex items-center gap-1.5">
+                                  <span>
+                                    {user.last_login
+                                      ? new Date(user.last_login).toLocaleDateString()
+                                      : 'Never'}
+                                  </span>
+                                  {(() => {
+                                    const DORMANT_THRESHOLD_DAYS = 90;
+                                    const now = Date.now();
+                                    const lastLoginMs = user.last_login ? Date.parse(user.last_login) : 0;
+                                    const daysSinceLogin = !user.last_login || !Number.isFinite(lastLoginMs)
+                                      ? Infinity
+                                      : (now - lastLoginMs) / (1000 * 60 * 60 * 24);
+                                    return daysSinceLogin > DORMANT_THRESHOLD_DAYS ? (
+                                      <Badge variant="destructive" className="text-[10px] px-1.5 py-0">
+                                        Dormant
+                                      </Badge>
+                                    ) : null;
+                                  })()}
+                                </div>
                               </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-1">

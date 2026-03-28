@@ -21,6 +21,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Form, FormField } from '@/components/ui/form';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Plus, Eye, Search, BookmarkPlus, BookmarkX, Pencil, Trash2 } from 'lucide-react';
 import type { Organization, PlanTier, Subscription } from '@/types';
 import { api } from '@/lib/api-client';
@@ -71,6 +72,8 @@ function OrganizationsPageContent() {
   const [editError, setEditError] = useState('');
   const [updatingOrganization, setUpdatingOrganization] = useState(false);
   const [deletingOrganizationId, setDeletingOrganizationId] = useState<number | null>(null);
+  const [selectedOrgIds, setSelectedOrgIds] = useState<Set<number>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [totalItems, setTotalItems] = useState(0);
   const [orgPlans, setOrgPlans] = useState<OrganizationPlanMap>({});
   const [slugTouched, setSlugTouched] = useState(false);
@@ -354,6 +357,89 @@ function OrganizationsPageContent() {
     }
   };
 
+  // Clear selection when org list changes
+  useEffect(() => {
+    setSelectedOrgIds((prev) => {
+      if (prev.size === 0) return prev;
+      const available = new Set(organizations.map((org) => org.id));
+      const next = new Set<number>();
+      prev.forEach((id) => {
+        if (available.has(id)) next.add(id);
+      });
+      return next;
+    });
+  }, [organizations]);
+
+  const handleToggleSelectOrg = (orgId: number, checked: boolean) => {
+    setSelectedOrgIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(orgId);
+      } else {
+        next.delete(orgId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllVisible = (checked: boolean) => {
+    setSelectedOrgIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        organizations.forEach((org) => next.add(org.id));
+      } else {
+        organizations.forEach((org) => next.delete(org.id));
+      }
+      return next;
+    });
+  };
+
+  const handleClearSelection = () => {
+    setSelectedOrgIds(new Set());
+  };
+
+  const handleBulkDeleteOrganizations = async () => {
+    const ids = Array.from(selectedOrgIds);
+    if (ids.length === 0) return;
+    const approval = await promptPrivilegedAction({
+      title: 'Delete selected organizations',
+      message: `Delete ${ids.length} organization${ids.length !== 1 ? 's' : ''}? This cannot be undone.`,
+      confirmText: 'Delete',
+      requirePassword: false,
+    });
+    if (!approval) return;
+
+    try {
+      setBulkDeleting(true);
+      const results = await Promise.allSettled(
+        ids.map((id) => api.deleteOrganization(String(id)))
+      );
+      const failures = results.filter((r) => r.status === 'rejected').length;
+      if (failures > 0) {
+        showError(
+          'Bulk delete incomplete',
+          `${ids.length - failures} deleted, ${failures} failed.`
+        );
+      } else {
+        success(
+          'Organizations deleted',
+          `${ids.length} organization${ids.length !== 1 ? 's' : ''} removed.`
+        );
+      }
+      handleClearSelection();
+      await loadOrganizations();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete organizations';
+      showError('Bulk delete failed', message);
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const selectedOrgCount = selectedOrgIds.size;
+  const allVisibleSelected = organizations.length > 0
+    && organizations.every((org) => selectedOrgIds.has(org.id));
+
   const totalPages = Math.ceil(totalItems / pageSize);
   const paginatedOrganizations = organizations;
 
@@ -542,9 +628,40 @@ function OrganizationsPageContent() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
+                {selectedOrgCount > 0 && (
+                  <div className="mb-4 flex flex-col gap-3 rounded-md border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">{selectedOrgCount} selected</Badge>
+                      <span className="text-sm text-muted-foreground">
+                        Bulk actions apply to selected organizations.
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleBulkDeleteOrganizations}
+                        loading={bulkDeleting}
+                        loadingText="Deleting..."
+                        disabled={bulkDeleting}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4 text-destructive" />
+                        Delete
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleClearSelection}
+                        disabled={bulkDeleting}
+                      >
+                        Clear selection
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 {loading ? (
                   <div className="py-4">
-                    <TableSkeleton rows={3} columns={isBillingEnabled() ? 7 : 5} />
+                    <TableSkeleton rows={3} columns={isBillingEnabled() ? 8 : 6} />
                   </div>
                 ) : organizations.length === 0 ? (
                   <EmptyState
@@ -575,6 +692,13 @@ function OrganizationsPageContent() {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead className="w-10">
+                            <Checkbox
+                              checked={allVisibleSelected}
+                              onCheckedChange={handleToggleSelectAllVisible}
+                              aria-label="Select all visible organizations"
+                            />
+                          </TableHead>
                           <TableHead>ID</TableHead>
                           <TableHead>Name</TableHead>
                           <TableHead>Slug</TableHead>
@@ -587,6 +711,13 @@ function OrganizationsPageContent() {
                       <TableBody>
                         {paginatedOrganizations.map((org) => (
                           <TableRow key={org.id}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selectedOrgIds.has(org.id)}
+                                onCheckedChange={(checked) => handleToggleSelectOrg(org.id, checked)}
+                                aria-label={`Select organization ${org.name}`}
+                              />
+                            </TableCell>
                             <TableCell className="font-mono text-sm">{org.id}</TableCell>
                             <TableCell className="font-medium">{org.name}</TableCell>
                             <TableCell>
