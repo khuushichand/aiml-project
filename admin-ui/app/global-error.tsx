@@ -21,6 +21,8 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
             .global-error-card { background-color: #16213e !important; color: #e0e0e0 !important; }
             .global-error-card p { color: #a0a0b0 !important; }
             .global-error-detail { background-color: #1e2a3a !important; }
+            .global-error-icon { background-color: #4a1e1e !important; }
+            .global-error-retry { background-color: #2563eb !important; }
             .global-error-home { background-color: #16213e !important; color: #e0e0e0 !important; border-color: #334155 !important; }
           }
         `}} />
@@ -51,6 +53,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
             }}
           >
             <div
+              className="global-error-icon"
               style={{
                 width: '3rem',
                 height: '3rem',
@@ -106,6 +109,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
 
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
+                className="global-error-retry"
                 onClick={reset}
                 style={{
                   flex: 1,

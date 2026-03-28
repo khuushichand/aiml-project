@@ -384,6 +384,9 @@ export default function DependenciesPage() {
     if (usageTrendResult.status === 'rejected') {
       nextErrors.push(`Usage trend unavailable: ${usageTrendResult.reason instanceof Error ? usageTrendResult.reason.message : 'Request failed'}`);
     }
+    if (uptimeResult.status === 'rejected') {
+      nextErrors.push(`Uptime history unavailable: ${uptimeResult.reason instanceof Error ? uptimeResult.reason.message : 'Request failed'}`);
+    }
 
     const usageMap: Record<string, ProviderUsageSummary> = {};
     usageRows.forEach((row) => {

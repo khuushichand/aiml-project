@@ -44,6 +44,7 @@ function ApiKeysPageContent() {
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [bulkRotating, setBulkRotating] = useState(false);
   const [bulkRevoking, setBulkRevoking] = useState(false);
+  const [bulkMutating, setBulkMutating] = useState(false);
 
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
   const [ownerFilter, setOwnerFilter] = useUrlState<string>('owner', { defaultValue: '' });
@@ -222,7 +223,7 @@ function ApiKeysPageContent() {
   };
 
   const handleRotateSelected = async () => {
-    if (selectedRows.length === 0 || bulkRotating) return;
+    if (selectedRows.length === 0 || bulkMutating) return;
 
     const confirmed = await confirm({
       title: 'Rotate selected keys',
@@ -234,6 +235,7 @@ function ApiKeysPageContent() {
     if (!confirmed) return;
 
     try {
+      setBulkMutating(true);
       setBulkRotating(true);
       const results = await Promise.allSettled(
         selectedRows.map((row) => api.rotateApiKey(String(row.ownerUserId), row.keyId))
@@ -255,11 +257,12 @@ function ApiKeysPageContent() {
       toastError('Bulk rotation failed', message);
     } finally {
       setBulkRotating(false);
+      setBulkMutating(false);
     }
   };
 
   const handleRevokeSelected = async () => {
-    if (selectedRows.length === 0 || bulkRevoking) return;
+    if (selectedRows.length === 0 || bulkMutating) return;
 
     const confirmed = await confirm({
       title: 'Revoke selected keys',
@@ -271,6 +274,7 @@ function ApiKeysPageContent() {
     if (!confirmed) return;
 
     try {
+      setBulkMutating(true);
       setBulkRevoking(true);
       const results = await Promise.allSettled(
         selectedRows.map((row) => api.revokeApiKey(String(row.ownerUserId), row.keyId))
@@ -290,6 +294,7 @@ function ApiKeysPageContent() {
       toastError('Bulk revocation failed', message);
     } finally {
       setBulkRevoking(false);
+      setBulkMutating(false);
     }
   };
 
@@ -481,7 +486,7 @@ function ApiKeysPageContent() {
                   </Button>
                   <Button
                     onClick={handleRotateSelected}
-                    disabled={selectedRowIds.size === 0 || bulkRotating}
+                    disabled={selectedRowIds.size === 0 || bulkMutating}
                     loading={bulkRotating}
                     loadingText="Rotating..."
                   >
@@ -491,7 +496,7 @@ function ApiKeysPageContent() {
                   <Button
                     variant="destructive"
                     onClick={handleRevokeSelected}
-                    disabled={selectedRowIds.size === 0 || bulkRevoking}
+                    disabled={selectedRowIds.size === 0 || bulkMutating}
                     loading={bulkRevoking}
                     loadingText="Revoking..."
                   >
