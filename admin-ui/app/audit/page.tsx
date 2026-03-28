@@ -14,7 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Pagination } from '@/components/ui/pagination';
-import { FileText, RefreshCw, Filter, Eye, Clipboard, Trash2, Bell, ExternalLink } from 'lucide-react';
+import { FileText, RefreshCw, Filter, Eye, Clipboard, Trash2, Bell, ExternalLink, ShieldAlert } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { AuditLog } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
@@ -983,6 +983,20 @@ function AuditPageContent() {
                 <div className="flex gap-2 mt-4">
                   <Button variant="outline" onClick={handleClearFilters}>
                     Clear Filters
+                  </Button>
+                  <Button
+                    variant={filters.action === 'admin' ? 'default' : 'outline'}
+                    onClick={() => {
+                      if (filters.action === 'admin') {
+                        handleFilterChange({ action: '' });
+                      } else {
+                        handleFilterChange({ action: 'admin' });
+                      }
+                    }}
+                    data-testid="admin-actions-filter"
+                  >
+                    <ShieldAlert className="mr-1.5 h-4 w-4" />
+                    Admin Actions Only
                   </Button>
                 </div>
               </CardContent>

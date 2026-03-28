@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatsCardSkeleton } from '@/components/ui/skeleton';
 import type { DashboardUIStats } from '@/lib/dashboard';
@@ -247,6 +248,13 @@ export const StatsGrid = ({
               <p className="mt-1 text-xs text-muted-foreground">
                 {storagePercentage.toFixed(0)}% used
               </p>
+              <Link
+                href="/data-ops"
+                className="mt-1 inline-block text-xs text-primary hover:underline"
+                data-testid="storage-detail-link"
+              >
+                View details
+              </Link>
             </div>
           </CardContent>
         </Card>
@@ -319,6 +327,13 @@ export const StatsGrid = ({
               label="previous day"
               preferLower
             />
+            <Link
+              href="/audit?action=error"
+              className="inline-block text-xs text-primary hover:underline"
+              data-testid="error-drilldown-link"
+            >
+              View errors
+            </Link>
           </CardContent>
         </Card>
 

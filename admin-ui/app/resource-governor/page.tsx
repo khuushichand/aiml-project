@@ -21,6 +21,7 @@ import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import { parseOptionalInt } from '@/lib/number';
 import { RateLimitEvent, normalizeRateLimitEventsPayload, parseRateLimitEventsFromMetricsText } from '@/lib/rate-limit-events';
+import Link from 'next/link';
 import { RefreshCw, Trash2, Edit2, Plus, Gauge, X } from 'lucide-react';
 
 type ResourcePolicy = {
@@ -982,13 +983,28 @@ export default function ResourceGovernorPage() {
             <CardContent className="grid gap-4">
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="space-y-1">
-                  <Label htmlFor="resolution-user-id">User ID</Label>
-                  <Input
-                    id="resolution-user-id"
-                    placeholder="e.g., 42"
-                    value={resolutionUserId}
-                    onChange={(event) => setResolutionUserId(event.target.value)}
-                  />
+                  <Label htmlFor="resolution-user-id">User</Label>
+                  {scopeUsers.length > 0 ? (
+                    <Select
+                      id="resolution-user-id"
+                      value={resolutionUserId}
+                      onChange={(event) => setResolutionUserId(event.target.value)}
+                    >
+                      <option value="">Select a user...</option>
+                      {scopeUsers.map((user) => (
+                        <option key={user.id} value={String(user.id)}>
+                          {user.username || user.email || `User ${user.id}`} (ID: {user.id})
+                        </option>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Input
+                      id="resolution-user-id"
+                      placeholder="e.g., 42"
+                      value={resolutionUserId}
+                      onChange={(event) => setResolutionUserId(event.target.value)}
+                    />
+                  )}
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="resolution-resource-type">Resource Type</Label>
@@ -1082,10 +1098,26 @@ export default function ResourceGovernorPage() {
                     Recent rate-limit rejections by user/role and policy over the last {USAGE_LOOKBACK_HOURS} hours.
                   </CardDescription>
                 </div>
-                <Badge variant="outline" className="text-xs">
-                  {rateLimitEventsSourceLabel}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  {!rateLimitEventsLoading && rateLimitEvents.length > 0 ? (
+                    <Badge variant="destructive" className="text-xs" data-testid="throttle-event-count">
+                      {rateLimitEvents.reduce((sum, e) => sum + (e.rejections24h ?? 0), 0)} rejections
+                    </Badge>
+                  ) : null}
+                  <Badge variant="outline" className="text-xs">
+                    {rateLimitEventsSourceLabel}
+                  </Badge>
+                </div>
               </div>
+              {!rateLimitEventsLoading && rateLimitEvents.length > 0 ? (
+                <Link
+                  href="/audit?action=rate_limit"
+                  className="mt-1 inline-block text-xs text-primary hover:underline"
+                  data-testid="throttle-audit-link"
+                >
+                  View in audit log
+                </Link>
+              ) : null}
             </CardHeader>
             <CardContent className="grid gap-4">
               {rateLimitEventsLoading ? (

@@ -285,6 +285,13 @@ exports[`StatsGrid > matches snapshot at viewport width 375 1`] = `
             >
               25% used
             </p>
+            <a
+              class="mt-1 inline-block text-xs text-primary hover:underline"
+              data-testid="storage-detail-link"
+              href="/data-ops"
+            >
+              View details
+            </a>
           </div>
         </div>
       </div>
@@ -536,6 +543,13 @@ exports[`StatsGrid > matches snapshot at viewport width 375 1`] = `
             </svg>
             24.0% down vs previous day
           </p>
+          <a
+            class="inline-block text-xs text-primary hover:underline"
+            data-testid="error-drilldown-link"
+            href="/audit?action=error"
+          >
+            View errors
+          </a>
         </div>
       </div>
       <div
@@ -1079,6 +1093,13 @@ exports[`StatsGrid > matches snapshot at viewport width 768 1`] = `
             >
               25% used
             </p>
+            <a
+              class="mt-1 inline-block text-xs text-primary hover:underline"
+              data-testid="storage-detail-link"
+              href="/data-ops"
+            >
+              View details
+            </a>
           </div>
         </div>
       </div>
@@ -1330,6 +1351,13 @@ exports[`StatsGrid > matches snapshot at viewport width 768 1`] = `
             </svg>
             24.0% down vs previous day
           </p>
+          <a
+            class="inline-block text-xs text-primary hover:underline"
+            data-testid="error-drilldown-link"
+            href="/audit?action=error"
+          >
+            View errors
+          </a>
         </div>
       </div>
       <div
@@ -1873,6 +1901,13 @@ exports[`StatsGrid > matches snapshot at viewport width 1280 1`] = `
             >
               25% used
             </p>
+            <a
+              class="mt-1 inline-block text-xs text-primary hover:underline"
+              data-testid="storage-detail-link"
+              href="/data-ops"
+            >
+              View details
+            </a>
           </div>
         </div>
       </div>
@@ -2124,6 +2159,13 @@ exports[`StatsGrid > matches snapshot at viewport width 1280 1`] = `
             </svg>
             24.0% down vs previous day
           </p>
+          <a
+            class="inline-block text-xs text-primary hover:underline"
+            data-testid="error-drilldown-link"
+            href="/audit?action=error"
+          >
+            View errors
+          </a>
         </div>
       </div>
       <div

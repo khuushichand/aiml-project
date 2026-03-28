@@ -15,21 +15,23 @@ describe('navigation information architecture', () => {
       'Identity & Access',
       'AI & Models',
       'Operations',
-      'Governance',
+      'Cost & Usage',
+      'Security & Compliance',
       'Advanced',
     ]);
   });
 
-  it('includes key admin destinations in operations and governance groups', () => {
+  it('includes key admin destinations in operations, cost/usage, and security groups', () => {
     const operations = navigationSections.find((section) => section.title === 'Operations');
-    const governance = navigationSections.find((section) => section.title === 'Governance');
+    const costUsage = navigationSections.find((section) => section.title === 'Cost & Usage');
+    const securityCompliance = navigationSections.find((section) => section.title === 'Security & Compliance');
     const advanced = navigationSections.find((section) => section.title === 'Advanced');
 
     expect(operations?.items.map((item) => item.href)).toContain('/monitoring');
     expect(operations?.items.map((item) => item.href)).toContain('/dependencies');
     expect(operations?.items.map((item) => item.href)).toContain('/incidents');
-    expect(governance?.items.map((item) => item.href)).toContain('/security');
-    expect(governance?.items.map((item) => item.href)).toContain('/resource-governor');
+    expect(costUsage?.items.map((item) => item.href)).toContain('/resource-governor');
+    expect(securityCompliance?.items.map((item) => item.href)).toContain('/security');
     expect(advanced?.items.map((item) => item.href)).toContain('/config');
   });
 });
