@@ -13,7 +13,10 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
-import { Pause, Play, RefreshCw, MessageSquare, XCircle, Wifi, WifiOff } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Pause, Play, RefreshCw, MessageSquare, XCircle, Wifi, WifiOff, Gauge } from 'lucide-react';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportACPSessions, ExportFormat } from '@/lib/export';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
@@ -39,6 +42,10 @@ interface ACPSession {
   has_websocket: boolean;
   model: string | null;
   estimated_cost_usd: number | null;
+  token_budget?: number | null;
+  auto_terminate_at_budget?: boolean;
+  budget_exhausted?: boolean;
+  budget_remaining?: number | null;
 }
 
 interface ACPSessionListResponse {
@@ -147,6 +154,44 @@ export default function ACPSessionsPage() {
     }
   }, [confirm, toast, loadSessions]);
 
+  // -- Set Budget dialog state --
+  const [budgetDialogOpen, setBudgetDialogOpen] = useState(false);
+  const [budgetSessionId, setBudgetSessionId] = useState<string | null>(null);
+  const [budgetValue, setBudgetValue] = useState('');
+  const [budgetAutoTerminate, setBudgetAutoTerminate] = useState(true);
+  const [budgetSaving, setBudgetSaving] = useState(false);
+
+  const openBudgetDialog = useCallback((session: ACPSession) => {
+    setBudgetSessionId(session.session_id);
+    setBudgetValue(session.token_budget != null ? String(session.token_budget) : '');
+    setBudgetAutoTerminate(session.auto_terminate_at_budget ?? true);
+    setBudgetDialogOpen(true);
+  }, []);
+
+  const handleSaveBudget = useCallback(async () => {
+    if (!budgetSessionId) return;
+    const parsed = parseInt(budgetValue, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      toast.error('Token budget must be a positive number');
+      return;
+    }
+    setBudgetSaving(true);
+    try {
+      await api.setSessionBudget(budgetSessionId, {
+        token_budget: parsed,
+        auto_terminate_at_budget: budgetAutoTerminate,
+      });
+      toast.success('Token budget updated');
+      setBudgetDialogOpen(false);
+      loadSessions();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Failed to set budget';
+      toast.error(message);
+    } finally {
+      setBudgetSaving(false);
+    }
+  }, [budgetSessionId, budgetValue, budgetAutoTerminate, toast, loadSessions]);
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'active':
@@ -169,6 +214,53 @@ export default function ACPSessionsPage() {
   const formatCost = (usd: number | null | undefined): string => {
     if (usd == null) return '\u2014';
     return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
+  };
+
+  const getBudgetDisplay = (session: ACPSession) => {
+    if (session.token_budget == null) {
+      return <span className="text-xs text-muted-foreground">No budget</span>;
+    }
+    const used = session.usage.total_tokens;
+    const budget = session.token_budget;
+    const pct = budget > 0 ? Math.min((used / budget) * 100, 100) : 0;
+
+    if (session.budget_exhausted) {
+      return (
+        <div className="flex flex-col gap-0.5 min-w-[80px]" data-testid="budget-exhausted">
+          <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Exhausted</Badge>
+          <span className="text-[10px] text-muted-foreground">
+            {formatTokens(used)} / {formatTokens(budget)}
+          </span>
+        </div>
+      );
+    }
+
+    const barColor =
+      pct > 80 ? 'bg-red-500' :
+      pct > 60 ? 'bg-yellow-500' :
+      'bg-green-500';
+
+    const textColor =
+      pct > 80 ? 'text-red-600' :
+      pct > 60 ? 'text-yellow-600' :
+      'text-green-600';
+
+    return (
+      <div className="flex flex-col gap-0.5 min-w-[80px]" data-testid="budget-progress">
+        <div className="flex items-center gap-1">
+          <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
+            <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+          </div>
+          <span className={`text-[10px] font-medium ${textColor}`}>{Math.round(pct)}%</span>
+        </div>
+        <span className="text-[10px] text-muted-foreground">
+          {formatTokens(used)} / {formatTokens(budget)}
+          {session.auto_terminate_at_budget && (
+            <span title="Auto-terminates when budget is exhausted"> (auto)</span>
+          )}
+        </span>
+      </div>
+    );
   };
 
   return (
@@ -279,6 +371,7 @@ export default function ACPSessionsPage() {
                         <TableHead>Messages</TableHead>
                         <TableHead>Tokens</TableHead>
                         <TableHead>Est. Cost</TableHead>
+                        <TableHead>Budget</TableHead>
                         <TableHead>WS</TableHead>
                         <TableHead>Created</TableHead>
                         <TableHead>Actions</TableHead>
@@ -315,6 +408,9 @@ export default function ACPSessionsPage() {
                             )}
                           </TableCell>
                           <TableCell>
+                            {getBudgetDisplay(session)}
+                          </TableCell>
+                          <TableCell>
                             {session.has_websocket ? (
                               <Wifi className="h-4 w-4 text-green-500" />
                             ) : (
@@ -325,13 +421,22 @@ export default function ACPSessionsPage() {
                           <TableCell>
                             <div className="flex gap-1">
                               {session.status === 'active' && (
-                                <AccessibleIconButton
-                                  icon={XCircle}
-                                  label="Close session"
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => handleCloseSession(session.session_id)}
-                                />
+                                <>
+                                  <AccessibleIconButton
+                                    icon={Gauge}
+                                    label="Set budget"
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => openBudgetDialog(session)}
+                                  />
+                                  <AccessibleIconButton
+                                    icon={XCircle}
+                                    label="Close session"
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handleCloseSession(session.session_id)}
+                                  />
+                                </>
                               )}
                             </div>
                           </TableCell>
@@ -343,6 +448,46 @@ export default function ACPSessionsPage() {
               )}
             </CardContent>
           </Card>
+          {/* Set Budget Dialog */}
+          <Dialog open={budgetDialogOpen} onOpenChange={setBudgetDialogOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Set Token Budget</DialogTitle>
+                <DialogDescription>
+                  Set a token budget for session {budgetSessionId?.slice(0, 12)}...
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <div className="space-y-2">
+                  <Label htmlFor="budget-tokens">Token Budget</Label>
+                  <Input
+                    id="budget-tokens"
+                    type="number"
+                    min={1}
+                    placeholder="e.g. 100000"
+                    value={budgetValue}
+                    onChange={(e) => setBudgetValue(e.target.value)}
+                    data-testid="budget-input"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="budget-auto-terminate"
+                    checked={budgetAutoTerminate}
+                    onCheckedChange={(checked) => setBudgetAutoTerminate(checked === true)}
+                    data-testid="budget-auto-terminate"
+                  />
+                  <Label htmlFor="budget-auto-terminate">Auto-terminate when budget is exhausted</Label>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setBudgetDialogOpen(false)}>Cancel</Button>
+                <Button size="sm" onClick={handleSaveBudget} disabled={budgetSaving} loading={budgetSaving} loadingText="Saving...">
+                  Set Budget
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       </ResponsiveLayout>
     </PermissionGuard>

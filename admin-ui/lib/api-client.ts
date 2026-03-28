@@ -1108,6 +1108,11 @@ export const api = {
     requestJson(`/admin/acp/sessions/${encodeURIComponent(sessionId)}/close`, {
       method: 'POST',
     }),
+  setSessionBudget: (sessionId: string, data: { token_budget: number; auto_terminate_at_budget?: boolean }) =>
+    requestJson(`/admin/acp/sessions/${encodeURIComponent(sessionId)}/budget`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
 
   // ============================================
   // ACP Agent Configs (Admin)

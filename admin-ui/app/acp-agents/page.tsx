@@ -104,6 +104,8 @@ const defaultAgentForm = {
   max_tokens: '',
   requires_api_key: '',
   enabled: true,
+  default_token_budget: '',
+  default_auto_terminate_at_budget: true,
 };
 
 const defaultPolicyForm = {
@@ -185,6 +187,8 @@ export default function ACPAgentsPage() {
       max_tokens: String((agent.parameters as Record<string, unknown>).max_tokens ?? ''),
       requires_api_key: agent.requires_api_key || '',
       enabled: agent.enabled,
+      default_token_budget: String((agent.parameters as Record<string, unknown>).default_token_budget ?? ''),
+      default_auto_terminate_at_budget: (agent.parameters as Record<string, unknown>).default_auto_terminate_at_budget !== false,
     });
     setAgentDialogOpen(true);
   };
@@ -202,6 +206,8 @@ export default function ACPAgentsPage() {
           ...(agentForm.temperature ? { temperature: parseFloat(agentForm.temperature) } : {}),
           ...(agentForm.model ? { model: agentForm.model } : {}),
           ...(agentForm.max_tokens ? { max_tokens: parseInt(agentForm.max_tokens) } : {}),
+          ...(agentForm.default_token_budget ? { default_token_budget: parseInt(agentForm.default_token_budget) } : {}),
+          ...(agentForm.default_token_budget ? { default_auto_terminate_at_budget: agentForm.default_auto_terminate_at_budget } : {}),
         },
         requires_api_key: agentForm.requires_api_key || null,
         enabled: agentForm.enabled,
@@ -615,6 +621,23 @@ export default function ACPAgentsPage() {
                 <div className="space-y-2">
                   <Label htmlFor="agent-key">Required API Key (env var name)</Label>
                   <Input id="agent-key" value={agentForm.requires_api_key} onChange={(e) => setAgentForm(f => ({ ...f, requires_api_key: e.target.value }))} placeholder="ANTHROPIC_API_KEY" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="agent-default-budget">Default Token Budget</Label>
+                    <Input id="agent-default-budget" type="number" min={0} value={agentForm.default_token_budget} onChange={(e) => setAgentForm(f => ({ ...f, default_token_budget: e.target.value }))} placeholder="e.g. 100000 (empty = no budget)" />
+                  </div>
+                  <div className="flex items-end pb-2">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="agent-auto-terminate"
+                        checked={agentForm.default_auto_terminate_at_budget}
+                        onCheckedChange={(checked) => setAgentForm(f => ({ ...f, default_auto_terminate_at_budget: checked === true }))}
+                        disabled={!agentForm.default_token_budget}
+                      />
+                      <Label htmlFor="agent-auto-terminate">Auto-terminate at budget</Label>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Checkbox
