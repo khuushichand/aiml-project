@@ -1160,6 +1160,7 @@ class IncidentItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None = None
+    acknowledged_at: datetime | None = None
     created_by: str | None = None
     updated_by: str | None = None
     timeline: list[IncidentEvent] = []
@@ -1168,6 +1169,8 @@ class IncidentItem(BaseModel):
     root_cause: str | None = None
     impact: str | None = None
     action_items: list[IncidentActionItem] = []
+    mtta_minutes: float | None = None
+    mttr_minutes: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1211,6 +1214,7 @@ class IncidentUpdateRequest(BaseModel):
     assigned_to_user_id: int | None = None
     root_cause: str | None = None
     impact: str | None = None
+    acknowledged_at: datetime | None = None
     action_items: list[IncidentActionItem] | None = None
     update_message: str | None = None
 

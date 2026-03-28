@@ -173,6 +173,7 @@ def _normalize_incident_record(value: Any) -> dict[str, Any]:
         else None
     )
     incident["action_items"] = _normalize_incident_action_items(incident.get("action_items"))
+    incident.setdefault("acknowledged_at", None)
     return incident
 
 
@@ -526,10 +527,35 @@ def list_incidents(
     total = len(incidents)
     safe_offset = max(0, offset)
     safe_limit = max(1, limit)
-    return [
+    items = [
         _normalize_incident_record(item)
         for item in incidents[safe_offset:safe_offset + safe_limit]
-    ], total
+    ]
+    for inc in items:
+        inc["mtta_minutes"] = None
+        inc["mttr_minutes"] = None
+        created = inc.get("created_at")
+        acknowledged = inc.get("acknowledged_at")
+        resolved = inc.get("resolved_at")
+        if created and acknowledged:
+            try:
+                c = datetime.fromisoformat(str(created))
+                a = datetime.fromisoformat(str(acknowledged))
+                val = (a - c).total_seconds() / 60
+                if val >= 0:
+                    inc["mtta_minutes"] = round(val, 1)
+            except (ValueError, TypeError):
+                pass
+        if created and resolved:
+            try:
+                c = datetime.fromisoformat(str(created))
+                r = datetime.fromisoformat(str(resolved))
+                val = (r - c).total_seconds() / 60
+                if val >= 0:
+                    inc["mttr_minutes"] = round(val, 1)
+            except (ValueError, TypeError):
+                pass
+    return items, total
 
 
 def create_incident(
@@ -559,6 +585,7 @@ def create_incident(
         "created_at": now,
         "actor": actor,
     }
+    acknowledged_at = now if status_norm != "open" else None
     incident = {
         "id": incident_id,
         "title": title_norm,
@@ -569,6 +596,7 @@ def create_incident(
         "created_at": now,
         "updated_at": now,
         "resolved_at": resolved_at,
+        "acknowledged_at": acknowledged_at,
         "created_by": actor,
         "updated_by": actor,
         "timeline": [timeline_entry],
@@ -617,6 +645,8 @@ def update_incident(
                 status_norm = status.strip().lower()
                 if status_norm not in _INCIDENT_STATUSES:
                     raise ValueError("invalid_status")
+                if current.get("status") == "open" and status_norm != "open" and not current.get("acknowledged_at"):
+                    updated_incident["acknowledged_at"] = now
                 updated_incident["status"] = status_norm
                 updated_incident["resolved_at"] = now if status_norm == "resolved" else None
             if severity is not None:

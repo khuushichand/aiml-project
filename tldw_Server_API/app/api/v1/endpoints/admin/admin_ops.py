@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -522,6 +523,65 @@ async def create_incident(
         metadata={"status": incident.get("status"), "severity": incident.get("severity")},
     )
     return IncidentItem(**incident)
+
+
+@router.get("/incidents/metrics/sla", response_model=dict)
+async def get_incident_sla_metrics(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict:
+    """Compute SLA metrics across all incidents."""
+    _require_platform_admin(principal)
+    incidents, _ = svc_list_incidents(
+        status=None, severity=None, tag=None, limit=10000, offset=0,
+    )
+
+    mtta_values: list[float] = []
+    mttr_values: list[float] = []
+
+    for inc in incidents:
+        created = inc.get("created_at")
+        acknowledged = inc.get("acknowledged_at")
+        resolved = inc.get("resolved_at")
+
+        if created and acknowledged:
+            try:
+                c = datetime.fromisoformat(str(created))
+                a = datetime.fromisoformat(str(acknowledged))
+                mtta_minutes = (a - c).total_seconds() / 60
+                if mtta_minutes >= 0:
+                    mtta_values.append(mtta_minutes)
+            except (ValueError, TypeError):
+                pass
+
+        if created and resolved:
+            try:
+                c = datetime.fromisoformat(str(created))
+                r = datetime.fromisoformat(str(resolved))
+                mttr_minutes = (r - c).total_seconds() / 60
+                if mttr_minutes >= 0:
+                    mttr_values.append(mttr_minutes)
+            except (ValueError, TypeError):
+                pass
+
+    def _avg(values: list[float]) -> float | None:
+        return round(sum(values) / len(values), 1) if values else None
+
+    def _p95(values: list[float]) -> float | None:
+        if not values:
+            return None
+        sorted_v = sorted(values)
+        idx = int(len(sorted_v) * 0.95)
+        return round(sorted_v[min(idx, len(sorted_v) - 1)], 1)
+
+    return {
+        "total_incidents": len(incidents),
+        "resolved_count": sum(1 for i in incidents if i.get("resolved_at")),
+        "acknowledged_count": sum(1 for i in incidents if i.get("acknowledged_at")),
+        "avg_mtta_minutes": _avg(mtta_values),
+        "avg_mttr_minutes": _avg(mttr_values),
+        "p95_mtta_minutes": _p95(mtta_values),
+        "p95_mttr_minutes": _p95(mttr_values),
+    }
 
 
 @router.patch("/incidents/{incident_id}", response_model=IncidentItem)
