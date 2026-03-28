@@ -214,6 +214,14 @@ If some selected sources are hidden by search, folder focus, or advanced filters
 
 This mirrors the current behavior expectations already established by batch remove.
 
+### Eligibility rules
+
+The transfer flow should operate only on ready sources in v1.
+
+This matches the current selection model, where `effectiveSelectedSourceEntries` is derived from ready source IDs only.
+
+If the current folder or filter context contains processing or errored sources that are not eligible for transfer, the modal should disclose that they are excluded from the transfer set rather than silently behaving as if they do not exist.
+
 ### Destination picker rules
 
 The destination picker should:
@@ -257,19 +265,20 @@ The transfer action works on selected origin source wrappers but deduplicates an
 ### Execution steps
 
 1. Build the origin transfer set from `effectiveSelectedSourceEntries`.
-2. Deduplicate the transfer set by `mediaId`.
-3. Resolve the destination workspace snapshot:
+2. Detect and summarize any non-ready in-scope sources excluded from the transfer set.
+3. Deduplicate the transfer set by `mediaId`.
+4. Resolve the destination workspace snapshot:
    - existing saved workspace snapshot, or
    - newly created destination snapshot created without switching the active workspace yet
-4. For each selected source:
+5. For each selected source:
    - if destination has no wrapper with that `mediaId`, create one
    - if destination already has that `mediaId`, queue a conflict
-5. Recreate or reuse destination folders needed by the transferred sources.
-6. Apply destination folder memberships based on conflict decisions.
-7. If action is `Move`, remove origin source wrappers only after destination updates are complete.
-8. If `Move` creates newly empty origin folders, apply the chosen cleanup policy.
-9. Update saved-workspace metadata for both origin and destination, including `sourceCount`.
-10. If the user created a new destination workspace, optionally switch to it after the transfer succeeds.
+6. Recreate or reuse destination folders needed by the transferred sources.
+7. Apply destination folder memberships based on conflict decisions.
+8. If action is `Move`, remove origin source wrappers only after destination updates are complete.
+9. If `Move` creates newly empty origin folders, apply the chosen cleanup policy.
+10. Update saved-workspace metadata for both origin and destination, including `sourceCount` and `lastAccessedAt`, and move modified workspaces to the front of recency ordering.
+11. If the user created a new destination workspace, optionally switch to it after the transfer succeeds.
 
 ## Destination Creation Rule
 
@@ -315,6 +324,8 @@ For each conflicting source, offer:
 2. `Merge folder memberships`
 3. `Replace transferred folder memberships`
 
+When many conflicts exist, the UI should support applying one resolution to all remaining conflicts.
+
 ### Meaning of merge
 
 Keep the existing destination source wrapper and add any mapped incoming folder memberships.
@@ -337,9 +348,13 @@ Cleanup applies only to folders made empty by the current move.
 
 Parent folders may be cleaned up recursively only while they remain empty as a direct consequence of this move.
 
+When cleanup deletes origin folders, the implementation must also repair any affected `selectedSourceFolderIds` and `activeFolderId` in the origin workspace, using the existing folder-deletion semantics or an equivalent result.
+
 ## Undo And Safety
 
-This feature should use one whole-transfer undo snapshot rather than per-source undo entries.
+This feature should present one atomic, whole-transfer undo affordance rather than per-source undo entries.
+
+V1 may implement this with the existing store-wide undo snapshot helpers, but if profiling shows that full-store snapshot cloning is too expensive for large workspace state, a targeted transfer transaction record is acceptable as long as restore behavior remains atomic and full-fidelity.
 
 ### Safety requirements
 
