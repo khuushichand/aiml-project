@@ -58,6 +58,7 @@ const navigationItems = {
   organizations: { name: 'Organizations', href: '/organizations', icon: Building2, permission: 'read:orgs', keywords: ['orgs', 'tenants'] },
   teams: { name: 'Teams', href: '/teams', icon: UserCog, permission: 'read:teams', keywords: ['groups'] },
   rolesPermissions: { name: 'Roles & Permissions', href: '/roles', icon: Shield, role: ['admin', 'super_admin', 'owner'], keywords: ['rbac', 'authz'] },
+  registrationCodes: { name: 'Registration Codes', href: '/users/registration', icon: KeyRound, permission: 'read:users', keywords: ['registration', 'invite', 'onboarding', 'codes'] },
   apiKeys: { name: 'API Keys', href: '/api-keys', icon: Key, permission: 'read:api_keys', keywords: ['credentials', 'tokens'] },
   byok: { name: 'BYOK', href: '/byok', icon: KeyRound, role: ['admin', 'super_admin', 'owner'], keywords: ['provider keys', 'bring your own key'] },
   providers: { name: 'LLM Providers', href: '/providers', icon: Cpu, permission: 'read:config', keywords: ['models', 'inference'] },
@@ -96,6 +97,7 @@ export const navigationSections: NavigationSection[] = [
     title: 'Identity & Access',
     items: [
       navigationItems.users,
+      navigationItems.registrationCodes,
       navigationItems.organizations,
       navigationItems.teams,
       navigationItems.rolesPermissions,
@@ -206,6 +208,7 @@ const resolveDynamicPathLabel = (segments: string[]): string | null => {
   if (!idOrSlug) return null;
 
   if (root === 'users') {
+    if (segments.length === 2 && idOrSlug === 'registration') return 'Registration Codes';
     if (segments.length === 2) return `User ${decodeURIComponent(idOrSlug)}`;
     if (segments.length === 3 && segments[2] === 'api-keys') return 'API Keys';
   }
