@@ -44,6 +44,10 @@ import type {
   VoiceSession,
   VoiceSessionListResponse,
   WatchlistSettings,
+  AdminWebhook,
+  AdminWebhooksResponse,
+  AdminWebhookDeliveryLogResponse,
+  AdminWebhookTestResult,
 } from '@/types';
 export { ApiError };
 
@@ -198,6 +202,8 @@ export const api = {
       body: JSON.stringify(data),
     }),
   getUserMfaStatus: (userId: string) => requestJson(`/admin/users/${userId}/mfa`),
+  getUserMfaStatusBulk: (userIds: number[]) =>
+    requestJson<{ mfa_status: Record<string, boolean> }>(`/admin/users/mfa/bulk?ids=${userIds.join(',')}`),
   disableUserMfa: (userId: string, data: { reason: string; admin_password?: string | null }) =>
     requestJson(`/admin/users/${userId}/mfa/disable`, {
       method: 'POST',
@@ -312,6 +318,10 @@ export const api = {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     return requestJson(`/orgs/${encodeURIComponent(orgId)}/invites${queryParams ? `?${queryParams}` : ''}`);
   },
+  revokeOrgInvite: (orgId: string, inviteId: string) =>
+    requestJson(`/orgs/${encodeURIComponent(orgId)}/invites/${encodeURIComponent(inviteId)}`, {
+      method: 'DELETE',
+    }),
 
   // ============================================
   // Teams
@@ -576,6 +586,11 @@ export const api = {
     requestJson(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
       method: 'DELETE',
     }),
+  notifyIncident: (incidentId: string) =>
+    requestJson<{ notified: boolean; incident_id: string; webhooks_delivered: number }>(
+      `/admin/incidents/${encodeURIComponent(incidentId)}/notify`,
+      { method: 'POST' },
+    ),
 
   // ============================================
   // Audit Logs
@@ -943,6 +958,71 @@ export const api = {
   // ============================================
   getSecurityHealth: () => requestJson<SecurityHealthData>('/health/security'),
   getSecurityAlertStatus: () => requestJson<SecurityAlertStatus>('/admin/security/alert-status'),
+  getKeyAgeStats: () => requestJson<{
+    buckets: Array<{ label: string; count: number; color: string }>;
+    total: number;
+  }>('/admin/security/key-age-stats'),
+  debugResolvePermissions: (userId: number) =>
+    requestJson<{ user_id: number; roles: string[]; effective_permissions: string[]; error?: string }>(
+      `/admin/debug/resolve-permissions?user_id=${userId}`, { method: 'POST' }
+    ),
+  debugValidateToken: (token: string) =>
+    requestJson<{ valid: boolean; header?: Record<string, unknown>; payload?: Record<string, unknown>; expired?: boolean; error?: string }>(
+      `/admin/debug/validate-token?token=${encodeURIComponent(token)}`, { method: 'POST' }
+    ),
+  debugSimulateRateLimit: (data: { user_id: number; endpoint: string }) =>
+    requestJson<{
+      user_id: number;
+      endpoint: string;
+      effective_limit_per_min: number | null;
+      effective_burst: number | null;
+      limit_source: string;
+      would_allow: boolean;
+      user_limits: Array<Record<string, unknown>>;
+      role_limits: Array<Record<string, unknown>>;
+    }>('/admin/debug/simulate-rate-limit', { method: 'POST', body: JSON.stringify(data) }),
+  getCostAttribution: (groupBy = 'user', rangeDays = 7) =>
+    requestJson<{
+      group_by: string;
+      range_days: number;
+      items: Array<{ entity_id: number; request_count: number; total_tokens: number; estimated_cost_usd: number }>;
+    }>(`/admin/usage/cost-attribution?group_by=${groupBy}&range_days=${rangeDays}`),
+  getBillingAnalytics: () => requestJson<{
+    analytics_available: boolean;
+    total_subscriptions?: number;
+    active_subscriptions?: number;
+    trialing?: number;
+    past_due?: number;
+    canceled?: number;
+    churn_rate_pct?: number;
+  }>('/admin/billing/analytics'),
+  getRiskWeights: () => requestJson<{
+    weights: Record<string, { weight: number; cap: number }>;
+  }>('/admin/security/risk-weights'),
+  setRiskWeights: (weights: Record<string, { weight: number; cap: number }>) =>
+    requestJson<{ weights: Record<string, { weight: number; cap: number }> }>('/admin/security/risk-weights', {
+      method: 'POST',
+      body: JSON.stringify(weights),
+    }),
+  getAllDependenciesHealth: () => requestJson<{
+    status: string;
+    dependencies: Array<{ name: string; status: string; latency_ms: number; error?: string; detail?: string }>;
+    checked_at: string;
+  }>('/admin/dependencies/health'),
+  getDependenciesUptimeHistory: (params?: Record<string, QueryParamValue>) => {
+    const qs = buildQueryString(params);
+    return requestJson<{
+      range_days: number;
+      services: Record<string, Array<{ bucket: string; uptime_pct: number; probes: number }>>;
+    }>(`/admin/dependencies/uptime-history${qs ? `?${qs}` : ''}`);
+  },
+  getBudgetForecast: (orgId: number) => requestJson<{
+    org_id: number;
+    forecast_available: boolean;
+    burn_rate_usd_per_day?: number;
+    projected_monthly_usd?: number;
+    days_until_exhaustion?: number | null;
+  }>(`/admin/budgets/forecast?org_id=${orgId}`),
 
   // ============================================
   // Virtual API Keys
@@ -953,6 +1033,10 @@ export const api = {
     requestJson(`/admin/users/${encodeURIComponent(userId)}/virtual-keys`, {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  deleteUserVirtualKey: (userId: string, keyId: string) =>
+    requestJson(`/admin/users/${encodeURIComponent(userId)}/virtual-keys/${encodeURIComponent(keyId)}`, {
+      method: 'DELETE',
     }),
 
   // ============================================
@@ -1108,6 +1192,20 @@ export const api = {
     requestJson(`/admin/acp/agents/${configId}`, {
       method: 'DELETE',
     }),
+  getACPAgentUsage: (rangeDays = 7) =>
+    requestJson<{
+      agents: Array<{
+        agent_type: string;
+        invocation_count: number;
+        total_tokens: number;
+        prompt_tokens: number;
+        completion_tokens: number;
+        estimated_cost_usd: number;
+        error_count: number;
+        avg_tokens_per_session: number;
+      }>;
+      range_days: number;
+    }>(`/admin/acp/agents/usage?range_days=${rangeDays}`),
 
   // ============================================
   // ACP Permission Policies (Admin)
@@ -1140,6 +1238,13 @@ export const api = {
   getMCPModules: () => requestJson('/mcp/modules'),
   getMCPModulesHealth: () => requestJson('/mcp/modules/health'),
   getMCPHealth: () => requestJson('/mcp/health'),
+  getMCPToolUsage: (params?: Record<string, QueryParamValue>) => {
+    const qs = buildQueryString(params);
+    return requestJson<{
+      period_seconds: number;
+      modules: Record<string, { calls: number; avg_latency_ms: number }>;
+    }>(`/admin/mcp/tool-usage${qs ? `?${qs}` : ''}`);
+  },
 
   // ============================================
   // Voice Commands & Assistant
@@ -1200,6 +1305,21 @@ export const api = {
     return requestJson<VoiceCommandUsage>(`/voice/commands/${encodeURIComponent(commandId)}/usage${queryParams ? `?${queryParams}` : ''}`, { signal });
   },
 
+  // Voice Command Dry-Run
+  dryRunVoiceCommand: (data: { phrase: string; command_id?: string }) =>
+    requestJson<{
+      dry_run: boolean;
+      phrase: string;
+      matched: boolean;
+      match_method: string;
+      matched_phrase: string | null;
+      confidence: number | null;
+      action_type: string;
+      action_config: Record<string, unknown>;
+      processing_time_ms: number;
+      alternatives: Array<{ action_type: string; confidence: number | null; raw_text: string | null }>;
+    }>('/voice/commands/dry-run', { method: 'POST', body: JSON.stringify(data) }),
+
   // Voice Workflow Templates
   getVoiceWorkflowTemplates: () =>
     requestJson('/voice/workflows/templates'),
@@ -1255,6 +1375,26 @@ export const api = {
   createOnboardingSession: (data: { org_name: string; org_slug: string; plan_id: string; owner_email?: string }) =>
     requestJson<{ checkout_url?: string; org_id?: number }>(
       '/billing/onboarding', { method: 'POST', body: JSON.stringify(data) }),
+
+  // Admin Webhooks
+  getWebhooks: (params?: Record<string, QueryParamValue>, options?: RequestInit) => {
+    const qs = buildQueryString(params);
+    return requestJson<AdminWebhooksResponse>(`/admin/webhooks${qs ? `?${qs}` : ''}`, options);
+  },
+  createWebhook: (data: { url: string; event_types?: string[]; description?: string; secret?: string; active?: boolean; retry_count?: number; timeout_seconds?: number }) =>
+    requestJson<AdminWebhook>('/admin/webhooks', { method: 'POST', body: JSON.stringify(data) }),
+  getWebhook: (id: number) =>
+    requestJson<AdminWebhook>(`/admin/webhooks/${id}`),
+  updateWebhook: (id: number, data: Partial<{ url: string; event_types: string[]; description: string; secret: string; active: boolean; retry_count: number; timeout_seconds: number }>) =>
+    requestJson<AdminWebhook>(`/admin/webhooks/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteWebhook: (id: number) =>
+    requestJson<{ deleted: boolean; id: number }>(`/admin/webhooks/${id}`, { method: 'DELETE' }),
+  testWebhook: (id: number) =>
+    requestJson<AdminWebhookTestResult>(`/admin/webhooks/${id}/test`, { method: 'POST' }),
+  getWebhookDeliveries: (id: number, params?: Record<string, QueryParamValue>) => {
+    const qs = buildQueryString(params);
+    return requestJson<AdminWebhookDeliveryLogResponse>(`/admin/webhooks/${id}/deliveries${qs ? `?${qs}` : ''}`);
+  },
 };
 
 export default api;

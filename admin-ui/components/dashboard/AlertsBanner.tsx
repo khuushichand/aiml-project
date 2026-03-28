@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { AlertTriangle } from 'lucide-react';
 
@@ -12,8 +13,15 @@ type DashboardAlertSummaryItem = {
   severity?: AlertSeverity;
 };
 
+type DashboardAlertFull = DashboardAlertSummaryItem & {
+  id?: string | number;
+  message?: string;
+  acknowledged?: boolean;
+};
+
 type AlertsBannerProps = {
-  alerts: DashboardAlertSummaryItem[];
+  alerts: DashboardAlertFull[];
+  onAcknowledgeAll?: () => void;
 };
 
 export const summarizeAlertSeverities = (alerts: DashboardAlertSummaryItem[]) => {
@@ -61,12 +69,17 @@ const getAlertToneClasses = (critical: number, warning: number) => {
   };
 };
 
-export const AlertsBanner = ({ alerts }: AlertsBannerProps) => {
+export const AlertsBanner = ({ alerts, onAcknowledgeAll }: AlertsBannerProps) => {
   if (alerts.length <= 0) return null;
 
   const summary = summarizeAlertSeverities(alerts);
   const tone = getAlertToneClasses(summary.critical, summary.warning);
   const total = summary.critical + summary.warning + summary.info;
+
+  // Find the most recent critical/warning alert with a message
+  const topAlert = alerts.find(
+    (a) => a.message && (a.severity === 'critical' || a.severity === 'error')
+  ) ?? alerts.find((a) => a.message && a.severity === 'warning');
 
   return (
     <Alert className={cn('mb-6', tone.container)}>
@@ -82,10 +95,22 @@ export const AlertsBanner = ({ alerts }: AlertsBannerProps) => {
           <Badge className="bg-blue-500 text-white">
             {summary.info} info
           </Badge>
+          {topAlert?.message && (
+            <span className="text-sm truncate max-w-md">
+              — {topAlert.message}
+            </span>
+          )}
         </div>
-        <div>
-          {total} active alert{total !== 1 ? 's' : ''} require attention.{' '}
-          <Link href="/monitoring" className="underline font-medium">View all</Link>
+        <div className="flex items-center gap-2">
+          <span>
+            {total} active alert{total !== 1 ? 's' : ''} require attention.{' '}
+            <Link href="/monitoring" className="underline font-medium">View all</Link>
+          </span>
+          {summary.critical > 0 && onAcknowledgeAll && (
+            <Button variant="ghost" size="sm" onClick={onAcknowledgeAll} className="text-xs">
+              Acknowledge All
+            </Button>
+          )}
         </div>
       </AlertDescription>
     </Alert>

@@ -173,6 +173,29 @@ def _normalize_incident_record(value: Any) -> dict[str, Any]:
         else None
     )
     incident["action_items"] = _normalize_incident_action_items(incident.get("action_items"))
+
+    # Preserve runbook_url if present
+    incident.setdefault("runbook_url", None)
+
+    # Compute SLA metrics (time to acknowledge, time to resolve)
+    created_at = _parse_iso(incident.get("created_at"))
+    resolved_at = _parse_iso(incident.get("resolved_at"))
+    timeline = incident.get("timeline") or []
+
+    # Time to acknowledge = time of first status change after creation
+    first_event_at = None
+    for event in timeline:
+        event_time = _parse_iso(event.get("created_at") if isinstance(event, dict) else None)
+        if event_time and event_time > created_at:
+            first_event_at = event_time
+            break
+    incident["time_to_acknowledge_seconds"] = (
+        int((first_event_at - created_at).total_seconds()) if first_event_at else None
+    )
+    incident["time_to_resolve_seconds"] = (
+        int((resolved_at - created_at).total_seconds()) if resolved_at else None
+    )
+
     return incident
 
 
@@ -595,6 +618,7 @@ def update_incident(
     assigned_to_label: Any = _UNSET,
     root_cause: Any = _UNSET,
     impact: Any = _UNSET,
+    runbook_url: Any = _UNSET,
     action_items: Any = _UNSET,
     update_message: str | None,
     actor: str | None,
@@ -649,6 +673,12 @@ def update_incident(
                 updated_incident["impact"] = (
                     str(impact).strip() or None
                     if impact is not None
+                    else None
+                )
+            if runbook_url is not _UNSET:
+                updated_incident["runbook_url"] = (
+                    str(runbook_url).strip() or None
+                    if runbook_url is not None
                     else None
                 )
             if action_items is not _UNSET:

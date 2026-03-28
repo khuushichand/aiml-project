@@ -18,6 +18,7 @@ import { api } from '@/lib/api-client';
 import { Team, TeamMember, User } from '@/types';
 import Link from 'next/link';
 import { UserPicker } from '@/components/users/UserPicker';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 export default function TeamDetailPage() {
   const params = useParams();
@@ -253,7 +254,7 @@ export default function TeamDetailPage() {
       <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <CardSkeleton />
           </div>
         </ResponsiveLayout>
       </PermissionGuard>

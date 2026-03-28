@@ -70,6 +70,7 @@ export const RecentActivityCard = ({
   formatTimeAgo,
 }: RecentActivityCardProps) => {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
+  const [severityFilter, setSeverityFilter] = useState<'all' | ActivitySeverity>('all');
   const activityWithMetadata = useMemo(() => recentActivity.map((log) => ({
     ...log,
     severity: getActivitySeverity(log),
@@ -95,6 +96,27 @@ export const RecentActivityCard = ({
           </Button>
         </Link>
       </CardHeader>
+      {!loading && recentActivity.length > 0 && (
+        <div className="px-6 pb-2 flex gap-1 flex-wrap">
+          {(['all', 'critical', 'warning', 'info'] as const).map((level) => {
+            const count = level === 'all'
+              ? activityWithMetadata.length
+              : activityWithMetadata.filter(a => a.severity === level).length;
+            return (
+              <Button
+                key={level}
+                variant={severityFilter === level ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setSeverityFilter(level)}
+                className="text-xs"
+              >
+                {level === 'all' ? 'All' : level.charAt(0).toUpperCase() + level.slice(1)}
+                <Badge variant="secondary" className="ml-1 text-xs">{count}</Badge>
+              </Button>
+            );
+          })}
+        </div>
+      )}
       <CardContent>
         {loading ? (
           <div className="space-y-4">
@@ -112,7 +134,7 @@ export const RecentActivityCard = ({
           <p className="text-center text-muted-foreground py-8">No recent activity</p>
         ) : (
           <div className="space-y-3">
-            {activityWithMetadata.map((log) => {
+            {activityWithMetadata.filter(a => severityFilter === 'all' || a.severity === severityFilter).map((log) => {
               const logId = String(log.id);
               const expanded = expandedIds[logId] === true;
               return (

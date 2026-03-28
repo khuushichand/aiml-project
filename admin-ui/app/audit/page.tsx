@@ -666,6 +666,12 @@ function AuditPageContent() {
       link.remove();
       window.URL.revokeObjectURL(url);
 
+      if (entries.length >= COMPLIANCE_REPORT_LIMIT) {
+        showError(
+          'Report may be incomplete',
+          `Reached the ${COMPLIANCE_REPORT_LIMIT.toLocaleString()} event limit. Narrow the date range for complete data.`
+        );
+      }
       success(
         'Compliance report generated',
         `${COMPLIANCE_REPORT_TYPE_LABELS[reportType]} exported with ${entries.length} events.`
@@ -970,9 +976,30 @@ function AuditPageContent() {
                     <AlertDescription>{dateRangeError}</AlertDescription>
                   </Alert>
                 )}
-                <div className="flex gap-2 mt-4">
+                <div className="flex flex-wrap gap-2 mt-4">
                   <Button variant="outline" onClick={handleClearFilters}>
                     Clear Filters
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => handleFilterChange({ action: 'delete' })}
+                  >
+                    Destructive Actions
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => handleFilterChange({ action: 'login' })}
+                  >
+                    Login Events
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => handleFilterChange({ resource: 'api_key' })}
+                  >
+                    API Key Activity
                   </Button>
                 </div>
               </CardContent>
@@ -1114,10 +1141,19 @@ function AuditPageContent() {
                                 )}
                               </TableCell>
                               <TableCell className="text-right">
-                                <Button variant="outline" size="sm" onClick={() => setSelectedLog(log)}>
-                                  <Eye className="mr-2 h-4 w-4" />
-                                  View
-                                </Button>
+                                <div className="flex justify-end gap-1">
+                                  <Button variant="outline" size="sm" onClick={() => setSelectedLog(log)}>
+                                    <Eye className="mr-2 h-4 w-4" />
+                                    View
+                                  </Button>
+                                  {typeof (log.details as Record<string, unknown>)?.request_id === 'string' && (
+                                    <Link href={`/logs?requestId=${String((log.details as Record<string, unknown>).request_id)}`}>
+                                      <Button variant="ghost" size="sm" title="View related system logs">
+                                        Logs
+                                      </Button>
+                                    </Link>
+                                  )}
+                                </div>
                               </TableCell>
                             </TableRow>
                           ))}

@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Bug, Key, Wallet, Search } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Bug, Gauge, Key, Wallet, Search } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { isSingleUserMode } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
@@ -279,8 +280,242 @@ export default function DebugPage() {
               </CardContent>
             </Card>
           </div>
+
+          {/* User Lookup Tool */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Search className="h-5 w-5" />
+                Lookup by User ID
+              </CardTitle>
+              <CardDescription>Retrieve user details by numeric ID instead of raw API key</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <UserLookupTool />
+            </CardContent>
+          </Card>
+          {/* Permission Resolver */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Key className="h-5 w-5" />
+                Permission Resolver
+              </CardTitle>
+              <CardDescription>Resolve effective permissions for a user by ID</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <PermissionResolverTool />
+            </CardContent>
+          </Card>
+
+          {/* Token Validator */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Search className="h-5 w-5" />
+                Token Validator
+              </CardTitle>
+              <CardDescription>Decode and validate a JWT token</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TokenValidatorTool />
+            </CardContent>
+          </Card>
+
+          {/* Rate Limit Simulator */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Gauge className="h-5 w-5" />
+                Rate Limit Simulator
+              </CardTitle>
+              <CardDescription>Check what rate limits apply for a given user and endpoint</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RateLimitSimTool />
+            </CardContent>
+          </Card>
         </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+function PermissionResolverTool() {
+  const [userId, setUserId] = useState('');
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleResolve = async () => {
+    if (!userId.trim()) { setError('Enter a user ID'); return; }
+    setLoading(true); setError(''); setResult(null);
+    try {
+      const data = await api.debugResolvePermissions(parseInt(userId.trim()));
+      setResult(data as unknown as Record<string, unknown>);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed'); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <Label htmlFor="perm-user-id">User ID</Label>
+          <Input id="perm-user-id" placeholder="e.g., 42" value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleResolve()} />
+        </div>
+        <Button onClick={handleResolve} disabled={loading} className="self-end" loading={loading}>Resolve</Button>
+      </div>
+      {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+      {result && (
+        <pre className="bg-muted p-3 rounded text-xs overflow-auto max-h-64">{JSON.stringify(result, null, 2)}</pre>
+      )}
+    </div>
+  );
+}
+
+function TokenValidatorTool() {
+  const [token, setToken] = useState('');
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleValidate = async () => {
+    if (!token.trim()) { setError('Paste a JWT token'); return; }
+    setLoading(true); setError(''); setResult(null);
+    try {
+      const data = await api.debugValidateToken(token.trim());
+      setResult(data as unknown as Record<string, unknown>);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed'); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <Label htmlFor="debug-token">JWT Token</Label>
+        <Input id="debug-token" type="password" placeholder="eyJhbG..." value={token}
+          onChange={(e) => setToken(e.target.value)} />
+      </div>
+      <Button onClick={handleValidate} disabled={loading} loading={loading}>Validate</Button>
+      {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+      {result && (
+        <pre className="bg-muted p-3 rounded text-xs overflow-auto max-h-64">{JSON.stringify(result, null, 2)}</pre>
+      )}
+    </div>
+  );
+}
+
+function UserLookupTool() {
+  const [userId, setUserId] = useState('');
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleLookup = async () => {
+    if (!userId.trim()) { setError('Enter a user ID'); return; }
+    setLoading(true);
+    setError('');
+    setResult(null);
+    try {
+      const user = await api.getUser(userId.trim());
+      setResult(user as unknown as Record<string, unknown>);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'User not found');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <Label htmlFor="debug-user-id">User ID</Label>
+          <Input id="debug-user-id" placeholder="e.g., 42" value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleLookup()} />
+        </div>
+        <Button onClick={handleLookup} disabled={loading} className="self-end" loading={loading}>
+          Lookup
+        </Button>
+      </div>
+      {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+      {result && (
+        <pre className="bg-muted p-3 rounded text-xs overflow-auto max-h-64">
+          {JSON.stringify(result, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function RateLimitSimTool() {
+  const [userId, setUserId] = useState('');
+  const [endpoint, setEndpoint] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+
+  const handleSimulate = async () => {
+    const uid = parseInt(userId, 10);
+    if (!Number.isFinite(uid) || uid <= 0) { setError('Enter a valid user ID'); return; }
+    if (!endpoint.trim()) { setError('Enter an endpoint path'); return; }
+    setLoading(true); setError(''); setResult(null);
+    try {
+      const res = await api.debugSimulateRateLimit({ user_id: uid, endpoint: endpoint.trim() });
+      setResult(res as unknown as Record<string, unknown>);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Simulation failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-3 items-end">
+        <div className="flex-1">
+          <Label htmlFor="rl-user-id">User ID</Label>
+          <Input id="rl-user-id" placeholder="e.g., 42" value={userId}
+            onChange={(e) => setUserId(e.target.value)} />
+        </div>
+        <div className="flex-[2]">
+          <Label htmlFor="rl-endpoint">Endpoint</Label>
+          <Input id="rl-endpoint" placeholder="e.g., /api/v1/chat/completions" value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSimulate()} />
+        </div>
+        <Button onClick={handleSimulate} disabled={loading} className="self-end" loading={loading}>
+          Simulate
+        </Button>
+      </div>
+      {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+      {result && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Badge variant={(result as { would_allow?: boolean }).would_allow ? 'default' : 'destructive'}>
+              {(result as { would_allow?: boolean }).would_allow ? 'Allowed' : 'Blocked'}
+            </Badge>
+            <span className="text-sm text-muted-foreground">
+              Source: {(result as { limit_source?: string }).limit_source || 'none'}
+            </span>
+            {(result as { effective_limit_per_min?: number | null }).effective_limit_per_min != null && (
+              <span className="text-sm">
+                {(result as { effective_limit_per_min: number }).effective_limit_per_min}/min
+                {(result as { effective_burst?: number | null }).effective_burst != null && (
+                  <> (burst: {(result as { effective_burst: number }).effective_burst})</>
+                )}
+              </span>
+            )}
+          </div>
+          <pre className="bg-muted p-3 rounded text-xs overflow-auto max-h-48">
+            {JSON.stringify(result, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
   );
 }

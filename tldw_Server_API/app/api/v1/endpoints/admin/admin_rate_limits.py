@@ -4,8 +4,9 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
+from pydantic import BaseModel
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -223,3 +224,87 @@ async def upsert_user_rate_limit(
     except _RATE_LIMITS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to upsert user rate limit: {e}")
         raise HTTPException(status_code=500, detail="Failed to upsert user rate limit") from e
+
+
+class RateLimitSimRequest(BaseModel):
+    user_id: int
+    endpoint: str = ""
+
+
+class RateLimitSimResponse(BaseModel):
+    user_id: int
+    endpoint: str
+    effective_limit_per_min: int | None = None
+    effective_burst: int | None = None
+    limit_source: str = "none"
+    would_allow: bool = True
+    user_limits: list[dict[str, Any]] = []
+    role_limits: list[dict[str, Any]] = []
+
+
+@router.post("/debug/simulate-rate-limit", response_model=RateLimitSimResponse)
+async def simulate_rate_limit(
+    payload: RateLimitSimRequest,
+    db=Depends(get_db_transaction),
+) -> RateLimitSimResponse:
+    """Simulate a rate-limit check for a given user/key and endpoint."""
+    user_id = payload.user_id
+    endpoint = payload.endpoint
+
+    # Look up user-level rate limits
+    user_limits: list[dict[str, Any]] = []
+    try:
+        rows = await db.fetch_all(
+            "SELECT resource, limit_per_min, burst FROM rbac_user_rate_limits WHERE user_id = ?",
+            (int(user_id),),
+        )
+        user_limits = [dict(row) for row in rows]
+    except _RATE_LIMITS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("simulate-rate-limit: failed to fetch user limits for {}: {}", user_id, exc)
+
+    # Look up role-level rate limits via user's roles
+    role_limits: list[dict[str, Any]] = []
+    try:
+        rows = await db.fetch_all(
+            """
+            SELECT rrl.resource, rrl.limit_per_min, rrl.burst, r.name as role_name
+            FROM rbac_role_rate_limits rrl
+            JOIN rbac_roles r ON rrl.role_id = r.id
+            JOIN rbac_user_roles ur ON ur.role_id = r.id
+            WHERE ur.user_id = ?
+            """,
+            (int(user_id),),
+        )
+        role_limits = [dict(row) for row in rows]
+    except _RATE_LIMITS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("simulate-rate-limit: failed to fetch role limits for {}: {}", user_id, exc)
+
+    # Find the most specific matching limit for the endpoint
+    matching_user = [lim for lim in user_limits if endpoint.startswith(lim.get("resource", "")) or lim.get("resource") == "*"]
+    matching_role = [lim for lim in role_limits if endpoint.startswith(lim.get("resource", "")) or lim.get("resource") == "*"]
+
+    effective_limit: int | None = None
+    effective_burst: int | None = None
+    source = "none"
+
+    if matching_user:
+        best = max(matching_user, key=lambda lim: len(lim.get("resource", "")))
+        effective_limit = best.get("limit_per_min")
+        effective_burst = best.get("burst")
+        source = "user"
+    elif matching_role:
+        best = max(matching_role, key=lambda lim: len(lim.get("resource", "")))
+        effective_limit = best.get("limit_per_min")
+        effective_burst = best.get("burst")
+        source = f"role:{best.get('role_name', 'unknown')}"
+
+    return RateLimitSimResponse(
+        user_id=int(user_id),
+        endpoint=endpoint,
+        effective_limit_per_min=effective_limit,
+        effective_burst=effective_burst,
+        limit_source=source,
+        would_allow=effective_limit is None or effective_limit > 0,
+        user_limits=user_limits,
+        role_limits=role_limits,
+    )

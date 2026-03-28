@@ -33,8 +33,10 @@ import {
 import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, type SecurityHealthData, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
 import {
+  aggregateUsageDailyRows,
   buildDashboardOperationalKpis,
   DEFAULT_DASHBOARD_OPERATIONAL_KPIS,
+  extractLlmDailyCostRows,
   type DashboardOperationalKpis,
   type JobSnapshot,
 } from '@/lib/dashboard-kpis';
@@ -47,7 +49,9 @@ import {
 import {
   buildDashboardActivityChartData,
   getDashboardActivityQuery,
+  mergeOverlayData,
   resolveDashboardActivityPoints,
+  type DailyOverlayRow,
   type DashboardActivityPoint,
   type DashboardActivityRange,
 } from '@/lib/dashboard-activity';
@@ -163,6 +167,9 @@ export default function DashboardPage() {
     enabledProviders: 0,
     storageUsedMb: 0,
     storageQuotaMb: 1000,
+    activeAcpSessions: null,
+    tokensToday: null,
+    mcpInvocationsToday: null,
   });
   const [operationalKpis, setOperationalKpis] = useState<DashboardOperationalKpis>(
     DEFAULT_DASHBOARD_OPERATIONAL_KPIS
@@ -187,6 +194,7 @@ export default function DashboardPage() {
       DEFAULT_ACTIVITY_RANGE
     )
   );
+  const [activityOverlayRows, setActivityOverlayRows] = useState<DailyOverlayRow[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [registrationCodes, setRegistrationCodes] = useState<RegistrationCode[]>([]);
   const [registrationSettings, setRegistrationSettings] = useState<RegistrationSettings | null>(null);
@@ -330,6 +338,23 @@ export default function DashboardPage() {
         previousJobsSnapshotRef.current = operationalKpiModel.jobsSnapshot;
       }
 
+      // Build overlay data for activity chart (errors, latency, cost per day)
+      const usageRows = aggregateUsageDailyRows(
+        usageDailyResult.status === 'fulfilled' ? usageDailyResult.value : undefined
+      );
+      const costRows = extractLlmDailyCostRows(
+        llmUsageSummaryResult.status === 'fulfilled' ? llmUsageSummaryResult.value : undefined
+      );
+      const costByDay = new Map(costRows.map(r => [r.day, r.totalCostUsd]));
+      setActivityOverlayRows(
+        usageRows.map(r => ({
+          day: r.day,
+          errors: r.errors,
+          latencyAvgMs: r.latencyAvgMs,
+          costUsd: costByDay.get(r.day) ?? null,
+        }))
+      );
+
       const healthState: ServerStatusState = (() => {
         if (healthResult.status !== 'fulfilled') {
           return 'offline';
@@ -366,11 +391,29 @@ export default function DashboardPage() {
         enabledProviders: enabledProviders.length,
         storageUsedMb: totalStorage,
         storageQuotaMb: totalQuota || 1000,
+        activeAcpSessions: null,
+        tokensToday: null,
+        mcpInvocationsToday: null,
       };
+      const rawStats = statsResult.status === 'fulfilled' ? statsResult.value : null;
       const nextStats = buildDashboardUIStats({
         computedStats,
-        statsResponse: statsResult.status === 'fulfilled' ? statsResult.value : null,
+        statsResponse: rawStats,
       });
+      // Extract non-numeric fields that buildDashboardUIStats can't merge
+      if (rawStats && typeof rawStats === 'object') {
+        const r = rawStats as Record<string, unknown>;
+        nextStats.activeAcpSessions = typeof r.active_acp_sessions === 'number' ? r.active_acp_sessions : null;
+        nextStats.mcpInvocationsToday = typeof r.mcp_invocations_today === 'number' ? r.mcp_invocations_today : null;
+        if (r.tokens_today && typeof r.tokens_today === 'object') {
+          const tt = r.tokens_today as Record<string, unknown>;
+          nextStats.tokensToday = {
+            prompt: typeof tt.prompt === 'number' ? tt.prompt : 0,
+            completion: typeof tt.completion === 'number' ? tt.completion : 0,
+            total: typeof tt.total === 'number' ? tt.total : 0,
+          };
+        }
+      }
       setStats(nextStats);
 
       if (isBillingEnabled()) {
@@ -389,6 +432,7 @@ export default function DashboardPage() {
         sttHealthResult,
         embeddingsHealthResult,
         metricsTextResult,
+        jobsStatsResult,
       }));
 
       const optionalHealthFailures = [
@@ -453,6 +497,23 @@ export default function DashboardPage() {
   useEffect(() => {
     void loadDashboardData();
   }, [loadDashboardData]);
+
+  // Auto-refresh every 60 seconds
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+
+  useEffect(() => {
+    if (!autoRefreshEnabled) return;
+    const id = setInterval(() => { void loadDashboardData(); }, 60_000);
+    return () => clearInterval(id);
+  }, [autoRefreshEnabled, loadDashboardData]);
+
+  // Track last refresh timestamp
+  useEffect(() => {
+    if (!loading) {
+      setLastRefreshedAt(new Date());
+    }
+  }, [loading]);
 
   const formatTimeAgo = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -669,8 +730,11 @@ export default function DashboardPage() {
   };
 
   const activityChartData = useMemo(
-    () => buildDashboardActivityChartData(activityData, activityRange),
-    [activityData, activityRange]
+    () => mergeOverlayData(
+      buildDashboardActivityChartData(activityData, activityRange),
+      activityOverlayRows,
+    ),
+    [activityData, activityRange, activityOverlayRows]
   );
 
   const storagePercentage = stats.storageQuotaMb > 0
@@ -714,6 +778,9 @@ export default function DashboardPage() {
             uptimeWindowDays={uptimeSummary.windowDays}
             loading={loading}
             onRefresh={loadDashboardData}
+            autoRefreshEnabled={autoRefreshEnabled}
+            onToggleAutoRefresh={() => setAutoRefreshEnabled(prev => !prev)}
+            lastRefreshedAt={lastRefreshedAt}
           />
 
           {error && (
@@ -722,7 +789,14 @@ export default function DashboardPage() {
             </Alert>
           )}
 
-          <AlertsBanner alerts={alerts} />
+          <AlertsBanner
+            alerts={alerts}
+            onAcknowledgeAll={async () => {
+              const unack = alerts.filter(a => (a.severity === 'critical' || a.severity === 'error') && !a.acknowledged);
+              await Promise.allSettled(unack.map(a => api.acknowledgeAlert(String(a.id))));
+              loadDashboardData();
+            }}
+          />
 
           <StatsGrid
             loading={loading}

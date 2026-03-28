@@ -65,6 +65,7 @@ export default function MCPServersPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'modules' | 'tools'>('overview');
+  const [toolUsageByModule, setToolUsageByModule] = useState<Record<string, { calls: number; avg_latency_ms: number }>>({});
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -76,6 +77,7 @@ export default function MCPServersPage() {
         api.getMCPTools(),
         api.getMCPModulesHealth(),
         api.getMCPMetrics(),
+        api.getMCPToolUsage({ period_seconds: '3600' }),
       ]);
 
       if (results[0].status === 'fulfilled') setMcpStatus(results[0].value as MCPStatus);
@@ -95,6 +97,10 @@ export default function MCPServersPage() {
         setHealth(Array.isArray(healthList) ? healthList as MCPHealthResult[] : []);
       }
       if (results[4].status === 'fulfilled') setMetrics(results[4].value as MCPMetrics);
+      if (results[5].status === 'fulfilled') {
+        const usageResult = results[5].value as { modules?: Record<string, { calls: number; avg_latency_ms: number }> };
+        setToolUsageByModule(usageResult?.modules ?? {});
+      }
 
       const failures = results.filter(r => r.status === 'rejected');
       if (failures.length === results.length) {
@@ -333,6 +339,7 @@ export default function MCPServersPage() {
                       <TableRow>
                         <TableHead>Tool Name</TableHead>
                         <TableHead>Module</TableHead>
+                        <TableHead>Usage (1h)</TableHead>
                         <TableHead>Description</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -341,6 +348,17 @@ export default function MCPServersPage() {
                         <TableRow key={i}>
                           <TableCell className="font-mono text-sm">{tool.name}</TableCell>
                           <TableCell><Badge variant="outline">{tool.module || '-'}</Badge></TableCell>
+                          <TableCell className="text-xs">
+                            {(() => {
+                              const modUsage = toolUsageByModule[tool.module || ''];
+                              if (!modUsage || modUsage.calls === 0) return <span className="text-muted-foreground">-</span>;
+                              return (
+                                <span title={`${modUsage.avg_latency_ms}ms avg latency`}>
+                                  {modUsage.calls} call{modUsage.calls !== 1 ? 's' : ''}
+                                </span>
+                              );
+                            })()}
+                          </TableCell>
                           <TableCell className="text-xs text-muted-foreground max-w-md truncate">{tool.description || '-'}</TableCell>
                         </TableRow>
                       ))}

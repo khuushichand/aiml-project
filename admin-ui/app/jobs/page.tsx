@@ -16,6 +16,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, Repeat, Clock, Plus, X, Paperclip } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
@@ -732,10 +734,22 @@ export default function JobsPage() {
               <h1 className="text-3xl font-bold">Jobs</h1>
               <p className="text-muted-foreground">Inspect queues, job health, and recent activity</p>
             </div>
-            <Button variant="outline" onClick={loadData} disabled={loading}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
+            <div className="flex items-center gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => {
+                  exportData({
+                    data: jobs as unknown as Record<string, unknown>[],
+                    filename: 'jobs',
+                    format,
+                  });
+                }}
+                disabled={jobs.length === 0}
+              />
+              <Button variant="outline" onClick={loadData} disabled={loading}>
+                <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
           </div>
 
           {error && (
@@ -1254,9 +1268,21 @@ export default function JobsPage() {
                         const canRetry = normalizedStatus === 'failed';
                         const canRequeue = normalizedStatus === 'quarantined';
 
+                        // SLA breach detection
+                        const matchingSla = slaPolicies.find(p => p.enabled && (!p.job_type || p.job_type === job.job_type));
+                        const jobDurationSec = job.started_at && job.completed_at
+                          ? (new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()) / 1000
+                          : job.started_at
+                            ? (Date.now() - new Date(job.started_at).getTime()) / 1000
+                            : null;
+                        const isSlaBreach = matchingSla && jobDurationSec != null && jobDurationSec > matchingSla.max_processing_time_seconds;
+
                         return (
-                          <TableRow key={job.id}>
-                            <TableCell className="font-medium">{job.id}</TableCell>
+                          <TableRow key={job.id} className={isSlaBreach ? 'bg-red-50 dark:bg-red-950/20' : ''}>
+                            <TableCell className="font-medium">
+                              {job.id}
+                              {isSlaBreach && <Badge variant="destructive" className="ml-1 text-[10px] px-1">SLA</Badge>}
+                            </TableCell>
                             <TableCell>{job.domain}</TableCell>
                             <TableCell>{job.queue}</TableCell>
                             <TableCell>{job.job_type}</TableCell>

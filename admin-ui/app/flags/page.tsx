@@ -401,6 +401,29 @@ export default function FlagsPage() {
     }
   };
 
+  const handleToggleFlag = async (flag: FeatureFlagItem) => {
+    const newEnabled = !flag.enabled;
+    // Optimistic: update UI immediately
+    setFlags((prev) =>
+      prev.map((f) => (getFlagId(f) === getFlagId(flag) ? { ...f, enabled: newEnabled } : f))
+    );
+    try {
+      await api.upsertFeatureFlag(flag.key, {
+        scope: flag.scope,
+        enabled: newEnabled,
+        org_id: flag.org_id,
+        user_id: flag.user_id,
+      });
+    } catch (err: unknown) {
+      // Rollback on failure
+      setFlags((prev) =>
+        prev.map((f) => (getFlagId(f) === getFlagId(flag) ? { ...f, enabled: flag.enabled } : f))
+      );
+      const message = err instanceof Error && err.message ? err.message : 'Failed to toggle flag';
+      showError(message);
+    }
+  };
+
   const handleDeleteFlag = async (flag: FeatureFlagItem) => {
     const flagId = getFlagId(flag);
     if (deletingFlagId === flagId) return;
@@ -510,7 +533,9 @@ export default function FlagsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Feature Flags</CardTitle>
-              <CardDescription>Manage feature overrides by scope.</CardDescription>
+              <CardDescription>
+                Manage feature overrides by scope. This is a feature flag system, not an A/B testing platform — for experiments, use a dedicated experimentation tool.
+              </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4">
               <div className="grid gap-4 md:grid-cols-3">
@@ -710,9 +735,15 @@ export default function FlagsPage() {
                           <TableCell className="font-medium">{flag.key}</TableCell>
                           <TableCell>{flag.scope}</TableCell>
                           <TableCell>
-                            <Badge variant={flag.enabled ? 'default' : 'outline'}>
-                              {flag.enabled ? 'Enabled' : 'Disabled'}
-                            </Badge>
+                            <button
+                              onClick={() => void handleToggleFlag(flag)}
+                              className="cursor-pointer hover:opacity-80"
+                              title={`Click to ${flag.enabled ? 'disable' : 'enable'}`}
+                            >
+                              <Badge variant={flag.enabled ? 'default' : 'outline'}>
+                                {flag.enabled ? 'Enabled' : 'Disabled'}
+                              </Badge>
+                            </button>
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">

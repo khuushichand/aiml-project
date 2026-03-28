@@ -4049,6 +4049,98 @@ def migration_079_add_governance_pack_trust_policy(conn: sqlite3.Connection) -> 
     logger.info("Migration 079: Added governance-pack trust policy schema")
 
 
+def migration_080_create_admin_webhooks_tables(conn: sqlite3.Connection) -> None:
+    """Create admin_webhooks and admin_webhooks_delivery_log tables."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_webhooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT NOT NULL,
+            secret TEXT NOT NULL,
+            event_types TEXT NOT NULL DEFAULT '[]',
+            description TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            retry_count INTEGER NOT NULL DEFAULT 3,
+            timeout_seconds INTEGER NOT NULL DEFAULT 10,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_webhooks_delivery_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            webhook_id INTEGER NOT NULL REFERENCES admin_webhooks(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            signature TEXT NOT NULL,
+            status_code INTEGER,
+            response_body TEXT,
+            latency_ms INTEGER,
+            retry_attempt INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            delivered_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_webhooks_delivery_log_webhook_id "
+        "ON admin_webhooks_delivery_log(webhook_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_webhooks_delivery_log_created_at "
+        "ON admin_webhooks_delivery_log(created_at)"
+    )
+
+    conn.commit()
+    logger.info("Migration 080: Created admin_webhooks and delivery_log tables")
+
+
+def migration_081_create_admin_dependency_health_history(conn: sqlite3.Connection) -> None:
+    """Create time-series table for dependency health probe results."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_dependency_health_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            latency_ms INTEGER,
+            error_message TEXT,
+            checked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_admin_dep_health_service_checked "
+        "ON admin_dependency_health_history(service_name, checked_at DESC)"
+    )
+
+    conn.commit()
+    logger.info("Migration 081: Created admin_dependency_health_history table")
+
+
+def rollback_081_drop_admin_dependency_health_history(conn: sqlite3.Connection) -> None:
+    """Rollback migration 081."""
+    conn.execute("DROP TABLE IF EXISTS admin_dependency_health_history")
+    conn.commit()
+    logger.info("Rollback 081: Dropped admin_dependency_health_history table")
+
+
+def rollback_080_drop_admin_webhooks_tables(conn: sqlite3.Connection) -> None:
+    """Rollback migration 080 by dropping admin webhook tables."""
+    conn.execute("DROP TABLE IF EXISTS admin_webhooks_delivery_log")
+    conn.execute("DROP TABLE IF EXISTS admin_webhooks")
+    conn.commit()
+    logger.info("Rollback 080: Dropped admin webhook tables")
+
+
 def rollback_077_drop_sharing_tables(conn: sqlite3.Connection) -> None:
     """Rollback migration 077 by dropping sharing tables."""
     conn.execute("DROP TABLE IF EXISTS sharing_config")
@@ -4387,6 +4479,18 @@ def get_authnz_migrations() -> list[Migration]:
             79,
             "Add governance-pack trust policy",
             migration_079_add_governance_pack_trust_policy,
+        ),
+        Migration(
+            80,
+            "Create admin webhooks tables",
+            migration_080_create_admin_webhooks_tables,
+            rollback_080_drop_admin_webhooks_tables,
+        ),
+        Migration(
+            81,
+            "Create dependency health history table",
+            migration_081_create_admin_dependency_health_history,
+            rollback_081_drop_admin_dependency_health_history,
         ),
     ]
 

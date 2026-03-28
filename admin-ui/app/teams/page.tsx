@@ -18,6 +18,8 @@ import { TableSkeleton } from '@/components/ui/skeleton';
 import { Form, FormInput } from '@/components/ui/form';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { Plus, Users, Building2, Search, Pencil, Trash2 } from 'lucide-react';
 import { Team, Organization } from '@/types';
 import { api } from '@/lib/api-client';
@@ -105,10 +107,19 @@ function TeamsPageContent() {
   useEffect(() => {
     if (selectedOrgId) {
       loadTeams(selectedOrgId);
+    } else if (organizations.length > 0) {
+      // "All Organizations" mode: fetch teams for each org
+      setLoading(true);
+      Promise.allSettled(organizations.map(org => api.getTeams(String(org.id))))
+        .then(results => {
+          const allTeams = results.flatMap(r => r.status === 'fulfilled' && Array.isArray(r.value) ? r.value : []);
+          setTeams(allTeams);
+        })
+        .finally(() => setLoading(false));
     } else {
       setTeams([]);
     }
-  }, [loadTeams, selectedOrgId]);
+  }, [loadTeams, selectedOrgId, organizations]);
 
   const handleSubmit = teamForm.handleSubmit(async (data) => {
     if (!selectedOrgId) {
@@ -243,13 +254,25 @@ function TeamsPageContent() {
                 <h1 className="text-3xl font-bold">Teams</h1>
                 <p className="text-muted-foreground">Manage teams within organizations</p>
               </div>
-              <Button
-                onClick={() => setShowCreateForm(!showCreateForm)}
-                disabled={!selectedOrgId}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                New Team
-              </Button>
+              <div className="flex items-center gap-2">
+                <ExportMenu
+                  onExport={(format: ExportFormat) => {
+                    exportData({
+                      data: teams as unknown as Record<string, unknown>[],
+                      filename: 'teams',
+                      format,
+                    });
+                  }}
+                  disabled={teams.length === 0}
+                />
+                <Button
+                  onClick={() => setShowCreateForm(!showCreateForm)}
+                  disabled={!selectedOrgId}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Team
+                </Button>
+              </div>
             </div>
 
             {/* Organization Selector */}
@@ -278,10 +301,11 @@ function TeamsPageContent() {
                   />
                 ) : (
                   <Select
-                    value={selectedOrgId || ''}
-                    onChange={(e) => handleOrgChange(e.target.value)}
+                    value={selectedOrgId || '__all__'}
+                    onChange={(e) => handleOrgChange(e.target.value === '__all__' ? '' : e.target.value)}
                     className="max-w-md"
                   >
+                    <option value="__all__">All Organizations</option>
                     {organizations.map((org) => (
                       <option key={org.id} value={org.id}>
                         {org.name} ({org.slug})

@@ -17,6 +17,8 @@ import { Pagination } from '@/components/ui/pagination';
 import { api } from '@/lib/api-client';
 import { useUrlPagination } from '@/lib/use-url-state';
 import { formatDateTime } from '@/lib/format';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { RefreshCw } from 'lucide-react';
 
 type SystemLogEntry = {
@@ -291,16 +293,28 @@ function LogsPageContent() {
               <h1 className="text-2xl font-bold">System Logs</h1>
               <p className="text-muted-foreground">Query recent logs aggregated across workers.</p>
             </div>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setRefreshSignal((prev) => prev + 1);
-              }}
-              disabled={loading}
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
+            <div className="flex items-center gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => {
+                  exportData({
+                    data: logs as Record<string, unknown>[],
+                    filename: 'system-logs',
+                    format,
+                  });
+                }}
+                disabled={logs.length === 0}
+              />
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setRefreshSignal((prev) => prev + 1);
+                }}
+                disabled={loading}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
           </div>
 
           <Card>

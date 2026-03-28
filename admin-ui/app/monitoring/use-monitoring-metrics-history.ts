@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useUrlState } from '@/lib/use-url-state';
 import {
   normalizeMonitoringMetricsPayload,
   resolveMonitoringRangeParams,
@@ -45,7 +46,8 @@ export const useMonitoringMetricsHistory = ({
   }, []);
 
   const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
-  const [timeRange, setTimeRange] = useState<MonitoringTimeRangeOption>('24h');
+  const [timeRangeRaw, setTimeRange] = useUrlState<MonitoringTimeRangeOption>('range', { defaultValue: '24h' });
+  const timeRange: MonitoringTimeRangeOption = timeRangeRaw ?? '24h';
   const [customRangeStart, setCustomRangeStart] = useState<string>(defaultCustomRange.start);
   const [customRangeEnd, setCustomRangeEnd] = useState<string>(defaultCustomRange.end);
   const [rangeValidationError, setRangeValidationError] = useState('');

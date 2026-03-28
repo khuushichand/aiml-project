@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Plus, Copy, KeyRound, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, Plus, Copy, KeyRound, ShieldCheck, Trash2, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { ToggleBadgeGroup } from '@/components/ui/toggle-badge-group';
 import { api } from '@/lib/api-client';
@@ -20,6 +20,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDateTime } from '@/lib/format';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type VirtualApiKey = {
   id: string;
@@ -247,7 +248,7 @@ export default function UserApiKeysPage() {
       <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <CardSkeleton />
           </div>
         </ResponsiveLayout>
       </PermissionGuard>
@@ -312,14 +313,7 @@ export default function UserApiKeysPage() {
                         onClick={() => copyToClipboard(newKeyValue)}
                       />
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setNewKeyValue(null)}
-                      className="text-yellow-700"
-                    >
-                      Dismiss
-                    </Button>
+                    <DismissKeyButton onDismiss={() => setNewKeyValue(null)} />
                   </div>
                 </AlertDescription>
               </Alert>
@@ -394,14 +388,7 @@ export default function UserApiKeysPage() {
                             onClick={() => copyToClipboard(newVirtualKeyValue)}
                           />
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setNewVirtualKeyValue(null)}
-                          className="text-yellow-700"
-                        >
-                          Dismiss
-                        </Button>
+                        <DismissKeyButton onDismiss={() => setNewVirtualKeyValue(null)} />
                       </div>
                     </AlertDescription>
                   </Alert>
@@ -478,6 +465,7 @@ export default function UserApiKeysPage() {
                         <TableHead>Created</TableHead>
                         <TableHead>Last Used</TableHead>
                         <TableHead>Expires</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -512,6 +500,29 @@ export default function UserApiKeysPage() {
                           <TableCell className="text-sm text-muted-foreground">
                             {formatDate(key.expires_at)}
                           </TableCell>
+                          <TableCell className="text-right">
+                            <AccessibleIconButton
+                              icon={Trash2}
+                              label="Delete virtual key"
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive hover:text-destructive"
+                              onClick={async () => {
+                                const ok = await confirm({
+                                  title: 'Delete Virtual Key',
+                                  message: `Delete "${key.name}"? This cannot be undone.`,
+                                  confirmText: 'Delete',
+                                  variant: 'danger',
+                                  icon: 'delete',
+                                });
+                                if (!ok) return;
+                                try {
+                                  await api.deleteUserVirtualKey(userId, String(key.id));
+                                  loadVirtualKeys();
+                                } catch (err) { console.error('Failed to delete virtual key:', err); }
+                              }}
+                            />
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -522,5 +533,29 @@ export default function UserApiKeysPage() {
           </div>
       </ResponsiveLayout>
     </PermissionGuard>
+  );
+}
+
+function DismissKeyButton({ onDismiss }: { onDismiss: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-yellow-800">Have you saved this key?</span>
+        <Button variant="destructive" size="sm" onClick={onDismiss}>
+          Yes, dismiss
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setConfirming(false)} className="text-yellow-700">
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Button variant="ghost" size="sm" onClick={() => setConfirming(true)} className="text-yellow-700">
+      Dismiss
+    </Button>
   );
 }

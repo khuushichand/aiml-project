@@ -1012,3 +1012,65 @@ async def export_llm_usage_csv(
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to export llm usage CSV: {exc}")
         raise HTTPException(status_code=500, detail="Failed to export CSV") from exc
+
+
+async def get_cost_attribution(
+    *,
+    db,
+    group_by: str = "user",
+    range_days: int = 7,
+) -> dict:
+    """Aggregate LLM cost by user or org over the given time range."""
+    try:
+        is_pg = _is_postgres_connection(db)
+        group_col = "user_id" if group_by == "user" else "org_id"
+
+        if is_pg:
+            rows = await db.fetch(f"""
+                SELECT
+                    {group_col} as entity_id,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as completion_tokens
+                FROM llm_usage_v2
+                WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '{int(range_days)} days'
+                GROUP BY {group_col}
+                ORDER BY total_tokens DESC
+                LIMIT 50
+            """)
+        else:
+            cursor = await db.execute(f"""
+                SELECT
+                    {group_col} as entity_id,
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) as completion_tokens
+                FROM llm_usage_v2
+                WHERE datetime(created_at) >= datetime('now', '-{int(range_days)} days')
+                GROUP BY {group_col}
+                ORDER BY total_tokens DESC
+                LIMIT 50
+            """)
+            rows = await cursor.fetchall()
+
+        items = []
+        for row in rows:
+            r = dict(row) if hasattr(row, 'keys') else {
+                "entity_id": row[0], "request_count": row[1],
+                "total_tokens": row[2], "prompt_tokens": row[3], "completion_tokens": row[4],
+            }
+            # Estimated cost at blended $3/M tokens
+            tokens = int(r.get("total_tokens") or 0)
+            r["estimated_cost_usd"] = round(tokens * 0.000003, 4)
+            items.append(r)
+
+        return {
+            "group_by": group_by,
+            "range_days": range_days,
+            "items": items,
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to get cost attribution: {exc}")
+        return {"group_by": group_by, "range_days": range_days, "items": []}

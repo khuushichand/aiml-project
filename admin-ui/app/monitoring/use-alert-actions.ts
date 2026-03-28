@@ -52,13 +52,21 @@ export const useAlertActions = ({
   onReloadRequested,
 }: UseAlertActionsArgs) => {
   const handleAcknowledgeAlert = useCallback(async (alert: SystemAlert) => {
+    setError('');
+    // Optimistic: update UI immediately
+    const acknowledgedAt = new Date().toISOString();
+    setAlerts((prev) => markAlertAcknowledged(prev, alert.id, acknowledgedAt));
     try {
-      setError('');
       await apiClient.acknowledgeAlert(alert.id);
-      setAlerts((prev) => markAlertAcknowledged(prev, alert.id, new Date().toISOString()));
       setSuccess('Alert acknowledged');
       await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
+      // Rollback on failure
+      setAlerts((prev) =>
+        prev.map((a) =>
+          a.id === alert.id ? { ...a, acknowledged_at: undefined } : a,
+        ),
+      );
       console.error('Failed to acknowledge alert:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
     }

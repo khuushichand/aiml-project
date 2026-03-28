@@ -1457,6 +1457,98 @@ async def _stream_workflow_progress(
         )
 
 
+#######################################################################################################################
+#
+# Voice Command Dry-Run
+#
+
+class VoiceCommandDryRunRequest(BaseModel):
+    """Request payload for voice command dry-run."""
+    phrase: str = Field(..., min_length=1, max_length=500)
+    command_id: str | None = None
+
+
+class VoiceCommandDryRunAlternative(BaseModel):
+    action_type: str
+    confidence: float | None = None
+    raw_text: str | None = None
+
+
+class VoiceCommandDryRunResponse(BaseModel):
+    dry_run: bool = True
+    phrase: str
+    matched: bool
+    match_method: str
+    matched_phrase: str | None = None
+    confidence: float | None = None
+    action_type: str
+    action_config: dict[str, Any] = {}
+    processing_time_ms: float
+    alternatives: list[VoiceCommandDryRunAlternative] = []
+
+
+@router.post(
+    "/voice/commands/dry-run",
+    response_model=VoiceCommandDryRunResponse,
+    summary="Dry-run a voice command phrase",
+)
+async def voice_command_dry_run(
+    payload: VoiceCommandDryRunRequest,
+    request: Request,
+    current_user: User = Depends(get_request_user),
+) -> VoiceCommandDryRunResponse:
+    """Parse a phrase through the voice pipeline without executing.
+
+    Returns the matched command, confidence score, extracted entities,
+    and what action would be taken — without actually running it.
+    """
+    try:
+        from tldw_Server_API.app.core.VoiceAssistant.intent_parser import IntentParser
+        from tldw_Server_API.app.core.VoiceAssistant.registry import VoiceCommandRegistry
+
+        registry = VoiceCommandRegistry()
+        parser = IntentParser(registry=registry)
+
+        result = await parser.parse(
+            text=payload.phrase,
+            user_id=current_user.id,
+            context=None,
+        )
+
+        intent = result.intent
+        alternatives = []
+        if hasattr(result, "alternatives") and result.alternatives:
+            for alt in result.alternatives[:3]:
+                alternatives.append(VoiceCommandDryRunAlternative(
+                    action_type=alt.action_type.value if hasattr(alt.action_type, "value") else str(alt.action_type),
+                    confidence=getattr(alt, "confidence", None),
+                    raw_text=getattr(alt, "raw_text", None),
+                ))
+
+        return VoiceCommandDryRunResponse(
+            phrase=payload.phrase,
+            matched=result.match_method != "default",
+            match_method=result.match_method,
+            matched_phrase=getattr(result, "matched_phrase", None),
+            confidence=getattr(intent, "confidence", None),
+            action_type=intent.action_type.value if hasattr(intent.action_type, "value") else str(intent.action_type),
+            action_config=intent.action_config,
+            processing_time_ms=result.processing_time_ms,
+            alternatives=alternatives,
+        )
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail=f"Voice assistant module not available: {exc}",
+        ) from exc
+    except Exception as exc:
+        logger.error("Voice command dry-run failed: {}", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dry-run failed: {exc}",
+        ) from exc
+
+
 #
 # End of voice_assistant.py
 #######################################################################################################################

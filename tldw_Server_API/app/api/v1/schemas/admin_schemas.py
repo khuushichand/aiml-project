@@ -359,11 +359,23 @@ class SessionStats(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TokensTodayStats(BaseModel):
+    """Token usage stats for today"""
+    prompt: int = 0
+    completion: int = 0
+    total: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SystemStatsResponse(BaseModel):
     """System statistics response"""
     users: UserStats
     storage: StorageStats
     sessions: SessionStats
+    active_acp_sessions: int | None = None
+    tokens_today: TokensTodayStats | None = None
+    mcp_invocations_today: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1167,7 +1179,10 @@ class IncidentItem(BaseModel):
     assigned_to_label: str | None = None
     root_cause: str | None = None
     impact: str | None = None
+    runbook_url: str | None = None
     action_items: list[IncidentActionItem] = []
+    time_to_acknowledge_seconds: int | None = None
+    time_to_resolve_seconds: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1211,6 +1226,7 @@ class IncidentUpdateRequest(BaseModel):
     assigned_to_user_id: int | None = None
     root_cause: str | None = None
     impact: str | None = None
+    runbook_url: str | None = None
     action_items: list[IncidentActionItem] | None = None
     update_message: str | None = None
 
@@ -2142,6 +2158,130 @@ class AdminCircuitBreakerListFilters(BaseModel):
     category: str | None = None
     service: str | None = None
     name_prefix: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# Admin Webhooks Schemas
+
+
+class AdminWebhookCreateRequest(BaseModel):
+    """Request to register a new admin webhook."""
+
+    url: str = Field(..., min_length=1, max_length=2048)
+    event_types: list[str] = Field(default_factory=lambda: ["*"])
+    description: str = Field(default="", max_length=500)
+    secret: str | None = Field(default=None, max_length=256)
+    active: bool = True
+    retry_count: int = Field(default=3, ge=0, le=10)
+    timeout_seconds: int = Field(default=10, ge=1, le=60)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_scheme(cls, v: str) -> str:
+        """Only allow http/https URLs to prevent SSRF."""
+        stripped = v.strip()
+        if not stripped.startswith(("http://", "https://")):
+            raise ValueError("Webhook URL must use http:// or https:// scheme")
+        return stripped
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookUpdateRequest(BaseModel):
+    """Request to update an existing admin webhook."""
+
+    url: str | None = Field(default=None, min_length=1, max_length=2048)
+    event_types: list[str] | None = None
+    description: str | None = Field(default=None, max_length=500)
+    secret: str | None = Field(default=None, max_length=256)
+    active: bool | None = None
+    retry_count: int | None = Field(default=None, ge=0, le=10)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=60)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_scheme(cls, v: str | None) -> str | None:
+        """Only allow http/https URLs to prevent SSRF."""
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped.startswith(("http://", "https://")):
+            raise ValueError("Webhook URL must use http:// or https:// scheme")
+        return stripped
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookResponse(BaseModel):
+    """Single webhook record returned by the API."""
+
+    id: int
+    url: str
+    event_types: list[str]
+    description: str
+    active: bool
+    retry_count: int
+    timeout_seconds: int
+    created_by: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookListResponse(BaseModel):
+    """Paginated list of admin webhooks."""
+
+    items: list[AdminWebhookResponse]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookDeleteResponse(BaseModel):
+    """Response after deleting a webhook."""
+
+    deleted: bool
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookDeliveryLogEntry(BaseModel):
+    """Single delivery log entry."""
+
+    id: int
+    webhook_id: int
+    event_type: str
+    status_code: int | None = None
+    latency_ms: int | None = None
+    retry_attempt: int = 0
+    error_message: str | None = None
+    delivered_at: str | None = None
+    created_at: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookDeliveryLogListResponse(BaseModel):
+    """Paginated delivery log list."""
+
+    items: list[AdminWebhookDeliveryLogEntry]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminWebhookTestResponse(BaseModel):
+    """Response from testing a webhook."""
+
+    success: bool
+    status_code: int | None = None
+    latency_ms: int | None = None
+    error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

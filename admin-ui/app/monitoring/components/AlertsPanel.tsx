@@ -18,6 +18,7 @@ import type {
   SystemAlert,
 } from '../types';
 import { useMemo, useState } from 'react';
+import { CardSkeleton } from '@/components/ui/skeleton';
 
 type AlertsPanelProps = {
   alerts: SystemAlert[];
@@ -101,6 +102,7 @@ export default function AlertsPanel({
           size="sm"
           onClick={onToggleShowSnoozed}
           data-testid="alerts-show-snoozed-toggle"
+          aria-label={showSnoozed ? 'Hide snoozed alerts' : `Show snoozed alerts (${snoozedCount})`}
         >
           <ChevronDown className="mr-2 h-4 w-4" />
           Show snoozed ({snoozedCount})
@@ -108,7 +110,7 @@ export default function AlertsPanel({
       </CardHeader>
       <CardContent>
         {loading ? (
-          <div className="text-center text-muted-foreground py-8">Loading...</div>
+          <CardSkeleton />
         ) : visibleAlerts.length === 0 ? (
           <div className="text-center text-muted-foreground py-8">
             <CheckCircle className="h-12 w-12 mx-auto mb-2 text-green-500" />
@@ -116,7 +118,10 @@ export default function AlertsPanel({
           </div>
         ) : (
           <div className="space-y-3">
-            {visibleAlerts.slice(0, 10).map((alert) => (
+            <div className="text-xs text-muted-foreground mb-2">
+              Showing {Math.min(visibleAlerts.length, 50)} of {visibleAlerts.length} alerts
+            </div>
+            {visibleAlerts.slice(0, 50).map((alert) => (
               <div
                 key={alert.id}
                 className={`flex items-start justify-between p-3 rounded-lg border ${
@@ -199,6 +204,7 @@ export default function AlertsPanel({
                       disabled={!localActionsEnabled}
                       onClick={() => onEscalate(alert)}
                       title="Escalate"
+                      aria-label="Escalate"
                     >
                       Escalate
                     </Button>
@@ -210,6 +216,7 @@ export default function AlertsPanel({
                         size="sm"
                         onClick={() => onAcknowledge(alert)}
                         title="Acknowledge"
+                        aria-label="Acknowledge alert"
                       >
                         <Check className="h-4 w-4 text-green-500" />
                       </Button>
@@ -218,6 +225,7 @@ export default function AlertsPanel({
                         size="sm"
                         onClick={() => onDismiss(alert)}
                         title="Dismiss"
+                        aria-label="Dismiss alert"
                       >
                         <X className="h-4 w-4 text-red-500" />
                       </Button>
@@ -252,6 +260,11 @@ export default function AlertsPanel({
             )}
           </div>
         </details>
+        <div className="mt-4 text-center">
+          <Button variant="link" size="sm" className="text-xs text-muted-foreground">
+            Create Alert Rule for common patterns
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

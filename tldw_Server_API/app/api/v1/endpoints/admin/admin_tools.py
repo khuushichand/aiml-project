@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
+from pydantic import BaseModel
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
@@ -227,3 +228,48 @@ async def delete_tool_catalog_entry(
             exc,
         )
         raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry") from exc
+
+
+class ModuleToolUsage(BaseModel):
+    calls: int = 0
+    avg_latency_ms: float = 0
+
+
+class MCPToolUsageResponse(BaseModel):
+    period_seconds: int
+    modules: dict[str, ModuleToolUsage] = {}
+
+
+@router.get("/mcp/tool-usage", response_model=MCPToolUsageResponse)
+async def get_mcp_tool_usage(
+    period_seconds: int = Query(3600, ge=60, le=86400),
+) -> MCPToolUsageResponse:
+    """Aggregate MCP tool invocation counts per module from internal metrics."""
+    try:
+        from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import (
+            get_metrics_collector,
+        )
+
+        collector = get_metrics_collector()
+        raw = collector.get_internal_metrics(period_seconds=period_seconds)
+
+        usage: dict[str, ModuleToolUsage] = {}
+        for key, data in raw.items():
+            if not key.startswith("module_") or "_tools_call" not in key:
+                continue
+            groups = data.get("groups", [])
+            for group in groups:
+                labels = dict(group.get("labels", []))
+                module = labels.get("module", "unknown")
+                count = group.get("count", 0)
+                avg = group.get("avg", 0)
+                if module not in usage:
+                    usage[module] = ModuleToolUsage()
+                usage[module].calls += count
+                if count > 0:
+                    usage[module].avg_latency_ms = round(avg * 1000, 1)
+
+        return MCPToolUsageResponse(period_seconds=period_seconds, modules=usage)
+    except ImportError as exc:
+        logger.warning("MCP metrics module unavailable: {}", exc)
+        return MCPToolUsageResponse(period_seconds=period_seconds, modules={})

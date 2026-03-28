@@ -9,6 +9,7 @@ export const DASHBOARD_SUBSYSTEMS = [
   { key: 'stt', label: 'STT Service' },
   { key: 'embeddings', label: 'Embeddings' },
   { key: 'cache', label: 'RAG Cache' },
+  { key: 'job_queue', label: 'Job Queue' },
 ] as const;
 
 export type DashboardSubsystemKey = (typeof DASHBOARD_SUBSYSTEMS)[number]['key'];
@@ -17,6 +18,7 @@ export interface DashboardSubsystemHealth {
   status: DashboardHealthStatus;
   checkedAt?: string;
   cacheHitRatePct?: number | null;
+  message?: string;
 }
 
 export type DashboardSystemHealth = Record<DashboardSubsystemKey, DashboardSubsystemHealth>;
@@ -30,6 +32,7 @@ export const DEFAULT_DASHBOARD_SYSTEM_HEALTH: DashboardSystemHealth = {
   stt: { status: 'unknown' },
   embeddings: { status: 'unknown' },
   cache: { status: 'unknown' },
+  job_queue: { status: 'unknown' },
 };
 
 interface BuildDashboardSystemHealthArgs {
@@ -40,6 +43,7 @@ interface BuildDashboardSystemHealthArgs {
   sttHealthResult: PromiseSettledResult<unknown>;
   embeddingsHealthResult: PromiseSettledResult<unknown>;
   metricsTextResult?: PromiseSettledResult<unknown>;
+  jobsStatsResult?: PromiseSettledResult<unknown>;
   referenceTime?: string;
 }
 
@@ -180,6 +184,7 @@ export const buildDashboardSystemHealth = ({
   sttHealthResult,
   embeddingsHealthResult,
   metricsTextResult,
+  jobsStatsResult,
   referenceTime = new Date().toISOString(),
 }: BuildDashboardSystemHealthArgs): DashboardSystemHealth => {
   const apiHealth = resolveSettledStatus(
@@ -255,6 +260,24 @@ export const buildDashboardSystemHealth = ({
     referenceTime
   );
 
+  const jobQueueHealth: DashboardSubsystemHealth = (() => {
+    if (!jobsStatsResult || jobsStatsResult.status !== 'fulfilled') {
+      return { status: 'unknown', checkedAt: referenceTime };
+    }
+    const payload = toRecord(jobsStatsResult.value);
+    const failed = typeof payload?.failed === 'number' ? payload.failed : 0;
+    const queueDepth = typeof payload?.queue_depth === 'number' ? payload.queue_depth : 0;
+    const status: DashboardHealthStatus =
+      failed > 0 ? 'degraded' :
+      queueDepth > 100 ? 'degraded' :
+      'healthy';
+    return {
+      status,
+      checkedAt: referenceTime,
+      message: failed > 0 ? `${failed} failed jobs` : queueDepth > 100 ? `Queue depth: ${queueDepth}` : undefined,
+    };
+  })();
+
   return {
     api: apiHealth,
     database: databaseHealth,
@@ -264,5 +287,6 @@ export const buildDashboardSystemHealth = ({
     stt: sttHealth,
     embeddings: embeddingsHealth,
     cache: cacheHealth,
+    job_queue: jobQueueHealth,
   };
 };

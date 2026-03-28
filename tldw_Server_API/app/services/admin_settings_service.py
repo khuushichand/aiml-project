@@ -82,3 +82,42 @@ async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> dict[st
     except Exception as exc:
         logger.error(f"Failed to set notes title settings: {exc}")
         raise HTTPException(status_code=500, detail="Failed to set notes title settings") from exc
+
+
+# ---------------------------------------------------------------------------
+# Security Risk Weights
+# ---------------------------------------------------------------------------
+
+_DEFAULT_RISK_WEIGHTS: dict[str, Any] = {
+    "mfa_adoption": {"weight": 3, "cap": 40},
+    "api_key_age": {"weight": 2, "cap": 25},
+    "failed_logins": {"weight": 1, "cap": 20},
+    "suspicious_activity": {"weight": 4, "cap": 20},
+}
+
+# In-memory store — persisted across requests within a single process
+_risk_weights: dict[str, Any] | None = None
+
+
+async def get_risk_weights() -> dict[str, Any]:
+    """Return the current risk weight configuration."""
+    global _risk_weights
+    if _risk_weights is None:
+        _risk_weights = dict(_DEFAULT_RISK_WEIGHTS)
+    return {"weights": _risk_weights}
+
+
+async def set_risk_weights(weights: dict[str, Any]) -> dict[str, Any]:
+    """Update risk weight configuration."""
+    global _risk_weights
+    # Validate structure
+    validated: dict[str, Any] = {}
+    for key in _DEFAULT_RISK_WEIGHTS:
+        if key in weights and isinstance(weights[key], dict):
+            w = max(0, min(10, int(weights[key].get("weight", _DEFAULT_RISK_WEIGHTS[key]["weight"]))))
+            c = max(0, min(100, int(weights[key].get("cap", _DEFAULT_RISK_WEIGHTS[key]["cap"]))))
+            validated[key] = {"weight": w, "cap": c}
+        else:
+            validated[key] = dict(_DEFAULT_RISK_WEIGHTS[key])
+    _risk_weights = validated
+    return {"weights": _risk_weights}

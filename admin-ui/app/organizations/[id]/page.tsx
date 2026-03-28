@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -24,6 +26,7 @@ import { UserPicker } from '@/components/users/UserPicker';
 import { PlanBadge } from '@/components/PlanBadge';
 import { UsageMeter } from '@/components/UsageMeter';
 import { InvoiceTable } from '@/components/InvoiceTable';
+import { CardSkeleton } from '@/components/ui/skeleton';
 import {
   formatBillingDate,
   isBillingEnabled,
@@ -38,6 +41,7 @@ export default function OrganizationDetailPage() {
 
   const [org, setOrg] = useState<Organization | null>(null);
   const [members, setMembers] = useState<OrgMember[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
   const [memberRoleSelections, setMemberRoleSelections] = useState<Record<number, string>>({});
   const [teams, setTeams] = useState<Team[]>([]);
   const [byokKeys, setByokKeys] = useState<ProviderSecret[]>([]);
@@ -447,7 +451,7 @@ export default function OrganizationDetailPage() {
       <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <CardSkeleton />
           </div>
         </ResponsiveLayout>
       </PermissionGuard>
@@ -583,7 +587,15 @@ export default function OrganizationDetailPage() {
               </Alert>
             )}
 
-            <div className="grid gap-6 lg:grid-cols-2">
+            <Tabs defaultValue="members" className="space-y-4">
+              <TabsList>
+                <TabsTrigger value="members">Members ({members.length})</TabsTrigger>
+                <TabsTrigger value="teams">Teams</TabsTrigger>
+                <TabsTrigger value="keys">Keys & Secrets</TabsTrigger>
+                {isBillingEnabled() && <TabsTrigger value="billing">Billing</TabsTrigger>}
+              </TabsList>
+
+              <TabsContent value="members">
               {/* Members Section */}
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
@@ -595,6 +607,12 @@ export default function OrganizationDetailPage() {
                     <CardDescription>
                       {members.length} member{members.length !== 1 ? 's' : ''}
                     </CardDescription>
+                    <Input
+                      placeholder="Search members..."
+                      value={memberSearch}
+                      onChange={(e) => setMemberSearch(e.target.value)}
+                      className="mt-2 max-w-xs"
+                    />
                   </div>
                   <div className="flex gap-2">
                     <Dialog
@@ -634,15 +652,14 @@ export default function OrganizationDetailPage() {
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="inviteRole">Role</Label>
-                            <select
+                            <Select
                               id="inviteRole"
                               value={inviteRole}
                               onChange={(e) => setInviteRole(e.target.value)}
-                              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                             >
                               <option value="member">Member</option>
                               <option value="admin">Admin</option>
-                            </select>
+                            </Select>
                           </div>
                           {inviteLink && (
                             <div className="space-y-2">
@@ -702,16 +719,15 @@ export default function OrganizationDetailPage() {
                           />
                           <div className="space-y-2">
                             <Label htmlFor="memberRole">Role</Label>
-                            <select
+                            <Select
                               id="memberRole"
                               value={newMemberRole}
                               onChange={(e) => setNewMemberRole(e.target.value)}
-                              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                             >
                               <option value="member">Member</option>
                               <option value="admin">Admin</option>
                               <option value="owner">Owner</option>
-                            </select>
+                            </Select>
                           </div>
                         </div>
                         <DialogFooter>
@@ -738,7 +754,13 @@ export default function OrganizationDetailPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {members.map((member) => (
+                        {members.filter(m => {
+                          if (!memberSearch) return true;
+                          const q = memberSearch.toLowerCase();
+                          return (m.user?.username?.toLowerCase().includes(q)) ||
+                            (m.user?.email?.toLowerCase().includes(q)) ||
+                            String(m.user_id).includes(q);
+                        }).map((member) => (
                           <TableRow key={member.user_id}>
                             <TableCell>
                               <div>
@@ -749,7 +771,7 @@ export default function OrganizationDetailPage() {
                               </div>
                             </TableCell>
                             <TableCell>
-                              <select
+                              <Select
                                 value={memberRoleSelections[member.user_id] ?? member.role}
                                 onChange={async (event) => {
                                   const newRole = event.target.value;
@@ -780,12 +802,12 @@ export default function OrganizationDetailPage() {
                                     }));
                                   }
                                 }}
-                                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                                className="h-8"
                               >
                                 <option value="member">Member</option>
                                 <option value="admin">Admin</option>
                                 <option value="owner">Owner</option>
-                              </select>
+                              </Select>
                             </TableCell>
                             <TableCell className="text-sm text-muted-foreground">
                               {new Date(member.joined_at).toLocaleDateString()}
@@ -808,7 +830,9 @@ export default function OrganizationDetailPage() {
                   )}
                 </CardContent>
               </Card>
+              </TabsContent>
 
+              <TabsContent value="teams">
               {/* Teams Section */}
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
@@ -868,7 +892,9 @@ export default function OrganizationDetailPage() {
                   )}
                 </CardContent>
               </Card>
+              </TabsContent>
 
+              <TabsContent value="keys">
               {/* BYOK Provider Keys Section */}
               <Card className="lg:col-span-2">
                 <CardHeader className="flex flex-row items-center justify-between">
@@ -908,11 +934,10 @@ export default function OrganizationDetailPage() {
                       <div className="space-y-4 py-4">
                         <div className="space-y-2">
                           <Label htmlFor="byokProvider">Provider</Label>
-                          <select
+                          <Select
                             id="byokProvider"
                             value={byokProvider}
                             onChange={(e) => setByokProvider(e.target.value)}
-                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                           >
                             <option value="">Select provider...</option>
                             <option value="openai">OpenAI</option>
@@ -923,7 +948,7 @@ export default function OrganizationDetailPage() {
                             <option value="mistral">Mistral AI</option>
                             <option value="deepseek">DeepSeek</option>
                             <option value="openrouter">OpenRouter</option>
-                          </select>
+                          </Select>
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="byokApiKey">API Key</Label>
@@ -1027,7 +1052,7 @@ export default function OrganizationDetailPage() {
                 </CardHeader>
                 <CardContent>
                   {watchlistLoading ? (
-                    <div className="text-center text-muted-foreground py-4">Loading...</div>
+                    <CardSkeleton />
                   ) : (
                     <div className="space-y-4">
                       <div className="grid gap-4 sm:grid-cols-3">
@@ -1074,7 +1099,9 @@ export default function OrganizationDetailPage() {
                   )}
                 </CardContent>
               </Card>
+              </TabsContent>
 
+              <TabsContent value="billing">
               {/* Subscription & Billing */}
               {isBillingEnabled() && (
                 <Card className="lg:col-span-2">
@@ -1123,7 +1150,8 @@ export default function OrganizationDetailPage() {
                   </CardContent>
                 </Card>
               )}
-            </div>
+              </TabsContent>
+            </Tabs>
           </div>
       </ResponsiveLayout>
     </PermissionGuard>

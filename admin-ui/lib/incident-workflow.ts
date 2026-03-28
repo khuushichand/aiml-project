@@ -8,6 +8,7 @@ export interface IncidentWorkflowState {
   assignedToLabel?: string;
   rootCause: string;
   impact: string;
+  runbookUrl?: string;
   actionItems: IncidentActionItem[];
 }
 
@@ -32,6 +33,7 @@ export const incidentWorkflowStateFromIncident = (
   assignedToLabel: incident.assigned_to_label ?? undefined,
   rootCause: incident.root_cause ?? '',
   impact: incident.impact ?? '',
+  runbookUrl: incident.runbook_url ?? '',
   actionItems: cloneActionItems(incident.action_items),
 });
 

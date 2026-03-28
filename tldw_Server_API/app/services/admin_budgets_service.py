@@ -463,8 +463,39 @@ def merge_budget_settings(
             else:
                 merged[key] = merged_enforcement
             continue
+        if key == "provider_budgets":
+            merged_providers = _merge_provider_budgets(merged.get(key), value)
+            if merged_providers is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = merged_providers
+            continue
         raise ValueError("invalid_budget_update")
     return merged
+
+
+def _merge_provider_budgets(
+    existing: Any, updates: Any
+) -> dict[str, Any] | None:
+    """Merge per-provider budget thresholds.
+
+    Structure: ``{"openai": {"month_usd": 50}, "anthropic": {"month_usd": 100}}``
+    Setting a provider to ``None`` removes it.
+    """
+    if updates is None:
+        return None
+    existing_payload = existing if isinstance(existing, dict) else {}
+    merged = dict(existing_payload)
+    if not isinstance(updates, dict):
+        return merged or None
+    for provider, settings in updates.items():
+        if settings is None:
+            merged.pop(provider, None)
+        elif isinstance(settings, dict):
+            merged[provider] = {**merged.get(provider, {}), **settings}
+        else:
+            merged[provider] = settings
+    return merged or None
 
 
 def _merge_alert_thresholds(existing: Any, updates: Any) -> dict[str, Any] | None:

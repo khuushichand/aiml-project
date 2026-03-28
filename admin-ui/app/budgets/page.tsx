@@ -14,6 +14,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportData, type ExportFormat } from '@/lib/export';
 import { RefreshCw, Wallet, Pencil } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
@@ -33,6 +35,11 @@ type BudgetEnforcementMode = {
   per_metric?: Record<string, 'none' | 'soft' | 'hard'>;
 };
 
+type ProviderBudget = {
+  month_usd?: number | null;
+  day_usd?: number | null;
+};
+
 type BudgetSettings = {
   budget_day_usd?: number | null;
   budget_month_usd?: number | null;
@@ -40,6 +47,7 @@ type BudgetSettings = {
   budget_month_tokens?: number | null;
   alert_thresholds?: BudgetAlertThresholds | null;
   enforcement_mode?: BudgetEnforcementMode | null;
+  provider_budgets?: Record<string, ProviderBudget | null> | null;
 };
 
 type BudgetMetricKey =
@@ -499,6 +507,23 @@ const renderBudgetCaps = (item: OrgBudgetItem) => {
         <span className="text-muted-foreground">Monthly tokens</span>
         <span className="font-mono">{formatTokens(settings.budget_month_tokens)}</span>
       </div>
+      {settings.provider_budgets && Object.keys(settings.provider_budgets).length > 0 && (
+        <>
+          <div className="border-t my-1 pt-1">
+            <span className="text-muted-foreground text-[10px] uppercase tracking-wide">Per-Provider</span>
+          </div>
+          {Object.entries(settings.provider_budgets).map(([provider, budget]) => (
+            <div key={provider} className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">{provider}</span>
+              <span className="font-mono">
+                {budget?.month_usd != null ? `$${budget.month_usd}/mo` : ''}
+                {budget?.month_usd != null && budget?.day_usd != null ? ' · ' : ''}
+                {budget?.day_usd != null ? `$${budget.day_usd}/day` : ''}
+              </span>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 };
@@ -531,6 +556,7 @@ function BudgetsPageContent() {
   const [editForm, setEditForm] = useState<BudgetEditFormState | null>(null);
   const [editErrors, setEditErrors] = useState<BudgetEditErrorsState>({ caps: {}, thresholds: {} });
   const [savingBudget, setSavingBudget] = useState(false);
+  const [providerBudgets, setProviderBudgets] = useState<Record<string, { month_usd: string; day_usd: string }>>({});
 
   const budgetParams = useMemo(() => {
     const params: Record<string, string> = {
@@ -603,6 +629,15 @@ function BudgetsPageContent() {
     setEditingBudget(item);
     setEditForm(buildBudgetEditFormState(item.budgets || {}));
     setEditErrors({ caps: {}, thresholds: {} });
+    const existing = (item.budgets || {}).provider_budgets || {};
+    const draft: Record<string, { month_usd: string; day_usd: string }> = {};
+    for (const [provider, budget] of Object.entries(existing)) {
+      draft[provider] = {
+        month_usd: budget?.month_usd != null ? String(budget.month_usd) : '',
+        day_usd: budget?.day_usd != null ? String(budget.day_usd) : '',
+      };
+    }
+    setProviderBudgets(draft);
   };
 
   const closeEditDialog = () => {
@@ -610,6 +645,7 @@ function BudgetsPageContent() {
     setEditForm(null);
     setEditErrors({ caps: {}, thresholds: {} });
     setSavingBudget(false);
+    setProviderBudgets({});
   };
 
   const updateEditCap = (key: keyof Pick<BudgetEditFormState, 'budget_day_usd' | 'budget_month_usd' | 'budget_day_tokens' | 'budget_month_tokens'>, value: string) => {
@@ -688,6 +724,20 @@ function BudgetsPageContent() {
     try {
       setSavingBudget(true);
       const budgetsPayload = buildBudgetUpdatePayload(editForm);
+      // Include provider budgets in the payload
+      const providerBudgetsPayload: Record<string, ProviderBudget | null> = {};
+      for (const [provider, draft] of Object.entries(providerBudgets)) {
+        const monthUsd = draft.month_usd.trim() ? Number(draft.month_usd) : null;
+        const dayUsd = draft.day_usd.trim() ? Number(draft.day_usd) : null;
+        if (monthUsd === null && dayUsd === null) {
+          providerBudgetsPayload[provider] = null; // Remove provider
+        } else {
+          providerBudgetsPayload[provider] = { month_usd: monthUsd, day_usd: dayUsd };
+        }
+      }
+      if (Object.keys(providerBudgetsPayload).length > 0) {
+        budgetsPayload.provider_budgets = providerBudgetsPayload;
+      }
       await api.updateBudget(String(editingBudget.org_id), {
         budgets: budgetsPayload,
       });
@@ -717,6 +767,16 @@ function BudgetsPageContent() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => {
+                  exportData({
+                    data: budgets as Record<string, unknown>[],
+                    filename: 'budgets',
+                    format,
+                  });
+                }}
+                disabled={budgets.length === 0}
+              />
               <Button variant="outline" onClick={loadBudgets} disabled={loading}>
                 <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                 Refresh
@@ -934,6 +994,85 @@ function BudgetsPageContent() {
                         )}
                       </div>
                     </div>
+                  </div>
+
+                  {/* Provider Budgets */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-medium">Per-Provider Budgets</h3>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        onClick={() => {
+                          const name = window.prompt('Provider name (e.g. openai, anthropic):');
+                          if (name && name.trim()) {
+                            setProviderBudgets((prev) => ({
+                              ...prev,
+                              [name.trim().toLowerCase()]: { month_usd: '', day_usd: '' },
+                            }));
+                          }
+                        }}
+                      >
+                        + Add Provider
+                      </Button>
+                    </div>
+                    {Object.keys(providerBudgets).length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No per-provider budgets configured.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {Object.entries(providerBudgets).map(([provider, draft]) => (
+                          <div key={provider} className="flex items-end gap-3 rounded-md border p-3">
+                            <div className="min-w-[100px]">
+                              <Label className="text-xs text-muted-foreground">{provider}</Label>
+                            </div>
+                            <div className="space-y-1 flex-1">
+                              <Label htmlFor={`pb-month-${provider}`} className="text-xs">Monthly USD</Label>
+                              <Input
+                                id={`pb-month-${provider}`}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="No limit"
+                                value={draft.month_usd}
+                                onChange={(e) => setProviderBudgets((prev) => ({
+                                  ...prev,
+                                  [provider]: { ...prev[provider], month_usd: e.target.value },
+                                }))}
+                              />
+                            </div>
+                            <div className="space-y-1 flex-1">
+                              <Label htmlFor={`pb-day-${provider}`} className="text-xs">Daily USD</Label>
+                              <Input
+                                id={`pb-day-${provider}`}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="No limit"
+                                value={draft.day_usd}
+                                onChange={(e) => setProviderBudgets((prev) => ({
+                                  ...prev,
+                                  [provider]: { ...prev[provider], day_usd: e.target.value },
+                                }))}
+                              />
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              type="button"
+                              className="text-destructive"
+                              onClick={() => setProviderBudgets((prev) => {
+                                const next = { ...prev };
+                                delete next[provider];
+                                return next;
+                              })}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div>

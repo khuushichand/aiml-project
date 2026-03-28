@@ -308,6 +308,8 @@ class UserNotificationRow:
     created_at: str
     read_at: str | None
     dismissed_at: str | None
+    delivery_status: str = "pending"
+    delivered_at: str | None = None
 
 
 @dataclass
@@ -704,7 +706,9 @@ class CollectionsDatabase:
                 archived_at TEXT,
                 created_at TEXT NOT NULL,
                 read_at TEXT,
-                dismissed_at TEXT
+                dismissed_at TEXT,
+                delivery_status TEXT NOT NULL DEFAULT 'pending',
+                delivered_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
@@ -953,7 +957,9 @@ class CollectionsDatabase:
                 archived_at TEXT,
                 created_at TEXT NOT NULL,
                 read_at TEXT,
-                dismissed_at TEXT
+                dismissed_at TEXT,
+                delivery_status TEXT NOT NULL DEFAULT 'pending',
+                delivered_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created ON user_notifications(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread ON user_notifications(user_id, read_at);
@@ -1551,6 +1557,36 @@ class CollectionsDatabase:
                     logger.debug("collections backfill: content_items.{} already exists or skipped", column)
                 else:
                     raise
+        # Backfill user_notifications columns
+        notif_columns: set[str] = set()
+        if self.backend.backend_type == BackendType.SQLITE:
+            try:
+                notif_columns = self._sqlite_columns("user_notifications")
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
+                pass
+        if notif_columns and "delivery_status" not in notif_columns:
+            try:
+                self.backend.execute(
+                    "ALTER TABLE user_notifications ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'pending'",
+                    (),
+                )
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: user_notifications.delivery_status already exists or skipped")
+                else:
+                    raise
+        if notif_columns and "delivered_at" not in notif_columns:
+            try:
+                self.backend.execute(
+                    "ALTER TABLE user_notifications ADD COLUMN delivered_at TEXT",
+                    (),
+                )
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                if _is_backfill_noop_error(exc):
+                    logger.debug("collections backfill: user_notifications.delivered_at already exists or skipped")
+                else:
+                    raise
+
         self._fts_available = fts_available
         self._refresh_fts_capabilities()
 
@@ -4365,6 +4401,8 @@ class CollectionsDatabase:
             created_at=str(row.get("created_at") or ""),
             read_at=row.get("read_at"),
             dismissed_at=row.get("dismissed_at"),
+            delivery_status=str(row.get("delivery_status") or "pending"),
+            delivered_at=row.get("delivered_at"),
         )
 
     def create_user_notification(
@@ -4390,8 +4428,8 @@ class CollectionsDatabase:
             "INSERT INTO user_notifications ("
             "user_id, kind, title, message, severity, source_task_id, source_task_run_id, source_job_id, "
             "source_domain, source_job_type, link_type, link_id, link_url, dedupe_key, retention_until, archived_at, "
-            "created_at, read_at, dismissed_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "created_at, read_at, dismissed_at, delivery_status, delivered_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         params = (
             self.user_id,
@@ -4413,6 +4451,8 @@ class CollectionsDatabase:
             now,
             None,
             None,
+            "pending",
+            None,
         )
         res = self._execute_insert(q, params)
         new_id = self._extract_lastrowid(res)
@@ -4432,6 +4472,24 @@ class CollectionsDatabase:
         if not row:
             raise KeyError("user_notification_not_found")
         return self._notification_row_from_db(row)
+
+    def update_notification_delivery_status(
+        self,
+        notification_id: int,
+        status: str,
+        delivered_at: str | None = None,
+    ) -> None:
+        """Update the delivery_status (and optionally delivered_at) of a notification."""
+        if delivered_at:
+            self.backend.execute(
+                "UPDATE user_notifications SET delivery_status = ?, delivered_at = ? WHERE id = ? AND user_id = ?",
+                (status, delivered_at, notification_id, self.user_id),
+            )
+        else:
+            self.backend.execute(
+                "UPDATE user_notifications SET delivery_status = ? WHERE id = ? AND user_id = ?",
+                (status, notification_id, self.user_id),
+            )
 
     def list_user_notifications(
         self,

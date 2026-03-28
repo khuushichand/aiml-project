@@ -116,3 +116,44 @@ def test_merge_budget_settings_normalizes_thresholds():
         clear=False,
     )
     assert merged["alert_thresholds"]["global"] == [80, 95]
+
+
+def test_merge_budget_settings_provider_budgets_adds():
+    existing = {"budget_month_usd": 100.0}
+    merged = merge_budget_settings(
+        existing,
+        updates={"provider_budgets": {"openai": {"month_usd": 50}, "anthropic": {"month_usd": 80}}},
+        clear=False,
+    )
+    assert merged["provider_budgets"] == {"openai": {"month_usd": 50}, "anthropic": {"month_usd": 80}}
+    assert merged["budget_month_usd"] == 100.0
+
+
+def test_merge_budget_settings_provider_budgets_removes_provider():
+    existing = {"provider_budgets": {"openai": {"month_usd": 50}, "anthropic": {"month_usd": 80}}}
+    merged = merge_budget_settings(
+        existing,
+        updates={"provider_budgets": {"openai": None}},
+        clear=False,
+    )
+    assert merged["provider_budgets"] == {"anthropic": {"month_usd": 80}}
+
+
+def test_merge_budget_settings_provider_budgets_clears_all():
+    existing = {"provider_budgets": {"openai": {"month_usd": 50}}}
+    merged = merge_budget_settings(
+        existing,
+        updates={"provider_budgets": None},
+        clear=False,
+    )
+    assert "provider_budgets" not in merged
+
+
+def test_merge_budget_settings_provider_budgets_merges_keys():
+    existing = {"provider_budgets": {"openai": {"month_usd": 50, "day_usd": 5}}}
+    merged = merge_budget_settings(
+        existing,
+        updates={"provider_budgets": {"openai": {"month_usd": 100}}},
+        clear=False,
+    )
+    assert merged["provider_budgets"]["openai"] == {"month_usd": 100, "day_usd": 5}

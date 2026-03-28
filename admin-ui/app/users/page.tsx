@@ -341,20 +341,14 @@ function UsersPageContent() {
     const loadMfaStatus = async () => {
       try {
         setMfaLoading(true);
-        const results = await Promise.allSettled(
-          missingIds.map(async (id) => {
-            const status = await api.getUserMfaStatus(String(id)) as { enabled?: boolean };
-            return { id, enabled: Boolean(status?.enabled) };
-          })
-        );
+        // Use bulk endpoint instead of N+1 individual calls
+        const bulkResult = await api.getUserMfaStatusBulk(missingIds);
         if (cancelled) return;
         setMfaByUserId((prev) => {
           const next = { ...prev };
-          results.forEach((result) => {
-            if (result.status === 'fulfilled') {
-              next[result.value.id] = result.value.enabled;
-            }
-          });
+          for (const [uid, enabled] of Object.entries(bulkResult.mfa_status)) {
+            next[Number(uid)] = enabled;
+          }
           return next;
         });
       } catch (err) {
@@ -1242,6 +1236,7 @@ function UsersPageContent() {
                           <TableHead>Role</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Storage</TableHead>
+                          <TableHead>Created</TableHead>
                           <TableHead>Last Login</TableHead>
                           <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -1308,9 +1303,26 @@ function UsersPageContent() {
                                 </div>
                               </TableCell>
                               <TableCell className="text-muted-foreground text-sm">
-                                {user.last_login
-                                  ? new Date(user.last_login).toLocaleDateString()
-                                  : 'Never'}
+                                {user.created_at
+                                  ? new Date(user.created_at).toLocaleDateString()
+                                  : '—'}
+                              </TableCell>
+                              <TableCell className="text-muted-foreground text-sm">
+                                <div className="flex items-center gap-1">
+                                  {user.last_login
+                                    ? new Date(user.last_login).toLocaleDateString()
+                                    : 'Never'}
+                                  {(() => {
+                                    const DORMANT_THRESHOLD_DAYS = 90;
+                                    const lastLogin = user.last_login ? new Date(user.last_login) : null;
+                                    const daysSinceLogin = lastLogin
+                                      ? Math.floor((Date.now() - lastLogin.getTime()) / (1000 * 60 * 60 * 24))
+                                      : Infinity;
+                                    return daysSinceLogin > DORMANT_THRESHOLD_DAYS ? (
+                                      <Badge variant="destructive" className="text-[10px] px-1 py-0">Dormant</Badge>
+                                    ) : null;
+                                  })()}
+                                </div>
                               </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-1">

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from loguru import logger
+from pydantic import BaseModel
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
@@ -84,6 +87,30 @@ async def admin_get_user_mfa_status(
         principal,
         user_id,
     )
+
+
+class BulkMfaStatusResponse(BaseModel):
+    mfa_status: dict[str, bool]
+
+
+@router.get("/users/mfa/bulk", response_model=BulkMfaStatusResponse)
+async def admin_get_bulk_mfa_status(
+    ids: str = Query(..., description="Comma-separated user IDs"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BulkMfaStatusResponse:
+    """Fetch MFA status for multiple users in a single request."""
+    user_ids = [int(uid.strip()) for uid in ids.split(",") if uid.strip().isdigit()][:200]
+
+    async def _fetch_one(uid: int) -> tuple[str, bool]:
+        try:
+            status = await admin_sessions_mfa_service.get_user_mfa_status(principal, uid)
+            return str(uid), bool(status.get("enabled", False)) if isinstance(status, dict) else False
+        except Exception as exc:
+            logger.warning("bulk MFA status: failed for user {}: {}", uid, exc)
+            return str(uid), False
+
+    pairs = await asyncio.gather(*[_fetch_one(uid) for uid in user_ids])
+    return BulkMfaStatusResponse(mfa_status=dict(pairs))
 
 
 @router.post("/users/{user_id}/mfa/disable", response_model=MessageResponse)

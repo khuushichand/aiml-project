@@ -78,6 +78,9 @@ export const UnifiedApiKeysTable = ({
   const rowIds = rows.map((row) => `${row.ownerUserId}:${row.keyId}`);
   const selectedCount = rowIds.filter((rowId) => selectedRowIds?.has(rowId)).length;
   const allSelected = selectedCount > 0 && selectedCount === rowIds.length;
+  const hasTelemetry = rows.some(
+    (r) => r.requestCount24h != null && Number.isFinite(r.requestCount24h)
+  );
 
   return (
     <Table>
@@ -97,11 +100,13 @@ export const UnifiedApiKeysTable = ({
           <TableHead>Created</TableHead>
           <TableHead>Last Used</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead>Age</TableHead>
+          <TableHead title="Green: <90 days, Yellow: 90-180 days, Red: >180 days">
+            Age <span className="text-muted-foreground cursor-help">&#9432;</span>
+          </TableHead>
           <TableHead>Expiry</TableHead>
           <TableHead>Activity</TableHead>
-          <TableHead>Requests (24h)</TableHead>
-          <TableHead>Error Rate (24h)</TableHead>
+          {hasTelemetry && <TableHead>Requests (24h)</TableHead>}
+          {hasTelemetry && <TableHead>Error Rate (24h)</TableHead>}
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
@@ -159,8 +164,8 @@ export const UnifiedApiKeysTable = ({
                   <Badge variant="secondary">Normal</Badge>
                 )}
               </TableCell>
-              <TableCell>{formatRequestCount24h(row.requestCount24h)}</TableCell>
-              <TableCell>{formatErrorRate24h(row.errorRate24h)}</TableCell>
+              {hasTelemetry && <TableCell>{formatRequestCount24h(row.requestCount24h)}</TableCell>}
+              {hasTelemetry && <TableCell>{formatErrorRate24h(row.errorRate24h)}</TableCell>}
               <TableCell className="text-right">
                 <Link href={`/users/${row.ownerUserId}/api-keys`}>
                   <Button variant="outline" size="sm">Manage</Button>

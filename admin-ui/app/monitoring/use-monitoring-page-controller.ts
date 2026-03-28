@@ -209,6 +209,14 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     void loadData();
   }, [loadData]);
 
+  // Auto-refresh dashboard data every 60 seconds
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  useEffect(() => {
+    if (!autoRefreshEnabled) return;
+    const id = setInterval(() => { void loadData(); }, 60_000);
+    return () => clearInterval(id);
+  }, [autoRefreshEnabled, loadData]);
+
   const activeAlertsCount = useMemo(
     () =>
       alerts.filter((alert) => !alert.acknowledged && !isAlertSnoozed(alert)).length,
@@ -220,8 +228,10 @@ export const useMonitoringPageController = (): MonitoringPageController => {
       lastUpdated,
       loading,
       onRefresh: loadData,
+      autoRefreshEnabled,
+      onToggleAutoRefresh: () => setAutoRefreshEnabled((prev) => !prev),
     }),
-    [lastUpdated, loading, loadData]
+    [lastUpdated, loading, loadData, autoRefreshEnabled]
   );
 
   const feedbackBannersProps = useMemo<ComponentProps<typeof MonitoringFeedbackBanners>>(

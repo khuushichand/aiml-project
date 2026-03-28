@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { usePrivilegedActionDialog } from '@/components/ui/privileged-action-dialog';
 import { KeyRound, RefreshCw, Plus, Trash2, Send, Server, X } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import type { AuditLog, ByokValidationRunItem } from '@/types';
@@ -187,6 +188,7 @@ const PROVIDER_OPTIONS = [
 export default function ByokDashboardPage() {
   const { selectedOrg } = useOrgContext();
   const confirm = useConfirm();
+  const privilegedAction = usePrivilegedActionDialog();
   const { success: toastSuccess, error: showError } = useToast();
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [metricsError, setMetricsError] = useState<string | null>(null);
@@ -652,14 +654,13 @@ export default function ByokDashboardPage() {
 
   const handleDeleteSharedKey = async (key: SharedProviderKey) => {
     const keyId = `${key.scope_type}:${key.scope_id}:${key.provider}`;
-    const confirmed = await confirm({
+    const result = await privilegedAction({
       title: 'Delete Shared Key',
       message: `Delete the shared key for "${key.provider}"? Users and orgs will fall back to their own keys.`,
       confirmText: 'Delete',
-      variant: 'danger',
-      icon: 'delete',
+      requirePassword: true,
     });
-    if (!confirmed) return;
+    if (!result) return;
 
     try {
       setDeletingKey(keyId);
@@ -957,8 +958,19 @@ export default function ByokDashboardPage() {
                         {formatValidationStatus(latestValidationRun.status)}
                       </Badge>
                     </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {formatValidationCounts(latestValidationRun)}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {latestValidationRun.keys_checked != null && (
+                        <Badge variant="outline">{latestValidationRun.keys_checked} checked</Badge>
+                      )}
+                      {(latestValidationRun.valid_count ?? 0) > 0 && (
+                        <Badge variant="default" className="bg-green-600">{latestValidationRun.valid_count} valid</Badge>
+                      )}
+                      {(latestValidationRun.invalid_count ?? 0) > 0 && (
+                        <Badge variant="destructive">{latestValidationRun.invalid_count} invalid</Badge>
+                      )}
+                      {(latestValidationRun.error_count ?? 0) > 0 && (
+                        <Badge variant="destructive">{latestValidationRun.error_count} errors</Badge>
+                      )}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       Requested by {latestValidationRun.requested_by_label || 'Unknown'} • {new Date(latestValidationRun.created_at).toLocaleString()}

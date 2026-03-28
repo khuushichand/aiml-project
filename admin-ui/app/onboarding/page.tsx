@@ -36,9 +36,14 @@ const STEPS = [
 
 function StepIndicator({ currentStep }: { currentStep: number }) {
   return (
-    <div className="flex items-center justify-center gap-2 mb-8" data-testid="step-indicator">
+    <div
+      className="flex items-center justify-center gap-2 mb-8"
+      data-testid="step-indicator"
+      role="group"
+      aria-label={`Onboarding progress, step ${currentStep} of ${STEPS.length}`}
+    >
       {STEPS.map((step, idx) => (
-        <div key={step.number} className="flex items-center gap-2">
+        <div key={step.number} className="flex items-center gap-2" aria-current={currentStep === step.number ? 'step' : undefined}>
           <div className="flex items-center gap-2">
             <div
               className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
@@ -86,6 +91,25 @@ function OnboardingPageContent() {
     resolver: zodResolver(orgSchema),
     defaultValues: { name: '', slug: '', owner_email: '' },
   });
+
+  const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
+  const [slugChecking, setSlugChecking] = useState(false);
+
+  const checkSlugAvailability = useCallback(async (slug: string) => {
+    if (!slug || slug.length < 2) { setSlugAvailable(null); return; }
+    setSlugChecking(true);
+    try {
+      const orgs = await api.getOrganizations({ q: slug });
+      const taken = (Array.isArray(orgs) ? orgs : []).some(
+        (o: { slug?: string }) => o.slug === slug
+      );
+      setSlugAvailable(!taken);
+    } catch {
+      setSlugAvailable(null);
+    } finally {
+      setSlugChecking(false);
+    }
+  }, []);
 
   const fetchPlans = useCallback(async () => {
     setLoading(true);
@@ -193,9 +217,14 @@ function OnboardingPageContent() {
                 id="org-slug"
                 data-testid="org-slug-input"
                 placeholder="my-organization"
-                {...register('slug')}
+                {...register('slug', {
+                  onBlur: (e) => { void checkSlugAvailability(e.target.value); },
+                })}
               />
               {errors.slug && <p className="mt-1 text-sm text-red-600">{errors.slug.message}</p>}
+              {slugChecking && <p className="mt-1 text-xs text-muted-foreground">Checking availability...</p>}
+              {slugAvailable === true && !errors.slug && <p className="mt-1 text-xs text-green-600">Slug is available</p>}
+              {slugAvailable === false && !errors.slug && <p className="mt-1 text-xs text-red-600">Slug is already taken</p>}
             </div>
             <div>
               <Label htmlFor="owner-email">Owner Email (optional)</Label>

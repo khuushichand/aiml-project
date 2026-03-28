@@ -14,8 +14,20 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
 
   return (
     <html lang="en">
+      <head>
+        <style dangerouslySetInnerHTML={{ __html: `
+          @media (prefers-color-scheme: dark) {
+            .global-error-bg { background-color: #1a1a2e !important; }
+            .global-error-card { background-color: #16213e !important; color: #e0e0e0 !important; }
+            .global-error-card p { color: #a0a0b0 !important; }
+            .global-error-detail { background-color: #1e2a3a !important; }
+            .global-error-home { background-color: #16213e !important; color: #e0e0e0 !important; border-color: #334155 !important; }
+          }
+        `}} />
+      </head>
       <body>
         <div
+          className="global-error-bg"
           style={{
             minHeight: '100vh',
             display: 'flex',
@@ -27,6 +39,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
           }}
         >
           <div
+            className="global-error-card"
             style={{
               maxWidth: '28rem',
               width: '100%',
@@ -73,6 +86,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
             </p>
 
             <div
+              className="global-error-detail"
               style={{
                 backgroundColor: '#f3f4f6',
                 borderRadius: '0.375rem',
@@ -108,6 +122,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
                 Try Again
               </button>
               <button
+                className="global-error-home"
                 onClick={() => (window.location.href = '/')}
                 style={{
                   flex: 1,

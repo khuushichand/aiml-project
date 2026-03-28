@@ -158,8 +158,16 @@ export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) 
   const { organizations, selectedOrg, setSelectedOrg, loading } = useOrgContext();
   const { isSuperAdmin } = usePermissions();
 
-  // Super admins see all orgs and can choose to scope to one; org-scoped users are auto-selected and don't need a switcher
+  // Org-scoped users see a read-only badge showing their org name
   if (!isSuperAdmin()) {
+    if (selectedOrg) {
+      return (
+        <div className={`flex items-center gap-2 px-3 py-2 ${className}`}>
+          <Building2 className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">{selectedOrg.name}</span>
+        </div>
+      );
+    }
     return null;
   }
   if (loading) {
