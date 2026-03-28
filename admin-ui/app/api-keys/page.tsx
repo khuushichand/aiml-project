@@ -282,7 +282,7 @@ function ApiKeysPageContent() {
                 <div>
                   <h3 className="font-semibold">Unified Key Management</h3>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    24h request/error metrics are currently unavailable from backend key telemetry and are shown as N/A.
+                    Per-key request and error rate metrics will appear automatically once backend telemetry is available.
                   </p>
                 </div>
               </div>
@@ -409,7 +409,7 @@ function ApiKeysPageContent() {
             <CardContent>
               {loading ? (
                 <div className="py-4">
-                  <TableSkeleton rows={8} columns={11} />
+                  <TableSkeleton rows={8} columns={9} />
                 </div>
               ) : totalItems === 0 ? (
                 <EmptyState

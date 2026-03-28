@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { ArrowLeft, Users, UserPlus, Trash2, Shield, Building2, Pencil } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Team, TeamMember, User } from '@/types';
+import { CardSkeleton } from '@/components/ui/skeleton';
 import Link from 'next/link';
 import { UserPicker } from '@/components/users/UserPicker';
 
@@ -253,7 +254,7 @@ export default function TeamDetailPage() {
       <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <CardSkeleton />
           </div>
         </ResponsiveLayout>
       </PermissionGuard>

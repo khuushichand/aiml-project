@@ -79,6 +79,11 @@ export const UnifiedApiKeysTable = ({
   const selectedCount = rowIds.filter((rowId) => selectedRowIds?.has(rowId)).length;
   const allSelected = selectedCount > 0 && selectedCount === rowIds.length;
 
+  // Only show telemetry columns when any row has real data from the backend
+  const hasTelemetry = rows.some(
+    (row) => row.requestCount24h !== null || row.errorRate24h !== null
+  );
+
   return (
     <Table>
       <TableHeader>
@@ -100,8 +105,8 @@ export const UnifiedApiKeysTable = ({
           <TableHead>Age</TableHead>
           <TableHead>Expiry</TableHead>
           <TableHead>Activity</TableHead>
-          <TableHead>Requests (24h)</TableHead>
-          <TableHead>Error Rate (24h)</TableHead>
+          {hasTelemetry && <TableHead>Requests (24h)</TableHead>}
+          {hasTelemetry && <TableHead>Error Rate (24h)</TableHead>}
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
@@ -159,8 +164,8 @@ export const UnifiedApiKeysTable = ({
                   <Badge variant="secondary">Normal</Badge>
                 )}
               </TableCell>
-              <TableCell>{formatRequestCount24h(row.requestCount24h)}</TableCell>
-              <TableCell>{formatErrorRate24h(row.errorRate24h)}</TableCell>
+              {hasTelemetry && <TableCell>{formatRequestCount24h(row.requestCount24h)}</TableCell>}
+              {hasTelemetry && <TableCell>{formatErrorRate24h(row.errorRate24h)}</TableCell>}
               <TableCell className="text-right">
                 <Link href={`/users/${row.ownerUserId}/api-keys`}>
                   <Button variant="outline" size="sm">Manage</Button>

@@ -14,6 +14,7 @@ import { getKeyAgeIndicator, resolveUnifiedApiKeyStatus, type ApiKeyMetadataLike
 import { formatDateTime } from '@/lib/format';
 import { isSecurityHealthData } from '@/lib/type-guards';
 import type { SecurityHealthData } from '@/types';
+import { TableSkeleton } from '@/components/ui/skeleton';
 import { ShieldAlert, ShieldCheck, RefreshCw, AlertTriangle, Key, Users, Lock } from 'lucide-react';
 import Link from 'next/link';
 
@@ -660,9 +661,7 @@ export default function SecurityPage() {
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    Loading...
-                  </div>
+                  <TableSkeleton rows={3} columns={3} />
                 ) : !alertStatus?.recent_alerts?.length ? (
                   <div className="text-center text-muted-foreground py-8">
                     <ShieldCheck className="h-12 w-12 mx-auto mb-2 text-green-500" />

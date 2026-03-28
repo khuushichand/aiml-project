@@ -22,6 +22,7 @@ import {
 } from '@/lib/rate-limits';
 import { Role, Permission, User } from '@/types';
 import { Label } from '@/components/ui/label';
+import { FormSkeleton } from '@/components/ui/skeleton';
 import Link from 'next/link';
 
 type RateLimits = {
@@ -550,7 +551,7 @@ export default function RoleDetailPage() {
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           {loading ? (
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <FormSkeleton />
           ) : !role ? (
             <>
               <Alert variant="destructive">

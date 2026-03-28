@@ -22,6 +22,7 @@ import { Organization, OrgMember, Team, ProviderSecret, User, WatchlistSettings,
 import Link from 'next/link';
 import { UserPicker } from '@/components/users/UserPicker';
 import { PlanBadge } from '@/components/PlanBadge';
+import { CardSkeleton, FormSkeleton } from '@/components/ui/skeleton';
 import { UsageMeter } from '@/components/UsageMeter';
 import { InvoiceTable } from '@/components/InvoiceTable';
 import {
@@ -447,7 +448,7 @@ export default function OrganizationDetailPage() {
       <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading...</div>
+            <CardSkeleton />
           </div>
         </ResponsiveLayout>
       </PermissionGuard>
@@ -1027,7 +1028,7 @@ export default function OrganizationDetailPage() {
                 </CardHeader>
                 <CardContent>
                   {watchlistLoading ? (
-                    <div className="text-center text-muted-foreground py-4">Loading...</div>
+                    <FormSkeleton />
                   ) : (
                     <div className="space-y-4">
                       <div className="grid gap-4 sm:grid-cols-3">

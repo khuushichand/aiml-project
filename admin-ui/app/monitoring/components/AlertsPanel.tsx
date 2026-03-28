@@ -210,6 +210,7 @@ export default function AlertsPanel({
                         size="sm"
                         onClick={() => onAcknowledge(alert)}
                         title="Acknowledge"
+                        aria-label="Acknowledge alert"
                       >
                         <Check className="h-4 w-4 text-green-500" />
                       </Button>
@@ -218,6 +219,7 @@ export default function AlertsPanel({
                         size="sm"
                         onClick={() => onDismiss(alert)}
                         title="Dismiss"
+                        aria-label="Dismiss alert"
                       >
                         <X className="h-4 w-4 text-red-500" />
                       </Button>

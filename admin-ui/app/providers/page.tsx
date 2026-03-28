@@ -19,6 +19,7 @@ import { Cpu, RefreshCw, CheckCircle, XCircle, Key, ExternalLink, Plus, Trash2, 
 import { api } from '@/lib/api-client';
 import { getDeprecatedModelNotice } from '@/lib/deprecated-models';
 import { buildProviderTokenTrendMap, buildSparklinePoints } from '@/lib/provider-token-trends';
+import { TableSkeleton } from '@/components/ui/skeleton';
 import { LLMProvider, LLMProviderOverride, User as UserType, Organization } from '@/types';
 
 interface ByokKey {
@@ -1095,7 +1096,7 @@ export default function ProvidersPage() {
                       )}
                     </div>
                     {loading ? (
-                      <div className="text-center text-muted-foreground py-8">Loading...</div>
+                      <TableSkeleton rows={5} columns={4} />
                     ) : providers.length === 0 ? (
                       <div className="text-center text-muted-foreground py-8">
                         <Cpu className="h-12 w-12 mx-auto mb-2 opacity-50" />
@@ -1438,7 +1439,7 @@ export default function ProvidersPage() {
                           <p>Select a user to manage their BYOK keys</p>
                         </div>
                       ) : byokState.isLoading ? (
-                        <div className="text-center text-muted-foreground py-8">Loading...</div>
+                        <TableSkeleton rows={3} columns={3} />
                       ) : byokState.userKeys.length === 0 ? (
                         <div className="text-center text-muted-foreground py-8">
                           <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />
@@ -1527,7 +1528,7 @@ export default function ProvidersPage() {
                           <p>Select an organization to manage BYOK keys</p>
                         </div>
                       ) : byokState.isLoading ? (
-                        <div className="text-center text-muted-foreground py-8">Loading...</div>
+                        <TableSkeleton rows={3} columns={3} />
                       ) : byokState.orgKeys.length === 0 ? (
                         <div className="text-center text-muted-foreground py-8">
                           <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />
