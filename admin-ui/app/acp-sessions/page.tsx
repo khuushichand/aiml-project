@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,10 +13,11 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
-import { RefreshCw, MessageSquare, XCircle, Wifi, WifiOff } from 'lucide-react';
+import { Pause, Play, RefreshCw, MessageSquare, XCircle, Wifi, WifiOff } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import { formatDistanceToNow } from 'date-fns';
 
 interface ACPSession {
   session_id: string;
@@ -58,10 +59,14 @@ export default function ACPSessionsPage() {
     agentType: '',
     userId: '',
   });
+  const loadingRef = useRef(false);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const confirm = useConfirm();
   const toast = useToast();
 
   const loadSessions = useCallback(async () => {
+    loadingRef.current = true;
     setLoading(true);
     setError('');
     try {
@@ -76,13 +81,40 @@ export default function ACPSessionsPage() {
       const message = err instanceof ApiError ? err.message : 'Failed to load ACP sessions';
       setError(message);
     } finally {
+      loadingRef.current = false;
       setLoading(false);
+      setLastRefreshed(new Date());
     }
   }, [appliedFilters]);
 
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Auto-refresh: 15-second interval, paused when tab is not visible
+  useEffect(() => {
+    if (!autoRefreshEnabled) return;
+
+    const intervalId = setInterval(() => {
+      if (document.visibilityState === 'visible' && !loadingRef.current) {
+        void loadSessions();
+      }
+    }, 15_000);
+
+    return () => clearInterval(intervalId);
+  }, [autoRefreshEnabled, loadSessions]);
+
+  // Re-render the "Last updated X ago" text every 15 seconds so it stays fresh
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!lastRefreshed) return;
+    const tickId = setInterval(() => setTick((t) => t + 1), 15_000);
+    return () => clearInterval(tickId);
+  }, [lastRefreshed]);
+
+  const lastUpdatedLabel = lastRefreshed
+    ? `Updated ${formatDistanceToNow(lastRefreshed, { addSuffix: true })}`
+    : null;
 
   const handleApplyFilters = useCallback(() => {
     setAppliedFilters({
@@ -140,13 +172,34 @@ export default function ACPSessionsPage() {
               <h1 className="text-2xl font-bold">ACP Sessions</h1>
               <p className="text-muted-foreground">Monitor and manage Agent Client Protocol sessions across all users</p>
             </div>
-            <AccessibleIconButton
-              icon={RefreshCw}
-              label="Refresh"
-              onClick={loadSessions}
-              disabled={loading}
-              className={loading ? 'animate-spin' : ''}
-            />
+            <div className="flex items-center gap-2">
+              {lastUpdatedLabel && (
+                <span className="text-xs text-muted-foreground" data-testid="last-updated-label">
+                  {lastUpdatedLabel}
+                </span>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setAutoRefreshEnabled((prev) => !prev)}
+                aria-label={autoRefreshEnabled ? 'Pause auto-refresh' : 'Resume auto-refresh'}
+                data-testid="auto-refresh-toggle"
+                title={autoRefreshEnabled ? 'Pause auto-refresh' : 'Resume auto-refresh'}
+              >
+                {autoRefreshEnabled ? (
+                  <Pause className="h-4 w-4" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+              </Button>
+              <AccessibleIconButton
+                icon={RefreshCw}
+                label="Refresh"
+                onClick={loadSessions}
+                disabled={loading}
+                className={loading ? 'animate-spin' : ''}
+              />
+            </div>
           </div>
 
           {error && (
