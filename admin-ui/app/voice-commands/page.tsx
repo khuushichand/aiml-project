@@ -55,6 +55,7 @@ type CreateCommandFormData = z.output<typeof createCommandSchema>;
 function DryRunPanel() {
   const [phrase, setPhrase] = useState('');
   const [running, setRunning] = useState(false);
+  const { error: showError } = useToast();
   const [result, setResult] = useState<{
     dry_run: boolean;
     phrase: string;
@@ -75,8 +76,9 @@ function DryRunPanel() {
     try {
       const res = await api.dryRunVoiceCommand({ phrase: phrase.trim() });
       setResult(res);
-    } catch {
+    } catch (err: unknown) {
       setResult(null);
+      showError('Dry-run failed', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setRunning(false);
     }
@@ -259,6 +261,28 @@ function VoiceCommandsPageContent() {
     setSearchQuery(value || undefined);
     resetPagination();
   };
+
+  const runLocalPhraseTest = useCallback(() => {
+    const normalizedPhrase = testPhrase.trim();
+    if (!normalizedPhrase) {
+      setTestResult(null);
+      setHasSearchedPhrase(false);
+      return;
+    }
+
+    let bestMatch: typeof testResult = null;
+    for (const cmd of commands) {
+      const phrases = Array.isArray(cmd.phrases) ? cmd.phrases : [];
+      if (phrases.length === 0) continue;
+      const result = testVoiceCommandPhraseMatch(normalizedPhrase, phrases);
+      if (result.matched && (!bestMatch || result.confidence > bestMatch.result.confidence)) {
+        bestMatch = { commandName: cmd.name, result };
+      }
+    }
+
+    setTestResult(bestMatch);
+    setHasSearchedPhrase(true);
+  }, [commands, testPhrase]);
 
   const handleActionTypeChange = (value: string) => {
     setActionTypeFilter(value || undefined);
@@ -541,35 +565,14 @@ function VoiceCommandsPageContent() {
                   className="max-w-md"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
-                      // Test against all commands
-                      let bestMatch: typeof testResult = null;
-                      for (const cmd of commands) {
-                        const phrases = Array.isArray(cmd.phrases) ? cmd.phrases : [];
-                        if (phrases.length === 0) continue;
-                        const result = testVoiceCommandPhraseMatch(testPhrase, phrases);
-                        if (result.matched && (!bestMatch || result.confidence > bestMatch.result.confidence)) {
-                          bestMatch = { commandName: cmd.name, result };
-                        }
-                      }
-                      setTestResult(bestMatch); setHasSearchedPhrase(true);
+                      runLocalPhraseTest();
                     }
                   }}
                 />
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    let bestMatch: typeof testResult = null;
-                    for (const cmd of commands) {
-                      const phrases = Array.isArray(cmd.phrases) ? cmd.phrases : [];
-                      if (phrases.length === 0) continue;
-                      const result = testVoiceCommandPhraseMatch(testPhrase, phrases);
-                      if (result.matched && (!bestMatch || result.confidence > bestMatch.result.confidence)) {
-                        bestMatch = { commandName: cmd.name, result };
-                      }
-                    }
-                    setTestResult(bestMatch); setHasSearchedPhrase(true);
-                  }}
+                  onClick={runLocalPhraseTest}
                   disabled={!testPhrase.trim()}
                 >
                   Test

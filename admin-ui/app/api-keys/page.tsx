@@ -581,13 +581,28 @@ function KeyActivitySection() {
   const [loadingLogs, setLoadingLogs] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
+
     api.getAuditLogs({ resource: 'api_key', limit: '10' })
       .then((data) => {
+        if (cancelled) return;
         const items = Array.isArray(data) ? data : (data as { items?: unknown[] })?.items ?? [];
         setLogs(items as typeof logs);
       })
-      .catch(() => setLogs([]))
-      .finally(() => setLoadingLogs(false));
+      .catch(() => {
+        if (!cancelled) {
+          setLogs([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingLogs(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (loadingLogs) return <CardSkeleton />;

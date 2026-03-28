@@ -4487,14 +4487,14 @@ class CollectionsDatabase:
         delivered_at: str | None = None,
     ) -> bool:
         """Update the delivery_status (and optionally delivered_at) of a notification."""
-        if delivered_at:
+        if delivered_at is not None:
             cursor = self.backend.execute(
                 "UPDATE user_notifications SET delivery_status = ?, delivered_at = ? WHERE id = ? AND user_id = ?",
                 (status, delivered_at, notification_id, self.user_id),
             )
         else:
             cursor = self.backend.execute(
-                "UPDATE user_notifications SET delivery_status = ? WHERE id = ? AND user_id = ?",
+                "UPDATE user_notifications SET delivery_status = ?, delivered_at = NULL WHERE id = ? AND user_id = ?",
                 (status, notification_id, self.user_id),
             )
         return bool(cursor.rowcount and cursor.rowcount > 0)

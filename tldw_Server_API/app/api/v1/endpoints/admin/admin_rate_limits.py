@@ -65,6 +65,12 @@ def _get_is_postgres_backend_fn() -> Callable[[], Awaitable[bool]]:
     return admin_mod._is_postgres_backend
 
 
+def _require_platform_admin(principal: AuthPrincipal) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
+
+    admin_mod._require_platform_admin(principal)
+
+
 def _row_to_dict(row: Any) -> dict[str, Any]:
     if row is None:
         return {}
@@ -246,9 +252,11 @@ class RateLimitSimResponse(BaseModel):
 @router.post("/debug/simulate-rate-limit", response_model=RateLimitSimResponse)
 async def simulate_rate_limit(
     payload: RateLimitSimRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> RateLimitSimResponse:
     """Simulate a rate-limit check for a given user/key and endpoint."""
+    _require_platform_admin(principal)
     result = await admin_rate_limits_service.simulate_rate_limit(
         db=db,
         user_id=int(payload.user_id),

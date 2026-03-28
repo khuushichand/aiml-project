@@ -17,8 +17,8 @@
 **Tech Stack:** FastAPI (Python), Next.js 15 / React 19 / TypeScript, Recharts, Radix UI, Tailwind CSS 4, Vitest
 
 **Repos:**
-- Backend: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/stage-1-dashboard/tldw_Server_API/`
-- Frontend: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/stage-1-dashboard/admin-ui/`
+- Backend: `./tldw_Server_API/`
+- Frontend: `./admin-ui/`
 
 ---
 

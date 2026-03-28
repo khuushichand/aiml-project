@@ -17,6 +17,10 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from tldw_Server_API.app.core.AuthNZ.admin_webhook_secrets import (
+    decrypt_admin_webhook_secret,
+    encrypt_admin_webhook_secret,
+)
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 
 
@@ -95,20 +99,26 @@ class AdminWebhooksService:
         pool = await self._get_pool()
         if secret is None:
             secret = secrets.token_hex(32)
+        encrypted_secret = encrypt_admin_webhook_secret(secret)
         event_types_json = json.dumps(event_types)
         now = datetime.now(timezone.utc).isoformat()
 
         row = await pool.fetchone(
             """
             INSERT INTO admin_webhooks
-                (url, secret, event_types, description, active,
+                (url, secret_encrypted, secret_key_id, event_types, description, active,
                  retry_count, timeout_seconds, created_by, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id, url, secret, event_types, description, active,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id, url, secret_encrypted, secret_key_id, event_types, description, active,
                       retry_count, timeout_seconds, created_by, created_at, updated_at
             """,
             (
-                url, secret, event_types_json, description, int(active),
+                url,
+                encrypted_secret.encrypted_blob,
+                encrypted_secret.key_id,
+                event_types_json,
+                description,
+                int(active),
                 retry_count, timeout_seconds, created_by, now, now,
             ),
         )
@@ -160,6 +170,9 @@ class AdminWebhooksService:
             json.dumps(fields["event_types"]) if fields.get("event_types") is not None else None
         )
         active_value = int(fields["active"]) if fields.get("active") is not None else None
+        serialized_secret = (
+            encrypt_admin_webhook_secret(fields["secret"]) if fields.get("secret") is not None else None
+        )
 
         has_changes = any(
             fields.get(key) is not None
@@ -183,7 +196,8 @@ class AdminWebhooksService:
                 url = COALESCE(?, url),
                 event_types = COALESCE(?, event_types),
                 description = COALESCE(?, description),
-                secret = COALESCE(?, secret),
+                secret_encrypted = COALESCE(?, secret_encrypted),
+                secret_key_id = COALESCE(?, secret_key_id),
                 active = COALESCE(?, active),
                 retry_count = COALESCE(?, retry_count),
                 timeout_seconds = COALESCE(?, timeout_seconds),
@@ -194,7 +208,8 @@ class AdminWebhooksService:
                 fields.get("url"),
                 serialized_event_types,
                 fields.get("description"),
-                fields.get("secret"),
+                serialized_secret.encrypted_blob if serialized_secret is not None else None,
+                serialized_secret.key_id if serialized_secret is not None else None,
                 active_value,
                 fields.get("retry_count"),
                 fields.get("timeout_seconds"),
@@ -221,22 +236,13 @@ class AdminWebhooksService:
     ) -> DeliveryLogEntry:
         """Send a webhook delivery with retries and log the result."""
         body = json.dumps(payload, default=str)
-        timestamp = str(int(time.time()))
-        signature = generate_signature(webhook.secret, timestamp, body)
-
-        headers = {
-            "Content-Type": "application/json",
-            "X-Admin-Webhook-Event": event_type,
-            "X-Admin-Webhook-Timestamp": timestamp,
-            "X-Admin-Webhook-Signature": signature,
-        }
-
         status_code: int | None = None
         response_body: str | None = None
         error_message: str | None = None
         latency_ms: int | None = None
         delivered_at: str | None = None
         last_attempt = 0
+        signature = ""
 
         max_attempts = max(1, webhook.retry_count + 1)
         async with httpx.AsyncClient(
@@ -249,6 +255,14 @@ class AdminWebhooksService:
                     await asyncio.sleep(min(2 ** attempt, 30))
                 start = time.monotonic()
                 try:
+                    timestamp = str(int(time.time()))
+                    signature = generate_signature(webhook.secret, timestamp, body)
+                    headers = {
+                        "Content-Type": "application/json",
+                        "X-Admin-Webhook-Event": event_type,
+                        "X-Admin-Webhook-Timestamp": timestamp,
+                        "X-Admin-Webhook-Signature": signature,
+                    }
                     resp = await client.post(webhook.url, content=body, headers=headers)
                     latency_ms = int((time.monotonic() - start) * 1000)
                     status_code = resp.status_code
@@ -306,8 +320,8 @@ class AdminWebhooksService:
 
         async def _deliver_one(wh: WebhookRecord) -> bool:
             try:
-                await self.deliver(wh, event_type, payload)
-                return True
+                entry = await self.deliver(wh, event_type, payload)
+                return entry.status_code is not None and 200 <= entry.status_code < 300
             except Exception as exc:
                 logger.error("Failed to deliver {} to webhook {}: {}", event_type, wh.id, exc)
                 return False
@@ -380,17 +394,32 @@ class AdminWebhooksService:
 
     @staticmethod
     def _row_to_record(row: Any) -> WebhookRecord:
-        event_types_raw = row["event_types"] if isinstance(row, dict) else row[3]
+        if isinstance(row, dict):
+            event_types_raw = row["event_types"]
+            encrypted_secret = row.get("secret_encrypted")
+            plaintext_secret = row.get("secret")
+        else:
+            is_hardened_schema = len(row) >= 12
+            event_types_raw = row[4] if is_hardened_schema else row[3]
+            encrypted_secret = row[2] if is_hardened_schema else None
+            plaintext_secret = None if is_hardened_schema else row[2]
         try:
             event_types = json.loads(event_types_raw) if isinstance(event_types_raw, str) else event_types_raw
         except (json.JSONDecodeError, TypeError):
             event_types = []
 
+        if isinstance(encrypted_secret, str) and encrypted_secret:
+            secret_value = decrypt_admin_webhook_secret(encrypted_secret)
+        elif isinstance(plaintext_secret, str) and plaintext_secret:
+            secret_value = plaintext_secret
+        else:
+            raise ValueError("Webhook row is missing a usable secret")
+
         if isinstance(row, dict):
             return WebhookRecord(
                 id=row["id"],
                 url=row["url"],
-                secret=row["secret"],
+                secret=secret_value,
                 event_types=event_types,
                 description=row.get("description", ""),
                 active=bool(row.get("active", True)),
@@ -401,10 +430,17 @@ class AdminWebhooksService:
                 updated_at=row.get("updated_at"),
             )
         return WebhookRecord(
-            id=row[0], url=row[1], secret=row[2],
-            event_types=event_types, description=row[4],
-            active=bool(row[5]), retry_count=row[6], timeout_seconds=row[7],
-            created_by=row[8], created_at=row[9], updated_at=row[10],
+            id=row[0],
+            url=row[1],
+            secret=secret_value,
+            event_types=event_types,
+            description=row[5] if len(row) >= 12 else row[4],
+            active=bool(row[6] if len(row) >= 12 else row[5]),
+            retry_count=row[7] if len(row) >= 12 else row[6],
+            timeout_seconds=row[8] if len(row) >= 12 else row[7],
+            created_by=row[9] if len(row) >= 12 else row[8],
+            created_at=row[10] if len(row) >= 12 else row[9],
+            updated_at=row[11] if len(row) >= 12 else row[10],
         )
 
     @staticmethod

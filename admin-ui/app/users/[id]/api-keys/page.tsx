@@ -313,7 +313,7 @@ export default function UserApiKeysPage() {
                         onClick={() => copyToClipboard(newKeyValue)}
                       />
                     </div>
-                    <DismissKeyButton onDismiss={() => setNewKeyValue(null)} />
+                    <DismissKeyButton key={newKeyValue} onDismiss={() => setNewKeyValue(null)} />
                   </div>
                 </AlertDescription>
               </Alert>
@@ -388,7 +388,7 @@ export default function UserApiKeysPage() {
                             onClick={() => copyToClipboard(newVirtualKeyValue)}
                           />
                         </div>
-                        <DismissKeyButton onDismiss={() => setNewVirtualKeyValue(null)} />
+                        <DismissKeyButton key={newVirtualKeyValue} onDismiss={() => setNewVirtualKeyValue(null)} />
                       </div>
                     </AlertDescription>
                   </Alert>

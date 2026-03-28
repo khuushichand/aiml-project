@@ -61,9 +61,14 @@ export default function RegistrationPage() {
   };
 
   const handleCopy = (code: string) => {
-    navigator.clipboard.writeText(code).then(() => {
-      toast.success('Code copied to clipboard');
-    });
+    navigator.clipboard.writeText(code)
+      .then(() => {
+        toast.success('Code copied to clipboard');
+      })
+      .catch((err: unknown) => {
+        console.error('Failed to copy registration code:', err);
+        toast.error('Failed to copy to clipboard');
+      });
   };
 
   return (

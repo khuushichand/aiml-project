@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -19,6 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 from tldw_Server_API.app.core.Logging.system_log_buffer import query_system_logs
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -239,8 +241,8 @@ async def get_system_stats(db) -> SystemStatsResponse:
             store = await get_acp_session_store()
             _records, active_count = await store.list_sessions(status="active", limit=0, offset=0)
             active_acp = active_count
-        except Exception:
-            pass  # ACP store may not be initialized
+        except Exception as exc:
+            logger.debug(f"Skipping ACP session stats in system overview: {exc}")
 
         try:
             if is_pg:
@@ -273,8 +275,8 @@ async def get_system_stats(db) -> SystemStatsResponse:
                     "completion": int(td.get("completion") or 0),
                     "total": int(td.get("total") or 0),
                 }
-        except Exception:
-            pass  # llm_usage_v2 table may not exist
+        except Exception as exc:
+            logger.debug(f"Skipping token usage stats in system overview: {exc}")
 
         return SystemStatsResponse(
             users={
@@ -830,31 +832,25 @@ async def debug_resolve_permissions(user_id: int, db) -> dict:
                 (user_id,),
             )
             roles_row = await cursor.fetchall()
-            cursor = await db.execute("""
-                SELECT DISTINCT p.name
-                FROM user_roles ur
-                JOIN role_permissions rp ON ur.role_id = rp.role_id
-                JOIN permissions p ON rp.permission_id = p.id
-                WHERE ur.user_id = ?
-            """, (user_id,))
-            perms_row = await cursor.fetchall()
 
         roles = [r["name"] if isinstance(r, dict) else r[0] for r in (roles_row or [])]
-        permissions = [p["name"] if isinstance(p, dict) else p[0] for p in (perms_row or [])]
+        loop = asyncio.get_running_loop()
+        permissions = await loop.run_in_executor(None, get_effective_permissions, int(user_id))
+        normalized_permissions = sorted({str(permission) for permission in permissions if str(permission).strip()})
 
         return {
             "user_id": user_id,
             "roles": roles,
-            "effective_permissions": sorted(permissions),
-            "permission_count": len(permissions),
+            "effective_permissions": normalized_permissions,
+            "permission_count": len(normalized_permissions),
         }
     except Exception as exc:
         logger.warning(f"Failed to resolve permissions for user {user_id}: {exc}")
         return {"user_id": user_id, "roles": [], "effective_permissions": [], "error": str(exc)[:200]}
 
 
-async def debug_validate_token(token: str) -> dict:
-    """Decode and validate a JWT token without executing it."""
+async def debug_decode_token(token: str) -> dict:
+    """Decode a JWT token without claiming signature verification."""
     import base64
     import json
 
@@ -862,7 +858,7 @@ async def debug_validate_token(token: str) -> dict:
         # Split JWT into parts
         parts = token.split(".")
         if len(parts) != 3:
-            return {"valid": False, "error": "Not a valid JWT format (expected 3 parts)"}
+            return {"decoded": False, "signature_verified": False, "error": "Not a valid JWT format (expected 3 parts)"}
 
         # Decode header
         header_b64 = parts[0] + "=" * (4 - len(parts[0]) % 4)
@@ -881,7 +877,8 @@ async def debug_validate_token(token: str) -> dict:
             is_expired = exp_dt < datetime.now(timezone.utc)
 
         return {
-            "valid": True,
+            "decoded": True,
+            "signature_verified": False,
             "header": header,
             "payload": {k: v for k, v in payload.items() if k not in ("password", "secret")},
             "expired": is_expired,
@@ -890,7 +887,12 @@ async def debug_validate_token(token: str) -> dict:
             "subject": payload.get("sub"),
         }
     except Exception as exc:
-        return {"valid": False, "error": str(exc)[:200]}
+        return {"decoded": False, "signature_verified": False, "error": str(exc)[:200]}
+
+
+async def debug_validate_token(token: str) -> dict:
+    """Backward-compatible alias for token decoding debug logic."""
+    return await debug_decode_token(token)
 
 
 async def get_billing_analytics(db) -> dict:

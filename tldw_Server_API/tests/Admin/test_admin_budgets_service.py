@@ -162,6 +162,16 @@ def test_merge_budget_settings_provider_budgets_merges_keys():
     assert merged["provider_budgets"]["openai"] == {"month_usd": 100, "day_usd": 5}
 
 
+def test_merge_budget_settings_provider_budgets_replaces_non_dict_existing_value():
+    existing = {"provider_budgets": {"openai": 5}}
+    merged = merge_budget_settings(
+        existing,
+        updates={"provider_budgets": {"openai": {"month_usd": 100}}},
+        clear=False,
+    )
+    assert merged["provider_budgets"]["openai"] == {"month_usd": 100}
+
+
 def test_budget_payload_roundtrip_preserves_provider_budgets():
     flat = {
         "budget_month_usd": 100.0,

@@ -78,6 +78,30 @@ const defaultPolicyForm = {
   priority: '0',
 };
 
+function extractToolNames(response: unknown): string[] {
+  const rawTools: unknown[] = Array.isArray(response)
+    ? response
+    : (
+      response
+      && typeof response === 'object'
+      && 'tools' in response
+      && Array.isArray((response as Record<string, unknown>).tools)
+    )
+      ? (response as Record<string, unknown>).tools as unknown[]
+      : [];
+
+  return rawTools.flatMap((tool) => {
+    if (typeof tool === 'string' && tool.trim()) {
+      return [tool];
+    }
+    if (tool && typeof tool === 'object' && 'name' in tool) {
+      const name = String((tool as Record<string, unknown>).name).trim();
+      return name ? [name] : [];
+    }
+    return [];
+  });
+}
+
 export default function ACPAgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [policies, setPolicies] = useState<PermissionPolicy[]>([]);
@@ -137,12 +161,7 @@ export default function ACPAgentsPage() {
     }).catch(() => { /* usage is optional — don't block page */ });
 
     api.getMCPTools().then((res) => {
-      const raw = Array.isArray(res) ? res : (res && typeof res === 'object' && 'tools' in res && Array.isArray((res as Record<string, unknown>).tools)) ? (res as Record<string, unknown>).tools as unknown[] : [];
-      setAvailableTools(raw.map((t: unknown) => {
-        if (typeof t === 'string') return t;
-        if (t && typeof t === 'object' && 'name' in t) return String((t as Record<string, unknown>).name);
-        return '';
-      }).filter(Boolean));
+      setAvailableTools(extractToolNames(res));
     }).catch(() => { /* tools list is optional */ });
   }, []);
 
@@ -402,17 +421,21 @@ export default function ACPAgentsPage() {
                           <TableCell><Badge variant="outline">{agent.type}</Badge></TableCell>
                           <TableCell>
                             <div className="flex gap-1">
-                              <button
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                type="button"
                                 onClick={() => void handleToggleAgent(agent)}
-                                className="cursor-pointer hover:opacity-80"
+                                className="h-auto p-0 hover:bg-transparent hover:opacity-80"
                                 title={`Click to ${agent.enabled ? 'disable' : 'enable'}`}
+                                aria-pressed={agent.enabled}
                               >
                                 {agent.enabled ? (
                                   <Badge variant="default">Enabled</Badge>
                                 ) : (
                                   <Badge variant="secondary">Disabled</Badge>
                                 )}
-                              </button>
+                              </Button>
                               {agent.is_configured ? (
                                 <Badge variant="default">Configured</Badge>
                               ) : (

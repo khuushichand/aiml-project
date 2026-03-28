@@ -619,7 +619,7 @@ export default function ResourceGovernorPage() {
       const matchingSuggestion = userSuggestions.find(
         (entry) =>
           String(entry.id) === userIdValue ||
-          entry.username.toLowerCase() === normalizedUserValue
+          entry.username?.toLowerCase() === normalizedUserValue
       );
       const resolvedUserId = matchingSuggestion ? String(matchingSuggestion.id) : userIdValue;
       const user = scopeUsers.find(

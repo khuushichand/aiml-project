@@ -465,6 +465,13 @@ function UserLookupTool() {
   );
 }
 
+type RateLimitSimResult = {
+  would_allow?: boolean;
+  limit_source?: string;
+  effective_limit_per_min?: number | null;
+  effective_burst?: number | null;
+};
+
 function RateLimitSimTool() {
   const [userId, setUserId] = useState('');
   const [endpoint, setEndpoint] = useState('');
@@ -486,6 +493,7 @@ function RateLimitSimTool() {
       setLoading(false);
     }
   };
+  const typedResult = result as RateLimitSimResult | null;
 
   return (
     <div className="space-y-3">
@@ -506,20 +514,20 @@ function RateLimitSimTool() {
         </Button>
       </div>
       {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-      {result && (
+      {typedResult && (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <Badge variant={(result as { would_allow?: boolean }).would_allow ? 'default' : 'destructive'}>
-              {(result as { would_allow?: boolean }).would_allow ? 'Allowed' : 'Blocked'}
+            <Badge variant={typedResult.would_allow ? 'default' : 'destructive'}>
+              {typedResult.would_allow ? 'Allowed' : 'Blocked'}
             </Badge>
             <span className="text-sm text-muted-foreground">
-              Source: {(result as { limit_source?: string }).limit_source || 'none'}
+              Source: {typedResult.limit_source || 'none'}
             </span>
-            {(result as { effective_limit_per_min?: number | null }).effective_limit_per_min != null && (
+            {typedResult.effective_limit_per_min != null && (
               <span className="text-sm">
-                {(result as { effective_limit_per_min: number }).effective_limit_per_min}/min
-                {(result as { effective_burst?: number | null }).effective_burst != null && (
-                  <> (burst: {(result as { effective_burst: number }).effective_burst})</>
+                {typedResult.effective_limit_per_min}/min
+                {typedResult.effective_burst != null && (
+                  <> (burst: {typedResult.effective_burst})</>
                 )}
               </span>
             )}

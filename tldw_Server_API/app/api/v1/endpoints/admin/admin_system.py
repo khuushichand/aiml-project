@@ -11,6 +11,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ActivitySummaryResponse,
+    AdminPermissionDebugRequest,
+    AdminPermissionDebugResponse,
+    AdminTokenDecodeRequest,
+    AdminTokenDecodeResponse,
     AuditLogResponse,
     SecurityAlertStatusResponse,
     SystemLogsResponse,
@@ -22,28 +26,46 @@ from tldw_Server_API.app.services import admin_system_service
 router = APIRouter()
 
 
+async def _enforce_admin_user_scope(
+    principal: AuthPrincipal,
+    target_user_id: int,
+    *,
+    require_hierarchy: bool,
+) -> None:
+    from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
+
+    await admin_mod._enforce_admin_user_scope(
+        principal,
+        target_user_id,
+        require_hierarchy=require_hierarchy,
+    )
+
+
 @router.get("/security/alert-status", response_model=SecurityAlertStatusResponse)
 async def get_security_alert_status() -> SecurityAlertStatusResponse:
     return await admin_system_service.get_security_alert_status()
 
 
-@router.post("/debug/resolve-permissions")
+@router.post("/debug/resolve-permissions", response_model=AdminPermissionDebugResponse)
 async def debug_resolve_permissions(
-    user_id: int = Query(..., description="User ID to resolve permissions for"),
+    payload: AdminPermissionDebugRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
-) -> dict:
+) -> AdminPermissionDebugResponse:
     """Resolve effective permissions for a given user (debug tool)."""
-    return await admin_system_service.debug_resolve_permissions(user_id, db)
+    await _enforce_admin_user_scope(principal, payload.user_id, require_hierarchy=False)
+    result = await admin_system_service.debug_resolve_permissions(payload.user_id, db)
+    return AdminPermissionDebugResponse(**result)
 
 
-@router.post("/debug/validate-token")
-async def debug_validate_token(
-    token: str = Query(..., description="JWT or API token to validate"),
+@router.post("/debug/validate-token", response_model=AdminTokenDecodeResponse)
+async def debug_decode_token(
+    payload: AdminTokenDecodeRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> dict:
-    """Decode and validate a JWT or API token (debug tool)."""
-    return await admin_system_service.debug_validate_token(token)
+) -> AdminTokenDecodeResponse:
+    """Decode a JWT or API token without verifying its signature."""
+    result = await admin_system_service.debug_decode_token(payload.token.get_secret_value())
+    return AdminTokenDecodeResponse(**result)
 
 
 @router.get("/billing/analytics")

@@ -31,6 +31,13 @@ class AdminUptimeHistoryService:
             return self._pool
         return await get_db_pool()
 
+    @staticmethod
+    def _is_postgres(pool: Any) -> bool:
+        sqlite_hint = getattr(pool, "_is_sqlite", None)
+        if isinstance(sqlite_hint, bool):
+            return not sqlite_hint
+        return bool(getattr(pool, "pool", None) is not None)
+
     async def record_probe(
         self,
         *,
@@ -64,20 +71,36 @@ class AdminUptimeHistoryService:
         entries ordered oldest-first.
         """
         pool = await self._get_pool()
-        rows = await pool.fetchall(
-            """
-            SELECT
-                DATE(checked_at) AS bucket,
-                COUNT(*) AS probes,
-                SUM(CASE WHEN status = 'healthy' THEN 1 ELSE 0 END) AS healthy_count
-            FROM admin_dependency_health_history
-            WHERE service_name = ?
-              AND checked_at >= DATETIME('now', ?)
-            GROUP BY bucket
-            ORDER BY bucket ASC
-            """,
-            (service_name, f"-{range_days} days"),
-        )
+        if self._is_postgres(pool):
+            rows = await pool.fetchall(
+                """
+                SELECT
+                    DATE_BIN(($2)::interval, checked_at, TIMESTAMPTZ '1970-01-01T00:00:00+00:00') AS bucket,
+                    COUNT(*) AS probes,
+                    SUM(CASE WHEN status = 'healthy' THEN 1 ELSE 0 END) AS healthy_count
+                FROM admin_dependency_health_history
+                WHERE service_name = $1
+                  AND checked_at >= NOW() - make_interval(days => $3)
+                GROUP BY bucket
+                ORDER BY bucket ASC
+                """,
+                (service_name, f"{bucket_hours} hours", range_days),
+            )
+        else:
+            rows = await pool.fetchall(
+                """
+                SELECT
+                    datetime((CAST(strftime('%s', checked_at) AS INTEGER) / ?2) * ?2, 'unixepoch') AS bucket,
+                    COUNT(*) AS probes,
+                    SUM(CASE WHEN status = 'healthy' THEN 1 ELSE 0 END) AS healthy_count
+                FROM admin_dependency_health_history
+                WHERE service_name = ?1
+                  AND checked_at >= DATETIME('now', ?3)
+                GROUP BY bucket
+                ORDER BY bucket ASC
+                """,
+                (service_name, bucket_hours * 3600, f"-{range_days} days"),
+            )
         result = []
         for row in rows:
             probes = row["probes"] if isinstance(row, dict) else row[1]

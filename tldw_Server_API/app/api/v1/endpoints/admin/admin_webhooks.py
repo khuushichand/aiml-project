@@ -31,7 +31,7 @@ async def create_webhook(payload: AdminWebhookCreateRequest) -> AdminWebhookResp
         retry_count=payload.retry_count,
         timeout_seconds=payload.timeout_seconds,
     )
-    logger.info("Created admin webhook id={} url={}", record.id, record.url)
+    logger.info("Created admin webhook id={}", record.id)
     return AdminWebhookResponse(
         id=record.id,
         url=record.url,

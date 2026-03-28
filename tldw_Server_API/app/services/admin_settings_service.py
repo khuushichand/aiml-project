@@ -98,13 +98,6 @@ _DEFAULT_RISK_WEIGHTS: dict[str, Any] = {
     "suspicious_activity": {"weight": 4, "cap": 20},
 }
 
-_ADMIN_SETTINGS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS admin_settings (
-    setting_key TEXT PRIMARY KEY,
-    value_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
-"""
 _RISK_WEIGHTS_SETTING_KEY = "security_risk_weights"
 
 
@@ -137,10 +130,8 @@ def _validate_risk_weights(weights: dict[str, Any] | None) -> dict[str, Any]:
     return validated
 
 
-async def _ensure_admin_settings_table():
-    pool = await get_db_pool()
-    await pool.execute(_ADMIN_SETTINGS_TABLE_DDL)
-    return pool
+async def _ensure_admin_settings_table() -> Any:
+    return await get_db_pool()
 
 
 async def get_risk_weights() -> dict[str, Any]:
@@ -170,8 +161,11 @@ async def get_risk_weights() -> dict[str, Any]:
 async def set_risk_weights(weights: dict[str, Any]) -> dict[str, Any]:
     """Update risk weight configuration."""
     try:
-        validated = _validate_risk_weights(weights)
         pool = await _ensure_admin_settings_table()
+        existing = await get_risk_weights()
+        merged = dict(existing)
+        merged.update(weights if isinstance(weights, dict) else {})
+        validated = _validate_risk_weights(merged)
         await pool.execute(
             """
             INSERT INTO admin_settings (setting_key, value_json, updated_at)

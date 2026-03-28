@@ -70,6 +70,7 @@ export default function AIOverviewPage() {
       if (providersResult.status === 'fulfilled') {
         const providers = Array.isArray(providersResult.value) ? providersResult.value : [];
         setProviderUsage(
+          // TODO: Replace these placeholder per-provider metrics when the admin API exposes them.
           providers
             .filter((p: Record<string, unknown>) => p.enabled)
             .map((p: Record<string, unknown>) => ({

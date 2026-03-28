@@ -102,6 +102,8 @@ export default function MCPServersPage() {
           tools?: Record<string, { calls: number; avg_latency_ms: number }>;
         };
         setToolUsageByTool(usageResult?.tools ?? {});
+      } else {
+        setToolUsageByTool({});
       }
 
       const failures = results.filter(r => r.status === 'rejected');
@@ -356,8 +358,13 @@ export default function MCPServersPage() {
                               const toolUsage = toolUsageByTool[toolKey];
                               if (!toolUsage || toolUsage.calls === 0) return <span className="text-muted-foreground">-</span>;
                               return (
-                                <span title={`${toolUsage.avg_latency_ms}ms avg latency`}>
+                                <span
+                                  aria-label={`${toolUsage.calls} calls, ${toolUsage.avg_latency_ms} milliseconds average latency`}
+                                >
                                   {toolUsage.calls} call{toolUsage.calls !== 1 ? 's' : ''}
+                                  <span className="sr-only">
+                                    , {toolUsage.avg_latency_ms}ms average latency
+                                  </span>
                                 </span>
                               );
                             })()}

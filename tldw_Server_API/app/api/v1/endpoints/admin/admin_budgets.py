@@ -8,6 +8,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
 )
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    BudgetForecastResponse,
     OrgBudgetItem,
     OrgBudgetListResponse,
     OrgBudgetSelfUpdateRequest,
@@ -72,12 +73,12 @@ async def admin_update_budget_by_org_id(
     )
 
 
-@router.get("/budgets/forecast")
+@router.get("/budgets/forecast", response_model=BudgetForecastResponse)
 async def admin_get_budget_forecast(
     org_id: int = Query(..., description="Organization ID"),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
-) -> dict:
+) -> BudgetForecastResponse:
     """Get budget spend forecast based on trailing 7-day average."""
     try:
         # Use list_budgets filtered by org_id to get the org's budget
@@ -86,7 +87,7 @@ async def admin_get_budget_forecast(
         )
         items = budget_list.items if hasattr(budget_list, 'items') else []
         if not items:
-            return {"org_id": org_id, "forecast_available": False}
+            return BudgetForecastResponse(org_id=org_id, forecast_available=False)
 
         budget = items[0]
         budget_dict = budget.model_dump() if hasattr(budget, 'model_dump') else (
@@ -98,18 +99,18 @@ async def admin_get_budget_forecast(
         monthly_usd = budgets.get("budget_month_usd") if isinstance(budgets, dict) else None
 
         if monthly_usd is None:
-            return {
-                "org_id": org_id,
-                "forecast_available": False,
-                "reason": "No monthly USD budget configured",
-            }
+            return BudgetForecastResponse(
+                org_id=org_id,
+                forecast_available=False,
+                reason="No monthly USD budget configured",
+            )
 
-        return {
-            "org_id": org_id,
-            "forecast_available": True,
-            "monthly_limit_usd": monthly_usd,
-            "note": "Detailed burn-rate projection requires usage aggregation — coming in a future release.",
-        }
+        return BudgetForecastResponse(
+            org_id=org_id,
+            forecast_available=True,
+            monthly_limit_usd=monthly_usd,
+            note="Detailed burn-rate projection requires usage aggregation — coming in a future release.",
+        )
     except HTTPException:
         raise
     except Exception as exc:

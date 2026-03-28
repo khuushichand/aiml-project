@@ -5,6 +5,8 @@ from typing import Any
 import pytest
 
 from tldw_Server_API.app.api.v1.endpoints.admin import admin_rate_limits
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.services import admin_rate_limits_service
 
 
 class _CursorStub:
@@ -88,6 +90,18 @@ class _PostgresDbStub:
                 }
             ]
         raise AssertionError(f"Unexpected query: {query!r}")
+
+
+def _platform_admin_principal() -> AuthPrincipal:
+    return AuthPrincipal(
+        kind="user",
+        user_id=1,
+        roles=["admin"],
+        permissions=[],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
 
 
 @pytest.mark.asyncio
@@ -199,6 +213,7 @@ async def test_simulate_rate_limit_uses_fetch_and_prefers_matching_user_limit() 
             user_id=11,
             endpoint="/api/v1/rag/search/query",
         ),
+        principal=_platform_admin_principal(),
         db=db,
     )
 
@@ -207,3 +222,12 @@ async def test_simulate_rate_limit_uses_fetch_and_prefers_matching_user_limit() 
     assert response.effective_burst == 1  # nosec B101
     assert response.would_allow is True  # nosec B101
     assert len(db.fetch_calls) == 2  # nosec B101
+
+
+def test_matches_endpoint_requires_exact_or_path_boundary_match() -> None:
+    row = {"resource": "/api/v1/users"}
+
+    assert admin_rate_limits_service._matches_endpoint(row, "/api/v1/users") is True  # nosec B101
+    assert admin_rate_limits_service._matches_endpoint(row, "/api/v1/users/123") is True  # nosec B101
+    assert admin_rate_limits_service._matches_endpoint(row, "/api/v1/users-export") is False  # nosec B101
+    assert admin_rate_limits_service._matches_endpoint({"resource": ""}, "/api/v1/users") is False  # nosec B101

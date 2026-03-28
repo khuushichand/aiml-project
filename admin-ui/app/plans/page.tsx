@@ -152,7 +152,7 @@ export default function PlansPage() {
   const handleDelete = async (plan: Plan) => {
     // Check for active subscribers before allowing deletion
     try {
-      const subs = await api.getSubscriptions();
+      const subs = await api.getSubscriptions({ plan_id: plan.id, status: 'active' });
       const activeSubs = subs.filter(
         (s) => s.plan_id === plan.id && s.status !== 'canceled'
       );
@@ -163,7 +163,8 @@ export default function PlansPage() {
         );
         return;
       }
-    } catch {
+    } catch (err) {
+      console.error('Failed to verify subscribers:', err);
       showError('Cannot delete plan', 'Unable to verify subscriber count. Please try again.');
       return;
     }

@@ -1272,12 +1272,28 @@ export default function JobsPage() {
                         const matchingSla =
                           slaPolicies.find((policy) => policy.enabled && policy.job_type === job.job_type)
                           ?? slaPolicies.find((policy) => policy.enabled && !policy.job_type);
-                        const jobDurationSec = job.started_at && job.completed_at
-                          ? (new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()) / 1000
-                          : job.started_at
-                            ? (Date.now() - new Date(job.started_at).getTime()) / 1000
-                            : null;
-                        const isSlaBreach = matchingSla && jobDurationSec != null && jobDurationSec > matchingSla.max_processing_time_seconds;
+                        const nowMs = Date.now();
+                        const queuedAtMs = parseTimestampMs(job.available_at ?? job.created_at);
+                        const startedAtMs = parseTimestampMs(job.started_at);
+                        const completedAtMs = parseTimestampMs(job.completed_at);
+                        const processingDurationSec = startedAtMs !== null
+                          ? ((completedAtMs ?? nowMs) - startedAtMs) / 1000
+                          : null;
+                        const waitDurationSec = queuedAtMs !== null
+                          ? (((startedAtMs ?? completedAtMs) ?? nowMs) - queuedAtMs) / 1000
+                          : null;
+                        const isSlaBreach = Boolean(
+                          matchingSla && (
+                            (
+                              processingDurationSec !== null
+                              && processingDurationSec > matchingSla.max_processing_time_seconds
+                            )
+                            || (
+                              waitDurationSec !== null
+                              && waitDurationSec > matchingSla.max_wait_time_seconds
+                            )
+                          )
+                        );
 
                         return (
                           <TableRow key={job.id} className={isSlaBreach ? 'bg-red-50 dark:bg-red-950/20' : ''}>

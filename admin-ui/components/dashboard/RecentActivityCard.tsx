@@ -78,6 +78,10 @@ export const RecentActivityCard = ({
     actorLabel: log.username?.trim() ? log.username : `User ${log.user_id}`,
     detailText: formatAuditDetails(log),
   })), [recentActivity]);
+  const filteredActivity = useMemo(
+    () => activityWithMetadata.filter((activity) => severityFilter === 'all' || activity.severity === severityFilter),
+    [activityWithMetadata, severityFilter]
+  );
 
   return (
     <Card>
@@ -109,6 +113,7 @@ export const RecentActivityCard = ({
                 size="sm"
                 onClick={() => setSeverityFilter(level)}
                 className="text-xs"
+                aria-pressed={severityFilter === level}
               >
                 {level === 'all' ? 'All' : level.charAt(0).toUpperCase() + level.slice(1)}
                 <Badge variant="secondary" className="ml-1 text-xs">{count}</Badge>
@@ -132,9 +137,11 @@ export const RecentActivityCard = ({
           </div>
         ) : recentActivity.length === 0 ? (
           <p className="text-center text-muted-foreground py-8">No recent activity</p>
+        ) : filteredActivity.length === 0 ? (
+          <p className="py-8 text-center text-muted-foreground">No activity matches the selected severity.</p>
         ) : (
           <div className="space-y-3">
-            {activityWithMetadata.filter(a => severityFilter === 'all' || a.severity === severityFilter).map((log) => {
+            {filteredActivity.map((log) => {
               const logId = String(log.id);
               const expanded = expandedIds[logId] === true;
               return (

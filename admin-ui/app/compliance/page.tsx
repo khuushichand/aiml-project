@@ -23,11 +23,13 @@ type PostureDimension = {
 
 export default function CompliancePage() {
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [dimensions, setDimensions] = useState<PostureDimension[]>([]);
   const [overallScore, setOverallScore] = useState<number>(0);
 
   const loadPosture = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
     try {
       // Gather data from existing endpoints
       const [securityResult, usersResult] = await Promise.allSettled([
@@ -58,7 +60,8 @@ export default function CompliancePage() {
         {
           label: 'API Key Hygiene',
           icon: Key,
-          score: 70, // Would be computed from key age stats endpoint
+          // TODO(PR-932): Replace this placeholder with key age/rotation metrics from a dedicated hygiene endpoint.
+          score: 70,
           status: 'warning',
           detail: 'Key age and rotation health',
           href: '/api-keys',
@@ -74,7 +77,8 @@ export default function CompliancePage() {
         {
           label: 'Data Retention',
           icon: Database,
-          score: 80, // Would be computed from retention policy compliance
+          // TODO(PR-932): Replace this placeholder with retention policy compliance metrics from data-ops APIs.
+          score: 80,
           status: 'good',
           detail: 'Retention policies configured',
           href: '/data-ops',
@@ -85,6 +89,7 @@ export default function CompliancePage() {
       setOverallScore(Math.round(dims.reduce((sum, d) => sum + d.score, 0) / dims.length));
     } catch (err) {
       console.error('Failed to load compliance posture:', err);
+      setLoadError(err instanceof Error && err.message ? err.message : 'Failed to load compliance data');
     } finally {
       setLoading(false);
     }
@@ -134,6 +139,12 @@ export default function CompliancePage() {
               <CardSkeleton />
               <CardSkeleton />
             </div>
+          ) : loadError ? (
+            <Card>
+              <CardContent className="pt-6">
+                <p className="text-sm text-destructive">{loadError}</p>
+              </CardContent>
+            </Card>
           ) : (
             <>
               {/* Overall Score */}

@@ -16,6 +16,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     IncidentEventCreateRequest,
     IncidentItem,
     IncidentListResponse,
+    IncidentNotifyResponse,
     IncidentUpdateRequest,
     MaintenanceRotationRunCreateRequest,
     MaintenanceRotationRunCreateResponse,
@@ -47,6 +48,9 @@ from tldw_Server_API.app.services.admin_system_ops_service import (
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
     delete_incident as svc_delete_incident,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    get_incident as svc_get_incident,
 )
 from tldw_Server_API.app.services.admin_system_ops_service import (
     get_maintenance_state as svc_get_maintenance_state,
@@ -646,12 +650,12 @@ async def delete_incident(
     return MessageResponse(message="incident_deleted")
 
 
-@router.post("/incidents/{incident_id}/notify")
+@router.post("/incidents/{incident_id}/notify", response_model=IncidentNotifyResponse)
 async def notify_incident(
     incident_id: str,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> dict:
+) -> IncidentNotifyResponse:
     """Send a notification about an incident to configured webhook channels.
 
     Dispatches an ``incident.notify`` event to all active admin webhooks
@@ -660,12 +664,7 @@ async def notify_incident(
     _require_platform_admin(principal)
 
     # Fetch the incident
-    items, _ = svc_list_incidents(limit=1000)
-    incident = None
-    for item in items:
-        if item.get("id") == incident_id:
-            incident = item
-            break
+    incident = svc_get_incident(incident_id=incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="incident_not_found")
 
@@ -694,11 +693,11 @@ async def notify_incident(
         metadata={"delivered_to": delivered},
     )
 
-    return {
-        "notified": True,
-        "incident_id": incident_id,
-        "webhooks_delivered": delivered,
-    }
+    return IncidentNotifyResponse(
+        notified=True,
+        incident_id=incident_id,
+        webhooks_delivered=delivered,
+    )
 
 
 # ---------------------------------------------------------------------------------------------------------------------

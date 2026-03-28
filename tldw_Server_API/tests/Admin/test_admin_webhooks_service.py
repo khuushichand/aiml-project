@@ -1,13 +1,16 @@
 """Unit tests for admin_webhooks_service — HMAC signing, CRUD, delivery."""
 from __future__ import annotations
 
+import base64
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tldw_Server_API.app.core.AuthNZ.admin_webhook_secrets import encrypt_admin_webhook_secret
 from tldw_Server_API.app.services.admin_webhooks_service import (
     AdminWebhooksService,
+    DeliveryLogEntry,
     WebhookRecord,
     generate_signature,
 )
@@ -45,10 +48,12 @@ def test_generate_signature_changes_with_timestamp():
 
 
 def test_row_to_record_from_dict():
+    encrypted = encrypt_admin_webhook_secret("s3cret")
     row = {
         "id": 1,
         "url": "https://example.com/hook",
-        "secret": "s3cret",
+        "secret_encrypted": encrypted.encrypted_blob,
+        "secret_key_id": encrypted.key_id,
         "event_types": '["incident.created", "alert.fired"]',
         "description": "Test hook",
         "active": 1,
@@ -61,16 +66,19 @@ def test_row_to_record_from_dict():
     record = AdminWebhooksService._row_to_record(row)
     assert record.id == 1
     assert record.url == "https://example.com/hook"
+    assert record.secret == "s3cret"
     assert record.event_types == ["incident.created", "alert.fired"]
     assert record.active is True
     assert record.created_by == 42
 
 
 def test_row_to_record_handles_invalid_json():
+    encrypted = encrypt_admin_webhook_secret("s3cret")
     row = {
         "id": 2,
         "url": "https://example.com/hook",
-        "secret": "s3cret",
+        "secret_encrypted": encrypted.encrypted_blob,
+        "secret_key_id": encrypted.key_id,
         "event_types": "NOT-JSON",
         "description": "",
         "active": 0,
@@ -99,44 +107,64 @@ def _make_pool_mock() -> MagicMock:
     return pool
 
 
-@pytest.fixture()
+@pytest.fixture
 def svc() -> AdminWebhooksService:
     return AdminWebhooksService(db_pool=_make_pool_mock())
 
 
+def _b64_key(seed: bytes) -> str:
+    return base64.b64encode((seed * 32)[:32]).decode("ascii")
+
+
+@pytest.fixture(autouse=True)
+def webhook_secret_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BYOK_ENCRYPTION_KEY", _b64_key(b"w"))
+
+
 @pytest.mark.asyncio
 async def test_create_webhook_generates_secret(svc: AdminWebhooksService):
-    svc.db_pool.fetchone.return_value = {
-        "id": 10,
-        "url": "https://example.com/hook",
-        "secret": "generated",
-        "event_types": '["*"]',
-        "description": "",
-        "active": 1,
-        "retry_count": 3,
-        "timeout_seconds": 10,
-        "created_by": None,
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-    }
+    async def _return_inserted_row(_query: str, params: tuple[object, ...]) -> dict[str, object]:
+        return {
+            "id": 10,
+            "url": params[0],
+            "secret_encrypted": params[1],
+            "secret_key_id": params[2],
+            "event_types": params[3],
+            "description": params[4],
+            "active": params[5],
+            "retry_count": params[6],
+            "timeout_seconds": params[7],
+            "created_by": params[8],
+            "created_at": params[9],
+            "updated_at": params[10],
+        }
+
+    svc.db_pool.fetchone.side_effect = _return_inserted_row
     record = await svc.create_webhook(url="https://example.com/hook", event_types=["*"])
     assert record.id == 10
     assert record.url == "https://example.com/hook"
+    assert record.secret
     svc.db_pool.fetchone.assert_awaited_once()
+    params = svc.db_pool.fetchone.await_args.args[1]
+    assert params[1] != record.secret
 
 
 @pytest.mark.asyncio
 async def test_list_webhooks(svc: AdminWebhooksService):
     svc.db_pool.fetchone.return_value = {"cnt": 2}
+    secret_one = encrypt_admin_webhook_secret("s1")
+    secret_two = encrypt_admin_webhook_secret("s2")
     svc.db_pool.fetchall.return_value = [
         {
-            "id": 1, "url": "https://a.com", "secret": "s1",
+            "id": 1, "url": "https://a.com", "secret_encrypted": secret_one.encrypted_blob,
+            "secret_key_id": secret_one.key_id,
             "event_types": '["*"]', "description": "", "active": 1,
             "retry_count": 3, "timeout_seconds": 10,
             "created_by": None, "created_at": None, "updated_at": None,
         },
         {
-            "id": 2, "url": "https://b.com", "secret": "s2",
+            "id": 2, "url": "https://b.com", "secret_encrypted": secret_two.encrypted_blob,
+            "secret_key_id": secret_two.key_id,
             "event_types": '["incident.created"]', "description": "hook 2",
             "active": 0, "retry_count": 1, "timeout_seconds": 5,
             "created_by": 1, "created_at": None, "updated_at": None,
@@ -150,8 +178,10 @@ async def test_list_webhooks(svc: AdminWebhooksService):
 
 @pytest.mark.asyncio
 async def test_update_webhook_skips_none_fields(svc: AdminWebhooksService):
+    encrypted = encrypt_admin_webhook_secret("s")
     svc.db_pool.fetchone.return_value = {
-        "id": 1, "url": "https://updated.com", "secret": "s",
+        "id": 1, "url": "https://updated.com", "secret_encrypted": encrypted.encrypted_blob,
+        "secret_key_id": encrypted.key_id,
         "event_types": '["*"]', "description": "updated", "active": 1,
         "retry_count": 3, "timeout_seconds": 10,
         "created_by": None, "created_at": None, "updated_at": None,
@@ -210,6 +240,50 @@ async def test_deliver_success(svc: AdminWebhooksService):
 
 
 @pytest.mark.asyncio
+async def test_deliver_refreshes_signature_and_timestamp_for_each_retry_attempt(svc: AdminWebhooksService):
+    wh = WebhookRecord(
+        id=1, url="https://example.com/hook", secret="test-secret",
+        event_types=["*"], description="", active=True,
+        retry_count=1, timeout_seconds=5,
+        created_by=None, created_at=None, updated_at=None,
+    )
+
+    svc.db_pool.fetchone.return_value = {
+        "id": 101, "webhook_id": 1, "event_type": "test.event",
+        "status_code": 200, "latency_ms": 50, "retry_attempt": 1,
+        "error_message": None, "delivered_at": "2026-01-01T00:00:05Z",
+        "created_at": "2026-01-01T00:00:05Z",
+    }
+
+    first_response = MagicMock()
+    first_response.status_code = 500
+    first_response.text = "server error"
+
+    second_response = MagicMock()
+    second_response.status_code = 200
+    second_response.text = "OK"
+
+    with (
+        patch("tldw_Server_API.app.services.admin_webhooks_service.httpx.AsyncClient") as mock_client_cls,
+        patch("tldw_Server_API.app.services.admin_webhooks_service.asyncio.sleep", new=AsyncMock()),
+        patch("tldw_Server_API.app.services.admin_webhooks_service.time.time", side_effect=[1000, 1005]),
+    ):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = [first_response, second_response]
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client_cls.return_value = mock_client
+
+        await svc.deliver(wh, "test.event", {"key": "value"})
+
+    first_call = mock_client.post.await_args_list[0]
+    second_call = mock_client.post.await_args_list[1]
+    assert first_call.kwargs["headers"]["X-Admin-Webhook-Timestamp"] == "1000"
+    assert second_call.kwargs["headers"]["X-Admin-Webhook-Timestamp"] == "1005"
+    assert first_call.kwargs["headers"]["X-Admin-Webhook-Signature"] != second_call.kwargs["headers"]["X-Admin-Webhook-Signature"]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_event_filters_by_event_type(svc: AdminWebhooksService):
     svc.db_pool.fetchone.side_effect = [
         {"cnt": 2},  # list_webhooks count
@@ -250,3 +324,28 @@ async def test_dispatch_event_filters_by_event_type(svc: AdminWebhooksService):
         delivered = await svc.dispatch_event("incident.created", {"id": 1})
         # Only webhook 1 matches "incident.created", webhook 2 only wants "alert.fired"
         assert delivered == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_event_counts_only_2xx_deliveries(svc: AdminWebhooksService):
+    webhooks = [
+        WebhookRecord(
+            id=1, url="https://a.com", secret="s1", event_types=["incident.created"],
+            description="", active=True, retry_count=0, timeout_seconds=5,
+            created_by=None, created_at=None, updated_at=None,
+        ),
+        WebhookRecord(
+            id=2, url="https://b.com", secret="s2", event_types=["incident.created"],
+            description="", active=True, retry_count=0, timeout_seconds=5,
+            created_by=None, created_at=None, updated_at=None,
+        ),
+    ]
+    svc.list_webhooks = AsyncMock(return_value=(webhooks, 2))  # type: ignore[method-assign]
+    svc.deliver = AsyncMock(side_effect=[  # type: ignore[method-assign]
+        DeliveryLogEntry(1, 1, "incident.created", 200, 10, 0, None, "2026-01-01T00:00:00Z", None),
+        DeliveryLogEntry(2, 2, "incident.created", 500, 10, 0, "HTTP 500", None, None),
+    ])
+
+    delivered = await svc.dispatch_event("incident.created", {"id": 1})
+
+    assert delivered == 1

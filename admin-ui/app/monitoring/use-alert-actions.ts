@@ -59,7 +59,6 @@ export const useAlertActions = ({
     try {
       await apiClient.acknowledgeAlert(alert.id);
       setSuccess('Alert acknowledged');
-      await Promise.resolve(onReloadRequested());
     } catch (err: unknown) {
       // Rollback on failure
       setAlerts((prev) =>
@@ -69,6 +68,14 @@ export const useAlertActions = ({
       );
       console.error('Failed to acknowledge alert:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
+      return;
+    }
+
+    try {
+      await Promise.resolve(onReloadRequested());
+    } catch (err: unknown) {
+      console.error('Failed to reload alerts after acknowledgement:', err);
+      setError('Alert acknowledged, but refresh failed');
     }
   }, [apiClient, onReloadRequested, setAlerts, setError, setSuccess]);
 

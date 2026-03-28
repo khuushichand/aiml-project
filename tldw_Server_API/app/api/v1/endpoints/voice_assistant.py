@@ -16,8 +16,9 @@ import uuid
 from typing import Any, Optional
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
@@ -1496,6 +1497,7 @@ async def voice_command_dry_run(
     payload: VoiceCommandDryRunRequest,
     request: Request,
     current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> VoiceCommandDryRunResponse:
     """Parse a phrase through the voice pipeline without executing.
 
@@ -1504,9 +1506,14 @@ async def voice_command_dry_run(
     """
     try:
         from tldw_Server_API.app.core.VoiceAssistant.intent_parser import IntentParser
-        from tldw_Server_API.app.core.VoiceAssistant.registry import VoiceCommandRegistry
 
-        registry = VoiceCommandRegistry()
+        registry = get_voice_command_registry()
+        registry.load_defaults()
+        registry.refresh_user_commands(
+            db,
+            user_id=current_user.id,
+            include_disabled=True,
+        )
         parser = IntentParser(registry=registry)
 
         result = await parser.parse(
@@ -1533,7 +1540,7 @@ async def voice_command_dry_run(
             confidence=getattr(intent, "confidence", None),
             action_type=intent.action_type.value if hasattr(intent.action_type, "value") else str(intent.action_type),
             action_config=intent.action_config,
-            processing_time_ms=result.processing_time_ms,
+            processing_time_ms=getattr(result, "processing_time_ms", 0.0),
             alternatives=alternatives,
         )
     except ImportError as exc:

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -221,6 +221,8 @@ export default function FlagsPage() {
   const [flagNote, setFlagNote] = useState('');
   const [flagSaving, setFlagSaving] = useState(false);
   const [deletingFlagId, setDeletingFlagId] = useState<string | null>(null);
+  const [togglingFlags, setTogglingFlags] = useState<Record<string, boolean>>({});
+  const togglingFlagsRef = useRef<Set<string>>(new Set());
 
   const flagParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -402,7 +404,14 @@ export default function FlagsPage() {
   };
 
   const handleToggleFlag = async (flag: FeatureFlagItem) => {
+    const flagId = getFlagId(flag);
+    if (togglingFlagsRef.current.has(flagId)) {
+      return;
+    }
+
     const newEnabled = !flag.enabled;
+    togglingFlagsRef.current.add(flagId);
+    setTogglingFlags((prev) => ({ ...prev, [flagId]: true }));
     // Optimistic: update UI immediately
     setFlags((prev) =>
       prev.map((f) => (getFlagId(f) === getFlagId(flag) ? { ...f, enabled: newEnabled } : f))
@@ -425,6 +434,12 @@ export default function FlagsPage() {
       );
       const message = err instanceof Error && err.message ? err.message : 'Failed to toggle flag';
       showError(message);
+    } finally {
+      togglingFlagsRef.current.delete(flagId);
+      setTogglingFlags((prev) => {
+        const { [flagId]: _removed, ...rest } = prev;
+        return rest;
+      });
     }
   };
 
@@ -742,9 +757,10 @@ export default function FlagsPage() {
                             <button
                               type="button"
                               onClick={() => void handleToggleFlag(flag)}
-                              className="cursor-pointer hover:opacity-80"
+                              className="cursor-pointer hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
                               title={`Click to ${flag.enabled ? 'disable' : 'enable'}`}
                               aria-pressed={flag.enabled}
+                              disabled={Boolean(togglingFlags[flagId])}
                             >
                               <Badge variant={flag.enabled ? 'default' : 'outline'}>
                                 {flag.enabled ? 'Enabled' : 'Disabled'}

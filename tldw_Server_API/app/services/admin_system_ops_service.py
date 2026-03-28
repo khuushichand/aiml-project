@@ -188,7 +188,7 @@ def _normalize_incident_record(value: Any) -> dict[str, Any]:
     first_event_at = None
     for event in timeline:
         event_time = _parse_iso(event.get("created_at") if isinstance(event, dict) else None)
-        if created_at and event_time and event_time >= created_at:
+        if created_at and event_time and event_time > created_at:
             first_event_at = event_time
             break
     incident["time_to_acknowledge_seconds"] = (
@@ -559,6 +559,15 @@ def list_incidents(
         _normalize_incident_record(item)
         for item in incidents[safe_offset:safe_offset + safe_limit]
     ], total
+
+
+def get_incident(*, incident_id: str) -> dict[str, Any] | None:
+    with _locked_store() as store:
+        incidents = list(store.get("incidents", []))
+    for incident in incidents:
+        if incident.get("id") == incident_id:
+            return _normalize_incident_record(incident)
+    return None
 
 
 def create_incident(

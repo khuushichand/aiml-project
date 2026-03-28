@@ -180,6 +180,14 @@ function OrganizationsPageContent() {
   }, [loadOrganizations]);
 
   useEffect(() => {
+    const visibleIds = new Set(organizations.map((org) => org.id));
+    setSelectedOrgIds((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [organizations]);
+
+  useEffect(() => {
     if (!showCreateForm) {
       organizationForm.reset();
       setCreateError('');

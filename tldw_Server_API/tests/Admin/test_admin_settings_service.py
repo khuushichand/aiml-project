@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -12,15 +11,15 @@ from tldw_Server_API.app.services import admin_settings_service
 pytestmark = pytest.mark.unit
 
 
-def _setup_env(tmp_path) -> None:
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
-    os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path / 'users_test_admin_settings.db'}"
+@pytest.fixture
+def admin_settings_env(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "unit-test-api-key")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'users_test_admin_settings.db'}")
 
 
 @pytest.mark.asyncio
-async def test_risk_weights_persist_to_admin_settings_table(tmp_path) -> None:
-    _setup_env(tmp_path)
+async def test_risk_weights_persist_to_admin_settings_table(admin_settings_env) -> None:
 
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
 
@@ -50,6 +49,29 @@ async def test_risk_weights_persist_to_admin_settings_table(tmp_path) -> None:
     fetched = await admin_settings_service.get_risk_weights()
     assert fetched["mfa_adoption"] == {"weight": 7, "cap": 33}
     assert fetched["failed_logins"] == {"weight": 4, "cap": 18}
+
+
+@pytest.mark.asyncio
+async def test_set_risk_weights_merges_existing_sections(admin_settings_env) -> None:
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+
+    await reset_db_pool()
+
+    await admin_settings_service.set_risk_weights(
+        {
+            "mfa_adoption": {"weight": 7, "cap": 33},
+            "failed_logins": {"weight": 4, "cap": 18},
+        }
+    )
+
+    updated = await admin_settings_service.set_risk_weights(
+        {
+            "mfa_adoption": {"weight": 9, "cap": 44},
+        }
+    )
+
+    assert updated["mfa_adoption"] == {"weight": 9, "cap": 44}
+    assert updated["failed_logins"] == {"weight": 4, "cap": 18}
 
 
 @pytest.mark.asyncio

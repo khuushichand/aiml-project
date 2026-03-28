@@ -62,7 +62,9 @@ function SubscriptionsPageContent() {
           names[String(o.id)] = o.name;
         });
         setOrgNames(names);
-      } catch { /* org names are optional — fail silently */ }
+      } catch (err) {
+        console.error('Failed to fetch organization names for subscriptions:', err);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load subscriptions';
       setLoadError(message);

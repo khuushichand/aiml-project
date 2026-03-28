@@ -22,6 +22,7 @@ type UseMonitoringMetricsHistoryArgs = {
 };
 
 const DEFAULT_METRICS_HISTORY_POLL_MS = 5 * 60 * 1000;
+const VALID_TIME_RANGES: MonitoringTimeRangeOption[] = ['1h', '24h', '7d', '30d', 'custom'];
 
 const toDatetimeLocalInputValue = (value: Date): string => {
   const year = value.getFullYear();
@@ -47,11 +48,20 @@ export const useMonitoringMetricsHistory = ({
 
   const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
   const [timeRangeRaw, setTimeRange] = useUrlState<MonitoringTimeRangeOption>('range', { defaultValue: '24h' });
-  const timeRange: MonitoringTimeRangeOption = timeRangeRaw ?? '24h';
+  const timeRange = useMemo<MonitoringTimeRangeOption>(() => {
+    const candidate = timeRangeRaw ?? '24h';
+    return VALID_TIME_RANGES.includes(candidate) ? candidate : '24h';
+  }, [timeRangeRaw]);
   const [customRangeStart, setCustomRangeStart] = useState<string>(defaultCustomRange.start);
   const [customRangeEnd, setCustomRangeEnd] = useState<string>(defaultCustomRange.end);
   const [rangeValidationError, setRangeValidationError] = useState('');
   const [activeRangeLabel, setActiveRangeLabel] = useState('24h');
+
+  useEffect(() => {
+    if ((timeRangeRaw ?? '24h') !== timeRange) {
+      setTimeRange(timeRange);
+    }
+  }, [setTimeRange, timeRange, timeRangeRaw]);
 
   const loadMetricsHistoryForRange = useCallback(async (
     selectedRange: MonitoringTimeRangeOption,

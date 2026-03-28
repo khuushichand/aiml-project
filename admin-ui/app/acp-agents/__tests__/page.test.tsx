@@ -44,6 +44,8 @@ vi.mock('@/lib/api-client', () => ({
   api: {
     getACPAgentConfigs: vi.fn(),
     getACPPermissionPolicies: vi.fn(),
+    getACPAgentUsage: vi.fn(),
+    getMCPTools: vi.fn(),
     createACPAgentConfig: vi.fn(),
     updateACPAgentConfig: vi.fn(),
     deleteACPAgentConfig: vi.fn(),
@@ -56,6 +58,8 @@ vi.mock('@/lib/api-client', () => ({
 type ApiMock = {
   getACPAgentConfigs: ReturnType<typeof vi.fn>;
   getACPPermissionPolicies: ReturnType<typeof vi.fn>;
+  getACPAgentUsage: ReturnType<typeof vi.fn>;
+  getMCPTools: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -68,6 +72,13 @@ beforeEach(() => {
   apiMock.getACPPermissionPolicies.mockResolvedValue({
     policies: [],
     total: 0,
+  });
+  apiMock.getACPAgentUsage.mockResolvedValue({
+    agents: [],
+    total: 0,
+  });
+  apiMock.getMCPTools.mockResolvedValue({
+    tools: [],
   });
   confirmMock.mockResolvedValue(true);
   toastSuccessMock.mockClear();

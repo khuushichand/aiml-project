@@ -218,6 +218,10 @@ describe('JobsPage', () => {
     render(<JobsPage />);
 
     expect(await screen.findByText('Jobs')).toBeInTheDocument();
-    expect(screen.queryByText('SLA')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(apiMock.getJobs).toHaveBeenCalled();
+      expect(apiMock.getJobSlaPolicies).toHaveBeenCalled();
+      expect(screen.queryByText('SLA')).not.toBeInTheDocument();
+    });
   });
 });

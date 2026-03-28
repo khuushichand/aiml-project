@@ -81,6 +81,11 @@ type BudgetEditErrorsState = {
   thresholds: BudgetEditValidationErrors;
 };
 
+type ProviderBudgetDraft = {
+  month_usd: string;
+  day_usd: string;
+};
+
 type NotificationChannelSummary = {
   configuredChannels: string[];
   minSeverity: 'info' | 'warning' | 'error' | 'critical';
@@ -556,7 +561,9 @@ function BudgetsPageContent() {
   const [editForm, setEditForm] = useState<BudgetEditFormState | null>(null);
   const [editErrors, setEditErrors] = useState<BudgetEditErrorsState>({ caps: {}, thresholds: {} });
   const [savingBudget, setSavingBudget] = useState(false);
-  const [providerBudgets, setProviderBudgets] = useState<Record<string, { month_usd: string; day_usd: string }>>({});
+  const [providerBudgets, setProviderBudgets] = useState<Record<string, ProviderBudgetDraft>>({});
+  const [newProviderName, setNewProviderName] = useState('');
+  const [showAddProviderInput, setShowAddProviderInput] = useState(false);
 
   const budgetParams = useMemo(() => {
     const params: Record<string, string> = {
@@ -630,7 +637,7 @@ function BudgetsPageContent() {
     setEditForm(buildBudgetEditFormState(item.budgets || {}));
     setEditErrors({ caps: {}, thresholds: {} });
     const existing = (item.budgets || {}).provider_budgets || {};
-    const draft: Record<string, { month_usd: string; day_usd: string }> = {};
+    const draft: Record<string, ProviderBudgetDraft> = {};
     for (const [provider, budget] of Object.entries(existing)) {
       draft[provider] = {
         month_usd: budget?.month_usd != null ? String(budget.month_usd) : '',
@@ -638,6 +645,8 @@ function BudgetsPageContent() {
       };
     }
     setProviderBudgets(draft);
+    setNewProviderName('');
+    setShowAddProviderInput(false);
   };
 
   const closeEditDialog = () => {
@@ -646,6 +655,8 @@ function BudgetsPageContent() {
     setEditErrors({ caps: {}, thresholds: {} });
     setSavingBudget(false);
     setProviderBudgets({});
+    setNewProviderName('');
+    setShowAddProviderInput(false);
   };
 
   const updateEditCap = (key: keyof Pick<BudgetEditFormState, 'budget_day_usd' | 'budget_month_usd' | 'budget_day_tokens' | 'budget_month_tokens'>, value: string) => {
@@ -727,8 +738,12 @@ function BudgetsPageContent() {
       // Include provider budgets in the payload
       const providerBudgetsPayload: Record<string, ProviderBudget | null> = {};
       for (const [provider, draft] of Object.entries(providerBudgets)) {
-        const monthUsd = draft.month_usd.trim() ? Number(draft.month_usd) : null;
-        const dayUsd = draft.day_usd.trim() ? Number(draft.day_usd) : null;
+        const monthValue = draft.month_usd.trim();
+        const dayValue = draft.day_usd.trim();
+        const monthRaw = monthValue ? Number(monthValue) : null;
+        const dayRaw = dayValue ? Number(dayValue) : null;
+        const monthUsd = monthRaw != null && Number.isFinite(monthRaw) ? monthRaw : null;
+        const dayUsd = dayRaw != null && Number.isFinite(dayRaw) ? dayRaw : null;
         if (monthUsd === null && dayUsd === null) {
           providerBudgetsPayload[provider] = null; // Remove provider
         } else {
@@ -753,6 +768,17 @@ function BudgetsPageContent() {
     } finally {
       setSavingBudget(false);
     }
+  };
+
+  const addProviderBudgetDraft = () => {
+    const providerName = newProviderName.trim().toLowerCase();
+    if (!providerName) return;
+    setProviderBudgets((prev) => ({
+      ...prev,
+      [providerName]: prev[providerName] ?? { month_usd: '', day_usd: '' },
+    }));
+    setNewProviderName('');
+    setShowAddProviderInput(false);
   };
 
   return (
@@ -1000,22 +1026,57 @@ function BudgetsPageContent() {
                   <div>
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-medium">Per-Provider Budgets</h3>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        type="button"
-                        onClick={() => {
-                          const name = window.prompt('Provider name (e.g. openai, anthropic):');
-                          if (name && name.trim()) {
-                            setProviderBudgets((prev) => ({
-                              ...prev,
-                              [name.trim().toLowerCase()]: { month_usd: '', day_usd: '' },
-                            }));
-                          }
-                        }}
-                      >
-                        + Add Provider
-                      </Button>
+                      {showAddProviderInput ? (
+                        <div className="flex items-center gap-2">
+                          <Input
+                            autoFocus
+                            value={newProviderName}
+                            onChange={(e) => setNewProviderName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                addProviderBudgetDraft();
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setNewProviderName('');
+                                setShowAddProviderInput(false);
+                              }
+                            }}
+                            placeholder="openai"
+                            className="w-40"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            type="button"
+                            onClick={addProviderBudgetDraft}
+                            disabled={!newProviderName.trim()}
+                          >
+                            Add
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            type="button"
+                            onClick={() => {
+                              setNewProviderName('');
+                              setShowAddProviderInput(false);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => setShowAddProviderInput(true)}
+                        >
+                          + Add Provider
+                        </Button>
+                      )}
                     </div>
                     {Object.keys(providerBudgets).length === 0 ? (
                       <p className="text-xs text-muted-foreground">No per-provider budgets configured.</p>

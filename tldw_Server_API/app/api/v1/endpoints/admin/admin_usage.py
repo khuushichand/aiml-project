@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from loguru import logger
@@ -273,12 +275,15 @@ async def export_llm_usage_csv(
 
 @router.get("/usage/cost-attribution")
 async def get_cost_attribution(
-    group_by: str = Query("user", description="Group by: user or org"),
+    group_by: Literal["user", "org"] = Query("user", description="Group by: user or org"),
     range_days: int = Query(7, ge=1, le=90),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ) -> dict:
     """Get cost attribution grouped by user or organization."""
     return await admin_usage_service.get_cost_attribution(
-        db=db, group_by=group_by, range_days=range_days
+        principal=principal,
+        db=db,
+        group_by=group_by,
+        range_days=range_days,
     )

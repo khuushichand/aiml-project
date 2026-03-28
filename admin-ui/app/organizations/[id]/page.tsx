@@ -617,7 +617,11 @@ export default function OrganizationDetailPage() {
                     <CardDescription>
                       {members.length} member{members.length !== 1 ? 's' : ''}
                     </CardDescription>
+                    <Label htmlFor="member-search" className="sr-only">
+                      Search members
+                    </Label>
                     <Input
+                      id="member-search"
                       placeholder="Search members..."
                       value={memberSearch}
                       onChange={(e) => setMemberSearch(e.target.value)}

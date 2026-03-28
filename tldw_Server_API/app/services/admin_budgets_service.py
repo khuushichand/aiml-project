@@ -501,7 +501,10 @@ def _merge_provider_budgets(
         if settings is None:
             merged.pop(provider, None)
         elif isinstance(settings, dict):
-            merged[provider] = {**merged.get(provider, {}), **settings}
+            existing_provider = merged.get(provider)
+            if not isinstance(existing_provider, dict):
+                existing_provider = {}
+            merged[provider] = {**existing_provider, **settings}
         else:
             merged[provider] = settings
     return merged or None

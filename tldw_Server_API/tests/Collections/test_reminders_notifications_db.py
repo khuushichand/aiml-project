@@ -121,6 +121,33 @@ def test_update_notification_delivery_status_returns_boolean(collections_db: Col
     assert missing is False
 
 
+def test_update_notification_delivery_status_can_clear_existing_timestamp(
+    collections_db: CollectionsDatabase,
+) -> None:
+    row = collections_db.create_user_notification(
+        kind="job_completed",
+        title="Job done",
+        message="Background job completed",
+        severity="info",
+    )
+
+    collections_db.update_notification_delivery_status(
+        row.id,
+        "delivered",
+        delivered_at="2026-03-01T10:00:00+00:00",
+    )
+    cleared = collections_db.update_notification_delivery_status(
+        row.id,
+        "pending",
+        delivered_at=None,
+    )
+
+    assert cleared is True
+    refreshed = collections_db.get_user_notification(row.id)
+    assert refreshed.delivery_status == "pending"
+    assert refreshed.delivered_at is None
+
+
 def test_prune_user_notifications_archives_and_deletes(collections_db: CollectionsDatabase) -> None:
     row = collections_db.create_user_notification(
         kind="reminder_due",

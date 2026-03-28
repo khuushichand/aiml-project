@@ -313,6 +313,7 @@ export default function PermissionMatrixPage() {
                         value={permSearch}
                         onChange={(e) => setPermSearch(e.target.value)}
                         className="pl-9"
+                        aria-label="Filter permissions"
                       />
                     </div>
                     <Button

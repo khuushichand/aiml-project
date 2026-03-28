@@ -36,7 +36,11 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 
 def _matches_endpoint(limit_row: dict[str, Any], endpoint: str) -> bool:
     resource = str(limit_row.get("resource") or "")
-    return resource == "*" or endpoint.startswith(resource)
+    if not resource:
+        return False
+    if resource == "*":
+        return True
+    return endpoint == resource or endpoint.startswith(resource + "/")
 
 
 async def fetch_user_rate_limits(*, db: Any, user_id: int) -> list[dict[str, Any]]:

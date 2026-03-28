@@ -417,6 +417,50 @@ class ActivitySummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AdminPermissionDebugRequest(BaseModel):
+    """Request payload for permission resolution debug endpoint."""
+
+    user_id: int = Field(..., ge=1)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminPermissionDebugResponse(BaseModel):
+    """Permission resolution debug output."""
+
+    user_id: int
+    roles: list[str]
+    effective_permissions: list[str]
+    permission_count: int | None = None
+    error: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminTokenDecodeRequest(BaseModel):
+    """Request payload for token decode debug endpoint."""
+
+    token: SecretStr = Field(..., repr=False)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminTokenDecodeResponse(BaseModel):
+    """Token decode debug output without signature validation."""
+
+    decoded: bool
+    signature_verified: bool = False
+    header: dict[str, Any] | None = None
+    payload: dict[str, Any] | None = None
+    expired: bool | None = None
+    expires_at: datetime | None = None
+    issuer: str | None = None
+    subject: str | None = None
+    error: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # Security Alert Schemas
@@ -1257,6 +1301,16 @@ class IncidentEventCreateRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class IncidentNotifyResponse(BaseModel):
+    """Response payload for notifying incident subscribers."""
+
+    notified: bool
+    incident_id: str
+    webhooks_delivered: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # Batch Operation Schemas
@@ -1501,6 +1555,18 @@ class OrgBudgetListResponse(BaseModel):
     total: int
     page: int
     limit: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BudgetForecastResponse(BaseModel):
+    """Forecast summary for organization budgets."""
+
+    org_id: int
+    forecast_available: bool
+    reason: str | None = None
+    monthly_limit_usd: float | None = None
+    note: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2195,6 +2261,11 @@ class AdminWebhookCreateRequest(BaseModel):
     retry_count: int = Field(default=3, ge=0, le=10)
     timeout_seconds: int = Field(default=10, ge=1, le=60)
 
+    @field_validator("secret", mode="before")
+    @classmethod
+    def normalize_secret(cls, value: Any) -> Any:
+        return _blank_string_to_none(value)
+
     @field_validator("url")
     @classmethod
     def validate_url_scheme(cls, v: str) -> str:
@@ -2214,6 +2285,11 @@ class AdminWebhookUpdateRequest(BaseModel):
     active: bool | None = None
     retry_count: int | None = Field(default=None, ge=0, le=10)
     timeout_seconds: int | None = Field(default=None, ge=1, le=60)
+
+    @field_validator("secret", mode="before")
+    @classmethod
+    def normalize_secret(cls, value: Any) -> Any:
+        return _blank_string_to_none(value)
 
     @field_validator("url")
     @classmethod
