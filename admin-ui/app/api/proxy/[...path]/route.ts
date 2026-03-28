@@ -6,6 +6,9 @@ import {
   getBackendAuthHeaders,
   getRequestBody,
 } from '@/lib/server-auth';
+import { logger } from '@/lib/logger';
+
+const PROXY_TIMEOUT_MS = 30_000;
 
 const forward = async (request: NextRequest): Promise<NextResponse> => {
   const backendPath = request.nextUrl.pathname.replace(/^\/api\/proxy/, '') || '/';
@@ -14,15 +17,54 @@ const forward = async (request: NextRequest): Promise<NextResponse> => {
 
   const headers = getBackendAuthHeaders(request);
   appendProxyHeaders(request, headers);
+  const body = await getRequestBody(request);
+  const isGet = request.method === 'GET';
 
-  const response = await fetch(backendUrl.toString(), {
-    method: request.method,
-    headers,
-    body: await getRequestBody(request),
-    cache: 'no-store',
-  });
+  const attemptFetch = async (): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+    try {
+      return await fetch(backendUrl.toString(), {
+        method: request.method,
+        headers,
+        body,
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
 
-  return buildProxyResponse(response);
+  try {
+    const response = await attemptFetch();
+    return buildProxyResponse(response);
+  } catch (error) {
+    // Retry once for GET requests on network errors (not timeouts)
+    if (isGet && error instanceof Error && error.name !== 'AbortError') {
+      try {
+        await new Promise((r) => setTimeout(r, 500));
+        const response = await attemptFetch();
+        return buildProxyResponse(response);
+      } catch {
+        // Fall through to error handling
+      }
+    }
+
+    const isTimeout = error instanceof Error && error.name === 'AbortError';
+    logger.error('Proxy request failed', {
+      component: 'proxy',
+      path: backendPath,
+      method: request.method,
+      error: error instanceof Error ? error.message : String(error),
+      timeout: isTimeout,
+    });
+
+    return NextResponse.json(
+      { detail: isTimeout ? 'Backend request timed out' : 'Backend unavailable' },
+      { status: isTimeout ? 504 : 502 },
+    );
+  }
 };
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
