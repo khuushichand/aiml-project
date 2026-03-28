@@ -17,6 +17,10 @@ vi.mock('@/components/ResponsiveLayout', () => ({
   ),
 }));
 
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 vi.mock('@/lib/use-url-state', async () => {
   const React = await import('react');
   return {

@@ -612,6 +612,9 @@ export const api = {
         details,
         ip_address: record.ip_address ? String(record.ip_address) : undefined,
         username: record.username ? String(record.username) : undefined,
+        request_id: record.request_id ? String(record.request_id)
+          : record.context_request_id ? String(record.context_request_id)
+          : undefined,
         raw: record,
       };
     });

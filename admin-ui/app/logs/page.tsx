@@ -15,6 +15,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
 import { api } from '@/lib/api-client';
+import { useSearchParams } from 'next/navigation';
 import { useUrlPagination } from '@/lib/use-url-state';
 import { formatDateTime } from '@/lib/format';
 import { RefreshCw } from 'lucide-react';
@@ -129,6 +130,7 @@ const areFiltersEqual = (left: LogFilters, right: LogFilters) => (
 
 function LogsPageContent() {
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
+  const searchParams = useSearchParams();
   const [logs, setLogs] = useState<SystemLogEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -145,7 +147,7 @@ function LogsPageContent() {
   const [service, setService] = useState('');
   const [query, setQuery] = useState('');
   const [regexMode, setRegexMode] = useState(false);
-  const [requestId, setRequestId] = useState('');
+  const [requestId, setRequestId] = useState(() => searchParams.get('request_id') ?? '');
   const [orgId, setOrgId] = useState('');
   const [userId, setUserId] = useState('');
   const clearLogFilters = useCallback(() => {

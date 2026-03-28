@@ -135,6 +135,7 @@ export interface AuditLog {
   details?: Record<string, unknown>;
   ip_address?: string;
   username?: string;
+  request_id?: string;
   raw?: Record<string, unknown>;
 }
 

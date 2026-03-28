@@ -14,7 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Pagination } from '@/components/ui/pagination';
-import { FileText, RefreshCw, Filter, Eye, Clipboard, Trash2, Bell } from 'lucide-react';
+import { FileText, RefreshCw, Filter, Eye, Clipboard, Trash2, Bell, ExternalLink } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { AuditLog } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
@@ -23,6 +23,7 @@ import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useUrlMultiState, useUrlPagination } from '@/lib/use-url-state';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useToast } from '@/components/ui/toast';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 type AuditFilters = {
@@ -323,6 +324,7 @@ const parseSavedSearches = (value: string | null): SavedAuditSearch[] => {
 function AuditPageContent() {
   const { selectedOrg } = useOrgContext();
   const { success, error: showError } = useToast();
+  const router = useRouter();
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -1015,6 +1017,20 @@ function AuditPageContent() {
                         <Label>IP Address</Label>
                         <div className="text-sm font-mono">{selectedLog.ip_address || '—'}</div>
                       </div>
+                      {selectedLog.request_id && (
+                        <div className="space-y-1">
+                          <Label>Request ID</Label>
+                          <Button
+                            variant="link"
+                            className="h-auto p-0 font-mono text-xs"
+                            onClick={() => {
+                              router.push(`/logs?request_id=${encodeURIComponent(selectedLog.request_id!)}`);
+                            }}
+                          >
+                            {selectedLog.request_id}
+                          </Button>
+                        </div>
+                      )}
                     </div>
 
                     <div className="space-y-2">
@@ -1113,11 +1129,21 @@ function AuditPageContent() {
                                   <span className="text-muted-foreground">-</span>
                                 )}
                               </TableCell>
-                              <TableCell className="text-right">
+                              <TableCell className="text-right space-x-2">
                                 <Button variant="outline" size="sm" onClick={() => setSelectedLog(log)}>
                                   <Eye className="mr-2 h-4 w-4" />
                                   View
                                 </Button>
+                                {log.request_id && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => router.push(`/logs?request_id=${encodeURIComponent(log.request_id!)}`)}
+                                  >
+                                    <ExternalLink className="mr-2 h-4 w-4" />
+                                    View Logs
+                                  </Button>
+                                )}
                               </TableCell>
                             </TableRow>
                           ))}
