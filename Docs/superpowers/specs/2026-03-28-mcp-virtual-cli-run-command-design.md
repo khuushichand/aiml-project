@@ -400,11 +400,19 @@ Command mapping expectations:
 
 - `ls`, `cat`, and `write` adapt to the new filesystem primitives
 - `grep`, `head`, `tail`, and `json` are pure runtime text transforms and do not require new backend modules
-- `search`, `knowledge`, `media`, `memory`, `agent`, `workflow`, `mcp`, and `sandbox` should map to existing MCP capabilities where available
+- `mcp`, `knowledge`, `media`, and `sandbox` already have clear backing surfaces in the current MCP inventory
+- `workflow` is viable only when the chosen rollout slice explicitly targets the existing `kanban.workflow.*` surfaces
+- `agent`, `memory`, and any top-level `search` alias are optional adapters only if a concrete MCP-backed implementation is chosen for the rollout slice
 
 This keeps the design honest about implementation scope while preserving the intended v1 command set.
 
-#### Files and text
+Phase 1 should explicitly split command families into core required commands and optional adapters.
+
+#### Core required phase 1 commands
+
+These are the commands that should be treated as required for the first implementation plan because they are either backed by existing MCP capabilities or by the new filesystem primitives already called out above.
+
+##### Files and text
 
 - `ls`
 - `cat`
@@ -413,28 +421,37 @@ This keeps the design honest about implementation scope while preserving the int
 - `tail`
 - `write`
 
-#### Structured inspection
+##### Structured inspection
 
 - `json`
 
-#### Platform retrieval
+##### Platform retrieval
 
-- `search`
 - `knowledge`
 - `media`
-- `memory`
 
-#### Runtime and orchestration inspection
+##### Runtime and orchestration inspection
 
 - `mcp`
-- `agent`
-- `workflow`
 
-#### Explicit execution bridge
+##### Explicit execution bridge
 
 - `sandbox`
 
-These commands should be adapters over existing MCP capabilities, not fresh backend subsystems.
+#### Optional adapters after the core slice
+
+These commands are desirable but should not be treated as mandatory phase 1 scope unless the chosen rollout slice explicitly depends on them and already has a concrete backing implementation.
+
+- `workflow`
+  - only if phase 1 intentionally targets the existing `kanban.workflow.*` tools as the first workflow surface
+- `agent`
+  - only if phase 1 defines a concrete ACP/admin-backed adapter surface rather than a generic placeholder command
+- `memory`
+  - only after memory is exposed through MCP as a real governed backend capability
+- `search`
+  - only after choosing whether it is a real command, a thin alias, or a policy-driven router over `knowledge` and `media`
+
+All command families should still be adapters over existing MCP capabilities or explicitly added MCP primitives, not fresh backend subsystems invented by the command layer.
 
 ### 7. Agent Surface Policy
 
@@ -455,7 +472,7 @@ This lets the platform validate the interface thesis before removing escape hatc
 - add parser, registry, execution layer, and presentation layer
 - add workspace-bounded filesystem MCP primitives required for `ls`, `cat`, and `write`
 - add chain preflight for write-capable or approval-gated command chains
-- add the first command families
+- add the core required command families only
 - expose only to selected agent surfaces for evaluation
 
 ### Phase 2: Default agent surface
