@@ -1,33 +1,78 @@
-import { existsSync, readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
+// @vitest-environment jsdom
+import React, { Suspense } from "react"
+import { render, screen } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const extensionRouteRegistryPathCandidates = [
-  "extension/routes/route-registry.tsx",
-  "apps/tldw-frontend/extension/routes/route-registry.tsx"
-]
+const routeMocks = vi.hoisted(() => ({
+  standaloneMcpHub: vi.fn(() =>
+    React.createElement(
+      "div",
+      { "data-testid": "standalone-mcp-hub" },
+      "Standalone MCP Hub Wrapper"
+    )
+  ),
+  settingsMcpHub: vi.fn(() =>
+    React.createElement(
+      "div",
+      { "data-testid": "settings-mcp-hub" },
+      "Settings MCP Hub Wrapper"
+    )
+  )
+}))
 
-const extensionRouteRegistryPath = extensionRouteRegistryPathCandidates.find(
-  (candidate) => existsSync(candidate)
-)
+vi.mock("../../extension/routes/option-mcp-hub", () => ({
+  __esModule: true,
+  default: routeMocks.standaloneMcpHub
+}))
 
-if (!extensionRouteRegistryPath) {
-  throw new Error("Unable to locate extension route-registry.tsx for MCP Hub parity test")
-}
+vi.mock("../../extension/routes/option-settings-mcp-hub", () => ({
+  __esModule: true,
+  default: routeMocks.settingsMcpHub
+}))
 
-const extensionRouteRegistrySource = readFileSync(
-  extensionRouteRegistryPath,
-  "utf8"
-)
+const renderRoute = (element: React.ReactElement) =>
+  render(
+    React.createElement(
+      Suspense,
+      { fallback: React.createElement("div", { "data-testid": "route-fallback" }) },
+      element
+    )
+  )
 
 describe("extension route registry MCP Hub parity", () => {
-  it("registers the settings MCP Hub route", () => {
-    expect(extensionRouteRegistrySource).toMatch(/path:\s*"\/settings\/mcp-hub"/)
-    expect(extensionRouteRegistrySource).toMatch(
-      /labelToken:\s*"settings:mcpHubNav"/
-    )
+  beforeEach(() => {
+    vi.clearAllMocks()
   })
 
-  it("registers the standalone MCP Hub route", () => {
-    expect(extensionRouteRegistrySource).toMatch(/path:\s*"\/mcp-hub"/)
+  it("renders the standalone MCP Hub route from the extension registry", async () => {
+    const { ROUTE_DEFINITIONS } = await import(
+      "../../extension/routes/route-registry"
+    )
+    const route = ROUTE_DEFINITIONS.find((candidate) => candidate.path === "/mcp-hub")
+
+    expect(route).toBeDefined()
+    renderRoute(route!.element)
+
+    expect(await screen.findByTestId("standalone-mcp-hub")).toBeVisible()
+    expect(screen.queryByTestId("settings-mcp-hub")).not.toBeInTheDocument()
+  })
+
+  it("renders the settings MCP Hub route from the extension registry", async () => {
+    const { ROUTE_DEFINITIONS } = await import(
+      "../../extension/routes/route-registry"
+    )
+    const route = ROUTE_DEFINITIONS.find(
+      (candidate) => candidate.path === "/settings/mcp-hub"
+    )
+
+    expect(route).toBeDefined()
+    expect(route?.nav).toBeDefined()
+    expect(route?.nav?.group).toBe("server")
+    expect(route?.nav?.labelToken).toBe("settings:mcpHubNav")
+    renderRoute(route!.element)
+
+    expect(await screen.findByTestId("settings-mcp-hub")).toBeVisible()
+    expect(routeMocks.settingsMcpHub).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId("standalone-mcp-hub")).not.toBeInTheDocument()
   })
 })

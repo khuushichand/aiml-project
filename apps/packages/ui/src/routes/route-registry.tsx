@@ -161,6 +161,7 @@ const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
 const OptionAgents = lazy(() => import("./option-agents"))
 const OptionAgentTasks = lazy(() => import("./option-agent-tasks"))
 const OptionMcpHub = lazy(() => import("./option-mcp-hub"))
+const OptionSettingsMcpHub = lazy(() => import("./option-settings-mcp-hub"))
 const OptionSkills = lazy(() => import("./option-skills"))
 const OptionRepo2Txt = lazy(() => import("./option-repo2txt"))
 const OptionSetup = lazy(() => import("./option-setup"))
@@ -196,7 +197,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   {
     kind: "options",
     path: "/settings/mcp-hub",
-    element: <OptionMcpHub />,
+    element: <OptionSettingsMcpHub />,
   },
   {
     kind: "options",
