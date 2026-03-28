@@ -472,6 +472,7 @@ export interface Plan {
 export interface Subscription {
   id: string;
   org_id: number;
+  org_name?: string;
   plan_id: string;
   plan?: Plan;
   stripe_subscription_id: string;
@@ -480,8 +481,17 @@ export interface Subscription {
   current_period_end: string;
   trial_end?: string;
   cancel_at?: string;
+  cancel_at_period_end?: boolean;
   created_at: string;
   updated_at: string;
+  // Computed lifecycle fields
+  days_since_created?: number | null;
+  days_past_due?: number;
+  days_until_period_end?: number | null;
+  usage_pct?: number | null;
+  at_risk?: boolean;
+  at_risk_reasons?: string[];
+  billing_cycle?: string;
 }
 
 export interface OrgUsageSummary {
