@@ -15,6 +15,8 @@ import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { RefreshCw, Wallet, Pencil } from 'lucide-react';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportBudgets, ExportFormat } from '@/lib/export';
 import { api } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
@@ -716,6 +718,10 @@ function BudgetsPageContent() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => exportBudgets(budgets, format)}
+                disabled={budgets.length === 0}
+              />
               <Button variant="outline" onClick={loadBudgets} disabled={loading}>
                 <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                 Refresh

@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import ByokDashboardPage from '../page';
 import { api } from '@/lib/api-client';
 
-const confirmMock = vi.hoisted(() => vi.fn());
+const promptPrivilegedActionMock = vi.hoisted(() => vi.fn());
 const toastSuccessMock = vi.hoisted(() => vi.fn());
 const toastErrorMock = vi.hoisted(() => vi.fn());
 
@@ -25,8 +25,8 @@ vi.mock('@/components/OrgContextSwitcher', () => ({
   OrgContextSwitcher: () => <div data-testid="org-switcher" />,
 }));
 
-vi.mock('@/components/ui/confirm-dialog', () => ({
-  useConfirm: () => confirmMock,
+vi.mock('@/components/ui/privileged-action-dialog', () => ({
+  usePrivilegedActionDialog: () => promptPrivilegedActionMock,
 }));
 
 vi.mock('@/components/ui/toast', () => ({

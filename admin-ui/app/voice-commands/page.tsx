@@ -22,6 +22,8 @@ import { Eye, Mic, MicOff, Search, Plus, Trash2, BarChart2 } from 'lucide-react'
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api } from '@/lib/api-client';
 import { parseVoiceCommandInputs } from '@/lib/voice-commands';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportVoiceCommands, ExportFormat } from '@/lib/export';
 import type { VoiceCommand, VoiceActionType, VoiceAnalyticsSummary } from '@/types';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
@@ -257,14 +259,19 @@ function VoiceCommandsPageContent() {
               <h1 className="text-3xl font-bold">Voice Commands</h1>
               <p className="text-muted-foreground">Manage voice assistant commands and triggers</p>
             </div>
-            <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Create Command
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-lg">
+            <div className="flex flex-wrap gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => exportVoiceCommands(filteredCommands, format)}
+                disabled={filteredCommands.length === 0}
+              />
+              <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create Command
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-lg">
                 <DialogHeader>
                   <DialogTitle>Create Voice Command</DialogTitle>
                   <DialogDescription>Define a new voice command with trigger phrases and actions.</DialogDescription>
@@ -338,7 +345,8 @@ function VoiceCommandsPageContent() {
                   </Form>
                 </FormProvider>
               </DialogContent>
-            </Dialog>
+              </Dialog>
+            </div>
           </div>
 
           {/* Analytics Summary */}

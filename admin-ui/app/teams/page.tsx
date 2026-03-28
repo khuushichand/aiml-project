@@ -21,6 +21,8 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Plus, Users, Building2, Search, Pencil, Trash2 } from 'lucide-react';
 import { Team, Organization } from '@/types';
 import { api } from '@/lib/api-client';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportTeams, ExportFormat } from '@/lib/export';
 import Link from 'next/link';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
 
@@ -243,13 +245,19 @@ function TeamsPageContent() {
                 <h1 className="text-3xl font-bold">Teams</h1>
                 <p className="text-muted-foreground">Manage teams within organizations</p>
               </div>
-              <Button
-                onClick={() => setShowCreateForm(!showCreateForm)}
-                disabled={!selectedOrgId}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                New Team
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <ExportMenu
+                  onExport={(format: ExportFormat) => exportTeams(filteredTeams, format)}
+                  disabled={filteredTeams.length === 0}
+                />
+                <Button
+                  onClick={() => setShowCreateForm(!showCreateForm)}
+                  disabled={!selectedOrgId}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Team
+                </Button>
+              </div>
             </div>
 
             {/* Organization Selector */}

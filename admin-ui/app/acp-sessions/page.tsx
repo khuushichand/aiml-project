@@ -14,6 +14,8 @@ import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Pause, Play, RefreshCw, MessageSquare, XCircle, Wifi, WifiOff } from 'lucide-react';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportACPSessions, ExportFormat } from '@/lib/export';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
@@ -185,6 +187,10 @@ export default function ACPSessionsPage() {
                   {lastUpdatedLabel}
                 </span>
               )}
+              <ExportMenu
+                onExport={(format: ExportFormat) => exportACPSessions(sessions, format)}
+                disabled={sessions.length === 0}
+              />
               <Button
                 variant="ghost"
                 size="icon"

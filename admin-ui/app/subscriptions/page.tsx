@@ -84,20 +84,26 @@ function SubscriptionsPageContent() {
     <ResponsiveLayout>
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <CardTitle>Subscriptions</CardTitle>
-            <Select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-48"
-              aria-label="Filter by status"
-            >
-              {STATUS_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </Select>
+            <div className="flex items-center gap-2">
+              <ExportMenu
+                onExport={(format: ExportFormat) => exportSubscriptions(subscriptions, format)}
+                disabled={subscriptions.length === 0}
+              />
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-48"
+                aria-label="Filter by status"
+              >
+                {STATUS_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
