@@ -369,6 +369,7 @@ export default function DashboardPage() {
         sttHealthResult,
         embeddingsHealthResult,
         metricsTextResult,
+        jobsStatsResult,
       }));
 
       const optionalHealthFailures = [
@@ -635,6 +636,7 @@ export default function DashboardPage() {
             storagePercentage={storagePercentage}
             operationalKpis={operationalKpis}
             realtimeStats={realtimeStats}
+            cacheHitRatePct={systemHealth.cache.cacheHitRatePct}
           />
 
           {isBillingEnabled() && billingStats && (

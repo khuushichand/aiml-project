@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +25,7 @@ import {
 import {
   AreaChart,
   Area,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -35,6 +37,8 @@ type ActivityChartPoint = {
   name: string;
   requests: number;
   users: number;
+  errorRate?: number | null;
+  latencyP95?: number | null;
 };
 
 type ActivitySectionProps = {
@@ -101,7 +105,18 @@ export const ActivitySection = ({
   activityRange,
   onActivityRangeChange,
   loading = false,
-}: ActivitySectionProps) => (
+}: ActivitySectionProps) => {
+  const [showErrorRate, setShowErrorRate] = useState(false);
+  const [showLatency, setShowLatency] = useState(false);
+
+  const hasErrorData = activityChartData.some(
+    (p) => p.errorRate !== undefined && p.errorRate !== null
+  );
+  const hasLatencyData = activityChartData.some(
+    (p) => p.latencyP95 !== undefined && p.latencyP95 !== null
+  );
+
+  return (
   <div className="grid gap-6 lg:grid-cols-3 mb-8">
     <Card className="lg:col-span-2">
       <CardHeader className="space-y-3">
@@ -129,6 +144,34 @@ export const ActivitySection = ({
             ))}
           </div>
         </div>
+        <div className="flex items-center gap-3 flex-wrap" role="group" aria-label="Chart overlays">
+          <Button
+            type="button"
+            size="sm"
+            variant={showErrorRate ? 'default' : 'outline'}
+            onClick={() => setShowErrorRate((v) => !v)}
+            aria-pressed={showErrorRate}
+            disabled={!hasErrorData}
+            className="text-xs"
+            title={hasErrorData ? 'Toggle error rate overlay' : 'Error rate data unavailable'}
+          >
+            <span className="inline-block h-2 w-2 rounded-full bg-red-500 mr-1.5" />
+            Error Rate
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={showLatency ? 'default' : 'outline'}
+            onClick={() => setShowLatency((v) => !v)}
+            aria-pressed={showLatency}
+            disabled={!hasLatencyData}
+            className="text-xs"
+            title={hasLatencyData ? 'Toggle latency overlay' : 'Latency data unavailable'}
+          >
+            <span className="inline-block h-2 w-2 rounded-full bg-orange-500 mr-1.5" />
+            Latency p95
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <div role="img" aria-label={`Activity chart showing API requests and active users ${ACTIVITY_RANGE_DESCRIPTION[activityRange].toLowerCase()}`}>
@@ -137,7 +180,17 @@ export const ActivitySection = ({
               <AreaChart data={activityChartData}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis dataKey="name" className="text-xs" />
-                <YAxis className="text-xs" />
+                <YAxis className="text-xs" yAxisId="left" />
+                {(showErrorRate || showLatency) && (
+                  <YAxis
+                    className="text-xs"
+                    yAxisId="right"
+                    orientation="right"
+                    tickFormatter={(v: number) =>
+                      showLatency ? `${v}ms` : `${v}%`
+                    }
+                  />
+                )}
                 <Tooltip
                   contentStyle={{
                     backgroundColor: 'hsl(var(--background))',
@@ -153,6 +206,7 @@ export const ActivitySection = ({
                   fill="#3b82f6"
                   fillOpacity={0.3}
                   name="Requests"
+                  yAxisId="left"
                 />
                 <Area
                   type="monotone"
@@ -162,7 +216,32 @@ export const ActivitySection = ({
                   fill="#10b981"
                   fillOpacity={0.3}
                   name="Active Users"
+                  yAxisId="left"
                 />
+                {showErrorRate && hasErrorData && (
+                  <Line
+                    type="monotone"
+                    dataKey="errorRate"
+                    stroke="#ef4444"
+                    strokeWidth={2}
+                    dot={false}
+                    name="Error Rate (%)"
+                    yAxisId="right"
+                    connectNulls
+                  />
+                )}
+                {showLatency && hasLatencyData && (
+                  <Line
+                    type="monotone"
+                    dataKey="latencyP95"
+                    stroke="#f97316"
+                    strokeWidth={2}
+                    dot={false}
+                    name="Latency p95 (ms)"
+                    yAxisId="right"
+                    connectNulls
+                  />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -178,6 +257,8 @@ export const ActivitySection = ({
                   <th className="text-left px-2 py-1">Date</th>
                   <th className="text-right px-2 py-1">Requests</th>
                   <th className="text-right px-2 py-1">Active Users</th>
+                  {hasErrorData && <th className="text-right px-2 py-1">Error Rate</th>}
+                  {hasLatencyData && <th className="text-right px-2 py-1">Latency p95</th>}
                 </tr>
               </thead>
               <tbody>
@@ -186,6 +267,16 @@ export const ActivitySection = ({
                     <td className="px-2 py-1">{point.name}</td>
                     <td className="text-right px-2 py-1">{point.requests}</td>
                     <td className="text-right px-2 py-1">{point.users}</td>
+                    {hasErrorData && (
+                      <td className="text-right px-2 py-1">
+                        {point.errorRate != null ? `${point.errorRate.toFixed(2)}%` : '-'}
+                      </td>
+                    )}
+                    {hasLatencyData && (
+                      <td className="text-right px-2 py-1">
+                        {point.latencyP95 != null ? `${point.latencyP95.toFixed(0)}ms` : '-'}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -211,6 +302,8 @@ export const ActivitySection = ({
           const cacheHitRateLabel = subsystem.key === 'cache'
             ? formatCacheHitRate(subsystemHealth.cacheHitRatePct)
             : null;
+          const showError = (subsystemHealth.status === 'degraded' || subsystemHealth.status === 'down')
+            && subsystemHealth.errorMessage;
           return (
             <div key={subsystem.key} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
               <div className="min-w-0">
@@ -223,6 +316,11 @@ export const ActivitySection = ({
                 </p>
                 {cacheHitRateLabel && (
                   <p className="pl-7 text-xs text-muted-foreground">{cacheHitRateLabel}</p>
+                )}
+                {showError && (
+                  <p className="pl-7 text-xs text-red-600 truncate" title={subsystemHealth.errorMessage!}>
+                    {subsystemHealth.errorMessage}
+                  </p>
                 )}
               </div>
               {getHealthBadge(subsystemHealth.status)}
@@ -238,4 +336,5 @@ export const ActivitySection = ({
       </CardContent>
     </Card>
   </div>
-);
+  );
+};

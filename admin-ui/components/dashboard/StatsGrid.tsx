@@ -12,6 +12,7 @@ import {
   Clock3,
   Coins,
   Cpu,
+  Database,
   HardDrive,
   Minus,
   Monitor,
@@ -32,9 +33,10 @@ type StatsGridProps = {
   storagePercentage: number;
   operationalKpis: DashboardOperationalKpis;
   realtimeStats?: RealtimeStats | null;
+  cacheHitRatePct?: number | null;
 };
 
-const CARD_COUNT = 10;
+const CARD_COUNT = 11;
 
 const formatTrendValue = (trend: MetricTrend): string => {
   if (trend.percentChange !== null) {
@@ -117,16 +119,26 @@ const formatCompactNumber = (value: number): string => {
   return `${value}`;
 };
 
+const formatCacheHitRateKpi = (value: number | null | undefined): string => {
+  if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
+  return `${value.toFixed(1)}%`;
+};
+
 const buildStatsLiveSummary = (
   stats: DashboardUIStats,
   storagePercentage: number,
   operationalKpis: DashboardOperationalKpis,
   realtimeStats?: RealtimeStats | null,
+  cacheHitRatePct?: number | null,
 ): string => {
+  const cacheLabel = cacheHitRatePct !== null && cacheHitRatePct !== undefined
+    ? `cache hit rate ${cacheHitRatePct.toFixed(1)} percent, `
+    : '';
   const base =
     `Dashboard metrics updated. ${stats.users} total users, ${stats.activeUsers} active users, ` +
     `${stats.organizations} organizations, ${stats.enabledProviders} enabled providers, ` +
     `${storagePercentage.toFixed(0)} percent storage used, ` +
+    `${cacheLabel}` +
     `error rate ${formatLiveValue(operationalKpis.errorRatePct)} percent, ` +
     `queue depth ${formatLiveValue(operationalKpis.queueDepth)}.`;
   if (realtimeStats) {
@@ -148,6 +160,7 @@ export const StatsGrid = ({
   storagePercentage,
   operationalKpis,
   realtimeStats,
+  cacheHitRatePct,
 }: StatsGridProps) => (
   <div
     className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
@@ -157,7 +170,7 @@ export const StatsGrid = ({
     data-testid="dashboard-stats-live-region"
   >
     <p className="sr-only">
-      {loading ? 'Dashboard metrics loading.' : buildStatsLiveSummary(stats, storagePercentage, operationalKpis, realtimeStats)}
+      {loading ? 'Dashboard metrics loading.' : buildStatsLiveSummary(stats, storagePercentage, operationalKpis, realtimeStats, cacheHitRatePct)}
     </p>
     {loading ? (
       Array.from({ length: CARD_COUNT }).map((_, index) => (
@@ -336,6 +349,17 @@ export const StatsGrid = ({
               preferLower
               fallback="No prior queue snapshot"
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Cache Hit Rate</CardTitle>
+            <Database className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <div className="text-2xl font-bold">{formatCacheHitRateKpi(cacheHitRatePct)}</div>
+            <p className="text-xs text-muted-foreground">RAG cache hit rate</p>
           </CardContent>
         </Card>
       </>

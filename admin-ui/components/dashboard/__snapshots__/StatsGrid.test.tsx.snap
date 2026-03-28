@@ -679,6 +679,58 @@ exports[`StatsGrid > matches snapshot at viewport width 375 1`] = `
           </p>
         </div>
       </div>
+      <div
+        class="rounded-lg border bg-card text-card-foreground shadow-sm"
+      >
+        <div
+          class="p-6 flex flex-row items-center justify-between space-y-0 pb-2"
+        >
+          <h3
+            class="tracking-tight text-sm font-medium"
+          >
+            Cache Hit Rate
+          </h3>
+          <svg
+            class="lucide lucide-database h-4 w-4 text-muted-foreground"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <ellipse
+              cx="12"
+              cy="5"
+              rx="9"
+              ry="3"
+            />
+            <path
+              d="M3 5V19A9 3 0 0 0 21 19V5"
+            />
+            <path
+              d="M3 12A9 3 0 0 0 21 12"
+            />
+          </svg>
+        </div>
+        <div
+          class="p-6 pt-0 space-y-1"
+        >
+          <div
+            class="text-2xl font-bold"
+          >
+            N/A
+          </div>
+          <p
+            class="text-xs text-muted-foreground"
+          >
+            RAG cache hit rate
+          </p>
+        </div>
+      </div>
     </div>
   </div>
 </DocumentFragment>
@@ -1363,6 +1415,58 @@ exports[`StatsGrid > matches snapshot at viewport width 768 1`] = `
           </p>
         </div>
       </div>
+      <div
+        class="rounded-lg border bg-card text-card-foreground shadow-sm"
+      >
+        <div
+          class="p-6 flex flex-row items-center justify-between space-y-0 pb-2"
+        >
+          <h3
+            class="tracking-tight text-sm font-medium"
+          >
+            Cache Hit Rate
+          </h3>
+          <svg
+            class="lucide lucide-database h-4 w-4 text-muted-foreground"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <ellipse
+              cx="12"
+              cy="5"
+              rx="9"
+              ry="3"
+            />
+            <path
+              d="M3 5V19A9 3 0 0 0 21 19V5"
+            />
+            <path
+              d="M3 12A9 3 0 0 0 21 12"
+            />
+          </svg>
+        </div>
+        <div
+          class="p-6 pt-0 space-y-1"
+        >
+          <div
+            class="text-2xl font-bold"
+          >
+            N/A
+          </div>
+          <p
+            class="text-xs text-muted-foreground"
+          >
+            RAG cache hit rate
+          </p>
+        </div>
+      </div>
     </div>
   </div>
 </DocumentFragment>
@@ -2044,6 +2148,58 @@ exports[`StatsGrid > matches snapshot at viewport width 1280 1`] = `
               />
             </svg>
             20.0% down vs last refresh
+          </p>
+        </div>
+      </div>
+      <div
+        class="rounded-lg border bg-card text-card-foreground shadow-sm"
+      >
+        <div
+          class="p-6 flex flex-row items-center justify-between space-y-0 pb-2"
+        >
+          <h3
+            class="tracking-tight text-sm font-medium"
+          >
+            Cache Hit Rate
+          </h3>
+          <svg
+            class="lucide lucide-database h-4 w-4 text-muted-foreground"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <ellipse
+              cx="12"
+              cy="5"
+              rx="9"
+              ry="3"
+            />
+            <path
+              d="M3 5V19A9 3 0 0 0 21 19V5"
+            />
+            <path
+              d="M3 12A9 3 0 0 0 21 12"
+            />
+          </svg>
+        </div>
+        <div
+          class="p-6 pt-0 space-y-1"
+        >
+          <div
+            class="text-2xl font-bold"
+          >
+            N/A
+          </div>
+          <p
+            class="text-xs text-muted-foreground"
+          >
+            RAG cache hit rate
           </p>
         </div>
       </div>

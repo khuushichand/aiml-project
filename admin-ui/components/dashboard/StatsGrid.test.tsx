@@ -60,7 +60,7 @@ describe('StatsGrid', () => {
     expect(screen.getByText(/Dashboard metrics updated\./)).toBeInTheDocument();
   });
 
-  it('renders 10 dashboard cards including operational KPI and realtime cards', () => {
+  it('renders 11 dashboard cards including operational KPI, realtime, and cache cards', () => {
     const { container } = render(
       <StatsGrid
         loading={false}
@@ -68,10 +68,13 @@ describe('StatsGrid', () => {
         storagePercentage={25}
         operationalKpis={baseOperationalKpis}
         realtimeStats={baseRealtimeStats}
+        cacheHitRatePct={84.3}
       />
     );
 
-    expect(container.querySelectorAll('div.rounded-lg.border.bg-card').length).toBe(10);
+    expect(container.querySelectorAll('div.rounded-lg.border.bg-card').length).toBe(11);
+    expect(screen.getByText('Cache Hit Rate')).toBeInTheDocument();
+    expect(screen.getByText('84.3%')).toBeInTheDocument();
     expect(screen.getByText('Request Latency (p95)')).toBeInTheDocument();
     expect(screen.getByText('Error Rate')).toBeInTheDocument();
     expect(screen.getByText('Daily LLM Cost')).toBeInTheDocument();
