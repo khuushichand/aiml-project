@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
 import { isAlertSnoozed } from '@/lib/monitoring-alerts';
@@ -147,6 +147,40 @@ export const useMonitoringPageController = (): MonitoringPageController => {
     metricCriticalThreshold: METRIC_CRITICAL_THRESHOLD,
   });
 
+  // --- Auto-refresh (60 s) --------------------------------------------------
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const loadingRef = useRef(false);
+
+  // Keep loadingRef in sync with the loading state so the interval guard works
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  // Mark lastRefreshed whenever the dashboard state is updated
+  useEffect(() => {
+    if (lastUpdated) {
+      setLastRefreshed(lastUpdated);
+    }
+  }, [lastUpdated]);
+
+  useEffect(() => {
+    if (!autoRefreshEnabled) return;
+
+    const intervalId = setInterval(() => {
+      if (document.visibilityState === 'visible' && !loadingRef.current) {
+        void loadData();
+      }
+    }, 60_000);
+
+    return () => clearInterval(intervalId);
+  }, [autoRefreshEnabled, loadData]);
+
+  const onAutoRefreshToggle = useCallback(() => {
+    setAutoRefreshEnabled((prev) => !prev);
+  }, []);
+  // ---------------------------------------------------------------------------
+
   const {
     showCreateWatchlist,
     setShowCreateWatchlist,
@@ -220,8 +254,11 @@ export const useMonitoringPageController = (): MonitoringPageController => {
       lastUpdated,
       loading,
       onRefresh: loadData,
+      lastRefreshed,
+      autoRefreshEnabled,
+      onAutoRefreshToggle,
     }),
-    [lastUpdated, loading, loadData]
+    [lastUpdated, loading, loadData, lastRefreshed, autoRefreshEnabled, onAutoRefreshToggle]
   );
 
   const feedbackBannersProps = useMemo<ComponentProps<typeof MonitoringFeedbackBanners>>(
