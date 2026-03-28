@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildApiUrlForRequest } from '@/lib/api-config';
+import { logger } from '@/lib/logger';
 import {
   clearAdminSessionCookies,
   getBackendAuthHeaders,
@@ -27,7 +28,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       cache: 'no-store',
     });
   } catch (error) {
-    console.warn('Admin UI backend logout failed', {
+    logger.warn('Backend logout failed', {
+      component: 'auth/logout',
       error: error instanceof Error ? error.message : String(error),
     });
   }

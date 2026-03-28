@@ -46,9 +46,11 @@ describe('POST /api/auth/logout', () => {
       headers: new Headers({ Authorization: 'Bearer test-token' }),
       cache: 'no-store',
     });
-    expect(warnSpy).toHaveBeenCalledWith('Admin UI backend logout failed', {
-      error: 'backend unavailable',
-    });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const warnArg = warnSpy.mock.calls[0][0] as string;
+    expect(warnArg).toContain('Backend logout failed');
+    expect(warnArg).toContain('backend unavailable');
+    expect(warnArg).toContain('auth/logout');
     expect(clearAdminSessionCookies).toHaveBeenCalledTimes(1);
     expect(clearAdminSessionCookies).toHaveBeenCalledWith(expect.objectContaining({
       cookies: expect.anything(),
