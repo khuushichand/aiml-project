@@ -1649,7 +1649,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                       value: "auto",
                       label: t(
                         "playground:studio.flashcardDeckAuto",
-                        "Auto (first deck or create new)"
+                        "Auto (create new deck)"
                       )
                     },
                     ...availableDecks.map((deck) => ({

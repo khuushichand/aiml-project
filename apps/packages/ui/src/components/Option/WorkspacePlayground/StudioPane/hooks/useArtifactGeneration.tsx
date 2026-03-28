@@ -1158,7 +1158,9 @@ ${sourceText}`
     ...(useWorkspaceOwnership && workspaceOwnershipId
       ? { workspace_id: workspaceOwnershipId }
       : {}),
-    workspace_tag: options.workspaceTag || undefined,
+    ...(useWorkspaceOwnership && options.workspaceTag
+      ? { workspace_tag: options.workspaceTag }
+      : {}),
     media_id: uniqueMediaIds[0],
     source_bundle_json: sourceBundle
   })
@@ -1335,23 +1337,17 @@ async function generateFlashcards(
     decks.some((deck) => deck.id === options.preferredDeckId)
   ) {
     deckId = options.preferredDeckId
-  } else if (useWorkspaceOwnership && workspaceOwnershipId) {
+  } else {
     const newDeck = await createDeck(
       {
         name: buildFlashcardDeckName(options.workspaceName, options.selectedSources),
-        workspace_id: workspaceOwnershipId
+        ...(useWorkspaceOwnership && workspaceOwnershipId
+          ? { workspace_id: workspaceOwnershipId }
+          : {})
       },
       { signal: options.abortSignal }
     )
     deckId = newDeck.id
-  } else if (decks.length === 0) {
-    const newDeck = await createDeck(
-      { name: "Workspace Flashcards" },
-      { signal: options.abortSignal }
-    )
-    deckId = newDeck.id
-  } else {
-    deckId = decks[0].id
   }
 
   const flashcardInputs = flashcards.map((card) => ({

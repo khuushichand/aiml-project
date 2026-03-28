@@ -711,6 +711,7 @@ describe("StudioPane Stage 2 workflows", () => {
 
     expect(mockUpsertWorkspace).not.toHaveBeenCalled()
     expect(mockCreateQuiz.mock.calls[0]?.[0]).not.toHaveProperty("workspace_id")
+    expect(mockCreateQuiz.mock.calls[0]?.[0]).not.toHaveProperty("workspace_tag")
     expect(mockUpdateArtifactStatus).toHaveBeenCalledWith(
       expect.stringMatching(/^artifact-/),
       "completed",
@@ -1055,7 +1056,7 @@ describe("StudioPane Stage 2 workflows", () => {
     renderStudioPane()
 
     fireEvent.click(screen.getByRole("button", { name: "Audio Settings" }))
-    const autoDeckLabel = await screen.findByText("Auto (first deck or create new)")
+    const autoDeckLabel = await screen.findByText("Auto (create new deck)")
     fireEvent.mouseDown(autoDeckLabel.closest(".ant-select-selector") || autoDeckLabel)
     fireEvent.click(await screen.findByText("Biology Deck"))
 
@@ -1098,6 +1099,45 @@ describe("StudioPane Stage 2 workflows", () => {
         })
       })
     )
+  }, 15000)
+
+  it("creates a fresh general deck for auto flashcard generation", async () => {
+    workspaceStoreState.studyMaterialsPolicy = null
+    mockListDecks.mockResolvedValue([
+      { id: 4, name: "Biology Deck" },
+      { id: 9, name: "Chemistry Deck" }
+    ])
+    mockGenerateFlashcardsService.mockResolvedValue({
+      flashcards: [{ front: "ATP", back: "Cellular energy" }],
+      count: 1
+    })
+    mockCreateDeck.mockResolvedValue({
+      id: 12,
+      name: "Workspace A Flashcards - DSPy Prompting Talk"
+    })
+
+    renderStudioPane()
+
+    fireEvent.click(screen.getByRole("button", { name: "Flashcards" }))
+
+    await waitFor(() => {
+      expect(mockCreateDeck).toHaveBeenCalledTimes(1)
+    })
+
+    expect(mockUpsertWorkspace).not.toHaveBeenCalled()
+    expect(mockCreateDeck).toHaveBeenCalledWith(
+      {
+        name: "Workspace A Flashcards - DSPy Prompting Talk"
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    expect(mockCreateFlashcardsBulk).toHaveBeenCalledWith([
+      expect.objectContaining({
+        deck_id: 12,
+        front: "ATP",
+        back: "Cellular energy"
+      })
+    ], expect.objectContaining({ signal: expect.any(AbortSignal) }))
   }, 15000)
 
   it("falls back to per-card flashcard saves when bulk save rejects", async () => {

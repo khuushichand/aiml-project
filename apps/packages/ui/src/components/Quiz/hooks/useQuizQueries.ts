@@ -126,6 +126,11 @@ const sanitizeQuizPatch = (patch: QuizUpdate): Partial<Quiz> => {
   ) as Partial<Quiz>
 }
 
+const applyQuizPatch = (quiz: Quiz, patch: Partial<Quiz>): Quiz => ({
+  ...quiz,
+  ...patch
+})
+
 /**
  * Helper to check if quizzes feature is available
  */
@@ -212,6 +217,7 @@ export function useCreateQuizMutation() {
         id: tempId,
         name: payload.name,
         description: payload.description ?? null,
+        workspace_id: payload.workspace_id ?? null,
         workspace_tag: payload.workspace_tag ?? null,
         media_id: payload.media_id ?? null,
         total_questions: 0,
@@ -293,14 +299,20 @@ export function useUpdateQuizMutation() {
       previousLists.forEach(([queryKey, previous]) => {
         if (!previous) return
         const params = extractQuizListParams(queryKey)
+        const previousQuiz =
+          previous.items.find((quiz) => quiz.id === variables.quizId) ?? previousDetail
+        const nextQuiz = previousQuiz ? applyQuizPatch(previousQuiz, patch) : null
+        const previousVisible = previousQuiz ? quizMatchesVisibility(previousQuiz, params) : false
+        const nextVisible = nextQuiz ? quizMatchesVisibility(nextQuiz, params) : false
+        const countDelta = Number(nextVisible) - Number(previousVisible)
         const nextItems = previous.items
-          .map((quiz) => (quiz.id === variables.quizId ? { ...quiz, ...patch } : quiz))
+          .map((quiz) => (quiz.id === variables.quizId ? applyQuizPatch(quiz, patch) : quiz))
           .filter((quiz) => quizMatchesVisibility(quiz, params))
 
         qc.setQueryData(queryKey, {
           ...previous,
           items: nextItems,
-          count: nextItems.length
+          count: Math.max(0, previous.count + countDelta)
         } satisfies QuizListCacheValue)
       })
 
