@@ -268,7 +268,12 @@ exports[`StatsGrid > matches snapshot at viewport width 375 1`] = `
             class="mt-2"
           >
             <div
+              aria-label="Storage usage"
+              aria-valuemax="100"
+              aria-valuemin="0"
+              aria-valuenow="25"
               class="h-2 w-full rounded-full bg-gray-200"
+              role="progressbar"
             >
               <div
                 class="h-2 rounded-full bg-green-500"
@@ -728,6 +733,59 @@ exports[`StatsGrid > matches snapshot at viewport width 375 1`] = `
             class="text-xs text-muted-foreground"
           >
             RAG cache hit rate
+          </p>
+        </div>
+      </div>
+      <div
+        class="rounded-lg border bg-card text-card-foreground shadow-sm"
+      >
+        <div
+          class="p-6 flex flex-row items-center justify-between space-y-0 pb-2"
+        >
+          <h3
+            class="tracking-tight text-sm font-medium"
+          >
+            MCP Tool Invocations
+          </h3>
+          <svg
+            class="lucide lucide-plug h-4 w-4 text-muted-foreground"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M12 22v-5"
+            />
+            <path
+              d="M9 8V2"
+            />
+            <path
+              d="M15 8V2"
+            />
+            <path
+              d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"
+            />
+          </svg>
+        </div>
+        <div
+          class="p-6 pt-0 space-y-1"
+        >
+          <div
+            class="text-2xl font-bold"
+            title="Requires MCP telemetry"
+          >
+            N/A
+          </div>
+          <p
+            class="text-xs text-muted-foreground"
+          >
+            Requires MCP telemetry
           </p>
         </div>
       </div>
@@ -1004,7 +1062,12 @@ exports[`StatsGrid > matches snapshot at viewport width 768 1`] = `
             class="mt-2"
           >
             <div
+              aria-label="Storage usage"
+              aria-valuemax="100"
+              aria-valuemin="0"
+              aria-valuenow="25"
               class="h-2 w-full rounded-full bg-gray-200"
+              role="progressbar"
             >
               <div
                 class="h-2 rounded-full bg-green-500"
@@ -1464,6 +1527,59 @@ exports[`StatsGrid > matches snapshot at viewport width 768 1`] = `
             class="text-xs text-muted-foreground"
           >
             RAG cache hit rate
+          </p>
+        </div>
+      </div>
+      <div
+        class="rounded-lg border bg-card text-card-foreground shadow-sm"
+      >
+        <div
+          class="p-6 flex flex-row items-center justify-between space-y-0 pb-2"
+        >
+          <h3
+            class="tracking-tight text-sm font-medium"
+          >
+            MCP Tool Invocations
+          </h3>
+          <svg
+            class="lucide lucide-plug h-4 w-4 text-muted-foreground"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M12 22v-5"
+            />
+            <path
+              d="M9 8V2"
+            />
+            <path
+              d="M15 8V2"
+            />
+            <path
+              d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"
+            />
+          </svg>
+        </div>
+        <div
+          class="p-6 pt-0 space-y-1"
+        >
+          <div
+            class="text-2xl font-bold"
+            title="Requires MCP telemetry"
+          >
+            N/A
+          </div>
+          <p
+            class="text-xs text-muted-foreground"
+          >
+            Requires MCP telemetry
           </p>
         </div>
       </div>
@@ -1740,7 +1856,12 @@ exports[`StatsGrid > matches snapshot at viewport width 1280 1`] = `
             class="mt-2"
           >
             <div
+              aria-label="Storage usage"
+              aria-valuemax="100"
+              aria-valuemin="0"
+              aria-valuenow="25"
               class="h-2 w-full rounded-full bg-gray-200"
+              role="progressbar"
             >
               <div
                 class="h-2 rounded-full bg-green-500"
@@ -2200,6 +2321,59 @@ exports[`StatsGrid > matches snapshot at viewport width 1280 1`] = `
             class="text-xs text-muted-foreground"
           >
             RAG cache hit rate
+          </p>
+        </div>
+      </div>
+      <div
+        class="rounded-lg border bg-card text-card-foreground shadow-sm"
+      >
+        <div
+          class="p-6 flex flex-row items-center justify-between space-y-0 pb-2"
+        >
+          <h3
+            class="tracking-tight text-sm font-medium"
+          >
+            MCP Tool Invocations
+          </h3>
+          <svg
+            class="lucide lucide-plug h-4 w-4 text-muted-foreground"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M12 22v-5"
+            />
+            <path
+              d="M9 8V2"
+            />
+            <path
+              d="M15 8V2"
+            />
+            <path
+              d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"
+            />
+          </svg>
+        </div>
+        <div
+          class="p-6 pt-0 space-y-1"
+        >
+          <div
+            class="text-2xl font-bold"
+            title="Requires MCP telemetry"
+          >
+            N/A
+          </div>
+          <p
+            class="text-xs text-muted-foreground"
+          >
+            Requires MCP telemetry
           </p>
         </div>
       </div>

@@ -575,6 +575,20 @@ export default function DashboardPage() {
     }
   };
 
+  const handleAcknowledgeAlerts = useCallback(async () => {
+    try {
+      await Promise.allSettled(
+        alerts
+          .filter((a) => a.id !== undefined)
+          .map((a) => api.acknowledgeAlert(String(a.id)))
+      );
+      success('Alerts acknowledged', 'All visible alerts acknowledged.');
+      await loadDashboardData();
+    } catch {
+      showError('Acknowledge failed', 'Could not acknowledge alerts.');
+    }
+  }, [alerts, loadDashboardData, success, showError]);
+
   const activityChartData = useMemo(
     () => buildDashboardActivityChartData(activityData, activityRange),
     [activityData, activityRange]
@@ -628,7 +642,7 @@ export default function DashboardPage() {
             </Alert>
           )}
 
-          <AlertsBanner alerts={alerts} />
+          <AlertsBanner alerts={alerts} onAcknowledge={handleAcknowledgeAlerts} />
 
           <StatsGrid
             loading={loading}

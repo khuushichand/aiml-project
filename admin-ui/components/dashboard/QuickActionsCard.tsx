@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Building2, Cpu, FileText, Key, Shield, Users } from 'lucide-react';
+import { Activity, Building2, Cpu, FileText, Key, Shield, Users } from 'lucide-react';
 
 export const QuickActionsCard = () => (
   <Card>
@@ -70,6 +70,16 @@ export const QuickActionsCard = () => (
           <div>
             <p className="font-medium">Configuration</p>
             <p className="text-xs text-muted-foreground">System settings</p>
+          </div>
+        </Link>
+        <Link
+          href="/monitoring"
+          className="flex items-center gap-3 p-4 rounded-lg border hover:bg-muted transition-colors"
+        >
+          <Activity className="h-5 w-5 text-primary" />
+          <div>
+            <p className="font-medium">Monitoring</p>
+            <p className="text-xs text-muted-foreground">System health &amp; alerts</p>
           </div>
         </Link>
       </div>

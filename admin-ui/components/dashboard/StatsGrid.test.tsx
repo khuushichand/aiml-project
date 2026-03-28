@@ -60,7 +60,7 @@ describe('StatsGrid', () => {
     expect(screen.getByText(/Dashboard metrics updated\./)).toBeInTheDocument();
   });
 
-  it('renders 11 dashboard cards including operational KPI, realtime, and cache cards', () => {
+  it('renders 12 dashboard cards including operational KPI, realtime, cache, and MCP cards', () => {
     const { container } = render(
       <StatsGrid
         loading={false}
@@ -72,7 +72,7 @@ describe('StatsGrid', () => {
       />
     );
 
-    expect(container.querySelectorAll('div.rounded-lg.border.bg-card').length).toBe(11);
+    expect(container.querySelectorAll('div.rounded-lg.border.bg-card').length).toBe(12);
     expect(screen.getByText('Cache Hit Rate')).toBeInTheDocument();
     expect(screen.getByText('84.3%')).toBeInTheDocument();
     expect(screen.getByText('Request Latency (p95)')).toBeInTheDocument();
@@ -83,6 +83,8 @@ describe('StatsGrid', () => {
     expect(screen.getByText('active / queued / failed')).toBeInTheDocument();
     expect(screen.getByText('Active Sessions')).toBeInTheDocument();
     expect(screen.getByText('Token Consumption')).toBeInTheDocument();
+    expect(screen.getByText('MCP Tool Invocations')).toBeInTheDocument();
+    expect(screen.getByText('Requires MCP telemetry')).toBeInTheDocument();
   });
 
   it('renders active session count from realtime stats', () => {

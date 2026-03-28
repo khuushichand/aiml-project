@@ -16,6 +16,7 @@ import {
   HardDrive,
   Minus,
   Monitor,
+  Plug,
   Users,
   Wallet,
   Workflow,
@@ -36,7 +37,7 @@ type StatsGridProps = {
   cacheHitRatePct?: number | null;
 };
 
-const CARD_COUNT = 11;
+const CARD_COUNT = 12;
 
 const formatTrendValue = (trend: MetricTrend): string => {
   if (trend.percentChange !== null) {
@@ -227,7 +228,14 @@ export const StatsGrid = ({
               {`${(stats.storageUsedMb / 1024).toFixed(1)} GB`}
             </div>
             <div className="mt-2">
-              <div className="h-2 w-full rounded-full bg-gray-200">
+              <div
+                className="h-2 w-full rounded-full bg-gray-200"
+                role="progressbar"
+                aria-valuenow={Math.round(storagePercentage)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Storage usage"
+              >
                 <div
                   className={`h-2 rounded-full ${
                     storagePercentage > 90 ? 'bg-red-500'
@@ -360,6 +368,22 @@ export const StatsGrid = ({
           <CardContent className="space-y-1">
             <div className="text-2xl font-bold">{formatCacheHitRateKpi(cacheHitRatePct)}</div>
             <p className="text-xs text-muted-foreground">RAG cache hit rate</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">MCP Tool Invocations</CardTitle>
+            <Plug className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <div
+              className="text-2xl font-bold"
+              title="Requires MCP telemetry"
+            >
+              N/A
+            </div>
+            <p className="text-xs text-muted-foreground">Requires MCP telemetry</p>
           </CardContent>
         </Card>
       </>

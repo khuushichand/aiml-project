@@ -3,17 +3,22 @@
 import Link from 'next/link';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, CheckCheck } from 'lucide-react';
 
 type AlertSeverity = 'info' | 'warning' | 'error' | 'critical';
 
-type DashboardAlertSummaryItem = {
+export type DashboardAlertSummaryItem = {
+  id?: string | number;
   severity?: AlertSeverity;
+  message?: string;
+  created_at?: string;
 };
 
 type AlertsBannerProps = {
   alerts: DashboardAlertSummaryItem[];
+  onAcknowledge?: () => void;
 };
 
 export const summarizeAlertSeverities = (alerts: DashboardAlertSummaryItem[]) => {
@@ -39,6 +44,32 @@ export const summarizeAlertSeverities = (alerts: DashboardAlertSummaryItem[]) =>
   return summary;
 };
 
+const SEVERITY_PRIORITY: Record<string, number> = {
+  critical: 0,
+  error: 1,
+  warning: 2,
+  info: 3,
+};
+
+export const findMostRelevantAlert = (
+  alerts: DashboardAlertSummaryItem[]
+): DashboardAlertSummaryItem | null => {
+  if (alerts.length === 0) return null;
+
+  const withMessage = alerts.filter((a) => a.message);
+  if (withMessage.length === 0) return null;
+
+  return withMessage.sort((a, b) => {
+    const severityA = SEVERITY_PRIORITY[(a.severity ?? 'info').toLowerCase()] ?? 3;
+    const severityB = SEVERITY_PRIORITY[(b.severity ?? 'info').toLowerCase()] ?? 3;
+    if (severityA !== severityB) return severityA - severityB;
+
+    const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return dateB - dateA;
+  })[0];
+};
+
 const getAlertToneClasses = (critical: number, warning: number) => {
   if (critical > 0) {
     return {
@@ -61,12 +92,13 @@ const getAlertToneClasses = (critical: number, warning: number) => {
   };
 };
 
-export const AlertsBanner = ({ alerts }: AlertsBannerProps) => {
+export const AlertsBanner = ({ alerts, onAcknowledge }: AlertsBannerProps) => {
   if (alerts.length <= 0) return null;
 
   const summary = summarizeAlertSeverities(alerts);
   const tone = getAlertToneClasses(summary.critical, summary.warning);
   const total = summary.critical + summary.warning + summary.info;
+  const topAlert = findMostRelevantAlert(alerts);
 
   return (
     <Alert className={cn('mb-6', tone.container)}>
@@ -83,9 +115,30 @@ export const AlertsBanner = ({ alerts }: AlertsBannerProps) => {
             {summary.info} info
           </Badge>
         </div>
-        <div>
-          {total} active alert{total !== 1 ? 's' : ''} require attention.{' '}
-          <Link href="/monitoring" className="underline font-medium">View all</Link>
+        {topAlert?.message && (
+          <p className="text-sm truncate" title={topAlert.message} data-testid="top-alert-message">
+            {topAlert.message}
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-3">
+          <span>
+            {total} active alert{total !== 1 ? 's' : ''} require attention.{' '}
+            <Link href="/monitoring" className="underline font-medium">View all</Link>
+          </span>
+          {onAcknowledge && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-xs"
+              onClick={onAcknowledge}
+              title="Acknowledge all alerts"
+              data-testid="acknowledge-alerts-btn"
+            >
+              <CheckCheck className="h-3.5 w-3.5 mr-1" />
+              Acknowledge All
+            </Button>
+          )}
         </div>
       </AlertDescription>
     </Alert>
