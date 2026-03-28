@@ -15,10 +15,10 @@ COPY apps/tldw-frontend /app/apps/tldw-frontend
 COPY apps/packages/ui /app/apps/packages/ui
 
 # Narrow the workspace manifest so the image install does not pull unrelated workspaces.
-RUN node -e "const fs=require('fs');const path='/app/apps/package.json';const pkg=JSON.parse(fs.readFileSync(path,'utf8'));pkg.workspaces=['tldw-frontend','packages/ui'];fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');"
+RUN bun -e "const fs=require('fs');const path='/app/apps/package.json';const pkg=JSON.parse(fs.readFileSync(path,'utf8'));pkg.workspaces=['tldw-frontend','packages/ui'];fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');"
 
 # Install the frontend monorepo with Bun so workspace:* dependencies resolve correctly.
-RUN bun install --cwd /app/apps
+RUN bun install --frozen-lockfile --cwd /app/apps
 
 # Build-time API config baked into client bundle
 ARG NEXT_PUBLIC_API_URL=
@@ -35,8 +35,10 @@ ENV NEXT_PUBLIC_X_API_KEY=${NEXT_PUBLIC_X_API_KEY}
 ENV NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=${NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE}
 ENV TLDW_INTERNAL_API_ORIGIN=${TLDW_INTERNAL_API_ORIGIN}
 
-RUN node /app/apps/tldw-frontend/scripts/validate-networking-config.mjs
-RUN cd /app/apps/tldw-frontend && bun run build
+WORKDIR /app/apps/tldw-frontend
+
+RUN bun /app/apps/tldw-frontend/scripts/validate-networking-config.mjs
+RUN bun run build
 
 
 FROM node:20-bookworm-slim AS runtime
@@ -44,7 +46,9 @@ FROM node:20-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
-    PORT=3000
+    PORT=3000 \
+    NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE=quickstart \
+    TLDW_INTERNAL_API_ORIGIN=http://app:8000
 
 WORKDIR /app
 

@@ -172,7 +172,7 @@ For accelerated audio, local/manual or `make` is the recommended first path.
 
 ## NVIDIA: faster-whisper first
 
-Edit [config.txt](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/config.txt):
+Edit [config.txt](../../tldw_Server_API/Config_Files/config.txt):
 
 ```ini
 [STT-Settings]
@@ -195,7 +195,7 @@ Install the MLX STT extras in your active environment:
 pip install -e '.[STT_Parakeet_MLX]'
 ```
 
-Then edit [config.txt](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/config.txt):
+Then edit [config.txt](../../tldw_Server_API/Config_Files/config.txt):
 
 ```ini
 [STT-Settings]
@@ -231,7 +231,7 @@ python Helper_Scripts/TTS_Installers/install_tts_supertonic.py
 
 ### 3B. Enable the provider
 
-Edit [tts_providers_config.yaml](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/tts_providers_config.yaml):
+Edit [tts_providers_config.yaml](../../tldw_Server_API/Config_Files/tts_providers_config.yaml):
 
 ```yaml
 providers:
@@ -253,7 +253,7 @@ providers:
 
 ### 3C. Make it the default TTS provider
 
-Edit [config.txt](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/config.txt):
+Edit [config.txt](../../tldw_Server_API/Config_Files/config.txt):
 
 ```ini
 [TTS-Settings]
@@ -361,7 +361,7 @@ Use a PocketTTS runtime instead of `supertonic` if local voice cloning matters m
 
 Use:
 
-- [PocketTTS Voice Cloning Guide](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/User_Guides/WebUI_Extension/PocketTTS_Voice_Cloning_Guide.md) for `pocket_tts` (Python/ONNX)
+- [PocketTTS Voice Cloning Guide](../User_Guides/WebUI_Extension/PocketTTS_Voice_Cloning_Guide.md) for `pocket_tts` (Python/ONNX)
 - `python Helper_Scripts/TTS_Installers/install_tts_pocket_tts_cpp.py` for `pocket_tts_cpp` (compiled native runtime)
 
 Tradeoffs:
@@ -376,7 +376,7 @@ Tradeoffs:
 
 After the basic accelerated stack works, move to:
 
-- [QWEN3_TTS_SETUP.md](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/STT-TTS/QWEN3_TTS_SETUP.md)
+- [QWEN3_TTS_SETUP.md](../STT-TTS/QWEN3_TTS_SETUP.md)
 
 Treat it as the advanced upgrade path, not the baseline.
 
@@ -401,7 +401,7 @@ pip install -e '.[STT_Parakeet_MLX]'
 
 ### The server is using the wrong STT model
 
-- make the defaults explicit in [config.txt](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/config.txt)
+- make the defaults explicit in [config.txt](../../tldw_Server_API/Config_Files/config.txt)
 - do not rely on implicit provider selection if you care which backend is used
 - verify with `/api/v1/audio/transcriptions/health?model=...`
 
@@ -419,6 +419,6 @@ That can happen today.
 
 Use `/setup` when you want guided provisioning, then manually set:
 
-- your STT defaults in [config.txt](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/config.txt)
-- your TTS provider in [config.txt](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/config.txt)
-- your enabled provider block in [tts_providers_config.yaml](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/tts_providers_config.yaml)
+- your STT defaults in [config.txt](../../tldw_Server_API/Config_Files/config.txt)
+- your TTS provider in [config.txt](../../tldw_Server_API/Config_Files/config.txt)
+- your enabled provider block in [tts_providers_config.yaml](../../tldw_Server_API/Config_Files/tts_providers_config.yaml)
