@@ -87,6 +87,23 @@ const setCachedAuth = (cacheKey: string, ok: boolean, ttlMs: number): void => {
   enforceCacheSizeLimit();
 };
 
+/**
+ * Invalidate all auth cache entries for a given raw token.
+ * Called by the logout route to prevent revoked tokens from being accepted
+ * for the remainder of the cache TTL.
+ */
+export const invalidateAuthCache = async (rawToken: string): Promise<void> => {
+  const normalized = rawToken.replace(/^Bearer\s+/i, '').trim();
+  if (!normalized || normalized.length > MAX_TOKEN_LENGTH) return;
+
+  for (const kind of ['jwt', 'apiKey'] as AuthTokenKind[]) {
+    const cacheKey = await buildAuthCacheKey(kind, normalized);
+    if (cacheKey) {
+      authCache.delete(cacheKey);
+    }
+  }
+};
+
 const safeDecodeCookieValue = (value: string): string => {
   if (!value || value.length > MAX_COOKIE_VALUE_LENGTH) {
     return '';

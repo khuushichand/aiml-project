@@ -2,17 +2,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-const buildApiUrl = vi.fn((path: string) => `https://example.test${path}`);
+const buildApiUrlForRequest = vi.fn((_req: unknown, path: string) => `https://example.test${path}`);
 const getBackendAuthHeaders = vi.fn(() => new Headers({ Authorization: 'Bearer test-token' }));
 const clearAdminSessionCookies = vi.fn();
+const invalidateAuthCache = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('@/lib/api-config', () => ({
-  buildApiUrl,
+  buildApiUrlForRequest,
 }));
 
 vi.mock('@/lib/server-auth', () => ({
   clearAdminSessionCookies,
   getBackendAuthHeaders,
+  ACCESS_TOKEN_COOKIE: 'access_token',
+  API_KEY_COOKIE: 'x_api_key',
+  LEGACY_API_KEY_COOKIE: 'x-api-key',
+}));
+
+vi.mock('@/middleware', () => ({
+  invalidateAuthCache,
 }));
 
 describe('POST /api/auth/logout', () => {
