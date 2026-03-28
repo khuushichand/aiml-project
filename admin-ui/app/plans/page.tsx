@@ -147,9 +147,29 @@ export default function PlansPage() {
   });
 
   const handleDelete = async (plan: Plan) => {
+    let subscriberCount = 0;
+    let subscriberCheckFailed = false;
+
+    if (billingEnabled) {
+      try {
+        const subs = await api.getSubscriptions({ plan_id: String(plan.id) });
+        subscriberCount = Array.isArray(subs) ? subs.length : 0;
+      } catch (err: unknown) {
+        console.error('Failed to check plan subscribers:', err);
+        subscriberCheckFailed = true;
+      }
+    }
+
+    let message = `Are you sure you want to delete the plan "${plan.name}"? This action cannot be undone.`;
+    if (subscriberCount > 0) {
+      message = `This plan has ${subscriberCount} active subscription(s). Deleting it will affect these organizations.\n\n${message}`;
+    } else if (subscriberCheckFailed) {
+      message = `Warning: Could not verify whether this plan has active subscribers.\n\n${message}`;
+    }
+
     const confirmed = await confirm({
       title: 'Delete Plan',
-      message: `Are you sure you want to delete the plan "${plan.name}"? This action cannot be undone.`,
+      message,
       confirmText: 'Delete',
       variant: 'danger',
       icon: 'delete',
