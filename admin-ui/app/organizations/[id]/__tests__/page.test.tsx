@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import OrganizationDetailPage from '../page';
 import { api } from '@/lib/api-client';
 
@@ -23,6 +24,7 @@ vi.mock('next/navigation', () => ({
     replace: vi.fn(),
     prefetch: vi.fn(),
   }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 vi.mock('@/components/PermissionGuard', () => ({
@@ -154,9 +156,15 @@ afterEach(() => {
 
 describe('OrganizationDetailPage billing state', () => {
   it('clears prior billing details when navigating to an org whose billing requests fail', async () => {
+    const user = userEvent.setup();
     const { rerender } = render(<OrganizationDetailPage />);
 
     await screen.findByText('Org 1');
+
+    // Navigate to the Billing tab to see billing content
+    const billingTab = await screen.findByRole('tab', { name: /billing/i });
+    await user.click(billingTab);
+
     expect(await screen.findByText('active')).toBeInTheDocument();
     expect(screen.getByTestId('invoice-table').textContent).toBe('1');
 
@@ -164,6 +172,11 @@ describe('OrganizationDetailPage billing state', () => {
     rerender(<OrganizationDetailPage />);
 
     await screen.findByText('Org 2');
+
+    // Navigate to Billing tab again for the second org
+    const billingTab2 = await screen.findByRole('tab', { name: /billing/i });
+    await user.click(billingTab2);
+
     await waitFor(() => {
       expect(screen.getByText('No active subscription.')).toBeInTheDocument();
     });
