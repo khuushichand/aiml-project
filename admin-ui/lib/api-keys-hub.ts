@@ -270,6 +270,35 @@ export const buildKeyHygieneSummary = (
   };
 };
 
+export type HygieneFilter = 'none' | 'needs-rotation' | 'expiring-soon' | 'inactive';
+
+export const filterByHygiene = (
+  rows: UnifiedApiKeyRow[],
+  hygieneFilter: HygieneFilter,
+  now: Date = new Date()
+): UnifiedApiKeyRow[] => {
+  if (hygieneFilter === 'none') return rows;
+
+  return rows.filter((row) => {
+    if (row.status !== 'active') return false;
+
+    switch (hygieneFilter) {
+      case 'needs-rotation': {
+        const age = getKeyAgeIndicator(row.createdAt, now);
+        return age !== null && age.ageDays > 180;
+      }
+      case 'expiring-soon': {
+        return getKeyExpiryIndicator(row.expiresAt, now) !== null;
+      }
+      case 'inactive': {
+        return isInactiveKey(row.lastUsedAt, 30, now);
+      }
+      default:
+        return true;
+    }
+  });
+};
+
 export const formatRequestCount24h = (value: number | null): string => {
   if (value === null || !Number.isFinite(value)) {
     return 'N/A';

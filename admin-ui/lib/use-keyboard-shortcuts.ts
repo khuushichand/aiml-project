@@ -83,6 +83,42 @@ export function useKeyboardShortcuts() {
       description: 'Go to Configuration',
       category: 'Navigation',
     },
+    {
+      key: 'g s',
+      action: () => router.push('/security'),
+      description: 'Go to Security',
+      category: 'Navigation',
+    },
+    {
+      key: 'g b',
+      action: () => router.push('/budgets'),
+      description: 'Go to Budgets',
+      category: 'Navigation',
+    },
+    {
+      key: 'g j',
+      action: () => router.push('/jobs'),
+      description: 'Go to Jobs',
+      category: 'Navigation',
+    },
+    {
+      key: 'g i',
+      action: () => router.push('/incidents'),
+      description: 'Go to Incidents',
+      category: 'Navigation',
+    },
+    {
+      key: 'g d',
+      action: () => router.push('/data-ops'),
+      description: 'Go to Data Ops',
+      category: 'Navigation',
+    },
+    {
+      key: 'g l',
+      action: () => router.push('/logs'),
+      description: 'Go to Logs',
+      category: 'Navigation',
+    },
     // Help
     {
       key: '?',

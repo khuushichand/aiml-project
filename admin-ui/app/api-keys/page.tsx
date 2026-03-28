@@ -18,8 +18,10 @@ import { UnifiedApiKeysTable } from '@/components/api-keys/UnifiedApiKeysTable';
 import {
   buildKeyHygieneSummary,
   buildUnifiedApiKeyRows,
+  filterByHygiene,
   filterUnifiedApiKeyRows,
   type ApiKeyMetadataLike,
+  type HygieneFilter,
   type UnifiedApiKeyStatus,
 } from '@/lib/api-keys-hub';
 import { api } from '@/lib/api-client';
@@ -48,6 +50,7 @@ function ApiKeysPageContent() {
   const [ownerFilter, setOwnerFilter] = useUrlState<string>('owner', { defaultValue: '' });
   const [statusFilter, setStatusFilter] = useUrlState<string>('status', { defaultValue: 'all' });
   const [createdBefore, setCreatedBefore] = useUrlState<string>('created_before', { defaultValue: '' });
+  const [hygieneFilter, setHygieneFilter] = useState<HygieneFilter>('none');
 
   const {
     page: currentPage,
@@ -153,14 +156,16 @@ function ApiKeysPageContent() {
       : 'all';
 
   const filteredRows = useMemo(
-    () =>
-      filterUnifiedApiKeyRows(rows, {
+    () => {
+      const baseFiltered = filterUnifiedApiKeyRows(rows, {
         search: searchQuery || '',
         ownerUserId: ownerFilter ? Number(ownerFilter) : null,
         status: normalizedStatusFilter,
         createdBefore: createdBefore || '',
-      }),
-    [rows, searchQuery, ownerFilter, normalizedStatusFilter, createdBefore]
+      });
+      return filterByHygiene(baseFiltered, hygieneFilter);
+    },
+    [rows, searchQuery, ownerFilter, normalizedStatusFilter, createdBefore, hygieneFilter]
   );
   const hygieneSummary = useMemo(() => buildKeyHygieneSummary(rows), [rows]);
   const rowById = useMemo(() => {
@@ -182,10 +187,16 @@ function ApiKeysPageContent() {
     setOwnerFilter(undefined);
     setStatusFilter(undefined);
     setCreatedBefore(undefined);
+    setHygieneFilter('none');
     resetPagination();
   };
 
-  const hasActiveFilters = Boolean(searchQuery || ownerFilter || statusFilter !== 'all' || createdBefore);
+  const toggleHygieneFilter = (filter: HygieneFilter) => {
+    setHygieneFilter((prev) => (prev === filter ? 'none' : filter));
+    resetPagination();
+  };
+
+  const hasActiveFilters = Boolean(searchQuery || ownerFilter || statusFilter !== 'all' || createdBefore || hygieneFilter !== 'none');
   const selectedRows = [...selectedRowIds]
     .map((rowId) => rowById.get(rowId))
     .filter((row): row is NonNullable<typeof row> => Boolean(row));
@@ -299,7 +310,10 @@ function ApiKeysPageContent() {
           </Card>
 
           <div className="mb-6 grid gap-4 md:grid-cols-4">
-            <Card>
+            <Card
+              className={`cursor-pointer transition-colors hover:border-primary ${hygieneFilter === 'needs-rotation' ? 'border-primary ring-1 ring-primary' : ''}`}
+              onClick={() => toggleHygieneFilter('needs-rotation')}
+            >
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm">Keys Needing Rotation</CardTitle>
               </CardHeader>
@@ -308,7 +322,10 @@ function ApiKeysPageContent() {
                 <p className="text-xs text-muted-foreground">&gt;180 days old</p>
               </CardContent>
             </Card>
-            <Card>
+            <Card
+              className={`cursor-pointer transition-colors hover:border-primary ${hygieneFilter === 'expiring-soon' ? 'border-primary ring-1 ring-primary' : ''}`}
+              onClick={() => toggleHygieneFilter('expiring-soon')}
+            >
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm">Expiring Soon</CardTitle>
               </CardHeader>
@@ -317,7 +334,10 @@ function ApiKeysPageContent() {
                 <p className="text-xs text-muted-foreground">Within 30 days</p>
               </CardContent>
             </Card>
-            <Card>
+            <Card
+              className={`cursor-pointer transition-colors hover:border-primary ${hygieneFilter === 'inactive' ? 'border-primary ring-1 ring-primary' : ''}`}
+              onClick={() => toggleHygieneFilter('inactive')}
+            >
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm">Inactive Keys</CardTitle>
               </CardHeader>
