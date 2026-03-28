@@ -39,6 +39,7 @@ def _ws_to_response(ws: dict) -> WorkspaceResponse:
         id=ws["id"],
         name=ws.get("name"),
         archived=bool(ws.get("archived", False)),
+        study_materials_policy=str(ws.get("study_materials_policy") or "general"),
         deleted=bool(ws.get("deleted", False)),
         banner_title=ws.get("banner_title"),
         banner_subtitle=ws.get("banner_subtitle"),
@@ -157,7 +158,11 @@ async def upsert_workspace(
     current_user: User = Depends(get_request_user),
 ):
     """Create or update a workspace (idempotent)."""
-    ws = db.upsert_workspace(workspace_id, body.name)
+    ws = db.upsert_workspace(
+        workspace_id,
+        body.name,
+        study_materials_policy=body.study_materials_policy,
+    )
     return _ws_to_response(ws)
 
 

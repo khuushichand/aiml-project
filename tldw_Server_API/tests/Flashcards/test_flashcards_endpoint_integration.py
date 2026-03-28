@@ -188,6 +188,84 @@ def test_upload_flashcard_asset_returns_markdown_snippet_and_content(
     assert content.content == PNG_1X1_BYTES
 
 
+def test_deck_workspace_id_contract_and_scope_filters(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    flashcards_db.upsert_workspace("ws-1", "Workspace One")
+
+    create_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Scoped Deck", "workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["workspace_id"] == "ws-1"
+    deck_id = created["id"]
+
+    default_list = client_with_flashcards_db.get("/api/v1/flashcards/decks", headers=AUTH_HEADERS)
+    assert default_list.status_code == 200
+    assert all(item["id"] != deck_id for item in default_list.json())
+
+    workspace_list = client_with_flashcards_db.get(
+        "/api/v1/flashcards/decks",
+        params={"workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_list.status_code == 200
+    assert [item["id"] for item in workspace_list.json()] == [deck_id]
+
+    all_list = client_with_flashcards_db.get(
+        "/api/v1/flashcards/decks",
+        params={"include_workspace_items": True},
+        headers=AUTH_HEADERS,
+    )
+    assert all_list.status_code == 200
+    assert any(item["id"] == deck_id for item in all_list.json())
+
+    move_to_general = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/decks/{deck_id}",
+        json={"workspace_id": None, "expected_version": created["version"]},
+        headers=AUTH_HEADERS,
+    )
+    assert move_to_general.status_code == 200
+    moved = move_to_general.json()
+    assert moved["workspace_id"] is None
+
+    general_list = client_with_flashcards_db.get("/api/v1/flashcards/decks", headers=AUTH_HEADERS)
+    assert general_list.status_code == 200
+    assert any(item["id"] == deck_id for item in general_list.json())
+
+
+def test_deck_endpoints_reject_unknown_workspace_ids(
+    client_with_flashcards_db: TestClient,
+):
+    create_response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Bad Deck", "workspace_id": "missing-ws"},
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 404
+    assert "missing-ws" in create_response.json()["detail"]
+
+    valid_deck = client_with_flashcards_db.post(
+        "/api/v1/flashcards/decks",
+        json={"name": "Good Deck"},
+        headers=AUTH_HEADERS,
+    )
+    assert valid_deck.status_code == 200
+    deck_id = valid_deck.json()["id"]
+
+    update_response = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/decks/{deck_id}",
+        json={"workspace_id": "missing-ws", "expected_version": valid_deck.json()["version"]},
+        headers=AUTH_HEADERS,
+    )
+    assert update_response.status_code == 404
+    assert "missing-ws" in update_response.json()["detail"]
+
+
 def test_upload_flashcard_asset_rejects_invalid_or_oversized_upload(
     client_with_flashcards_db: TestClient,
     monkeypatch,
@@ -2019,6 +2097,35 @@ def test_import_json_file_basic(client_with_flashcards_db: TestClient):
     items = r.json().get('items', [])
     assert any(it.get('deck_name') == 'JDeck' and it.get('front') == 'JF1' for it in items)
     assert any(it.get('model_type') == 'cloze' and '{{c1::' in it.get('front') for it in items)
+
+
+def test_import_json_reuses_workspace_owned_deck_by_name(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    flashcards_db.upsert_workspace("ws-1", "Workspace One")
+    workspace_deck_id = flashcards_db.add_deck("Workspace Deck", workspace_id="ws-1")
+
+    payload = [
+        {"deck": "Workspace Deck", "front": "Front", "back": "Back"},
+    ]
+    files = {"file": ("cards.json", json.dumps(payload), "application/json")}
+    response = client_with_flashcards_db.post("/api/v1/flashcards/import/json", files=files, headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["imported"] == 1
+
+    cards_response = client_with_flashcards_db.get("/api/v1/flashcards", headers=AUTH_HEADERS)
+    assert cards_response.status_code == 200
+    cards = cards_response.json()["items"]
+    assert len(cards) == 1
+    assert cards[0]["deck_id"] == workspace_deck_id
+
+    decks = flashcards_db.list_decks(limit=100, offset=0, include_workspace_items=True)
+    same_name_decks = [deck for deck in decks if deck["name"] == "Workspace Deck"]
+    assert len(same_name_decks) == 1
+    assert same_name_decks[0]["id"] == workspace_deck_id
 
 
 def test_import_json_caps_and_errors(client_with_flashcards_db: TestClient, monkeypatch):

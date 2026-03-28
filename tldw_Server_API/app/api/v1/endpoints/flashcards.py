@@ -88,6 +88,13 @@ _FLASHCARDS_INT_PARSE_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 
+def _ensure_workspace_exists(db: CharactersRAGDB, workspace_id: Optional[str]) -> None:
+    if workspace_id is None:
+        return
+    if db.get_workspace(workspace_id) is None:
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
+
+
 def _coerce_scheduler_type(value: Any) -> str:
     return "fsrs" if str(value or "").strip().lower() == "fsrs" else "sm2_plus"
 
@@ -458,11 +465,13 @@ def _get_flashcards_apkg_max_media_bytes() -> int:
 @router.post("/decks", response_model=Deck)
 def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
+        _ensure_workspace_exists(db, payload.workspace_id)
         deck_id = db.add_deck(
             payload.name,
             payload.description,
             payload.scheduler_settings.model_dump() if payload.scheduler_settings else None,
             scheduler_type=payload.scheduler_type,
+            workspace_id=payload.workspace_id,
         )
         # Return the exact deck row by id
         deck = db.get_deck(deck_id)
@@ -473,6 +482,7 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
             "id": deck_id,
             "name": payload.name,
             "description": payload.description,
+            "workspace_id": payload.workspace_id,
             "created_at": None,
             "last_modified": None,
             "deleted": False,
@@ -496,10 +506,22 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
 
 
 @router.get("/decks", response_model=list[Deck])
-def list_decks(db: CharactersRAGDB = Depends(get_chacha_db_for_user), include_deleted: bool = False,
-               limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
+def list_decks(
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    include_deleted: bool = False,
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
     try:
-        return db.list_decks(limit=limit, offset=offset, include_deleted=include_deleted)
+        return db.list_decks(
+            limit=limit,
+            offset=offset,
+            include_deleted=include_deleted,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+        )
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list decks: {e}")
         raise HTTPException(status_code=500, detail="Failed to list decks") from e
@@ -515,13 +537,17 @@ def update_deck(
     expected_version = data.pop("expected_version", None)
     scheduler_settings = data.pop("scheduler_settings", None)
     scheduler_type = data.pop("scheduler_type", None)
+    workspace_id = data.pop("workspace_id", ...)
     try:
+        if workspace_id is not ...:
+            _ensure_workspace_exists(db, workspace_id)
         ok = db.update_deck(
             deck_id,
             name=data.get("name"),
             description=data.get("description"),
             scheduler_settings=scheduler_settings,
             scheduler_type=scheduler_type,
+            workspace_id=workspace_id,
             expected_version=expected_version,
         )
         if not ok:
@@ -1043,7 +1069,10 @@ def import_flashcards(
         # Build or cache decks by name
         decks_cache: dict[str, int] = {}
         # Preload existing decks once
-        existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        existing_decks = {
+            d.get('name'): d.get('id')
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
+        }
         default_deck_name = 'Default'
         # Ensure default deck exists in cache
         if default_deck_name not in existing_decks:
@@ -1242,7 +1271,10 @@ async def import_flashcards_json(
             raise HTTPException(status_code=400, detail="JSON content must be a list of objects or {'items': [...]} ")
 
         # Deck cache
-        existing_decks = {d.get('name'): d.get('id') for d in db.list_decks(limit=10000, offset=0, include_deleted=False)}
+        existing_decks = {
+            d.get('name'): d.get('id')
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
+        }
         decks_cache: dict[str, int] = dict(existing_decks)
         default_deck_name = 'Default'
         if default_deck_name not in decks_cache:
@@ -1408,7 +1440,7 @@ async def import_flashcards_apkg(
 
         existing_decks = {
             d.get("name"): d.get("id")
-            for d in db.list_decks(limit=10000, offset=0, include_deleted=False)
+            for d in db.list_decks(limit=10000, offset=0, include_deleted=False, include_workspace_items=True)
         }
         decks_cache: dict[str, int] = dict(existing_decks)
         if "Default" not in decks_cache:

@@ -57,6 +57,50 @@ def test_quizzes_basic_flow():
         assert attempts["count"] == 1
 
 
+def test_quiz_workspace_id_persists_and_can_move_between_scopes():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "ChaChaNotes.db")
+        db = CharactersRAGDB(db_path, client_id="test")
+        db.upsert_workspace("ws-1", "Workspace One")
+
+        quiz_id = db.create_quiz(
+            name="Scoped Quiz",
+            workspace_id="ws-1",
+            workspace_tag="workspace:legacy",
+        )
+        quiz = db.get_quiz(quiz_id)
+
+        assert quiz is not None
+        assert quiz["workspace_id"] == "ws-1"
+        assert quiz["workspace_tag"] == "workspace:legacy"
+
+        default_items = db.list_quizzes(limit=20, offset=0)["items"]
+        assert all(item["id"] != quiz_id for item in default_items)
+
+        workspace_items = db.list_quizzes(workspace_id="ws-1", limit=20, offset=0)["items"]
+        assert [item["id"] for item in workspace_items] == [quiz_id]
+
+        all_items = db.list_quizzes(include_workspace_items=True, limit=20, offset=0)["items"]
+        assert any(item["id"] == quiz_id for item in all_items)
+
+        assert db.update_quiz(quiz_id, {"workspace_id": None, "expected_version": quiz["version"]}) is True
+        moved_to_general = db.get_quiz(quiz_id)
+        assert moved_to_general is not None
+        assert moved_to_general["workspace_id"] is None
+        assert moved_to_general["workspace_tag"] == "workspace:legacy"
+
+        general_items = db.list_quizzes(limit=20, offset=0)["items"]
+        assert any(item["id"] == quiz_id for item in general_items)
+
+        assert db.update_quiz(
+            quiz_id,
+            {"workspace_id": "ws-1", "expected_version": moved_to_general["version"]},
+        ) is True
+        moved_back = db.get_quiz(quiz_id)
+        assert moved_back is not None
+        assert moved_back["workspace_id"] == "ws-1"
+
+
 def test_fill_blank_accepts_delimited_alternates():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "ChaChaNotes.db")

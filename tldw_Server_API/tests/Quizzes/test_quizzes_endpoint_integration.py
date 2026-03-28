@@ -211,6 +211,155 @@ def test_quiz_endpoints_flow(client_with_quizzes_db: TestClient):
     assert result["answers"][0]["is_correct"] is True
 
 
+def test_quiz_workspace_id_contract_and_scope_filters(
+    client_with_quizzes_db: TestClient,
+    quizzes_db: CharactersRAGDB,
+):
+    quizzes_db.upsert_workspace("ws-1", "Workspace One")
+
+    create_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={
+            "name": "Scoped Quiz",
+            "workspace_id": "ws-1",
+            "workspace_tag": "workspace:legacy",
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["workspace_id"] == "ws-1"
+    assert created["workspace_tag"] == "workspace:legacy"
+
+    quiz_id = created["id"]
+
+    default_list = client_with_quizzes_db.get("/api/v1/quizzes", headers=AUTH_HEADERS)
+    assert default_list.status_code == 200
+    assert all(item["id"] != quiz_id for item in default_list.json()["items"])
+
+    workspace_list = client_with_quizzes_db.get(
+        "/api/v1/quizzes",
+        params={"workspace_id": "ws-1"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_list.status_code == 200
+    assert [item["id"] for item in workspace_list.json()["items"]] == [quiz_id]
+
+    all_list = client_with_quizzes_db.get(
+        "/api/v1/quizzes",
+        params={"include_workspace_items": True},
+        headers=AUTH_HEADERS,
+    )
+    assert all_list.status_code == 200
+    assert any(item["id"] == quiz_id for item in all_list.json()["items"])
+
+    move_to_general = client_with_quizzes_db.patch(
+        f"/api/v1/quizzes/{quiz_id}",
+        json={"workspace_id": None, "expected_version": created["version"]},
+        headers=AUTH_HEADERS,
+    )
+    assert move_to_general.status_code == 200
+    moved = move_to_general.json()
+    assert moved["workspace_id"] is None
+    assert moved["workspace_tag"] == "workspace:legacy"
+
+    general_list = client_with_quizzes_db.get("/api/v1/quizzes", headers=AUTH_HEADERS)
+    assert general_list.status_code == 200
+    assert any(item["id"] == quiz_id for item in general_list.json()["items"])
+
+
+def test_quiz_endpoints_reject_unknown_workspace_ids(
+    client_with_quizzes_db: TestClient,
+):
+    create_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={"name": "Bad Quiz", "workspace_id": "missing-ws"},
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 404
+    assert "missing-ws" in create_response.json()["detail"]
+
+    valid_quiz = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={"name": "Good Quiz"},
+        headers=AUTH_HEADERS,
+    )
+    assert valid_quiz.status_code == 200
+    quiz_id = valid_quiz.json()["id"]
+
+    update_response = client_with_quizzes_db.patch(
+        f"/api/v1/quizzes/{quiz_id}",
+        json={"workspace_id": "missing-ws"},
+        headers=AUTH_HEADERS,
+    )
+    assert update_response.status_code == 404
+    assert "missing-ws" in update_response.json()["detail"]
+
+    import_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes/import/json",
+        json={
+            "export_format": "tldw.quiz.export.v1",
+            "quizzes": [
+                {
+                    "quiz": {
+                        "name": "Imported Quiz",
+                        "workspace_id": "missing-ws",
+                    },
+                    "questions": [],
+                }
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert import_response.status_code == 200
+    payload = import_response.json()
+    assert payload["imported_quizzes"] == 0
+    assert payload["failed_quizzes"] == 1
+    assert payload["errors"][0]["error"] == "Workspace 'missing-ws' not found"
+
+
+def test_quiz_patch_rejects_workspace_tag_mutation(client_with_quizzes_db: TestClient):
+    create_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={"name": "Quiz Tag Update Rejection"},
+        headers=AUTH_HEADERS,
+    )
+    assert create_response.status_code == 200
+    quiz_id = create_response.json()["id"]
+
+    update_response = client_with_quizzes_db.patch(
+        f"/api/v1/quizzes/{quiz_id}",
+        json={"workspace_tag": "workspace:mutated"},
+        headers=AUTH_HEADERS,
+    )
+    assert update_response.status_code == 422
+
+
+def test_quiz_list_ignores_workspace_tag_query_param(client_with_quizzes_db: TestClient):
+    first_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={"name": "Quiz One", "workspace_tag": "workspace:first"},
+        headers=AUTH_HEADERS,
+    )
+    second_response = client_with_quizzes_db.post(
+        "/api/v1/quizzes",
+        json={"name": "Quiz Two", "workspace_tag": "workspace:second"},
+        headers=AUTH_HEADERS,
+    )
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+
+    baseline = client_with_quizzes_db.get("/api/v1/quizzes", headers=AUTH_HEADERS)
+    filtered = client_with_quizzes_db.get(
+        "/api/v1/quizzes",
+        params={"workspace_tag": "workspace:first"},
+        headers=AUTH_HEADERS,
+    )
+    assert baseline.status_code == 200
+    assert filtered.status_code == 200
+    assert filtered.json()["count"] == baseline.json()["count"]
+
+
 def test_attempts_list_route_is_not_shadowed_by_quiz_id(client_with_quizzes_db: TestClient):
     create_quiz_response = client_with_quizzes_db.post(
         "/api/v1/quizzes",
@@ -780,6 +929,7 @@ def test_generate_quiz_from_quiz_attempt_question_sources(
 ):
     attempt_id, question_ids = _create_attempt_with_missed_questions(quizzes_db)
     question_source_id = f"{attempt_id}:{question_ids[0]}"
+    quizzes_db.upsert_workspace("ws-1", "Workspace One")
 
     async def fake_generate_llm(*, prompt: str, model: str | None = None):
         assert "Which structure filters blood?" in prompt
@@ -810,6 +960,7 @@ def test_generate_quiz_from_quiz_attempt_question_sources(
         json={
             "num_questions": 1,
             "sources": [{"source_type": "quiz_attempt_question", "source_id": question_source_id}],
+            "workspace_id": "ws-1",
         },
         headers=AUTH_HEADERS,
     )
@@ -818,6 +969,7 @@ def test_generate_quiz_from_quiz_attempt_question_sources(
     payload = response.json()
     assert payload["quiz"]["name"] == "Quiz: Remediation"
     assert payload["quiz"]["description"] == "Auto-generated remediation quiz from missed questions"
+    assert payload["quiz"]["workspace_id"] == "ws-1"
     assert payload["quiz"]["source_bundle_json"] == [
         {"source_type": "quiz_attempt_question", "source_id": question_source_id}
     ]
@@ -904,11 +1056,19 @@ def test_generate_quiz_rejects_invalid_quiz_attempt_question_source_identifier(
 
 
 def test_quiz_json_import_roundtrip(client_with_quizzes_db: TestClient):
+    workspace_response = client_with_quizzes_db.put(
+        "/api/v1/workspaces/ws-1",
+        json={"name": "Workspace One", "study_materials_policy": "workspace"},
+        headers=AUTH_HEADERS,
+    )
+    assert workspace_response.status_code == 200
+
     source_quiz_response = client_with_quizzes_db.post(
         "/api/v1/quizzes",
         json={
             "name": "Roundtrip Quiz",
             "description": "roundtrip source",
+            "workspace_id": "ws-1",
             "workspace_tag": "workspace:science",
             "media_id": 99,
             "time_limit_seconds": 900,
@@ -1013,6 +1173,7 @@ def test_quiz_json_import_roundtrip(client_with_quizzes_db: TestClient):
     imported_quiz = imported_quiz_response.json()
     assert imported_quiz["name"] == source_quiz["name"]
     assert imported_quiz["description"] == source_quiz["description"]
+    assert imported_quiz["workspace_id"] == source_quiz["workspace_id"]
     assert imported_quiz["workspace_tag"] == source_quiz["workspace_tag"]
     assert imported_quiz["media_id"] == source_quiz["media_id"]
     assert imported_quiz["time_limit_seconds"] == source_quiz["time_limit_seconds"]

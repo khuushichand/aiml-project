@@ -51,6 +51,13 @@ router = APIRouter(prefix="/quizzes", tags=["quizzes"])
 QUIZ_EXPORT_FORMAT = "tldw.quiz.export.v1"
 
 
+def _ensure_workspace_exists(db: CharactersRAGDB, workspace_id: Optional[str]) -> None:
+    if workspace_id is None:
+        return
+    if db.get_workspace(workspace_id) is None:
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' not found")
+
+
 def _build_assistant_context_snapshot(context: dict[str, Any]) -> dict[str, Any]:
     return {
         "context_type": context.get("context_type"),
@@ -100,14 +107,22 @@ def _mark_orphaned_remediation_items(
 def list_quizzes(
     q: Optional[str] = None,
     media_id: Optional[int] = None,
-    workspace_tag: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    include_workspace_items: bool = False,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     """List quizzes with pagination and optional filters."""
     try:
-        return db.list_quizzes(q=q, media_id=media_id, workspace_tag=workspace_tag, limit=limit, offset=offset)
+        return db.list_quizzes(
+            q=q,
+            media_id=media_id,
+            workspace_id=workspace_id,
+            include_workspace_items=include_workspace_items,
+            limit=limit,
+            offset=offset,
+        )
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list quizzes: {e}")
         raise HTTPException(status_code=500, detail="Failed to list quizzes") from e
@@ -117,6 +132,7 @@ def list_quizzes(
 def create_quiz(payload: QuizCreate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     """Create a new quiz."""
     try:
+        _ensure_workspace_exists(db, payload.workspace_id)
         quiz_id = db.create_quiz(**payload.model_dump())
         quiz = db.get_quiz(quiz_id)
         if not quiz:
@@ -146,8 +162,19 @@ def import_quizzes_json(
     for source_index, entry in enumerate(payload.quizzes):
         quiz_name = entry.quiz.name
         try:
+            _ensure_workspace_exists(db, entry.quiz.workspace_id)
             quiz_id = db.create_quiz(**entry.quiz.model_dump())
             imported_quizzes += 1
+        except HTTPException as exc:
+            failed_quizzes += 1
+            errors.append(
+                QuizImportError(
+                    source_index=source_index,
+                    quiz_name=quiz_name,
+                    error=str(exc.detail),
+                )
+            )
+            continue
         except CharactersRAGDBError as exc:
             failed_quizzes += 1
             errors.append(
@@ -219,7 +246,10 @@ def update_quiz(
 ):
     """Update a quiz."""
     try:
-        ok = db.update_quiz(quiz_id, updates.model_dump(exclude_unset=True))
+        update_data = updates.model_dump(exclude_unset=True)
+        if "workspace_id" in update_data:
+            _ensure_workspace_exists(db, update_data["workspace_id"])
+        ok = db.update_quiz(quiz_id, update_data)
         if not ok:
             raise HTTPException(status_code=404, detail="Quiz not found")
         quiz = db.get_quiz(quiz_id)
@@ -554,6 +584,7 @@ async def generate_quiz(
 ):
     """Generate a quiz from mixed sources using AI."""
     try:
+        _ensure_workspace_exists(db, request.workspace_id)
         if request.sources:
             sources = [source.model_dump(mode="json") for source in request.sources]
         elif request.media_id is not None:
@@ -561,7 +592,7 @@ async def generate_quiz(
         else:
             raise ValueError("Either media_id or sources must be provided")
 
-        return await generate_quiz_from_sources(
+        result = await generate_quiz_from_sources(
             db=db,
             media_db=media_db,
             sources=sources,
@@ -570,8 +601,10 @@ async def generate_quiz(
             difficulty=request.difficulty,
             focus_topics=request.focus_topics,
             model=request.model,
+            workspace_id=request.workspace_id,
             workspace_tag=request.workspace_tag,
         )
+        return result
     except QuizProvenanceValidationError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     except ConflictError as e:

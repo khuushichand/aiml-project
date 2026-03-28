@@ -41,3 +41,37 @@ def test_flashcards_basic_flow():
         data = db.export_flashcards_csv(deck_id=deck_id)
         text = data.decode("utf-8")
         assert "What is 2+2?" in text
+
+
+def test_deck_workspace_id_persists_and_can_move_between_scopes():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "ChaChaNotes.db")
+        db = CharactersRAGDB(db_path, client_id="test")
+        db.upsert_workspace("ws-1", "Workspace One")
+
+        deck_id = db.add_deck("Scoped Deck", "desc", workspace_id="ws-1")
+        deck = db.get_deck(deck_id)
+        assert deck is not None
+        assert deck["workspace_id"] == "ws-1"
+
+        default_items = db.list_decks(limit=20, offset=0)
+        assert all(item["id"] != deck_id for item in default_items)
+
+        workspace_items = db.list_decks(workspace_id="ws-1", limit=20, offset=0)
+        assert [item["id"] for item in workspace_items] == [deck_id]
+
+        all_items = db.list_decks(include_workspace_items=True, limit=20, offset=0)
+        assert any(item["id"] == deck_id for item in all_items)
+
+        assert db.update_deck(deck_id, workspace_id=None, expected_version=deck["version"]) is True
+        moved_to_general = db.get_deck(deck_id)
+        assert moved_to_general is not None
+        assert moved_to_general["workspace_id"] is None
+
+        general_items = db.list_decks(limit=20, offset=0)
+        assert any(item["id"] == deck_id for item in general_items)
+
+        assert db.update_deck(deck_id, workspace_id="ws-1", expected_version=moved_to_general["version"]) is True
+        moved_back = db.get_deck(deck_id)
+        assert moved_back is not None
+        assert moved_back["workspace_id"] == "ws-1"

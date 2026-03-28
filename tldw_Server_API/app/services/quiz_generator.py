@@ -487,11 +487,13 @@ def _persist_generated_quiz(
     quiz_title: str,
     quiz_description: str,
     primary_media_id: int | None,
+    workspace_id: str | None,
     workspace_tag: str | None,
 ) -> dict[str, Any]:
     quiz_id = db.create_quiz(
         name=f"Quiz: {quiz_title}" if quiz_title else "Quiz: Mixed Sources",
         description=quiz_description,
+        workspace_id=workspace_id,
         workspace_tag=workspace_tag,
         media_id=primary_media_id,
         source_bundle_json=normalized_sources,
@@ -531,6 +533,7 @@ async def generate_quiz_from_sources(
     difficulty: str = "mixed",
     focus_topics: list[str] | None = None,
     model: str | None = None,
+    workspace_id: str | None = None,
     workspace_tag: str | None = None,
 ) -> dict[str, Any]:
     """Generate a quiz from mixed sources (media, notes, flashcard decks/cards)."""
@@ -592,6 +595,7 @@ async def generate_quiz_from_sources(
         quiz_title=quiz_title,
         quiz_description=quiz_description,
         primary_media_id=primary_media_id,
+        workspace_id=workspace_id,
         workspace_tag=workspace_tag,
     )
 
@@ -606,6 +610,7 @@ async def generate_quiz_from_media(
     difficulty: str = "mixed",
     focus_topics: list[str] | None = None,
     model: str | None = None,
+    workspace_id: str | None = None,
     workspace_tag: str | None = None,
 ) -> dict[str, Any]:
     """Backward-compatible wrapper for legacy media-only generation requests."""
@@ -618,5 +623,6 @@ async def generate_quiz_from_media(
         difficulty=difficulty,
         focus_topics=focus_topics,
         model=model,
+        workspace_id=workspace_id,
         workspace_tag=workspace_tag,
     )

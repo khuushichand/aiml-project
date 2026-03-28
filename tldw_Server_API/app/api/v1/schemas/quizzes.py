@@ -50,6 +50,7 @@ class QuizCreate(BaseModel):
     name: str = Field(..., description="Quiz name")
     description: Optional[str] = Field(None, description="Optional quiz description")
     workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
+    workspace_id: Optional[str] = Field(None, description="Canonical owning workspace ID; null means general scope")
     media_id: Optional[int] = Field(None, description="Source media ID for AI-generated quizzes")
     source_bundle_json: Optional[list[QuizGenerateSource]] = Field(
         None, description="Optional canonical mixed-source bundle used to generate this quiz"
@@ -63,7 +64,7 @@ class QuizUpdate(BaseModel):
 
     name: Optional[str] = None
     description: Optional[str] = None
-    workspace_tag: Optional[str] = None
+    workspace_id: Optional[str] = None
     media_id: Optional[int] = None
     source_bundle_json: Optional[list[QuizGenerateSource]] = None
     time_limit_seconds: Optional[int] = Field(None, ge=1)
@@ -76,6 +77,7 @@ class QuizResponse(BaseModel):
     name: str
     description: Optional[str] = None
     workspace_tag: Optional[str] = None
+    workspace_id: Optional[str] = None
     media_id: Optional[int] = None
     source_bundle_json: Optional[list[QuizGenerateSource]] = None
     total_questions: int
@@ -279,6 +281,7 @@ class QuizGenerateRequest(BaseModel):
     difficulty: str = Field("mixed", description="easy, medium, hard, mixed")
     focus_topics: Optional[list[str]] = None
     model: Optional[str] = None
+    workspace_id: Optional[str] = Field(None, description="Canonical owning workspace ID; null means general scope")
     workspace_tag: Optional[str] = Field(None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>')")
 
     @model_validator(mode="after")
@@ -310,6 +313,7 @@ class QuizImportQuestion(BaseModel):
 class QuizImportQuiz(BaseModel):
     name: str
     description: Optional[str] = None
+    workspace_id: Optional[str] = None
     workspace_tag: Optional[str] = None
     media_id: Optional[int] = None
     source_bundle_json: Optional[list[QuizGenerateSource]] = None

@@ -528,7 +528,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 38  # Schema v38 adds quiz remediation conversion state
+    _CURRENT_SCHEMA_VERSION = 39  # Schema v39 adds workspace ownership for quizzes/decks and workspace policy
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _ALLOWED_CONVERSATION_CHARACTER_SCOPES: tuple[str, ...] = ("all", "character", "non_character")
@@ -1410,6 +1410,7 @@ CREATE TABLE IF NOT EXISTS decks(
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT UNIQUE NOT NULL,
   description   TEXT,
+  workspace_id  TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted       BOOLEAN  NOT NULL DEFAULT 0,
@@ -1418,6 +1419,7 @@ CREATE TABLE IF NOT EXISTS decks(
 );
 CREATE INDEX IF NOT EXISTS idx_decks_deleted ON decks(deleted);
 CREATE INDEX IF NOT EXISTS idx_decks_last_modified ON decks(last_modified);
+CREATE INDEX IF NOT EXISTS idx_decks_workspace_id ON decks(workspace_id);
 
 /* Flashcards table - with integer id for FTS external-content */
 CREATE TABLE IF NOT EXISTS flashcards(
@@ -1933,6 +1935,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
   name TEXT NOT NULL,
   description TEXT,
   workspace_tag TEXT,
+  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
   media_id INTEGER,
   total_questions INTEGER DEFAULT 0,
   time_limit_seconds INTEGER,
@@ -1946,6 +1949,7 @@ CREATE TABLE IF NOT EXISTS quizzes (
 CREATE INDEX IF NOT EXISTS idx_quizzes_media_id ON quizzes(media_id);
 CREATE INDEX IF NOT EXISTS idx_quizzes_deleted ON quizzes(deleted);
 CREATE INDEX IF NOT EXISTS idx_quizzes_last_modified ON quizzes(last_modified);
+CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_id ON quizzes(workspace_id);
 
 /* Quiz questions */
 CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -3150,6 +3154,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     name          TEXT    NOT NULL,
     description   TEXT,
     metadata_json TEXT    NOT NULL DEFAULT '{}',
+    study_materials_policy TEXT NOT NULL DEFAULT 'general',
     archived      BOOLEAN NOT NULL DEFAULT false,
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3258,6 +3263,24 @@ UPDATE db_schema_version
    SET version = 38
  WHERE schema_name = 'rag_char_chat_schema'
    AND version < 38;
+"""
+    _MIGRATION_SQL_V38_TO_V39 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 39 - Workspace ownership for quizzes/decks + workspace policy (2026-03-27)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 39
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 39;
+"""
+    _MIGRATION_SQL_V38_TO_V39_POSTGRES = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 39 - Workspace ownership for quizzes/decks + workspace policy (2026-03-27)
+───────────────────────────────────────────────────────────────*/
+UPDATE db_schema_version
+   SET version = 39
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 39;
 """
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
@@ -5041,6 +5064,27 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V37->V38: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V38 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
 
+    def _migrate_from_v38_to_v39(self, conn: sqlite3.Connection) -> None:
+        """Migrate schema from V38 to V39 (workspace ownership and workspace study materials policy)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V38 to V39 for DB: {self.db_path_str}...")
+        try:
+            self._ensure_workspace_study_material_schema_sqlite(conn)
+            conn.executescript(self._MIGRATION_SQL_V38_TO_V39)
+            final_version = self._get_db_version(conn)
+            if final_version != 39:
+                raise SchemaError(  # noqa: TRY003, TRY301
+                    f"[{self._SCHEMA_NAME}] Migration V38->V39 failed version check. Expected 39, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V39 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V38->V39 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V38->V39 failed for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+        except SchemaError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V38->V39: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V39 for '{self._SCHEMA_NAME}': {e}") from e  # noqa: TRY003
+
     def _ensure_recent_persona_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Backfill recent persona schema columns after version-number collisions."""
         profile_cols = {row[1] for row in conn.execute("PRAGMA table_info('persona_profiles')").fetchall()}
@@ -5609,6 +5653,49 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         for statement in statements:
             self.backend.execute(statement, connection=conn)
 
+    def _ensure_workspace_study_material_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure workspace ownership columns and workspace study-material policy exist for SQLite."""
+        try:
+            workspace_cols = {row[1] for row in conn.execute("PRAGMA table_info('workspaces')").fetchall()}
+            if "study_materials_policy" not in workspace_cols:
+                conn.execute(
+                    "ALTER TABLE workspaces ADD COLUMN study_materials_policy TEXT NOT NULL DEFAULT 'general'"
+                )
+            conn.execute(
+                "UPDATE workspaces SET study_materials_policy = 'general' "
+                "WHERE study_materials_policy IS NULL OR trim(study_materials_policy) = ''"
+            )
+
+            quiz_cols = {row[1] for row in conn.execute("PRAGMA table_info('quizzes')").fetchall()}
+            if "workspace_id" not in quiz_cols:
+                conn.execute(
+                    "ALTER TABLE quizzes ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_id ON quizzes(workspace_id)")
+
+            deck_cols = {row[1] for row in conn.execute("PRAGMA table_info('decks')").fetchall()}
+            if "workspace_id" not in deck_cols:
+                conn.execute(
+                    "ALTER TABLE decks ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL"
+                )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_workspace_id ON decks(workspace_id)")
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring SQLite workspace study-material schema: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_workspace_study_material_schema_postgres(self, conn: Any) -> None:
+        """Ensure workspace ownership columns and workspace study-material policy exist for PostgreSQL."""
+        statements = [
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS study_materials_policy TEXT NOT NULL DEFAULT 'general'",
+            "UPDATE workspaces SET study_materials_policy = 'general' "
+            "WHERE study_materials_policy IS NULL OR btrim(study_materials_policy) = ''",
+            "ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
+            "CREATE INDEX IF NOT EXISTS idx_quizzes_workspace_id ON quizzes(workspace_id)",
+            "ALTER TABLE decks ADD COLUMN IF NOT EXISTS workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL",
+            "CREATE INDEX IF NOT EXISTS idx_decks_workspace_id ON decks(workspace_id)",
+        ]
+        for statement in statements:
+            self.backend.execute(statement, connection=conn)
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -5884,6 +5971,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 38 and current_db_version == 37:
                         self._migrate_from_v37_to_v38(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 39 and current_db_version == 38:
+                        self._migrate_from_v38_to_v39(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -5922,6 +6012,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_character ON character_exemplars(character_id)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_scenario_emotion ON character_exemplars(scenario, emotion)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_character_exemplars_novelty ON character_exemplars(novelty_hint)")
+                    self._ensure_workspace_study_material_schema_sqlite(conn)
                 except sqlite3.Error:
                     pass
                 # Example for future migrations:
@@ -6304,6 +6395,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 if target_version >= 38 and current_db_version == 37:
                     self._migrate_from_v37_to_v38(conn)
                     current_db_version = self._get_db_version(conn)
+                if target_version >= 39 and current_db_version == 38:
+                    self._migrate_from_v38_to_v39(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 self._ensure_recent_persona_schema_sqlite(conn)
                 self._ensure_recent_voice_command_schema_sqlite(conn)
@@ -6316,6 +6410,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 # Verify core FTS tables after migrations complete
                 self._verify_required_fts_tables_sqlite(conn)
                 self._ensure_workspace_subresource_schema_sqlite(conn)
+                self._ensure_workspace_study_material_schema_sqlite(conn)
                 self._ensure_flashcard_asset_schema_sqlite(conn)
                 self._ensure_flashcard_scheduler_schema_sqlite(conn)
                 self._ensure_study_assistant_schema_sqlite(conn)
@@ -7534,6 +7629,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_quiz_remediation_conversion_schema_postgres(conn)
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V37_TO_V38_POSTGRES, conn, expected_version=38)
                 current_version = 38
+            if current_version < 39:
+                self._ensure_workspace_study_material_schema_postgres(conn)
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V38_TO_V39_POSTGRES, conn, expected_version=39)
+                current_version = 39
 
             if current_version > target_version:
                 raise SchemaError(  # noqa: TRY003
@@ -7543,6 +7642,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             self._ensure_flashcard_asset_schema_postgres(conn)
             self._ensure_flashcard_scheduler_schema_postgres(conn)
             self._ensure_study_assistant_schema_postgres(conn)
+            self._ensure_workspace_study_material_schema_postgres(conn)
             self._ensure_quiz_remediation_conversion_schema_postgres(conn)
             self._ensure_postgres_flashcards_tsvector(conn)
             self._ensure_recent_persona_schema_postgres(conn)
@@ -16128,11 +16228,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         description: str | None = None,
         metadata_json: str | None = None,
+        study_materials_policy: str = "general",
     ) -> dict[str, Any]:
-        """Create a workspace or return the existing one (idempotent by id).
+        """Create a workspace or update the existing row in place.
 
-        If the workspace already exists (and is not deleted), its current row is
-        returned without modification, making the call idempotent.
+        If the workspace already exists (and is not deleted), the provided
+        mutable fields are applied to the existing row using optimistic locking.
 
         Returns:
             A dict representing the workspace row.
@@ -16144,21 +16245,35 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not workspace_id or not name:
             raise InputError("workspace_id and name are required.")  # noqa: TRY003
 
+        normalized_policy = study_materials_policy or "general"
         existing = self.get_workspace(workspace_id)
         if existing is not None:
-            return existing
+            updates: dict[str, Any] = {}
+            if existing.get("name") != name:
+                updates["name"] = name
+            if description is not None and existing.get("description") != description:
+                updates["description"] = description
+            if metadata_json is not None and existing.get("metadata_json") != metadata_json:
+                updates["metadata_json"] = metadata_json
+            if existing.get("study_materials_policy") != normalized_policy:
+                updates["study_materials_policy"] = normalized_policy
+            if not updates:
+                return existing
+            return self.update_workspace(workspace_id, updates, expected_version=int(existing["version"]))
 
         now = self._get_current_utc_timestamp_iso()
         client_id = self.client_id or "unknown"
         query = (
-            "INSERT INTO workspaces (id, name, description, metadata_json, created_at, last_modified, deleted, client_id, version) "
-            "VALUES (?, ?, ?, ?, ?, ?, 0, ?, 1)"
+            "INSERT INTO workspaces "
+            "(id, name, description, metadata_json, study_materials_policy, created_at, last_modified, deleted, client_id, version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 1)"
         )
         params = (
             workspace_id,
             name,
             description,
             metadata_json or "{}",
+            normalized_policy,
             now,
             now,
             client_id,
@@ -16220,7 +16335,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         params: list[Any] = [now, expected_version + 1]
 
         for col in (
-            "name", "description", "metadata_json", "archived", "tag",
+            "name", "description", "metadata_json", "study_materials_policy", "archived", "tag",
             "banner_title", "banner_subtitle", "banner_color",
             "audio_provider", "audio_model", "audio_voice", "audio_speed",
         ):
@@ -16302,6 +16417,18 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         now = self._get_current_utc_timestamp_iso()
         with self.transaction() as conn:
+            conn.execute(
+                "UPDATE quizzes "
+                "SET workspace_id = NULL, last_modified = ?, version = version + 1, client_id = ? "
+                "WHERE workspace_id = ? AND deleted = 0",
+                (now, self.client_id, workspace_id),
+            )
+            conn.execute(
+                "UPDATE decks "
+                "SET workspace_id = NULL, last_modified = ?, version = version + 1, client_id = ? "
+                "WHERE workspace_id = ? AND deleted = 0",
+                (now, self.client_id, workspace_id),
+            )
             cursor = conn.execute(
                 "UPDATE workspaces SET deleted = 1, last_modified = ?, version = ? WHERE id = ? AND version = ?",
                 (now, expected_version + 1, workspace_id, expected_version),
@@ -20115,6 +20242,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         scheduler_settings: Mapping[str, Any] | str | None = None,
         *,
         scheduler_type: str = "sm2_plus",
+        workspace_id: str | None = None,
     ) -> int:
         """Create a deck and return its id."""
         now = self._get_current_utc_timestamp_iso()
@@ -20135,6 +20263,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         (
                             "UPDATE decks SET deleted = ?, last_modified = ?, version = ?, client_id = ?, "
                             "description = COALESCE(?, description), "
+                            "workspace_id = ?, "
                             "scheduler_type = COALESCE(?, scheduler_type), "
                             "scheduler_settings_json = COALESCE(?, scheduler_settings_json) "
                             "WHERE id = ? AND version = ?"
@@ -20145,6 +20274,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             next_version,
                             self.client_id,
                             description,
+                            workspace_id,
                             scheduler_type,
                             scheduler_settings_json,
                             deck_id,
@@ -20159,12 +20289,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         )
                     return deck_id
                 insert_sql = (
-                    "INSERT INTO decks(name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, client_id, version, deleted)"
-                    " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "INSERT INTO decks("
+                    "name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, client_id, version, deleted"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
+                    workspace_id,
                     scheduler_settings_json,
                     scheduler_type,
                     now,
@@ -20196,19 +20328,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to create deck: {e}") from e  # noqa: TRY003
 
-    def list_decks(self, limit: int = 100, offset: int = 0, include_deleted: bool = False) -> list[dict[str, Any]]:
+    def list_decks(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        include_deleted: bool = False,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
+    ) -> list[dict[str, Any]]:
+        select_sql = (
+            "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, "
+            "deleted, client_id, version FROM decks "
+        )
         if include_deleted:
-            query = (
-                "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, "
-                "deleted, client_id, version FROM decks ORDER BY name LIMIT ? OFFSET ?"
-            )
+            if workspace_id is not None:
+                query = select_sql + "WHERE workspace_id = ? ORDER BY name LIMIT ? OFFSET ?"
+                params: tuple[Any, ...] = (workspace_id, limit, offset)
+            elif include_workspace_items:
+                query = select_sql + "ORDER BY name LIMIT ? OFFSET ?"
+                params = (limit, offset)
+            else:
+                query = select_sql + "WHERE workspace_id IS NULL ORDER BY name LIMIT ? OFFSET ?"
+                params = (limit, offset)
         else:
-            query = (
-                "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, "
-                "deleted, client_id, version FROM decks WHERE deleted = 0 ORDER BY name LIMIT ? OFFSET ?"
-            )
+            if workspace_id is not None:
+                query = select_sql + "WHERE deleted = 0 AND workspace_id = ? ORDER BY name LIMIT ? OFFSET ?"
+                params = (workspace_id, limit, offset)
+            elif include_workspace_items:
+                query = select_sql + "WHERE deleted = 0 ORDER BY name LIMIT ? OFFSET ?"
+                params = (limit, offset)
+            else:
+                query = select_sql + "WHERE deleted = 0 AND workspace_id IS NULL ORDER BY name LIMIT ? OFFSET ?"
+                params = (limit, offset)
         try:
-            cursor = self.execute_query(query, (limit, offset))
+            cursor = self.execute_query(query, params)
             return [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError:  # noqa: TRY203
             raise
@@ -20216,7 +20369,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_deck(self, deck_id: int) -> dict[str, Any] | None:
         """Fetch a single deck row by id."""
         query = (
-            "SELECT id, name, description, scheduler_settings_json, scheduler_type, created_at, last_modified, deleted, client_id, version "
+            "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, deleted, client_id, version "
             "FROM decks WHERE id = ?"
         )
         try:
@@ -20234,6 +20387,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         description: str | None = None,
         scheduler_settings: Mapping[str, Any] | str | None = None,
         scheduler_type: str | None = None,
+        workspace_id: Any = ...,
         expected_version: int | None = None,
     ) -> bool:
         """Update mutable deck fields with optimistic locking."""
@@ -20251,6 +20405,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if scheduler_type is not None:
             set_parts.append("scheduler_type = ?")
             params.append(_coerce_scheduler_type(scheduler_type))
+        if workspace_id is not ...:
+            set_parts.append("workspace_id = ?")
+            params.append(workspace_id)
         if not set_parts:
             if expected_version is None:
                 return True
@@ -21738,6 +21895,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         name: str,
         description: str | None = None,
         workspace_tag: str | None = None,
+        workspace_id: str | None = None,
         media_id: int | None = None,
         source_bundle_json: list[dict[str, Any]] | None = None,
         time_limit_seconds: int | None = None,
@@ -21750,14 +21908,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         try:
             with self.transaction() as conn:
                 insert_sql = (
-                    "INSERT INTO quizzes(name, description, workspace_tag, media_id, source_bundle_json, total_questions, "
+                    "INSERT INTO quizzes(name, description, workspace_tag, workspace_id, media_id, source_bundle_json, total_questions, "
                     "time_limit_seconds, passing_score, deleted, client_id, version, created_at, last_modified) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
                     workspace_tag,
+                    workspace_id,
                     media_id,
                     source_bundle_payload,
                     0,
@@ -21788,7 +21947,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
         deleted_clause = "" if include_deleted else "AND deleted = 0"
         query = (
-            "SELECT id, name, description, workspace_tag, media_id, source_bundle_json, total_questions, "  # nosec B608
+            "SELECT id, name, description, workspace_tag, workspace_id, media_id, source_bundle_json, total_questions, "  # nosec B608
             "time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             "FROM quizzes WHERE id = ? " + deleted_clause
@@ -21804,7 +21963,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         self,
         q: str | None = None,
         media_id: int | None = None,
-        workspace_tag: str | None = None,
+        workspace_id: str | None = None,
+        include_workspace_items: bool = False,
         include_deleted: bool = False,
         limit: int = 50,
         offset: int = 0,
@@ -21817,9 +21977,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if media_id is not None:
             where_clauses.append("media_id = ?")
             params.append(media_id)
-        if workspace_tag:
-            where_clauses.append("workspace_tag = ?")
-            params.append(workspace_tag)
+        if workspace_id is not None:
+            where_clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        elif not include_workspace_items:
+            where_clauses.append("workspace_id IS NULL")
         if q:
             where_clauses.append("(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)")
             q_like = f"%{q.lower()}%"
@@ -21827,7 +21989,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         query = (
-            "SELECT id, name, description, workspace_tag, media_id, source_bundle_json, total_questions, "  # nosec B608
+            "SELECT id, name, description, workspace_tag, workspace_id, media_id, source_bundle_json, total_questions, "  # nosec B608
             "time_limit_seconds, passing_score, "
             "deleted, client_id, version, created_at, last_modified "
             f"FROM quizzes WHERE {where_sql} ORDER BY last_modified DESC LIMIT ? OFFSET ?"
@@ -21850,7 +22012,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         allowed = {
             "name",
             "description",
-            "workspace_tag",
+            "workspace_id",
             "media_id",
             "source_bundle_json",
             "time_limit_seconds",
