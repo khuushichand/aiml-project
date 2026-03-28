@@ -6,8 +6,10 @@ import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Pagination } from '@/components/ui/pagination';
 import { Select } from '@/components/ui/select';
 import { TableSkeleton } from '@/components/ui/skeleton';
@@ -20,6 +22,7 @@ import {
   buildUnifiedApiKeyRows,
   filterByHygiene,
   filterUnifiedApiKeyRows,
+  getKeyExpiryIndicator,
   type ApiKeyMetadataLike,
   type HygieneFilter,
   type UnifiedApiKeyStatus,
@@ -27,7 +30,7 @@ import {
 import { api } from '@/lib/api-client';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
 import type { UserWithKeyCount } from '@/types';
-import { Key, RotateCw, Search } from 'lucide-react';
+import { AlertTriangle, Copy, Key, Plus, RotateCw, Search } from 'lucide-react';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportApiKeys, ExportFormat } from '@/lib/export';
 import { logger } from '@/lib/logger';
@@ -45,6 +48,15 @@ function ApiKeysPageContent() {
   const [partialLoadWarning, setPartialLoadWarning] = useState('');
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [bulkRotating, setBulkRotating] = useState(false);
+
+  // Create Key dialog state
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createUserId, setCreateUserId] = useState('');
+  const [createKeyName, setCreateKeyName] = useState('');
+  const [createKeyScope, setCreateKeyScope] = useState('read');
+  const [createKeyExpiresDays, setCreateKeyExpiresDays] = useState('90');
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
   const [ownerFilter, setOwnerFilter] = useUrlState<string>('owner', { defaultValue: '' });
@@ -168,6 +180,17 @@ function ApiKeysPageContent() {
     [rows, searchQuery, ownerFilter, normalizedStatusFilter, createdBefore, hygieneFilter]
   );
   const hygieneSummary = useMemo(() => buildKeyHygieneSummary(rows), [rows]);
+
+  // Count keys expiring within 7 days for the urgent warning banner
+  const keysExpiringIn7Days = useMemo(() => {
+    const now = new Date();
+    return rows.filter((row) => {
+      if (row.status !== 'active') return false;
+      const indicator = getKeyExpiryIndicator(row.expiresAt, now);
+      return indicator !== null && indicator.daysRemaining <= 7;
+    }).length;
+  }, [rows]);
+
   const rowById = useMemo(() => {
     return new Map(rows.map((row) => [`${row.ownerUserId}:${row.keyId}`, row]));
   }, [rows]);
@@ -268,6 +291,46 @@ function ApiKeysPageContent() {
     }
   };
 
+  const handleOpenCreateDialog = () => {
+    setCreateUserId('');
+    setCreateKeyName('');
+    setCreateKeyScope('read');
+    setCreateKeyExpiresDays('90');
+    setNewKeyValue(null);
+    setCreateDialogOpen(true);
+  };
+
+  const handleCreateKey = async () => {
+    if (!createUserId || !createKeyName.trim()) return;
+    try {
+      setCreatingKey(true);
+      const result = await api.createApiKey(createUserId, {
+        name: createKeyName.trim(),
+        scope: createKeyScope,
+        expires_in_days: parseInt(createKeyExpiresDays) || 90,
+      });
+      if (result.key) {
+        setNewKeyValue(result.key);
+      }
+      toastSuccess('API key created', `Key created for ${ownerOptions.find((o) => String(o.id) === createUserId)?.username || 'user'}.`);
+      await loadUnifiedApiKeys();
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to create API key';
+      toastError('Create key failed', message);
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toastSuccess('Copied', 'API key copied to clipboard.');
+    } catch {
+      toastError('Copy failed', 'Could not copy to clipboard.');
+    }
+  };
+
   return (
     <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
@@ -277,11 +340,36 @@ function ApiKeysPageContent() {
               <h1 className="text-3xl font-bold">API Keys</h1>
               <p className="text-muted-foreground">Unified API key inventory across all users</p>
             </div>
-            <ExportMenu
-              onExport={(format: ExportFormat) => exportApiKeys(filteredRows, format)}
-              disabled={filteredRows.length === 0}
-            />
+            <div className="flex items-center gap-2">
+              <Button onClick={handleOpenCreateDialog}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create Key
+              </Button>
+              <ExportMenu
+                onExport={(format: ExportFormat) => exportApiKeys(filteredRows, format)}
+                disabled={filteredRows.length === 0}
+              />
+            </div>
           </div>
+
+          {keysExpiringIn7Days > 0 && (
+            <Alert className="mb-6 border-yellow-300 bg-yellow-50">
+              <AlertTriangle className="h-4 w-4 text-yellow-600" />
+              <AlertDescription className="ml-2 flex items-center justify-between">
+                <span className="text-yellow-800">
+                  {keysExpiringIn7Days} key{keysExpiringIn7Days !== 1 ? 's' : ''} expire{keysExpiringIn7Days === 1 ? 's' : ''} within 7 days.
+                </span>
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="text-yellow-800 underline p-0 h-auto"
+                  onClick={() => toggleHygieneFilter('expiring-soon')}
+                >
+                  View expiring keys
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
 
           {error && (
             <Alert variant="destructive" className="mb-6">
@@ -488,6 +576,101 @@ function ApiKeysPageContent() {
               )}
             </CardContent>
           </Card>
+
+          {/* Create Key Dialog */}
+          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Create API Key</DialogTitle>
+                <DialogDescription>Select a user and configure the new API key.</DialogDescription>
+              </DialogHeader>
+              {newKeyValue ? (
+                <div className="space-y-4 py-4">
+                  <Alert className="border-yellow-300 bg-yellow-50">
+                    <AlertDescription>
+                      <p className="mb-2 font-semibold text-yellow-800">
+                        Save this API key now — it will not be shown again.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 rounded bg-yellow-100 p-2 font-mono text-sm break-all">
+                          {newKeyValue}
+                        </code>
+                        <Button variant="outline" size="sm" onClick={() => copyToClipboard(newKeyValue)}>
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </AlertDescription>
+                  </Alert>
+                  <div className="flex justify-end">
+                    <Button onClick={() => setCreateDialogOpen(false)}>Done</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="create-key-user">User</Label>
+                    <Select
+                      id="create-key-user"
+                      value={createUserId}
+                      onChange={(e) => setCreateUserId(e.target.value)}
+                    >
+                      <option value="">Select a user...</option>
+                      {ownerOptions.map((owner) => (
+                        <option key={owner.id} value={String(owner.id)}>
+                          {owner.username}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="create-key-name">Key Name</Label>
+                    <Input
+                      id="create-key-name"
+                      placeholder="e.g., Production API"
+                      value={createKeyName}
+                      onChange={(e) => setCreateKeyName(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="create-key-scope">Scope</Label>
+                      <Select
+                        id="create-key-scope"
+                        value={createKeyScope}
+                        onChange={(e) => setCreateKeyScope(e.target.value)}
+                      >
+                        <option value="read">Read Only</option>
+                        <option value="write">Read & Write</option>
+                        <option value="admin">Admin</option>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="create-key-expires">Expires In (days)</Label>
+                      <Input
+                        id="create-key-expires"
+                        type="number"
+                        min="1"
+                        max="365"
+                        value={createKeyExpiresDays}
+                        onChange={(e) => setCreateKeyExpiresDays(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+                    <Button
+                      onClick={handleCreateKey}
+                      disabled={!createUserId || !createKeyName.trim() || creatingKey}
+                      loading={creatingKey}
+                      loadingText="Creating..."
+                    >
+                      Create Key
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
         </div>
       </ResponsiveLayout>
     </PermissionGuard>

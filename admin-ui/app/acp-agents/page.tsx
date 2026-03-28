@@ -18,6 +18,7 @@ import { useToast } from '@/components/ui/toast';
 import { RefreshCw, Bot, Plus, Pencil, Trash2, Shield } from 'lucide-react';
 import { AccessibleIconButton } from '@/components/ui/accessible-icon-button';
 import { api, ApiError } from '@/lib/api-client';
+import { TagInput } from '@/components/ui/tag-input';
 
 interface AgentConfig {
   id: number;
@@ -610,12 +611,12 @@ export default function ACPAgentsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="agent-allowed">Allowed Tools (comma-separated)</Label>
-                    <Input id="agent-allowed" value={agentForm.allowed_tools} onChange={(e) => setAgentForm(f => ({ ...f, allowed_tools: e.target.value }))} placeholder="read_file, write_file, search" />
+                    <Label htmlFor="agent-allowed">Allowed Tools</Label>
+                    <TagInput id="agent-allowed" value={agentForm.allowed_tools} onChange={(v) => setAgentForm(f => ({ ...f, allowed_tools: v }))} placeholder="Type tool name, press Enter" />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="agent-denied">Denied Tools (comma-separated)</Label>
-                    <Input id="agent-denied" value={agentForm.denied_tools} onChange={(e) => setAgentForm(f => ({ ...f, denied_tools: e.target.value }))} placeholder="bash, execute_command" />
+                    <Label htmlFor="agent-denied">Denied Tools</Label>
+                    <TagInput id="agent-denied" value={agentForm.denied_tools} onChange={(v) => setAgentForm(f => ({ ...f, denied_tools: v }))} placeholder="Type tool name, press Enter" />
                   </div>
                 </div>
                 <div className="space-y-2">

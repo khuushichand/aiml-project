@@ -44,6 +44,7 @@ vi.mock('@/lib/api-client', () => ({
   api: {
     getACPAgentConfigs: vi.fn(),
     getACPPermissionPolicies: vi.fn(),
+    getACPAgentMetrics: vi.fn(),
     createACPAgentConfig: vi.fn(),
     updateACPAgentConfig: vi.fn(),
     deleteACPAgentConfig: vi.fn(),
@@ -56,6 +57,7 @@ vi.mock('@/lib/api-client', () => ({
 type ApiMock = {
   getACPAgentConfigs: ReturnType<typeof vi.fn>;
   getACPPermissionPolicies: ReturnType<typeof vi.fn>;
+  getACPAgentMetrics: ReturnType<typeof vi.fn>;
 };
 
 const apiMock = api as unknown as ApiMock;
@@ -69,6 +71,7 @@ beforeEach(() => {
     policies: [],
     total: 0,
   });
+  apiMock.getACPAgentMetrics.mockResolvedValue({ items: [] });
   confirmMock.mockResolvedValue(true);
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
@@ -115,6 +118,53 @@ describe('ACPAgentsPage', () => {
     expect(screen.getByText('Handles implementation tasks')).toBeInTheDocument();
     expect(screen.getByText('Enabled')).toBeInTheDocument();
     expect(screen.getByText('Configured')).toBeInTheDocument();
+  });
+
+  it('opens the edit dialog with tag inputs for tools when editing an agent', async () => {
+    const user = userEvent.setup();
+    apiMock.getACPAgentConfigs.mockResolvedValue({
+      agents: [
+        {
+          id: 1,
+          type: 'codex',
+          name: 'Code Agent',
+          description: 'Handles tasks',
+          system_prompt: null,
+          allowed_tools: ['fs.read', 'fs.write'],
+          denied_tools: ['bash.run'],
+          parameters: { model: 'gpt-5-codex' },
+          requires_api_key: null,
+          org_id: null,
+          team_id: null,
+          enabled: true,
+          is_configured: true,
+          created_at: '2024-01-01T00:00:00.000Z',
+          updated_at: null,
+        },
+      ],
+      total: 1,
+    });
+
+    render(<ACPAgentsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Code Agent')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText('Edit Agent Configuration')).toBeInTheDocument();
+    });
+
+    // Tag chips should be rendered for allowed and denied tools
+    expect(screen.getByText('fs.read')).toBeInTheDocument();
+    expect(screen.getByText('fs.write')).toBeInTheDocument();
+    expect(screen.getByText('bash.run')).toBeInTheDocument();
+
+    // Remove buttons should exist for each tag
+    expect(screen.getByRole('button', { name: 'Remove fs.read' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove bash.run' })).toBeInTheDocument();
   });
 
   it('shows an empty state for the policies tab when no policies exist', async () => {
