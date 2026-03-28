@@ -131,40 +131,67 @@ export const ActivitySection = ({
         </div>
       </CardHeader>
       <CardContent>
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
-            <AreaChart data={activityChartData}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-              <XAxis dataKey="name" className="text-xs" />
-              <YAxis className="text-xs" />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: 'hsl(var(--background))',
-                  border: '1px solid hsl(var(--border))',
-                  borderRadius: '8px',
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="requests"
-                stackId="1"
-                stroke="#3b82f6"
-                fill="#3b82f6"
-                fillOpacity={0.3}
-                name="Requests"
-              />
-              <Area
-                type="monotone"
-                dataKey="users"
-                stackId="2"
-                stroke="#10b981"
-                fill="#10b981"
-                fillOpacity={0.3}
-                name="Active Users"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+        <div role="img" aria-label={`Activity chart showing API requests and active users ${ACTIVITY_RANGE_DESCRIPTION[activityRange].toLowerCase()}`}>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
+              <AreaChart data={activityChartData}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis dataKey="name" className="text-xs" />
+                <YAxis className="text-xs" />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'hsl(var(--background))',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '8px',
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="requests"
+                  stackId="1"
+                  stroke="#3b82f6"
+                  fill="#3b82f6"
+                  fillOpacity={0.3}
+                  name="Requests"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="users"
+                  stackId="2"
+                  stroke="#10b981"
+                  fill="#10b981"
+                  fillOpacity={0.3}
+                  name="Active Users"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
+        <details className="mt-2">
+          <summary className="text-xs text-muted-foreground cursor-pointer">
+            View chart data as table
+          </summary>
+          <div className="mt-1 max-h-48 overflow-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr>
+                  <th className="text-left px-2 py-1">Date</th>
+                  <th className="text-right px-2 py-1">Requests</th>
+                  <th className="text-right px-2 py-1">Active Users</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activityChartData.map((point, i) => (
+                  <tr key={i} className="border-t border-border">
+                    <td className="px-2 py-1">{point.name}</td>
+                    <td className="text-right px-2 py-1">{point.requests}</td>
+                    <td className="text-right px-2 py-1">{point.users}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
       </CardContent>
     </Card>
 
