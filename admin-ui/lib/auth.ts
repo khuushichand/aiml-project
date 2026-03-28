@@ -1,6 +1,7 @@
 'use client';
 
 import { clearScopedStorage } from '@/lib/scoped-storage';
+import { logger } from '@/lib/logger';
 
 const AUTH_CHANGE_EVENT = 'tldw-admin-auth-change';
 const SESSION_MARKER_COOKIE = 'admin_session';
@@ -234,7 +235,7 @@ export async function loginWithPassword(
 
     return null;
   } catch (error) {
-    console.error('Login failed:', error);
+    logger.error('Login failed', { component: 'auth', error: error instanceof Error ? error.message : String(error) });
     return null;
   }
 }
@@ -267,7 +268,7 @@ export async function completeMfaLogin(
 
     return await finalizeAuthenticatedLogin();
   } catch (error) {
-    console.error('MFA login failed:', error);
+    logger.error('MFA login failed', { component: 'auth', error: error instanceof Error ? error.message : String(error) });
     return null;
   }
 }
@@ -309,7 +310,7 @@ export async function loginWithApiKey(apiKey: string): Promise<boolean> {
     void waitForAuthenticatedUser().catch(() => null);
     return true;
   } catch (error) {
-    console.error('API key validation failed:', error);
+    logger.error('API key validation failed', { component: 'auth', error: error instanceof Error ? error.message : String(error) });
     return false;
   }
 }
@@ -331,7 +332,7 @@ async function fetchAndStoreUser(): Promise<AdminUser | null> {
     storeUser(user);
     return user;
   } catch (error) {
-    console.error('Failed to fetch user:', error);
+    logger.error('Failed to fetch user', { component: 'auth', error: error instanceof Error ? error.message : String(error) });
     return null;
   }
 }
