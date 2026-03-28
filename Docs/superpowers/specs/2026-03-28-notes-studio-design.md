@@ -51,9 +51,10 @@ The design does not try to turn the current Markdown and WYSIWYG Notes editor in
 - Template treatment should apply in the editor experience as a notebook surface, not only at export time.
 - Diagram generation should be optional after note generation, not part of the first pass.
 - The `Notes Studio` action should live inside the Notes editor.
-- Users should be able to either:
+- The user requested both:
   - create a derived note
   - replace the current selection
+- For the initial V1 implementation scope, only `create a derived note` is in scope. `Replace selection` is deferred to a later phase to keep the first plan coherent.
 - Compatibility with the current Markdown-based Notes system still matters, but limited structured Studio data is acceptable when explicitly modeled.
 - Generated notes should be a hybrid:
   - AI fills the main content
@@ -158,12 +159,22 @@ Recommended table name:
 
 - `note_studio_documents`
 
+V1 recommendation:
+
+- store this table in the same Notes database as the `notes` table
+- use a foreign key on `note_id`
+- use `ON DELETE CASCADE` for hard-delete cleanup
+
+Keeping the sidecar in the same database gives the implementation a practical path to transactional create and update behavior. A separate database or service boundary would make note-plus-Studio atomicity significantly harder for little V1 benefit.
+
 Recommended fields:
 
 - `note_id`: primary foreign key to the note
 - `payload_json`: canonical structured Studio payload
 - `template_type`: `lined`, `grid`, or `cornell`
-- `handwriting_mode`: structured rendering preference, not just a boolean blob
+- `handwriting_mode`: V1 enum with:
+  - `off`
+  - `accented`
 - `source_note_id`: original note the excerpt came from
 - `excerpt_snapshot`: the exact excerpt text or a normalized snapshot object
 - `excerpt_hash`: stable hash for drift detection
@@ -177,6 +188,18 @@ The Studio payload is canonical for Studio rendering.
 
 The note `content` field is a generated Markdown companion.
 
+### Lifecycle And Delete Semantics
+
+Studio sidecar behavior should be defined explicitly:
+
+- creating a Studio note should create the note row and sidecar in one transaction
+- updating Studio state and regenerating companion Markdown should update both in one transaction
+- soft-deleting a note should leave the Studio sidecar intact so restore can recover the full Studio note
+- restoring a note should reactivate the same Studio sidecar without regeneration
+- hard-deleting a note should remove the Studio sidecar automatically through foreign-key cascade or equivalent cleanup
+
+This keeps Studio notes aligned with the existing Notes trash model instead of silently losing structured state on soft delete.
+
 ### Canonical Data Rule
 
 For Studio notes:
@@ -189,9 +212,12 @@ The system should not attempt to fully reverse-parse arbitrary Markdown edits ba
 Instead:
 
 - if the user edits a Studio note in plain Markdown mode outside Studio actions, mark the Studio document as `stale` or `customized`
-- Studio view can then either:
-  - continue showing the last valid Studio render with a warning
-  - or prompt the user to regenerate Studio structure from the current Markdown body
+- title-only, keyword-only, and backlink-only edits should not mark the Studio document stale
+- content edits should mark the Studio document stale whenever the current companion Markdown hash no longer matches the sidecar's `companion_content_hash`
+- Studio view should continue showing the last valid Studio render with a warning banner rather than hard-locking the note
+- the warning banner should offer:
+  - `Regenerate Studio view from current Markdown`
+  - `Continue editing plain note`
 
 This keeps the model understandable and avoids brittle reverse parsing.
 
@@ -201,9 +227,24 @@ The canonical payload should be small and explicit. A suggested top-level shape:
 
 - `meta`
 - `sections`
-- `prompts`
-- `summary`
 - `layout`
+- `summary`
+- `prompts`
+- `diagrams`
+
+Required V1 payload fields:
+
+- `meta.source_note_id`
+- `meta.excerpt_snapshot`
+- `meta.generated_at`
+- `layout.template_type`
+- `layout.handwriting_mode`
+- `sections`
+
+Optional V1 payload fields:
+
+- `summary`
+- `prompts`
 - `diagrams`
 
 Suggested `meta` contents:
@@ -244,30 +285,35 @@ If the user is currently in WYSIWYG mode, the UI should prompt them to switch to
 2. User clicks `Notes Studio`.
 3. User chooses:
    - template: `lined`, `grid`, or `cornell`
-   - handwriting style intensity
-   - output mode: `Create derived note` or `Replace selection`
+   - handwriting mode: `off` or `accented`
+   - output mode: `Create derived note`
 4. System generates canonical Studio payload.
 5. System generates companion Markdown content from the payload.
-6. System either:
-   - creates a new note plus sidecar Studio document
-   - or replaces the selected range in the current Markdown note, then creates or updates the linked sidecar document
+6. System creates a new note plus sidecar Studio document.
 7. Studio view opens on the resulting note.
 8. User may optionally add a diagram afterward.
 
 ### Replace Selection Rule
 
-`Replace selection` should be supported more cautiously than originally planned.
+`Replace selection` remains a desired product behavior, but it should not be in the initial V1 implementation slice.
 
-V1 behavior:
+Reason:
+
+- it introduces harder editor-boundary and transaction questions than derived-note creation
+- it depends on deterministic safe-replacement rules in Markdown mode
+- it is not necessary to validate the core Notes Studio architecture
+
+Follow-up behavior after V1 foundation lands:
 
 - only allow it in Markdown mode
 - require a non-empty selection
-- prefer block-aligned replacement
-- if the selection appears unsafe for replacement, offer:
+- require block-aligned selection boundaries
+- disallow replacement when the selection intersects fenced code blocks, tables, nested lists, or HTML blocks
+- fallback behavior should be deterministic:
   - `Insert below selection`
   - or `Create derived note`
 
-This avoids corrupting surrounding Markdown structure.
+This keeps the first implementation slice coherent while preserving a path to the user-requested replacement workflow.
 
 ### Derived Note Rule
 
@@ -296,6 +342,17 @@ Studio view responsibilities:
 - render selective handwriting styling
 - render diagrams inline as notebook content
 - support print/export using the same rendering contract
+
+V1 Studio view should be render-first, not a full structured editor.
+
+V1 allowed Studio-view interactions:
+
+- template switching if supported by the final implementation slice
+- handwriting toggle
+- diagram add or retry actions
+- regenerate-from-Markdown actions
+
+V1 should not require direct block-level editing inside Studio view. Plain note editing continues to happen through the existing Markdown editor.
 
 ### Template Semantics
 
@@ -333,14 +390,23 @@ The AI should also intentionally leave some recall prompts or fill-in space for 
 
 ## Handwriting Mode
 
-Handwriting should not default to the full body text.
+V1 handwriting is a simple toggle expressed as `handwriting_mode`.
 
-V1 recommendation:
+Allowed V1 values:
 
-- apply handwriting styling to headings, cues, callouts, and prompt areas
-- keep dense body text in a readable notebook font by default
+- `off`: render all text with the standard notebook typography
+- `accented`: apply handwriting styling to headings, cues, callouts, and prompt areas only
 
-Optional settings may later allow a stronger handwriting treatment, but the default should balance personality and readability.
+Default:
+
+- `accented`
+
+V1 rendering rule:
+
+- dense body text remains in a readable notebook font in both modes
+- `accented` affects notebook personality surfaces, not long-form study paragraphs
+
+Later phases may add stronger handwriting treatments, but V1 should remain a two-state toggle.
 
 ## Diagram Handling
 
@@ -364,9 +430,15 @@ Suggested diagram manifest contents:
 
 - requested diagram type
 - source section IDs
-- Mermaid or intermediate graph representation
-- rendered SVG or image asset reference
+- canonical source graph syntax or intermediate graph representation
+- rendered SVG cache and render hash
 - generation status
+
+V1 recommendation:
+
+- store both the canonical diagram source representation and a cached rendered SVG
+- treat the source representation as canonical for edits and retries
+- treat rendered SVG as a cache optimized for Studio view and print/export
 
 ### Diagram Rendering
 
@@ -384,6 +456,8 @@ Search should continue to use the note title and Markdown companion content.
 
 This keeps Studio notes discoverable through the existing FTS note search without requiring Studio-specific indexing in V1.
 
+The companion Markdown should contain semantically useful study content only. It should not include template chrome markers, layout tokens, or notebook-render-only metadata that would pollute note search results.
+
 ### Plain Export
 
 Existing plain note export should continue to work and should export the note title and Markdown companion content.
@@ -398,6 +472,8 @@ V1 should clearly distinguish:
 
 - plain note export
 - Studio print/export
+
+Studio-preserving JSON export and Studio-aware import are explicitly out of scope for V1 unless later planning reintroduces them as a separate slice.
 
 ### Import
 
@@ -415,6 +491,10 @@ V1 should provide:
 
 - print-optimized HTML generated from the Studio renderer
 - browser print-to-PDF as the first PDF path
+- explicit paper sizes: `US Letter`, `A4`, and `A5`
+- default paper size from browser locale in the web UI:
+  - `US Letter` for US locale
+  - `A4` otherwise
 
 This is a practical first release, but it should be described honestly as print-optimized rather than deterministic, publication-grade PDF rendering.
 
@@ -435,8 +515,7 @@ The export path should reuse Studio rendering logic as much as possible so the e
 ## Error Handling
 
 - If Studio generation fails before note creation, create nothing and show a clear failure message.
-- If derived note creation succeeds but Studio sidecar persistence fails, keep the note and warn that Studio view is unavailable.
-- If the Markdown companion update fails after Studio payload generation, the operation should fail or roll back according to implementation feasibility. The spec should prefer atomic persistence where practical.
+- If note-row creation, sidecar persistence, or companion-Markdown generation fails during create or update, the operation should fail atomically and roll back.
 - If diagram generation fails, keep the note usable and allow retry.
 - If print export fails, offer plain note print export as a fallback.
 - If a Studio note becomes stale because plain Markdown content was edited outside Studio mode, show a non-destructive warning and allow regeneration.
@@ -455,7 +534,6 @@ The export path should reuse Studio rendering logic as much as possible so the e
 
 - Markdown-mode excerpt selection flow tests
 - derived-note creation tests
-- replace-selection guardrail tests
 - Studio view template rendering tests
 - handwriting-mode rendering tests
 - stale-state warning tests
@@ -481,7 +559,6 @@ The export path should reuse Studio rendering logic as much as possible so the e
 
 - excerpt selection from Markdown mode
 - default derived-note generation
-- optional guarded replace-selection flow
 - sidecar Studio storage
 - Markdown companion content generation
 - dedicated Studio view in Notes
@@ -492,19 +569,11 @@ The export path should reuse Studio rendering logic as much as possible so the e
 
 ### Later Phases
 
+- guarded `replace selection` workflow in Markdown mode
+- replace-selection guardrail tests
 - resource-native and chapter-native entry points
 - Studio-aware import and structured export formats
 - deterministic server-side PDF rendering
 - richer editing inside Studio view
 - broader handwriting controls
 - batch or whole-resource study-note generation
-
-## Open Questions To Resolve During Implementation Planning
-
-- Should Studio sidecar storage live in the main notes database as a new table or in a separate logically grouped table family?
-- What stale-state UX is best:
-  - hard lock Studio view until regenerate
-  - or soft warning with last valid render
-- Should `replace selection` ship in the first implementation slice or be deferred behind a feature flag after derived-note creation is proven stable?
-- What is the exact paper-size menu for V1 export?
-- Should diagrams be stored as both source graph syntax and rendered SVG, or only one of those plus regeneration metadata?
