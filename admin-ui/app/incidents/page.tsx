@@ -564,7 +564,7 @@ function IncidentsPageContent() {
           )}
 
           {loading ? (
-            <div className="py-10 text-center text-muted-foreground">Loading incidents...</div>
+            <div className="py-10 text-center text-muted-foreground" role="status" aria-live="polite">Loading incidents...</div>
           ) : incidents.length === 0 ? (
             <EmptyState
               icon={AlertTriangle}

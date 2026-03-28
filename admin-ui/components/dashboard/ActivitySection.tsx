@@ -20,6 +20,7 @@ import {
   ArrowRight,
   CheckCircle,
   Clock,
+  DollarSign,
   TrendingUp,
 } from 'lucide-react';
 import {
@@ -52,26 +53,26 @@ type ActivitySectionProps = {
 const getHealthIcon = (status: DashboardHealthStatus) => {
   switch (status) {
     case 'healthy':
-      return <CheckCircle className="h-4 w-4 text-green-500" />;
+      return <CheckCircle className="h-4 w-4 text-green-500" aria-hidden="true" />;
     case 'degraded':
-      return <AlertTriangle className="h-4 w-4 text-yellow-500" />;
+      return <AlertTriangle className="h-4 w-4 text-yellow-500" aria-hidden="true" />;
     case 'down':
-      return <AlertTriangle className="h-4 w-4 text-red-500" />;
+      return <AlertTriangle className="h-4 w-4 text-red-500" aria-hidden="true" />;
     default:
-      return <Clock className="h-4 w-4 text-muted-foreground" />;
+      return <Clock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />;
   }
 };
 
 const getHealthBadge = (status: DashboardHealthStatus) => {
   switch (status) {
     case 'healthy':
-      return <Badge className="bg-green-500">Healthy</Badge>;
+      return <Badge className="bg-green-500" role="status">Healthy</Badge>;
     case 'degraded':
-      return <Badge className="bg-yellow-500">Degraded</Badge>;
+      return <Badge className="bg-yellow-500" role="status">Degraded</Badge>;
     case 'down':
-      return <Badge variant="destructive">Down</Badge>;
+      return <Badge variant="destructive" role="status">Down</Badge>;
     default:
-      return <Badge variant="secondary">Unknown</Badge>;
+      return <Badge variant="secondary" role="status">Unknown</Badge>;
   }
 };
 
@@ -170,6 +171,18 @@ export const ActivitySection = ({
           >
             <span className="inline-block h-2 w-2 rounded-full bg-orange-500 mr-1.5" />
             Latency p95
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-pressed={false}
+            disabled
+            className="text-xs"
+            title="Cost time-series not available"
+          >
+            <DollarSign className="h-3 w-3 mr-1.5 text-emerald-600" />
+            Cost
           </Button>
         </div>
       </CardHeader>

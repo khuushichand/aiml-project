@@ -109,7 +109,7 @@ export function ActiveSessionsPanel({ onSessionEnded }: ActiveSessionsPanelProps
         {error ? (
           <div className="text-sm text-destructive py-4 text-center">{error}</div>
         ) : loading && sessions.length === 0 ? (
-          <div className="text-sm text-muted-foreground py-4 text-center">Loading sessions...</div>
+          <div className="text-sm text-muted-foreground py-4 text-center" role="status" aria-live="polite">Loading sessions...</div>
         ) : sessions.length === 0 ? (
           <div className="text-sm text-muted-foreground py-4 text-center">No active sessions</div>
         ) : (

@@ -694,7 +694,7 @@ export default function FlagsPage() {
               </div>
 
               {flagLoading ? (
-                <div className="py-8 text-center text-muted-foreground">Loading flags...</div>
+                <div className="py-8 text-center text-muted-foreground" role="status" aria-live="polite">Loading flags...</div>
               ) : flags.length === 0 ? (
                 <EmptyState
                   title="No flags found."
@@ -790,9 +790,12 @@ export default function FlagsPage() {
                           </TableCell>
                           <TableCell>{formatFlagDate(flag.updated_at)}</TableCell>
                           <TableCell>
-                            <details className="text-xs text-muted-foreground">
-                              <summary className="cursor-pointer">
-                                {flag.history?.length || 0} changes
+                            <details className="text-xs text-muted-foreground group">
+                              <summary className="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded px-1.5 py-0.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                <span className="inline-flex items-center gap-1">
+                                  <span className="transition-transform group-open:rotate-90" aria-hidden="true">&#9654;</span>
+                                  {flag.history?.length || 0} changes
+                                </span>
                               </summary>
                               <div className="mt-2 space-y-2">
                                 {(flag.history || []).map((entry, entryIndex) => {

@@ -1280,7 +1280,7 @@ export default function ProvidersPage() {
                                           Per-model usage ({USAGE_WINDOW_DAYS}d)
                                         </div>
                                         {modelUsageState?.isLoading ? (
-                                          <div className="text-sm text-muted-foreground">Loading model usage...</div>
+                                          <div className="text-sm text-muted-foreground" role="status" aria-live="polite">Loading model usage...</div>
                                         ) : modelUsageState?.error ? (
                                           <div className="text-sm text-red-600">{modelUsageState.error}</div>
                                         ) : (modelUsageState?.items?.length ?? 0) === 0 ? (

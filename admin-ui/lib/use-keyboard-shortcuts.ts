@@ -169,8 +169,8 @@ export function useKeyboardShortcuts() {
       }
 
       // Handle "g" prefix for navigation
+      // Don't preventDefault on the initial chord key — screen readers use single-letter keys
       if (key === 'g' && !pendingPrefix && !event.ctrlKey && !event.metaKey) {
-        event.preventDefault();
         setPendingPrefix('g');
 
         // Clear prefix after 1 second
